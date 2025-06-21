@@ -1,0 +1,300 @@
+package dcf
+
+import (
+	"errors"
+	"math"
+)
+
+// Inputs represents all inputs needed for DCF calculation
+type Inputs struct {
+	// Base financial data
+	BaseOperatingIncome float64 // Current normalized operating income
+	GrowthRate          float64 // Projected annual growth rate
+	TerminalGrowthRate  float64 // Long-term perpetual growth rate
+	WACC                float64 // Weighted Average Cost of Capital (discount rate)
+	TaxRate             float64 // Effective tax rate
+
+	// Projection parameters
+	ProjectionYears int // Number of explicit forecast years (typically 5)
+
+	// Optional: Capital expenditure and working capital assumptions
+	CapexAsPercentOfRevenue float64 // CapEx as % of revenue (for FCF calculation)
+	WorkingCapitalChange    float64 // Annual working capital change
+	DepreciationRate        float64 // Depreciation as % of revenue
+}
+
+// Projection represents cash flow projection for a single year
+type Projection struct {
+	Year              int     `json:"year"`
+	OperatingIncome   float64 `json:"operating_income"`
+	NOPAT             float64 `json:"nopat"`               // Net Operating Profit After Tax
+	FreeCashFlow      float64 `json:"free_cash_flow"`      // FCF to firm
+	DiscountFactor    float64 `json:"discount_factor"`     // (1 + WACC)^year
+	PresentValue      float64 `json:"present_value"`       // FCF / discount factor
+	GrowthRateApplied float64 `json:"growth_rate_applied"` // Growth rate used for this year
+}
+
+// Result contains the complete DCF valuation result
+type Result struct {
+	// Core valuation
+	EnterpriseValue     float64 `json:"enterprise_value"`      // Sum of all discounted cash flows
+	TerminalValue       float64 `json:"terminal_value"`        // Present value of terminal value
+	ExplicitPeriodValue float64 `json:"explicit_period_value"` // PV of explicit forecast years
+
+	// Detailed projections
+	Projections []Projection `json:"projections"` // Year-by-year projections
+
+	// Terminal value details
+	TerminalYearFCF      float64 `json:"terminal_year_fcf"`      // FCF in final explicit year
+	TerminalValueNominal float64 `json:"terminal_value_nominal"` // Terminal value before discounting
+
+	// Input validation and quality
+	IsReasonable bool     `json:"is_reasonable"`      // Sanity check result
+	Warnings     []string `json:"warnings,omitempty"` // Any calculation warnings
+
+	// Calculation metadata
+	ProjectionYears    int     `json:"projection_years"`
+	GrowthRate         float64 `json:"growth_rate"`
+	TerminalGrowthRate float64 `json:"terminal_growth_rate"`
+	WACC               float64 `json:"wacc"`
+}
+
+// CalculateDCF performs the complete DCF valuation
+func CalculateDCF(inputs Inputs) (*Result, error) {
+	if err := validateInputs(inputs); err != nil {
+		return nil, err
+	}
+
+	result := &Result{
+		ProjectionYears:    inputs.ProjectionYears,
+		GrowthRate:         inputs.GrowthRate,
+		TerminalGrowthRate: inputs.TerminalGrowthRate,
+		WACC:               inputs.WACC,
+		Projections:        make([]Projection, inputs.ProjectionYears),
+		Warnings:           []string{},
+	}
+
+	// Generate yearly projections
+	currentOperatingIncome := inputs.BaseOperatingIncome
+	explicitPeriodValue := 0.0
+
+	for year := 1; year <= inputs.ProjectionYears; year++ {
+		// Apply growth to operating income
+		currentOperatingIncome *= (1 + inputs.GrowthRate)
+
+		// Calculate NOPAT (Net Operating Profit After Tax)
+		nopat := currentOperatingIncome * (1 - inputs.TaxRate)
+
+		// For simplified DCF, assume FCF ≈ NOPAT (can be enhanced with CapEx/WC adjustments)
+		freeCashFlow := nopat
+
+		// Apply CapEx and working capital adjustments if provided
+		if inputs.CapexAsPercentOfRevenue > 0 || inputs.WorkingCapitalChange != 0 {
+			// Rough approximation: Revenue growth implies CapEx and WC needs
+			// This can be enhanced with more detailed modeling
+			grossInvestment := currentOperatingIncome * inputs.CapexAsPercentOfRevenue
+			freeCashFlow = nopat - grossInvestment - inputs.WorkingCapitalChange
+		}
+
+		// Calculate discount factor and present value
+		discountFactor := math.Pow(1+inputs.WACC, float64(year))
+		presentValue := freeCashFlow / discountFactor
+
+		// Store projection
+		result.Projections[year-1] = Projection{
+			Year:              year,
+			OperatingIncome:   currentOperatingIncome,
+			NOPAT:             nopat,
+			FreeCashFlow:      freeCashFlow,
+			DiscountFactor:    discountFactor,
+			PresentValue:      presentValue,
+			GrowthRateApplied: inputs.GrowthRate,
+		}
+
+		explicitPeriodValue += presentValue
+	}
+
+	result.ExplicitPeriodValue = explicitPeriodValue
+
+	// Calculate terminal value using Gordon Growth Model
+	finalYearProjection := result.Projections[inputs.ProjectionYears-1]
+	result.TerminalYearFCF = finalYearProjection.FreeCashFlow
+
+	// Terminal value = FCF(final year) * (1 + terminal growth) / (WACC - terminal growth)
+	terminalFCF := result.TerminalYearFCF * (1 + inputs.TerminalGrowthRate)
+	if inputs.WACC <= inputs.TerminalGrowthRate {
+		return nil, errors.New("WACC must be greater than terminal growth rate for Gordon Growth Model")
+	}
+
+	result.TerminalValueNominal = terminalFCF / (inputs.WACC - inputs.TerminalGrowthRate)
+
+	// Discount terminal value to present
+	terminalDiscountFactor := math.Pow(1+inputs.WACC, float64(inputs.ProjectionYears))
+	result.TerminalValue = result.TerminalValueNominal / terminalDiscountFactor
+
+	// Calculate total enterprise value
+	result.EnterpriseValue = result.ExplicitPeriodValue + result.TerminalValue
+
+	// Perform reasonableness checks
+	result.IsReasonable = isResultReasonable(result)
+	result.Warnings = generateWarnings(inputs, result)
+
+	return result, nil
+}
+
+// CalculateEquityValue converts enterprise value to equity value
+func CalculateEquityValue(enterpriseValue, debt, cash float64) float64 {
+	return enterpriseValue - debt + cash
+}
+
+// CalculateValuePerShare converts equity value to per-share value
+func CalculateValuePerShare(equityValue, sharesOutstanding float64) (float64, error) {
+	if sharesOutstanding <= 0 {
+		return 0, errors.New("shares outstanding must be positive")
+	}
+	return equityValue / sharesOutstanding, nil
+}
+
+// SensitivityAnalysis performs sensitivity analysis on key variables
+func SensitivityAnalysis(baseInputs Inputs, waccRange []float64, growthRange []float64) ([][]float64, error) {
+	results := make([][]float64, len(waccRange))
+
+	for i, wacc := range waccRange {
+		results[i] = make([]float64, len(growthRange))
+
+		for j, growth := range growthRange {
+			inputs := baseInputs
+			inputs.WACC = wacc
+			inputs.GrowthRate = growth
+
+			result, err := CalculateDCF(inputs)
+			if err != nil {
+				return nil, err
+			}
+
+			results[i][j] = result.EnterpriseValue
+		}
+	}
+
+	return results, nil
+}
+
+// Helper functions
+
+func validateInputs(inputs Inputs) error {
+	if inputs.BaseOperatingIncome <= 0 {
+		return errors.New("base operating income must be positive")
+	}
+
+	if inputs.GrowthRate < -0.5 || inputs.GrowthRate > 1.0 {
+		return errors.New("growth rate must be between -50% and 100%")
+	}
+
+	if inputs.TerminalGrowthRate < 0 || inputs.TerminalGrowthRate > 0.05 {
+		return errors.New("terminal growth rate must be between 0% and 5%")
+	}
+
+	if inputs.WACC <= 0 || inputs.WACC > 0.5 {
+		return errors.New("WACC must be between 0% and 50%")
+	}
+
+	if inputs.WACC <= inputs.TerminalGrowthRate {
+		return errors.New("WACC must be greater than terminal growth rate")
+	}
+
+	if inputs.TaxRate < 0 || inputs.TaxRate > 1 {
+		return errors.New("tax rate must be between 0% and 100%")
+	}
+
+	if inputs.ProjectionYears < 1 || inputs.ProjectionYears > 10 {
+		return errors.New("projection years must be between 1 and 10")
+	}
+
+	return nil
+}
+
+func isResultReasonable(result *Result) bool {
+	// Check if enterprise value is reasonable
+	if result.EnterpriseValue <= 0 {
+		return false
+	}
+
+	// Terminal value shouldn't dominate too much (typical range: 60-80% of total value)
+	terminalPercentage := result.TerminalValue / result.EnterpriseValue
+	if terminalPercentage > 0.9 || terminalPercentage < 0.4 {
+		return false
+	}
+
+	// Check for reasonable cash flows
+	for _, projection := range result.Projections {
+		 //Keep in eye on this check to see if it meet real life.
+		// Growth should be reasonable year-over-year
+		if projection.Year > 1 && projection.GrowthRateApplied > 1.0 {
+			return false
+		}
+	}
+	return true
+}
+
+func generateWarnings(inputs Inputs, result *Result) []string {
+	warnings := []string{}
+
+	// High growth rate warning
+	if inputs.GrowthRate > 0.3 {
+		warnings = append(warnings, "High growth rate (>30%) may be unsustainable")
+	}
+
+	// Terminal value dominance warning
+	terminalPercentage := result.TerminalValue / result.EnterpriseValue
+	if terminalPercentage > 0.8 {
+		warnings = append(warnings, "Terminal value represents >80% of total value - consider longer explicit forecast period")
+	}
+
+	// High WACC warning
+	if inputs.WACC > 0.2 {
+		warnings = append(warnings, "WACC >20% is unusually high - verify calculation")
+	}
+
+	// Terminal growth vs WACC warning
+	if inputs.TerminalGrowthRate > inputs.WACC*0.5 {
+		warnings = append(warnings, "Terminal growth rate is high relative to WACC")
+	}
+
+	return warnings
+}
+
+// CalculateImpliedGrowthRate calculates what growth rate would justify current valuation
+func CalculateImpliedGrowthRate(targetValue float64, inputs Inputs) (float64, error) {
+	// Binary search for growth rate that produces target value
+	// TODO: This is a very simple model and may not be accurate for all companies.
+	// TODO: Move these variables to a config file.
+	lowGrowth := -0.3
+	highGrowth := 0.5
+	tolerance := 0.0001
+	maxIterations := 100
+
+	for i := 0; i < maxIterations; i++ {
+		midGrowth := (lowGrowth + highGrowth) / 2
+
+		testInputs := inputs
+		testInputs.GrowthRate = midGrowth
+
+		result, err := CalculateDCF(testInputs)
+		if err != nil {
+			return 0, err
+		}
+
+		diff := result.EnterpriseValue - targetValue
+		if math.Abs(diff) < tolerance {
+			return midGrowth, nil
+		}
+
+		if diff > 0 {
+			highGrowth = midGrowth
+		} else {
+			lowGrowth = midGrowth
+		}
+	}
+
+	return (lowGrowth + highGrowth) / 2, nil
+}
