@@ -111,7 +111,7 @@ func (c *Client) GetTickerCIKMapping(ctx context.Context) (map[string]string, er
 		return nil, fmt.Errorf("rate limiter error: %w", err)
 	}
 
-	url := "https://www.sec.gov/files/company_tickers.json"
+	url := c.config.TickerMappingURL
 
 	c.logger.Debug("Fetching ticker-CIK mapping", zap.String("url", url))
 

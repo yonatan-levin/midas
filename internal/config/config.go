@@ -47,6 +47,7 @@ type CacheConfig struct {
 // SECConfig holds SEC API configuration
 type SECConfig struct {
 	BaseURL          string        `mapstructure:"base_url"`
+	TickerMappingURL string        `mapstructure:"ticker_mapping_url"`
 	UserAgent        string        `mapstructure:"user_agent"`
 	RateLimit        int           `mapstructure:"rate_limit"` // requests per second
 	RequestTimeout   time.Duration `mapstructure:"request_timeout"`
@@ -144,6 +145,7 @@ func setDefaults() {
 
 	// SEC API defaults
 	viper.SetDefault("sec.base_url", "https://data.sec.gov/api/xbrl")
+	viper.SetDefault("sec.ticker_mapping_url", "https://www.sec.gov/files/company_tickers.json")
 	viper.SetDefault("sec.user_agent", "Midas DCF API admin@example.com")
 	viper.SetDefault("sec.rate_limit", 10) // requests per second
 	viper.SetDefault("sec.request_timeout", "30s")

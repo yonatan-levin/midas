@@ -3,6 +3,7 @@ package sec
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -130,11 +131,18 @@ func (p *Parser) NormalizeFinancialData(ctx context.Context, data *entities.Fina
 func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]map[string]float64, error) {
 	periods := make(map[string]map[string]float64)
 
-	for conceptName, factGroup := range facts.Facts {
+	for fullConceptName, factGroup := range facts.Facts {
 		// Look for USD values (most common)
 		usdUnits, exists := factGroup.Units["USD"]
 		if !exists {
 			continue
+		}
+
+		// Extract the local concept name (remove namespace prefix)
+		// e.g., "us-gaap:Revenues" -> "Revenues"
+		conceptName := fullConceptName
+		if colonIndex := strings.LastIndex(fullConceptName, ":"); colonIndex >= 0 {
+			conceptName = fullConceptName[colonIndex+1:]
 		}
 
 		// Process each fact in the USD units
@@ -147,7 +155,7 @@ func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]
 				periods[periodKey] = make(map[string]float64)
 			}
 
-			// Store the value
+			// Store the value using the local concept name
 			periods[periodKey][conceptName] = fact.Val
 
 			// Also store metadata for the most recent fact in this period
@@ -340,21 +348,21 @@ func (p *Parser) calculateDeadInventoryWritedown(data *entities.FinancialData) f
 func (p *Parser) GetSupportedConcepts() []string {
 	return []string{
 		// Income Statement
-		"OperatingIncomeLoss",
-		"IncomeLossFromContinuingOperationsBeforeIncomeTaxes",
-		"Revenues",
-		"RevenueFromContractWithCustomerExcludingAssessedTax",
-		"InterestExpense",
+		"us-gaap:OperatingIncomeLoss",
+		"us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxes",
+		"us-gaap:Revenues",
+		"us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+		"us-gaap:InterestExpense",
 
 		// Balance Sheet
-		"Assets",
-		"Goodwill",
-		"IntangibleAssetsNetExcludingGoodwill",
-		"LongTermDebt",
-		"InventoryNet",
+		"us-gaap:Assets",
+		"us-gaap:Goodwill",
+		"us-gaap:IntangibleAssetsNetExcludingGoodwill",
+		"us-gaap:LongTermDebt",
+		"us-gaap:InventoryNet",
 
 		// Share Information
-		"CommonStockSharesOutstanding",
-		"WeightedAverageNumberOfDilutedSharesOutstanding",
+		"us-gaap:CommonStockSharesOutstanding",
+		"us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
 	}
 }
