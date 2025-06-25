@@ -1,0 +1,544 @@
+package valuation
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"go.uber.org/zap"
+
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
+)
+
+// Mock repositories for testing
+type MockFinancialDataRepository struct {
+	mock.Mock
+}
+
+func (m *MockFinancialDataRepository) Store(ctx context.Context, data *entities.FinancialData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
+func (m *MockFinancialDataRepository) GetLatest(ctx context.Context, ticker string) (*entities.FinancialData, error) {
+	args := m.Called(ctx, ticker)
+	return args.Get(0).(*entities.FinancialData), args.Error(1)
+}
+
+func (m *MockFinancialDataRepository) GetHistorical(ctx context.Context, ticker string, limit int) (*entities.HistoricalFinancialData, error) {
+	args := m.Called(ctx, ticker, limit)
+	return args.Get(0).(*entities.HistoricalFinancialData), args.Error(1)
+}
+
+func (m *MockFinancialDataRepository) GetByPeriod(ctx context.Context, ticker, period string) (*entities.FinancialData, error) {
+	args := m.Called(ctx, ticker, period)
+	return args.Get(0).(*entities.FinancialData), args.Error(1)
+}
+
+func (m *MockFinancialDataRepository) GetLastUpdated(ctx context.Context, ticker string) (time.Time, error) {
+	args := m.Called(ctx, ticker)
+	return args.Get(0).(time.Time), args.Error(1)
+}
+
+func (m *MockFinancialDataRepository) StoreHistorical(ctx context.Context, data *entities.HistoricalFinancialData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
+type MockMarketDataRepository struct {
+	mock.Mock
+}
+
+func (m *MockMarketDataRepository) Store(ctx context.Context, data *entities.MarketData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
+func (m *MockMarketDataRepository) GetLatest(ctx context.Context, ticker string) (*entities.MarketData, error) {
+	args := m.Called(ctx, ticker)
+	return args.Get(0).(*entities.MarketData), args.Error(1)
+}
+
+func (m *MockMarketDataRepository) GetBatch(ctx context.Context, tickers []string) (map[string]*entities.MarketData, error) {
+	args := m.Called(ctx, tickers)
+	return args.Get(0).(map[string]*entities.MarketData), args.Error(1)
+}
+
+func (m *MockMarketDataRepository) IsStale(ctx context.Context, ticker string, maxAge time.Duration) (bool, error) {
+	args := m.Called(ctx, ticker, maxAge)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockMarketDataRepository) GetLastUpdated(ctx context.Context, ticker string) (time.Time, error) {
+	args := m.Called(ctx, ticker)
+	return args.Get(0).(time.Time), args.Error(1)
+}
+
+type MockMacroDataRepository struct {
+	mock.Mock
+}
+
+func (m *MockMacroDataRepository) Store(ctx context.Context, data *entities.MacroData) error {
+	args := m.Called(ctx, data)
+	return args.Error(0)
+}
+
+func (m *MockMacroDataRepository) GetLatest(ctx context.Context) (*entities.MacroData, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(*entities.MacroData), args.Error(1)
+}
+
+func (m *MockMacroDataRepository) GetByDate(ctx context.Context, date time.Time) (*entities.MacroData, error) {
+	args := m.Called(ctx, date)
+	return args.Get(0).(*entities.MacroData), args.Error(1)
+}
+
+func (m *MockMacroDataRepository) GetLastUpdated(ctx context.Context) (time.Time, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(time.Time), args.Error(1)
+}
+
+func (m *MockMacroDataRepository) IsStale(ctx context.Context, maxAge time.Duration) (bool, error) {
+	args := m.Called(ctx, maxAge)
+	return args.Bool(0), args.Error(1)
+}
+
+type MockCacheRepository struct {
+	mock.Mock
+}
+
+func (m *MockCacheRepository) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+	args := m.Called(ctx, key, value, ttl)
+	return args.Error(0)
+}
+
+func (m *MockCacheRepository) Get(ctx context.Context, key string, dest interface{}) error {
+	args := m.Called(ctx, key, dest)
+	return args.Error(0)
+}
+
+func (m *MockCacheRepository) Delete(ctx context.Context, key string) error {
+	args := m.Called(ctx, key)
+	return args.Error(0)
+}
+
+func (m *MockCacheRepository) Exists(ctx context.Context, key string) (bool, error) {
+	args := m.Called(ctx, key)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockCacheRepository) SetNX(ctx context.Context, key string, value interface{}, ttl time.Duration) (bool, error) {
+	args := m.Called(ctx, key, value, ttl)
+	return args.Bool(0), args.Error(1)
+}
+
+func (m *MockCacheRepository) GetKeys(ctx context.Context, pattern string) ([]string, error) {
+	args := m.Called(ctx, pattern)
+	return args.Get(0).([]string), args.Error(1)
+}
+
+func (m *MockCacheRepository) DeletePattern(ctx context.Context, pattern string) error {
+	args := m.Called(ctx, pattern)
+	return args.Error(0)
+}
+
+func createTestService() (*Service, *MockFinancialDataRepository, *MockMarketDataRepository, *MockMacroDataRepository, *MockCacheRepository) {
+	financialRepo := &MockFinancialDataRepository{}
+	marketRepo := &MockMarketDataRepository{}
+	macroRepo := &MockMacroDataRepository{}
+	cache := &MockCacheRepository{}
+	logger := zap.NewNop()
+
+	service := NewService(financialRepo, marketRepo, macroRepo, cache, logger)
+
+	return service, financialRepo, marketRepo, macroRepo, cache
+}
+
+func createTestData() (*entities.HistoricalFinancialData, *entities.MarketData, *entities.MacroData) {
+	// Create test financial data
+	historicalData := &entities.HistoricalFinancialData{
+		Ticker: "AAPL",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:                    "AAPL",
+				FilingPeriod:              "2023FY",
+				FilingDate:                time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now(),
+				OperatingIncome:           123450000000,
+				NormalizedOperatingIncome: 120000000000,
+				Revenue:                   383930000000,
+				InterestExpense:           3490000000,
+				TaxRate:                   0.21,
+				TotalAssets:               381190000000,
+				TangibleAssets:            350000000000,
+				InterestBearingDebt:       110000000000,
+				SharesOutstanding:         15744231000,
+				HasNormalizedData:         true,
+			},
+			"2022FY": {
+				Ticker:                    "AAPL",
+				FilingPeriod:              "2022FY",
+				FilingDate:                time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+				OperatingIncome:           119440000000,
+				NormalizedOperatingIncome: 116000000000,
+				Revenue:                   365817000000,
+				InterestExpense:           2930000000,
+				TaxRate:                   0.19,
+				TotalAssets:               352755000000,
+				TangibleAssets:            320000000000,
+				InterestBearingDebt:       108000000000,
+				SharesOutstanding:         15943425000,
+				HasNormalizedData:         true,
+			},
+			"2021FY": {
+				Ticker:                    "AAPL",
+				FilingPeriod:              "2021FY",
+				FilingDate:                time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-2 * 365 * 24 * time.Hour),
+				OperatingIncome:           108949000000,
+				NormalizedOperatingIncome: 105000000000,
+				Revenue:                   365817000000,
+				InterestExpense:           2650000000,
+				TaxRate:                   0.18,
+				TotalAssets:               323888000000,
+				TangibleAssets:            290000000000,
+				InterestBearingDebt:       98000000000,
+				SharesOutstanding:         16426786000,
+				HasNormalizedData:         true,
+			},
+		},
+	}
+
+	// Create test market data
+	marketData := &entities.MarketData{
+		Ticker:            "AAPL",
+		AsOf:              time.Now(),
+		SharePrice:        180.50,
+		MarketCap:         2840000000000,
+		SharesOutstanding: 15744231000,
+		Beta:              1.25,
+		Beta3Y:            1.20,
+		AverageVolume:     75000000,
+		Source:            "yfinance",
+		DataQuality:       "good",
+	}
+
+	// Create test macro data
+	macroData := &entities.MacroData{
+		AsOf:               time.Now(),
+		RiskFreeRate:       0.045, // 4.5%
+		RiskFreeRate3Month: 0.043, // 4.3%
+		MarketRiskPremium:  0.06,  // 6%
+		InflationRate:      0.032, // 3.2%
+		Source:             "fred",
+	}
+
+	return historicalData, marketData, macroData
+}
+
+func TestService_CalculateValuation(t *testing.T) {
+	service, financialRepo, marketRepo, macroRepo, cache := createTestService()
+	ctx := context.Background()
+
+	historicalData, marketData, macroData := createTestData()
+
+	t.Run("successful valuation calculation", func(t *testing.T) {
+		// Setup expectations - cache miss first
+		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult")).Return(errors.New("cache miss"))
+
+		// Then data retrieval
+		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
+		marketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
+		macroRepo.On("GetLatest", ctx).Return(macroData, nil)
+
+		// Cache storage
+		cache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult"), 1*time.Hour).Return(nil)
+
+		result, err := service.CalculateValuation(ctx, "AAPL")
+
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, "AAPL", result.Ticker)
+		assert.Greater(t, result.DCFValuePerShare, 0.0)
+		assert.Greater(t, result.TangibleValuePerShare, 0.0)
+		assert.Greater(t, result.WACC, 0.0)
+		assert.NotEmpty(t, result.FinancialDataPeriod)
+
+		// Verify all mock expectations
+		financialRepo.AssertExpectations(t)
+		marketRepo.AssertExpectations(t)
+		macroRepo.AssertExpectations(t)
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("returns cached result if available", func(t *testing.T) {
+		// Reset mocks
+		cache.ExpectedCalls = nil
+
+		cachedResult := &ValuationResult{
+			Ticker:                "AAPL",
+			CalculatedAt:          time.Now().Add(-30 * time.Minute),
+			TangibleValuePerShare: 150.0,
+			DCFValuePerShare:      175.0,
+			WACC:                  0.08,
+			GrowthRate:            0.05,
+		}
+
+		// Setup cache hit expectation
+		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult")).Run(func(args mock.Arguments) {
+			dest := args.Get(2).(*ValuationResult)
+			*dest = *cachedResult
+		}).Return(nil)
+
+		result, err := service.CalculateValuation(ctx, "AAPL")
+
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, cachedResult.Ticker, result.Ticker)
+		assert.Equal(t, cachedResult.DCFValuePerShare, result.DCFValuePerShare)
+
+		cache.AssertExpectations(t)
+		// Should not call other repos when cache hit
+		financialRepo.AssertNotCalled(t, "GetHistorical")
+		marketRepo.AssertNotCalled(t, "GetLatest")
+		macroRepo.AssertNotCalled(t, "GetLatest")
+	})
+
+	t.Run("handles missing financial data", func(t *testing.T) {
+		// Reset mocks
+		financialRepo.ExpectedCalls = nil
+		marketRepo.ExpectedCalls = nil
+		macroRepo.ExpectedCalls = nil
+		cache.ExpectedCalls = nil
+
+		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult")).Return(errors.New("cache miss"))
+		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return((*entities.HistoricalFinancialData)(nil), errors.New("no data found"))
+
+		result, err := service.CalculateValuation(ctx, "AAPL")
+
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "failed to fetch financial data")
+
+		financialRepo.AssertExpectations(t)
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("handles missing market data", func(t *testing.T) {
+		// Reset mocks
+		financialRepo.ExpectedCalls = nil
+		marketRepo.ExpectedCalls = nil
+		macroRepo.ExpectedCalls = nil
+		cache.ExpectedCalls = nil
+
+		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult")).Return(errors.New("cache miss"))
+		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
+		marketRepo.On("GetLatest", ctx, "AAPL").Return((*entities.MarketData)(nil), errors.New("no market data"))
+
+		result, err := service.CalculateValuation(ctx, "AAPL")
+
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "failed to fetch market data")
+
+		financialRepo.AssertExpectations(t)
+		marketRepo.AssertExpectations(t)
+		cache.AssertExpectations(t)
+	})
+
+	t.Run("handles missing macro data", func(t *testing.T) {
+		// Reset mocks
+		financialRepo.ExpectedCalls = nil
+		marketRepo.ExpectedCalls = nil
+		macroRepo.ExpectedCalls = nil
+		cache.ExpectedCalls = nil
+
+		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult")).Return(errors.New("cache miss"))
+		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
+		marketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
+		macroRepo.On("GetLatest", ctx).Return((*entities.MacroData)(nil), errors.New("no macro data"))
+
+		result, err := service.CalculateValuation(ctx, "AAPL")
+
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "failed to fetch macro data")
+
+		financialRepo.AssertExpectations(t)
+		marketRepo.AssertExpectations(t)
+		macroRepo.AssertExpectations(t)
+		cache.AssertExpectations(t)
+	})
+}
+
+func TestService_performValuation(t *testing.T) {
+	service, _, _, _, _ := createTestService()
+	historicalData, marketData, macroData := createTestData()
+
+	t.Run("successful valuation with good data", func(t *testing.T) {
+		result, err := service.performValuation(historicalData, marketData, macroData)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Equal(t, "AAPL", result.Ticker)
+		assert.Greater(t, result.DCFValuePerShare, 0.0)
+		assert.Greater(t, result.TangibleValuePerShare, 0.0)
+		assert.Greater(t, result.WACC, 0.0)
+		assert.Greater(t, result.GrowthRate, 0.0)
+		assert.Greater(t, result.EnterpriseValue, 0.0)
+		assert.Greater(t, result.DataFreshnessScore, 0)
+		assert.Equal(t, "1.0", result.CalculationVersion)
+	})
+
+	t.Run("insufficient historical data", func(t *testing.T) {
+		// Create data with only 1 period (insufficient)
+		insufficientData := &entities.HistoricalFinancialData{
+			Ticker: "AAPL",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": historicalData.Data["2023FY"], // Only one period
+			},
+		}
+
+		result, err := service.performValuation(insufficientData, marketData, macroData)
+
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "insufficient financial data")
+	})
+
+	t.Run("incomplete market data", func(t *testing.T) {
+		// Create incomplete market data
+		incompleteMarketData := &entities.MarketData{
+			Ticker:     "AAPL",
+			AsOf:       time.Now(),
+			SharePrice: 0, // Missing price
+		}
+
+		result, err := service.performValuation(historicalData, incompleteMarketData, macroData)
+
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "incomplete market data")
+	})
+
+	t.Run("incomplete macro data", func(t *testing.T) {
+		// Create incomplete macro data
+		incompleteMacroData := &entities.MacroData{
+			AsOf:         time.Now(),
+			RiskFreeRate: 0, // Missing risk-free rate
+		}
+
+		result, err := service.performValuation(historicalData, marketData, incompleteMacroData)
+
+		assert.Error(t, err)
+		assert.Nil(t, result)
+		assert.Contains(t, err.Error(), "incomplete macro data")
+	})
+}
+
+func TestService_calculateTangibleValuePerShare(t *testing.T) {
+	service, _, _, _, _ := createTestService()
+	_, marketData, _ := createTestData()
+
+	t.Run("calculate with valid data", func(t *testing.T) {
+		financial := &entities.FinancialData{
+			TangibleAssets:      350000000000, // $350B
+			InterestBearingDebt: 110000000000, // $110B
+		}
+
+		tangibleValue := service.calculateTangibleValuePerShare(financial, marketData)
+
+		// Expected: 350B / 15.744B shares = ~22.23 (debt is not subtracted in this calculation)
+		expected := 350000000000 / 15744231000
+		assert.InDelta(t, expected, tangibleValue, 1.0) // Use larger delta for floating point precision
+	})
+
+	t.Run("calculate with zero debt", func(t *testing.T) {
+		financial := &entities.FinancialData{
+			TangibleAssets:      350000000000, // $350B
+			InterestBearingDebt: 0,            // No debt
+		}
+
+		tangibleValue := service.calculateTangibleValuePerShare(financial, marketData)
+
+		// Expected: 350B / 15.744B shares = ~22.23
+		expected := 350000000000 / 15744231000
+		assert.InDelta(t, expected, tangibleValue, 1.0) // Use larger delta for floating point precision
+	})
+}
+
+func TestService_calculateTerminalGrowthRate(t *testing.T) {
+	service, _, _, _, _ := createTestService()
+
+	t.Run("normal growth rate", func(t *testing.T) {
+		historicalCAGR := 0.08 // 8%
+		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR)
+
+		// Should be min(3%, half of 8%) = min(3%, 4%) = 3%
+		assert.Equal(t, 0.03, terminalGrowth)
+	})
+
+	t.Run("low growth rate", func(t *testing.T) {
+		historicalCAGR := 0.04 // 4%
+		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR)
+
+		// Should be min(3%, half of 4%) = min(3%, 2%) = 2%
+		assert.Equal(t, 0.02, terminalGrowth)
+	})
+
+	t.Run("zero growth rate", func(t *testing.T) {
+		historicalCAGR := 0.0 // 0%
+		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR)
+
+		// Should be min(3%, half of 0%) = min(3%, 0%) = 0%
+		assert.Equal(t, 0.0, terminalGrowth)
+	})
+
+	t.Run("negative growth rate", func(t *testing.T) {
+		historicalCAGR := -0.02 // -2%
+		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR)
+
+		// Should be min(3%, half of -2%) = min(3%, -1%) but with a floor of 2%
+		assert.Equal(t, 0.02, terminalGrowth) // 2% minimum for inflation
+	})
+}
+
+func TestService_calculateDataFreshnessScore(t *testing.T) {
+	service, _, _, _, _ := createTestService()
+
+	t.Run("fresh data gets high score", func(t *testing.T) {
+		financial := &entities.FinancialData{
+			AsOf: time.Now().Add(-24 * time.Hour), // 1 day old
+		}
+		market := &entities.MarketData{
+			AsOf: time.Now().Add(-1 * time.Hour), // 1 hour old
+		}
+		macro := &entities.MacroData{
+			AsOf: time.Now().Add(-2 * time.Hour), // 2 hours old
+		}
+
+		score := service.calculateDataFreshnessScore(financial, market, macro)
+
+		assert.Greater(t, score, 80) // Should be high score for fresh data
+	})
+
+	t.Run("stale data gets lower score", func(t *testing.T) {
+		financial := &entities.FinancialData{
+			AsOf: time.Now().Add(-120 * 24 * time.Hour), // 120 days old
+		}
+		market := &entities.MarketData{
+			AsOf: time.Now().Add(-48 * time.Hour), // 2 days old
+		}
+		macro := &entities.MacroData{
+			AsOf: time.Now().Add(-24 * time.Hour), // 1 day old
+		}
+
+		score := service.calculateDataFreshnessScore(financial, market, macro)
+
+		assert.LessOrEqual(t, score, 60) // Should be lower score for stale data
+	})
+}

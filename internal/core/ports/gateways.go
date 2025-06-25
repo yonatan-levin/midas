@@ -7,49 +7,40 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
 
-// SECGateway defines the interface for SEC data operations
+// SECGateway defines the interface for SEC data retrieval
 type SECGateway interface {
-	// GetCompanyFacts retrieves company facts from SEC API
-	GetCompanyFacts(ctx context.Context, cik string) (*SECCompanyFacts, error)
-
-	// GetTickerCIKMapping retrieves the ticker-to-CIK mapping from SEC
-	GetTickerCIKMapping(ctx context.Context) (map[string]string, error)
-
-	// ParseFinancialData extracts financial data from SEC company facts
-	ParseFinancialData(ctx context.Context, facts *SECCompanyFacts) (*entities.HistoricalFinancialData, error)
-
-	// NormalizeFinancialData applies normalization rules to financial data
-	NormalizeFinancialData(ctx context.Context, data *entities.FinancialData) (*entities.FinancialData, error)
+	GetCompanyFacts(ctx context.Context, cik string) (*entities.CompanyFactsResponse, error)
+	GetCompanyConcepts(ctx context.Context, cik string, tag string) (*entities.ConceptResponse, error)
+	HealthCheck(ctx context.Context) error
 }
 
-// MarketDataGateway defines the interface for market data operations
+// MarketDataGateway defines the interface for market data retrieval
 type MarketDataGateway interface {
-	// GetMarketData retrieves current market data for a ticker
-	GetMarketData(ctx context.Context, ticker string) (*entities.MarketData, error)
-
-	// GetBatchMarketData retrieves market data for multiple tickers
-	GetBatchMarketData(ctx context.Context, tickers []string) (map[string]*entities.MarketData, error)
-
-	// GetBeta retrieves beta for a ticker
-	GetBeta(ctx context.Context, ticker string) (float64, error)
-
-	// GetSharePrice retrieves current share price for a ticker
-	GetSharePrice(ctx context.Context, ticker string) (float64, error)
-
-	// GetSharesOutstanding retrieves shares outstanding for a ticker
-	GetSharesOutstanding(ctx context.Context, ticker string) (float64, error)
+	GetQuote(ctx context.Context, ticker string) (*entities.MarketData, error)
+	GetQuotes(ctx context.Context, tickers []string) (map[string]*entities.MarketData, error)
+	GetHistoricalPrices(ctx context.Context, ticker string, startDate, endDate time.Time) ([]*entities.PriceData, error)
+	HealthCheck(ctx context.Context) error
 }
 
-// MacroDataGateway defines the interface for macro-economic data operations
+// MacroDataGateway defines the interface for macroeconomic data
 type MacroDataGateway interface {
-	// GetTreasuryRate retrieves current Treasury rate (risk-free rate)
-	GetTreasuryRate(ctx context.Context, maturity string) (float64, error)
+	GetTreasuryRates(ctx context.Context) (*entities.TreasuryRates, error)
+	GetMarketRiskPremium(ctx context.Context) (float64, error)
+	HealthCheck(ctx context.Context) error
+}
 
-	// GetMacroData retrieves comprehensive macro data
-	GetMacroData(ctx context.Context) (*entities.MacroData, error)
+// CircuitBreaker defines the interface for circuit breaker functionality
+type CircuitBreaker interface {
+	Execute(ctx context.Context, fn func() error) error
+	State() string
+	Reset()
+}
 
-	// GetInflationRate retrieves current inflation rate
-	GetInflationRate(ctx context.Context) (float64, error)
+// RetryPolicy defines the interface for retry functionality
+type RetryPolicy interface {
+	Execute(ctx context.Context, fn func() error) error
+	WithMaxAttempts(attempts int) RetryPolicy
+	WithBackoff(strategy string) RetryPolicy
 }
 
 // SECCompanyFacts represents the structure of SEC Company Facts API response
