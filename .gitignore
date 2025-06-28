@@ -57,6 +57,7 @@ go-src-cache/
 .vscode/
 .vs/
 .cursor/
+.cursor/rules/
 .idea/
 *.swp
 *.swo
