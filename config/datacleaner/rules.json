@@ -1,0 +1,266 @@
+{
+  "version": "1.0.0",
+  "description": "SEC Data Cleaning Rules - Production Configuration",
+  "created_at": "2024-12-25T00:00:00Z",
+  "metadata": {
+    "source": "SEC Data Cleaning Field Guide",
+    "author": "Midas DCF API",
+    "last_updated": "2024-12-25",
+    "total_rules": 17
+  },
+  "rules": [
+    {
+      "id": "goodwill_exclusion",
+      "name": "Goodwill Exclusion",
+      "description": "Exclude goodwill from invested capital calculations as it represents pure acquisition premium with no guarantee of future cash flow",
+      "category": "asset_quality",
+      "xbrl_tags": ["GoodwillNet", "GoodwillGross", "Goodwill", "GoodwillAndOtherIntangibleAssets"],
+      "patterns": ["goodwill", "acquisition premium"],
+      "adjustment": "exclude",
+      "industry": ["all"],
+      "severity": "warning",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_A1"
+    },
+    {
+      "id": "intangible_adjustment",
+      "name": "Indefinite-Lived Intangibles Adjustment", 
+      "description": "Write down indefinite-lived intangibles (trademarks, broadcast licenses) as carrying value can be inflated through optimistic tests",
+      "category": "asset_quality",
+      "xbrl_tags": ["IndefiniteLivedIntangibleAssets", "IntangibleAssetsIndefiniteLived", "Trademarks", "BroadcastLicenses"],
+      "adjustment": "writedown",
+      "threshold": {
+        "writedown_rate": 1.0
+      },
+      "industry": ["all"],
+      "severity": "warning",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_A2"
+    },
+    {
+      "id": "capitalized_software",
+      "name": "Capitalized Software Development",
+      "description": "Reclassify capitalized software development costs as operating expense as capitalization postpones expenses and inflates EBIT",
+      "category": "asset_quality", 
+      "xbrl_tags": ["SoftwareDevelopmentCostsCapitalized", "CapitalizedSoftwareCosts", "InternalUseSoftware"],
+      "adjustment": "reclassify",
+      "threshold": {
+        "percentage_of_revenue": 0.02
+      },
+      "industry": ["45", "25"],
+      "severity": "info",
+      "version": "1.0", 
+      "enabled": true,
+      "source": "SEC_Guide_A3"
+    },
+    {
+      "id": "deferred_tax_assets",
+      "name": "Deferred Tax Assets Valuation",
+      "description": "Reduce deferred tax assets by portion not 'more-likely-than-not' to be realized as DTAs only valuable if future taxable income exists",
+      "category": "asset_quality",
+      "xbrl_tags": ["DeferredTaxAssetsGross", "DeferredIncomeTaxAssetsNet", "DeferredTaxAssets"],
+      "adjustment": "writedown",
+      "threshold": {
+        "percentage_of_assets": 0.25
+      },
+      "industry": ["all"],
+      "severity": "warning",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_A4"
+    },
+    {
+      "id": "obsolete_inventory",
+      "name": "Obsolete Inventory Detection",
+      "description": "Force write-down of slow/obsolete inventory when inventory > 1.5x 5-year median and turnover declines 25%+",
+      "category": "asset_quality",
+      "xbrl_tags": ["InventoryNet", "Inventory", "InventoryFinishedGoods", "InventoryRawMaterials"],
+      "adjustment": "writedown",
+      "threshold": {
+        "growth_multiple": 1.5,
+        "turnover_decline": 0.25,
+        "writedown_rate": 0.4
+      },
+      "industry": ["25", "30", "20"],
+      "severity": "critical",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_A5"
+    },
+    {
+      "id": "right_of_use_assets",
+      "name": "Right-of-Use Assets Adjustment",
+      "description": "Exclude ROU assets from invested capital as they inflate total assets but don't add operating capacity",
+      "category": "asset_quality",
+      "xbrl_tags": ["OperatingLeaseRightOfUseAsset", "RightOfUseAssets", "LeaseRightOfUseAssets"],
+      "adjustment": "exclude",
+      "industry": ["all"],
+      "severity": "info",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_A6"
+    },
+    {
+      "id": "excess_cash",
+      "name": "Excess Cash Identification",
+      "description": "Remove excess cash and short-term investments from working capital as they are non-operating",
+      "category": "asset_quality",
+      "xbrl_tags": ["CashAndCashEquivalents", "ShortTermInvestments", "MarketableSecurities"],
+      "adjustment": "exclude",
+      "threshold": {
+        "percentage_of_revenue": 0.1
+      },
+      "industry": ["all"],
+      "severity": "info",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_A7"
+    },
+    {
+      "id": "operating_leases",
+      "name": "Operating Lease Liabilities",
+      "description": "Treat operating lease liabilities as debt for leverage and enterprise value calculations",
+      "category": "liability_completeness",
+      "xbrl_tags": ["OperatingLeaseLiabilityCurrent", "OperatingLeaseLiabilityNoncurrent", "OperatingLeaseLiability"],
+      "adjustment": "treat_as_debt",
+      "industry": ["all"],
+      "severity": "warning",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_B1"
+    },
+    {
+      "id": "pension_obligations",
+      "name": "Under-funded Pension Obligations",
+      "description": "Add net under-funded pension and OPEB amounts to debt as they represent economic obligations",
+      "category": "liability_completeness",
+      "xbrl_tags": ["PensionLiabilities", "OPEBLiability", "DefinedBenefitPlanUnderfundedStatus"],
+      "adjustment": "treat_as_debt",
+      "industry": ["all"],
+      "severity": "warning",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_B2"
+    },
+    {
+      "id": "contingent_liabilities",
+      "name": "Contingent Liabilities Assessment",
+      "description": "Estimate contingent and environmental liabilities using probability-weighted expected values",
+      "category": "liability_completeness",
+      "xbrl_tags": ["ContingentLiabilities", "EnvironmentalLiabilities", "LitigationLiabilities"],
+      "adjustment": "flag",
+      "threshold": {
+        "percentage_of_revenue": 0.05
+      },
+      "industry": ["all"],
+      "severity": "critical",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_B3"
+    },
+    {
+      "id": "restructuring_charges",
+      "name": "Restructuring and Integration Charges",
+      "description": "Strip recurring restructuring charges from EBITDA as they create future expense slush funds",
+      "category": "earnings_normalization",
+      "xbrl_tags": ["RestructuringCosts", "ReorganizationCosts", "IntegrationCosts"],
+      "patterns": ["restructuring", "reorganization", "integration costs"],
+      "adjustment": "exclude",
+      "threshold": {
+        "percentage_of_revenue": 0.02
+      },
+      "industry": ["all"],
+      "severity": "info",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_C1"
+    },
+    {
+      "id": "asset_sale_gains",
+      "name": "Asset Sale Gains and Impairments",
+      "description": "Remove non-core asset sale gains and impairment losses from operating profit",
+      "category": "earnings_normalization",
+      "xbrl_tags": ["GainLossOnSaleOfAssets", "ImpairmentLosses", "AssetImpairmentCharges"],
+      "adjustment": "exclude",
+      "industry": ["all"],
+      "severity": "info",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_C2"
+    },
+    {
+      "id": "litigation_settlements",
+      "name": "Litigation Settlements and Fines",
+      "description": "Exclude episodic but material litigation settlements and regulatory fines from core earnings",
+      "category": "earnings_normalization",
+      "xbrl_tags": ["LegalSettlements", "RegulatoryFines", "LitigationExpenses"],
+      "patterns": ["settlement", "fine", "penalty", "litigation"],
+      "adjustment": "exclude",
+      "threshold": {
+        "percentage_of_revenue": 0.01
+      },
+      "industry": ["all"],
+      "severity": "warning",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_C3"
+    },
+    {
+      "id": "stock_compensation",
+      "name": "Stock-Based Compensation",
+      "description": "Adjust for stock-based compensation dilution in per-share estimates while treating as real expense",
+      "category": "earnings_normalization",
+      "xbrl_tags": ["ShareBasedCompensation", "StockBasedCompensationExpense"],
+      "adjustment": "reclassify",
+      "industry": ["all"],
+      "severity": "info",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_C4"
+    },
+    {
+      "id": "derivative_gains_losses",
+      "name": "Fair Value Gains/Losses on Derivatives",
+      "description": "Segregate volatile derivative marks from operating results to normalize earnings",
+      "category": "earnings_normalization",
+      "xbrl_tags": ["DerivativeGainsLosses", "FairValueAdjustments", "UnrealizedGainsLosses"],
+      "adjustment": "exclude",
+      "industry": ["all"],
+      "severity": "info",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_C5"
+    },
+    {
+      "id": "capitalized_interest",
+      "name": "Capitalized Interest Adjustment",
+      "description": "Add capitalized interest back to interest expense and reduce PP&E as it buries financing costs",
+      "category": "earnings_normalization", 
+      "xbrl_tags": ["CapitalizedInterest", "InterestCapitalized"],
+      "adjustment": "reclassify",
+      "industry": ["55", "60", "20"],
+      "severity": "warning",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_C6"
+    },
+    {
+      "id": "working_capital_window_dressing",
+      "name": "Working Capital Window Dressing",
+      "description": "Flag unusual quarter-end working capital movements that may inflate liquidity ratios",
+      "category": "earnings_normalization",
+      "xbrl_tags": ["AccountsReceivable", "AccountsPayable", "AccruedLiabilities"],
+      "adjustment": "flag",
+      "threshold": {
+        "percentage_of_revenue": 0.15
+      },
+      "industry": ["all"],
+      "severity": "critical",
+      "version": "1.0",
+      "enabled": true,
+      "source": "SEC_Guide_C7"
+    }
+  ]
+} 

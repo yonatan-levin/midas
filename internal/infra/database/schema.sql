@@ -111,7 +111,7 @@ CREATE INDEX IF NOT EXISTS idx_market_data_source ON market_data(source);
 -- Macro data table for economic indicators
 CREATE TABLE IF NOT EXISTS macro_data (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    as_of_date TIMESTAMP NOT NULL,
+    as_of TIMESTAMP NOT NULL,
     
     -- Risk-free rate (typically 10-year Treasury)
     risk_free_rate DECIMAL(6,4),
@@ -132,7 +132,22 @@ CREATE TABLE IF NOT EXISTS macro_data (
 );
 
 -- Index for macro data queries
-CREATE INDEX IF NOT EXISTS idx_macro_data_date ON macro_data(as_of_date DESC);
+CREATE INDEX IF NOT EXISTS idx_macro_data_date ON macro_data(as_of DESC);
+
+-- Ticker to CIK mapping table
+CREATE TABLE IF NOT EXISTS ticker_mapping (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker VARCHAR(10) NOT NULL UNIQUE,
+    cik VARCHAR(10) NOT NULL,
+    
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for ticker mapping queries
+CREATE INDEX IF NOT EXISTS idx_ticker_mapping_ticker ON ticker_mapping(ticker);
+CREATE INDEX IF NOT EXISTS idx_ticker_mapping_cik ON ticker_mapping(cik);
 
 -- Valuation results table for caching DCF calculations
 CREATE TABLE IF NOT EXISTS valuation_results (

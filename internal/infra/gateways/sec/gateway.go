@@ -31,8 +31,38 @@ func NewGateway(cfg *config.SECConfig, logger *zap.Logger) *Gateway {
 }
 
 // GetCompanyFacts retrieves company facts from SEC API
-func (g *Gateway) GetCompanyFacts(ctx context.Context, cik string) (*ports.SECCompanyFacts, error) {
-	return g.client.GetCompanyFacts(ctx, cik)
+func (g *Gateway) GetCompanyFacts(ctx context.Context, cik string) (*entities.CompanyFactsResponse, error) {
+	facts, err := g.client.GetCompanyFacts(ctx, cik)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert ports.SECCompanyFacts to entities.CompanyFactsResponse
+	return &entities.CompanyFactsResponse{
+		CIK:         facts.CIK,
+		EntityName:  facts.EntityName,
+		Facts:       convertFactsToMap(facts.Facts),
+		FactsCount:  len(facts.Facts),
+		LastUpdated: facts.FilingDate,
+	}, nil
+}
+
+// convertFactsToMap converts SEC facts to generic interface map
+func convertFactsToMap(facts map[string]ports.SECFactGroup) map[string]interface{} {
+	result := make(map[string]interface{})
+	for key, group := range facts {
+		result[key] = map[string]interface{}{
+			"label":       group.Label,
+			"description": group.Description,
+			"units":       group.Units,
+		}
+	}
+	return result
+}
+
+// GetCompanyConcepts retrieves company concepts from SEC API for a specific tag
+func (g *Gateway) GetCompanyConcepts(ctx context.Context, cik string, tag string) (*entities.ConceptResponse, error) {
+	return g.client.GetCompanyConcepts(ctx, cik, tag)
 }
 
 // GetTickerCIKMapping retrieves the ticker-to-CIK mapping from SEC

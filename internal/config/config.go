@@ -9,12 +9,14 @@ import (
 
 // Config holds all configuration settings for the application
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	Cache     CacheConfig     `mapstructure:"cache"`
-	SEC       SECConfig       `mapstructure:"sec"`
-	Market    MarketConfig    `mapstructure:"market"`
-	Valuation ValuationConfig `mapstructure:"valuation"`
+	Server      ServerConfig      `mapstructure:"server"`
+	Database    DatabaseConfig    `mapstructure:"database"`
+	Cache       CacheConfig       `mapstructure:"cache"`
+	SEC         SECConfig         `mapstructure:"sec"`
+	Market      MarketConfig      `mapstructure:"market"`
+	Macro       MacroConfig       `mapstructure:"macro"`
+	Valuation   ValuationConfig   `mapstructure:"valuation"`
+	DataCleaner DataCleanerConfig `mapstructure:"datacleaner"`
 }
 
 // ServerConfig holds HTTP server configuration
@@ -78,6 +80,15 @@ type FinziveConfig struct {
 	UserAgent      string        `mapstructure:"user_agent"`
 }
 
+// MacroConfig holds macro data configuration
+type MacroConfig struct {
+	FREDEnabled             bool    `mapstructure:"fred_enabled"`
+	FREDAPIKey              string  `mapstructure:"fred_api_key"`
+	FREDBaseURL             string  `mapstructure:"fred_base_url"`
+	ManualRiskFreeRate      float64 `mapstructure:"manual_risk_free_rate"`
+	ManualMarketRiskPremium float64 `mapstructure:"manual_market_risk_premium"`
+}
+
 // ValuationConfig holds valuation calculation settings
 type ValuationConfig struct {
 	DefaultMarketRiskPremium float64 `mapstructure:"default_market_risk_premium"`
@@ -85,6 +96,50 @@ type ValuationConfig struct {
 	DefaultTaxRate           float64 `mapstructure:"default_tax_rate"`
 	MinDataPointsForGrowth   int     `mapstructure:"min_data_points_for_growth"`
 	MaxBulkSize              int     `mapstructure:"max_bulk_size"`
+
+	// DCF calculation specific settings
+	DCFProjectionYears    int     `mapstructure:"dcf_projection_years"`    // Number of explicit forecast years
+	DCFMaxGrowthRate      float64 `mapstructure:"dcf_max_growth_rate"`     // Maximum allowed growth rate
+	DCFMinGrowthRate      float64 `mapstructure:"dcf_min_growth_rate"`     // Minimum allowed growth rate
+	DCFIterationTolerance float64 `mapstructure:"dcf_iteration_tolerance"` // Tolerance for implied growth calculations
+	DCFMaxIterations      int     `mapstructure:"dcf_max_iterations"`      // Max iterations for implied growth calculations
+}
+
+// DataCleanerConfig holds data cleaning configuration
+type DataCleanerConfig struct {
+	// Rules configuration paths
+	RulesPath         string `mapstructure:"rules_path"`          // Path to main rules JSON file
+	IndustryRulesPath string `mapstructure:"industry_rules_path"` // Path to industry rules directory
+	SchemaPath        string `mapstructure:"schema_path"`         // Path to JSON schema file
+
+	// Processing configuration
+	Enabled             bool          `mapstructure:"enabled"`               // Enable/disable data cleaning
+	EnableAIIntegration bool          `mapstructure:"enable_ai_integration"` // Enable AI service integration
+	AIServiceURL        string        `mapstructure:"ai_service_url"`        // External AI service URL for footnote parsing
+	AIServiceTimeout    time.Duration `mapstructure:"ai_service_timeout"`    // AI service request timeout
+
+	// Quality scoring thresholds
+	MinQualityScore  float64 `mapstructure:"min_quality_score"`  // Minimum acceptable quality score (0-100)
+	HighQualityScore float64 `mapstructure:"high_quality_score"` // High quality threshold (0-100)
+
+	// Risk flagging configuration
+	EnableRiskFlags   bool    `mapstructure:"enable_risk_flags"`  // Enable automated risk flagging
+	CriticalThreshold float64 `mapstructure:"critical_threshold"` // Critical risk threshold
+	WarningThreshold  float64 `mapstructure:"warning_threshold"`  // Warning risk threshold
+
+	// Performance settings
+	MaxConcurrentRules int           `mapstructure:"max_concurrent_rules"` // Max concurrent rule processing
+	EnableCaching      bool          `mapstructure:"enable_caching"`       // Enable cleaning result caching
+	CacheTTL           time.Duration `mapstructure:"cache_ttl"`            // Cache TTL for cleaning results
+
+	// Industry classification
+	DefaultIndustry     string `mapstructure:"default_industry"`      // Default GICS code when industry unknown
+	EnableIndustryRules bool   `mapstructure:"enable_industry_rules"` // Enable industry-specific rules
+
+	// Audit and logging
+	EnableAuditTrail bool `mapstructure:"enable_audit_trail"` // Enable detailed audit trail
+	LogAdjustments   bool `mapstructure:"log_adjustments"`    // Log all adjustments made
+	LogFlags         bool `mapstructure:"log_flags"`          // Log all flags raised
 }
 
 // Load loads configuration from environment variables and config files
@@ -164,12 +219,47 @@ func setDefaults() {
 	viper.SetDefault("market.finzive.max_retries", 2)
 	viper.SetDefault("market.finzive.user_agent", "Mozilla/5.0 (compatible; Midas/1.0)")
 
+	// Macro data defaults
+	viper.SetDefault("macro.fred_enabled", false)
+	viper.SetDefault("macro.fred_base_url", "https://api.stlouisfed.org/fred")
+	viper.SetDefault("macro.manual_risk_free_rate", 0.045)     // 4.5% - 10-year Treasury approximation
+	viper.SetDefault("macro.manual_market_risk_premium", 0.05) // 5% - Standard market risk premium
+
 	// Valuation defaults
 	viper.SetDefault("valuation.default_market_risk_premium", 0.05) // 5%
 	viper.SetDefault("valuation.default_terminal_growth_cap", 0.03) // 3%
 	viper.SetDefault("valuation.default_tax_rate", 0.21)            // 21%
 	viper.SetDefault("valuation.min_data_points_for_growth", 2)
 	viper.SetDefault("valuation.max_bulk_size", 50)
+
+	// DCF calculation defaults
+	viper.SetDefault("valuation.dcf_projection_years", 5)         // 5-year explicit forecast
+	viper.SetDefault("valuation.dcf_max_growth_rate", 0.5)        // 50% max growth
+	viper.SetDefault("valuation.dcf_min_growth_rate", -0.3)       // -30% min growth
+	viper.SetDefault("valuation.dcf_iteration_tolerance", 0.0001) // 0.01% tolerance
+	viper.SetDefault("valuation.dcf_max_iterations", 100)         // 100 max iterations
+
+	// DataCleaner defaults
+	viper.SetDefault("datacleaner.rules_path", "./config/datacleaner/rules.json")
+	viper.SetDefault("datacleaner.industry_rules_path", "./config/datacleaner/industry")
+	viper.SetDefault("datacleaner.schema_path", "./config/datacleaner/schema.json")
+	viper.SetDefault("datacleaner.enabled", true)
+	viper.SetDefault("datacleaner.enable_ai_integration", false) // Disabled by default until AI service is ready
+	viper.SetDefault("datacleaner.ai_service_url", "")
+	viper.SetDefault("datacleaner.ai_service_timeout", "30s")
+	viper.SetDefault("datacleaner.min_quality_score", 60.0)  // 60% minimum quality
+	viper.SetDefault("datacleaner.high_quality_score", 85.0) // 85% high quality
+	viper.SetDefault("datacleaner.enable_risk_flags", true)
+	viper.SetDefault("datacleaner.critical_threshold", 0.3)  // 30% critical threshold
+	viper.SetDefault("datacleaner.warning_threshold", 0.15)  // 15% warning threshold
+	viper.SetDefault("datacleaner.max_concurrent_rules", 10) // Process 10 rules concurrently
+	viper.SetDefault("datacleaner.enable_caching", true)
+	viper.SetDefault("datacleaner.cache_ttl", "6h")      // Cache cleaning results for 6 hours
+	viper.SetDefault("datacleaner.default_industry", "") // No default industry
+	viper.SetDefault("datacleaner.enable_industry_rules", true)
+	viper.SetDefault("datacleaner.enable_audit_trail", true) // Enable full audit trail
+	viper.SetDefault("datacleaner.log_adjustments", true)    // Log all adjustments
+	viper.SetDefault("datacleaner.log_flags", true)          // Log all flags
 }
 
 // validate performs basic validation on the configuration

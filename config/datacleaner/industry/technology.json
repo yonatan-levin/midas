@@ -1,0 +1,120 @@
+{
+  "gics_code": "45",
+  "name": "Information Technology",
+  "description": "Technology sector specific rules and overrides focusing on software capitalization, R&D treatment, and intangible assets",
+  "overrides": [
+    {
+      "rule_id": "capitalized_software",
+      "enabled": true,
+      "threshold": {
+        "percentage_of_revenue": 0.015
+      },
+      "severity": "warning"
+    },
+    {
+      "rule_id": "intangible_adjustment",
+      "enabled": true,
+      "threshold": {
+        "writedown_rate": 0.8
+      },
+      "severity": "critical"
+    },
+    {
+      "rule_id": "stock_compensation",
+      "enabled": true,
+      "severity": "warning"
+    },
+    {
+      "rule_id": "deferred_tax_assets",
+      "enabled": true,
+      "threshold": {
+        "percentage_of_assets": 0.15
+      },
+      "severity": "warning"
+    }
+  ],
+  "special_rules": [
+    {
+      "id": "rd_capitalization_review",
+      "name": "R&D Capitalization Review",
+      "description": "Technology companies often capitalize R&D expenses inappropriately. Flag cases where R&D capitalization exceeds 10% of total R&D spend",
+      "category": "asset_quality",
+      "xbrl_tags": ["ResearchAndDevelopmentExpenseCapitalized", "ResearchAndDevelopmentExpense", "SoftwareDevelopmentCosts"],
+      "adjustment": "flag",
+      "threshold": {
+        "percentage_of_revenue": 0.1
+      },
+      "industry": ["45"],
+      "severity": "critical",
+      "version": "1.0",
+      "enabled": true,
+      "source": "Industry_Tech_R&D"
+    },
+    {
+      "id": "acquired_technology_writedown",
+      "name": "Acquired Technology Writedown",
+      "description": "Technology acquisitions often result in overvalued acquired technology assets. Apply conservative writedown for acquired tech assets older than 3 years",
+      "category": "asset_quality",
+      "xbrl_tags": ["AcquiredTechnology", "DevelopedTechnologyAssets", "TechnologyIntangibles"],
+      "adjustment": "writedown",
+      "threshold": {
+        "age_in_years": 3,
+        "writedown_rate": 0.6
+      },
+      "industry": ["45"],
+      "severity": "warning",
+      "version": "1.0",
+      "enabled": true,
+      "source": "Industry_Tech_Acquired"
+    },
+    {
+      "id": "saas_deferred_revenue_quality",
+      "name": "SaaS Deferred Revenue Quality",
+      "description": "For SaaS companies, flag unusual patterns in deferred revenue that may indicate channel stuffing or aggressive revenue recognition",
+      "category": "earnings_normalization",
+      "xbrl_tags": ["DeferredRevenue", "ContractLiabilities", "UnbilledReceivables"],
+      "adjustment": "flag",
+      "threshold": {
+        "percentage_of_revenue": 0.3
+      },
+      "industry": ["45"],
+      "severity": "warning",
+      "version": "1.0",
+      "enabled": true,
+      "source": "Industry_Tech_SaaS"
+    },
+    {
+      "id": "cloud_infrastructure_adjustment",
+      "name": "Cloud Infrastructure Adjustment",
+      "description": "For cloud service providers, distinguish between productive infrastructure investments and speculative capacity expansion",
+      "category": "asset_quality",
+      "xbrl_tags": ["ComputerEquipment", "ServerEquipment", "DataCenterAssets"],
+      "adjustment": "flag",
+      "threshold": {
+        "growth_multiple": 2.0,
+        "percentage_of_revenue": 0.4
+      },
+      "industry": ["45"],
+      "severity": "info",
+      "version": "1.0",
+      "enabled": true,
+      "source": "Industry_Tech_Cloud"
+    },
+    {
+      "id": "cryptocurrency_holdings",
+      "name": "Cryptocurrency Holdings Assessment",
+      "description": "Technology companies holding cryptocurrency should have these treated as speculative investments with appropriate volatility adjustments",
+      "category": "asset_quality",
+      "xbrl_tags": ["DigitalAssets", "Cryptocurrency", "BitcoinHoldings"],
+      "adjustment": "flag",
+      "threshold": {
+        "percentage_of_assets": 0.05
+      },
+      "industry": ["45"],
+      "severity": "critical",
+      "version": "1.0",
+      "enabled": true,
+      "source": "Industry_Tech_Crypto"
+    }
+  ]
+} 

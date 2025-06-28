@@ -1,0 +1,209 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://midas-dcf.com/schemas/datacleaner-rules.json",
+  "title": "SEC Data Cleaning Rules Schema",
+  "description": "JSON Schema for validating SEC data cleaning rules configuration",
+  "type": "object",
+  "required": ["version", "description", "created_at", "rules"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version of the rules configuration"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Human-readable description of the rules configuration"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp when configuration was created"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "source": {"type": "string"},
+        "author": {"type": "string"},
+        "last_updated": {"type": "string"},
+        "total_rules": {"type": "integer", "minimum": 0}
+      },
+      "description": "Optional metadata about the rules configuration"
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/cleaning_rule"
+      },
+      "description": "Array of data cleaning rules"
+    }
+  },
+  "$defs": {
+    "cleaning_rule": {
+      "type": "object",
+      "required": ["id", "name", "description", "category", "xbrl_tags", "adjustment", "industry", "severity", "version", "enabled", "source"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*[a-z0-9]$",
+          "minLength": 3,
+          "maxLength": 50,
+          "description": "Unique identifier for the rule (snake_case)"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 100,
+          "description": "Human-readable name of the rule"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 20,
+          "maxLength": 500,
+          "description": "Detailed description of what the rule does and why"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["asset_quality", "liability_completeness", "earnings_normalization"],
+          "description": "Category of the rule based on SEC cleaning guide"
+        },
+        "xbrl_tags": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Z][a-zA-Z0-9]*$",
+            "minLength": 2,
+            "maxLength": 100
+          },
+          "uniqueItems": true,
+          "description": "XBRL tags that this rule applies to"
+        },
+        "patterns": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 50
+          },
+          "uniqueItems": true,
+          "description": "Text patterns for additional matching (optional)"
+        },
+        "adjustment": {
+          "type": "string", 
+          "enum": ["exclude", "writedown", "reclassify", "treat_as_debt", "flag"],
+          "description": "How the rule should be applied to the data"
+        },
+        "threshold": {
+          "$ref": "#/$defs/threshold_config",
+          "description": "Optional threshold configuration for conditional rule application"
+        },
+        "industry": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "oneOf": [
+              {"type": "string", "const": "all"},
+              {"type": "string", "pattern": "^[0-9]{1,2}$"}
+            ]
+          },
+          "description": "Industry codes (GICS) or 'all' for universal application"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "critical"],
+          "description": "Severity level for flagging and reporting"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+$",
+          "description": "Version of this specific rule"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether this rule is currently enabled"
+        },
+        "source": {
+          "type": "string",
+          "minLength": 5,
+          "maxLength": 50,
+          "description": "Reference to source material (e.g., SEC_Guide_A1)"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*[a-z0-9]$"
+          },
+          "uniqueItems": true,
+          "description": "Rule IDs that must be applied before this rule"
+        }
+      },
+      "additionalProperties": false
+    },
+    "threshold_config": {
+      "type": "object",
+      "properties": {
+        "percentage_of_revenue": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Threshold as percentage of revenue (0-1)"
+        },
+        "percentage_of_assets": {
+          "type": "number", 
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Threshold as percentage of total assets (0-1)"
+        },
+        "percentage_of_equity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Threshold as percentage of equity (0-1)"
+        },
+        "growth_multiple": {
+          "type": "number",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Growth multiple threshold (e.g., 1.5 for 150%)"
+        },
+        "turnover_decline": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Turnover decline threshold (0-1)"
+        },
+        "writedown_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Writedown rate to apply (0-1)"
+        },
+        "min_amount": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Minimum absolute amount threshold"
+        },
+        "max_amount": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Maximum absolute amount threshold"
+        },
+        "age_in_years": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Age threshold in years"
+        }
+      },
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "Threshold configuration for conditional rule application"
+    }
+  },
+  "additionalProperties": false
+} 

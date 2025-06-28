@@ -12,6 +12,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/midas/dcf-valuation-api/internal/config"
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 )
 
@@ -104,6 +105,67 @@ func (c *Client) GetCompanyFacts(ctx context.Context, cik string) (*ports.SECCom
 	return facts, nil
 }
 
+// GetCompanyConcepts retrieves company concepts from SEC API for a specific tag
+func (c *Client) GetCompanyConcepts(ctx context.Context, cik string, tag string) (*entities.ConceptResponse, error) {
+	// Wait for rate limiter
+	if err := c.rateLimiter.Wait(ctx); err != nil {
+		return nil, fmt.Errorf("rate limiter error: %w", err)
+	}
+
+	// Format CIK with leading zeros (SEC requires 10 digits)
+	formattedCIK := fmt.Sprintf("CIK%010s", cik)
+	url := fmt.Sprintf("%s/companyconcept/%s/us-gaap/%s.json", c.config.BaseURL, formattedCIK, tag)
+
+	c.logger.Debug("Fetching company concepts",
+		zap.String("cik", cik),
+		zap.String("tag", tag),
+		zap.String("url", url))
+
+	var conceptResponse *entities.ConceptResponse
+	var err error
+
+	// Implement retry logic
+	for attempt := 0; attempt < c.config.MaxRetries; attempt++ {
+		conceptResponse, err = c.makeConceptRequest(ctx, url)
+		if err == nil {
+			break
+		}
+
+		if attempt < c.config.MaxRetries-1 {
+			backoff := time.Duration(attempt+1) * c.config.RetryBackoffBase
+			c.logger.Warn("Concept request failed, retrying",
+				zap.String("cik", cik),
+				zap.String("tag", tag),
+				zap.Int("attempt", attempt+1),
+				zap.Duration("backoff", backoff),
+				zap.Error(err))
+
+			select {
+			case <-time.After(backoff):
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+
+	if err != nil {
+		c.logger.Error("Failed to fetch company concepts after retries",
+			zap.String("cik", cik),
+			zap.String("tag", tag),
+			zap.Int("max_retries", c.config.MaxRetries),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to fetch company concepts for CIK %s, tag %s: %w", cik, tag, err)
+	}
+
+	c.logger.Info("Successfully fetched company concepts",
+		zap.String("cik", cik),
+		zap.String("tag", tag),
+		zap.String("entity_name", conceptResponse.EntityName))
+
+	return conceptResponse, nil
+}
+
 // GetTickerCIKMapping retrieves the ticker-to-CIK mapping from SEC
 func (c *Client) GetTickerCIKMapping(ctx context.Context) (map[string]string, error) {
 	// Wait for rate limiter
@@ -115,42 +177,39 @@ func (c *Client) GetTickerCIKMapping(ctx context.Context) (map[string]string, er
 
 	c.logger.Debug("Fetching ticker-CIK mapping", zap.String("url", url))
 
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+	var mapping map[string]string
+	var err error
 
-	// Set required User-Agent header
-	req.Header.Set("User-Agent", c.config.UserAgent)
-	req.Header.Set("Accept", "application/json")
+	// Implement retry logic
+	for attempt := 0; attempt < c.config.MaxRetries; attempt++ {
+		mapping, err = c.makeTickerMappingRequest(ctx, url)
+		if err == nil {
+			break
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
+		if attempt < c.config.MaxRetries-1 {
+			backoff := time.Duration(attempt+1) * c.config.RetryBackoffBase
+			c.logger.Warn("Ticker mapping request failed, retrying",
+				zap.String("url", url),
+				zap.Int("attempt", attempt+1),
+				zap.Duration("backoff", backoff),
+				zap.Error(err))
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("SEC API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Parse the ticker mapping JSON
-	var rawMapping map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&rawMapping); err != nil {
-		return nil, fmt.Errorf("failed to decode ticker mapping: %w", err)
-	}
-
-	// Convert to ticker -> CIK mapping
-	mapping := make(map[string]string)
-	for _, entry := range rawMapping {
-		if entryMap, ok := entry.(map[string]interface{}); ok {
-			if ticker, ok := entryMap["ticker"].(string); ok {
-				if cikFloat, ok := entryMap["cik_str"].(string); ok {
-					mapping[ticker] = cikFloat
-				}
+			select {
+			case <-time.After(backoff):
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
 			}
 		}
+	}
+
+	if err != nil {
+		c.logger.Error("Failed to fetch ticker-CIK mapping after retries",
+			zap.String("url", url),
+			zap.Int("max_retries", c.config.MaxRetries),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to fetch ticker-CIK mapping: %w", err)
 	}
 
 	c.logger.Info("Successfully fetched ticker-CIK mapping",
@@ -212,6 +271,110 @@ func (c *Client) makeRequest(ctx context.Context, url string) (*ports.SECCompany
 	}
 
 	return &facts, nil
+}
+
+// makeConceptRequest executes an HTTP request to SEC Company Concept API
+func (c *Client) makeConceptRequest(ctx context.Context, url string) (*entities.ConceptResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set required headers for SEC API
+	req.Header.Set("User-Agent", c.config.UserAgent)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Host", "data.sec.gov")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Handle different HTTP status codes
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// Success, continue to parse response
+	case http.StatusNotFound:
+		return nil, fmt.Errorf("company concept not found (404)")
+	case http.StatusTooManyRequests:
+		return nil, fmt.Errorf("rate limited by SEC API (429)")
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
+		return nil, fmt.Errorf("SEC API server error (%d)", resp.StatusCode)
+	default:
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("SEC API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse the JSON response
+	var conceptResponse entities.ConceptResponse
+	if err := json.NewDecoder(resp.Body).Decode(&conceptResponse); err != nil {
+		return nil, fmt.Errorf("failed to decode SEC concept response: %w", err)
+	}
+
+	// Validate the response
+	if conceptResponse.CIK == "" {
+		return nil, fmt.Errorf("invalid response: missing CIK")
+	}
+
+	if conceptResponse.Tag == "" {
+		return nil, fmt.Errorf("invalid response: missing tag")
+	}
+
+	return &conceptResponse, nil
+}
+
+// makeTickerMappingRequest executes an HTTP request to SEC ticker mapping API
+func (c *Client) makeTickerMappingRequest(ctx context.Context, url string) (map[string]string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set required headers for SEC API
+	req.Header.Set("User-Agent", c.config.UserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Handle different HTTP status codes
+	switch resp.StatusCode {
+	case http.StatusOK:
+		// Success, continue to parse response
+	case http.StatusNotFound:
+		return nil, fmt.Errorf("ticker mapping not found (404)")
+	case http.StatusTooManyRequests:
+		return nil, fmt.Errorf("rate limited by SEC API (429)")
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
+		return nil, fmt.Errorf("SEC API server error (%d)", resp.StatusCode)
+	default:
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("SEC API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse the ticker mapping JSON
+	var rawMapping map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&rawMapping); err != nil {
+		return nil, fmt.Errorf("failed to decode ticker mapping: %w", err)
+	}
+
+	// Convert to ticker -> CIK mapping
+	mapping := make(map[string]string)
+	for _, entry := range rawMapping {
+		if entryMap, ok := entry.(map[string]interface{}); ok {
+			if ticker, ok := entryMap["ticker"].(string); ok {
+				if cikFloat, ok := entryMap["cik_str"].(string); ok {
+					mapping[ticker] = cikFloat
+				}
+			}
+		}
+	}
+
+	return mapping, nil
 }
 
 // HealthCheck performs a health check on the SEC API

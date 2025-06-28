@@ -29,20 +29,20 @@ type MarketData struct {
 
 // MacroData represents macro-economic data needed for WACC calculation
 type MacroData struct {
-	AsOf time.Time `json:"as_of"`
+	AsOf time.Time `json:"as_of" db:"as_of"`
 
 	// Risk-free rate (typically 10-year Treasury)
-	RiskFreeRate       float64 `json:"risk_free_rate"`    // Current 10-year Treasury yield
-	RiskFreeRate3Month float64 `json:"risk_free_rate_3m"` // 3-month Treasury for short-term
+	RiskFreeRate       float64 `json:"risk_free_rate" db:"risk_free_rate"`       // Current 10-year Treasury yield
+	RiskFreeRate3Month float64 `json:"risk_free_rate_3m" db:"risk_free_rate_3m"` // 3-month Treasury for short-term
 
 	// Market risk premium (configurable but typically ~5%)
-	MarketRiskPremium float64 `json:"market_risk_premium"`
+	MarketRiskPremium float64 `json:"market_risk_premium" db:"market_risk_premium"`
 
 	// Economic indicators
-	InflationRate float64 `json:"inflation_rate"` // Current inflation rate
+	InflationRate float64 `json:"inflation_rate" db:"inflation_rate"` // Current inflation rate
 
 	// Data source
-	Source string `json:"source"` // 'fred', 'manual', etc.
+	Source string `json:"source" db:"source"` // 'fred', 'manual', etc.
 }
 
 // IsStale checks if the macro data is stale beyond the given duration

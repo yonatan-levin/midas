@@ -11,6 +11,9 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/infra/gateways/macro"
+	"github.com/midas/dcf-valuation-api/internal/infra/gateways/market"
+	"github.com/midas/dcf-valuation-api/internal/infra/gateways/sec"
 	"github.com/midas/dcf-valuation-api/internal/infra/repositories/cache"
 	"github.com/midas/dcf-valuation-api/internal/infra/repositories/sqlite"
 	"github.com/midas/dcf-valuation-api/internal/infra/resilience"
@@ -45,6 +48,7 @@ func NewContainer() *Container {
 		fx.Provide(NewFinancialDataRepository),
 		fx.Provide(NewMarketDataRepository),
 		fx.Provide(NewMacroDataRepository),
+		fx.Provide(NewTickerMappingRepository),
 		fx.Provide(NewCacheRepository),
 
 		// Gateway Module
@@ -228,8 +232,11 @@ func NewMarketDataRepository(db *sqlx.DB) ports.MarketDataRepository {
 }
 
 func NewMacroDataRepository(db *sqlx.DB) ports.MacroDataRepository {
-	// TODO: Implement macro data repository
-	return nil // sqlite.NewMacroDataRepository(db)
+	return sqlite.NewMacroDataRepository(db)
+}
+
+func NewTickerMappingRepository(db *sqlx.DB) ports.TickerMappingRepository {
+	return sqlite.NewTickerMappingRepository(db)
 }
 
 func NewCacheRepository(redisClient *redis.Client, logger *zap.Logger) ports.CacheRepository {
@@ -250,8 +257,7 @@ func NewSECGateway(
 	retryFactory *RetryPolicyFactory,
 	logger *zap.Logger,
 ) ports.SECGateway {
-	// TODO: SEC Gateway needs to implement GetCompanyConcepts method
-	return nil // sec.NewGateway(&cfg.SEC, logger)
+	return sec.NewGateway(&cfg.SEC, logger)
 }
 
 func NewMarketDataGateway(
@@ -260,8 +266,7 @@ func NewMarketDataGateway(
 	retryFactory *RetryPolicyFactory,
 	logger *zap.Logger,
 ) ports.MarketDataGateway {
-	// TODO: Market Gateway needs to implement GetHistoricalPrices method
-	return nil // market.NewGateway(&cfg.Market, logger)
+	return market.NewGateway(&cfg.Market, logger)
 }
 
 // NewMacroDataGateway creates a macro data gateway
@@ -269,8 +274,7 @@ func NewMacroDataGateway(
 	cfg *config.Config,
 	logger *zap.Logger,
 ) ports.MacroDataGateway {
-	// TODO: Implement macro data gateway
-	return nil
+	return macro.NewGateway(&cfg.Macro, logger)
 }
 
 // Service Providers

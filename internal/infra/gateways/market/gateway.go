@@ -67,6 +67,67 @@ func (g *Gateway) GetMarketData(ctx context.Context, ticker string) (*entities.M
 	return nil, fmt.Errorf("failed to fetch market data for %s from all sources", ticker)
 }
 
+// GetQuote implements MarketDataGateway interface - alias for GetMarketData
+func (g *Gateway) GetQuote(ctx context.Context, ticker string) (*entities.MarketData, error) {
+	return g.GetMarketData(ctx, ticker)
+}
+
+// GetQuotes implements MarketDataGateway interface - alias for GetBatchMarketData
+func (g *Gateway) GetQuotes(ctx context.Context, tickers []string) (map[string]*entities.MarketData, error) {
+	return g.GetBatchMarketData(ctx, tickers)
+}
+
+// GetHistoricalPrices retrieves historical price data for a ticker
+func (g *Gateway) GetHistoricalPrices(ctx context.Context, ticker string, startDate, endDate time.Time) ([]*entities.PriceData, error) {
+	g.logger.Debug("Fetching historical prices",
+		zap.String("ticker", ticker),
+		zap.Time("start_date", startDate),
+		zap.Time("end_date", endDate))
+
+	if g.yfinance == nil {
+		return nil, fmt.Errorf("yfinance client not available")
+	}
+
+	// Calculate number of days for the request
+	days := int(endDate.Sub(startDate).Hours() / 24)
+	if days <= 0 {
+		return nil, fmt.Errorf("invalid date range: end date must be after start date")
+	}
+
+	// Get historical data from yfinance
+	pricePoints, err := g.yfinance.GetHistoricalPrices(ctx, ticker, days)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch historical prices from yfinance: %w", err)
+	}
+
+	// Convert to entities.PriceData format
+	result := make([]*entities.PriceData, 0, len(pricePoints))
+	for _, point := range pricePoints {
+		// Filter by date range
+		if point.Date.Before(startDate) || point.Date.After(endDate) {
+			continue
+		}
+
+		priceData := &entities.PriceData{
+			Ticker:   ticker,
+			Date:     point.Date,
+			Open:     point.Open,
+			High:     point.High,
+			Low:      point.Low,
+			Close:    point.Close,
+			Volume:   int64(point.Volume),
+			AdjClose: point.Close, // yfinance Close is already adjusted
+		}
+		result = append(result, priceData)
+	}
+
+	g.logger.Debug("Successfully fetched historical prices",
+		zap.String("ticker", ticker),
+		zap.Int("price_points", len(result)))
+
+	return result, nil
+}
+
 // GetBatchMarketData retrieves market data for multiple tickers
 func (g *Gateway) GetBatchMarketData(ctx context.Context, tickers []string) (map[string]*entities.MarketData, error) {
 	if len(tickers) == 0 {

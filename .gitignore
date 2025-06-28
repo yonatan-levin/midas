@@ -56,6 +56,7 @@ go-src-cache/
 # IDE and Editor files
 .vscode/
 .vs/
+.cursor/
 .idea/
 *.swp
 *.swo
@@ -301,3 +302,4 @@ cython_debug/
 # Project specific
 # Add any project-specific files or directories here
 testdata/*
+.cursor/rules/generalspecdoc.mdc
