@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,11 +51,11 @@ func testLoadBasicRules(t *testing.T) {
 	assert.Equal(t, "1.0.0", version)
 
 	// Verify specific rule content
-	goodwillRule, err := engine.GetRuleByID(RuleGoodwillExclusion)
+	goodwillRule, err := engine.GetRuleByID(entities.RuleGoodwillExclusion)
 	require.NoError(t, err)
 	assert.Equal(t, "Goodwill Exclusion", goodwillRule.Name)
-	assert.Equal(t, AssetQuality, goodwillRule.Category)
-	assert.Equal(t, Exclude, goodwillRule.Adjustment)
+	assert.Equal(t, entities.AssetQuality, goodwillRule.Category)
+	assert.Equal(t, entities.Exclude, goodwillRule.Adjustment)
 	assert.Contains(t, goodwillRule.XBRLTags, "GoodwillNet")
 }
 
@@ -81,7 +82,7 @@ func testLoadIndustryRules(t *testing.T) {
 	assert.Len(t, techRules, 3)                // 2 enabled base rules + 1 industry-specific (capitalized_software disabled by override)
 
 	// Verify industry override is applied
-	softwareRule, err := engine.GetRuleByID(RuleCapitalizedSoftware)
+	softwareRule, err := engine.GetRuleByID(entities.RuleCapitalizedSoftware)
 	require.NoError(t, err)
 	// Industry rule should have modified this rule to be more strict
 	assert.NotNil(t, softwareRule.Threshold)
@@ -131,11 +132,11 @@ func testGetRulesByCategory(t *testing.T) {
 	assert.Len(t, allRules, 3)
 
 	// Test getting rules by category
-	assetCategory := AssetQuality
+	assetCategory := entities.AssetQuality
 	assetRules := engine.GetRules(&assetCategory)
 	assert.Len(t, assetRules, 2) // 2 asset quality rules
 
-	earningsCategory := EarningsNormalization
+	earningsCategory := entities.EarningsNormalization
 	earningsRules := engine.GetRules(&earningsCategory)
 	assert.Len(t, earningsRules, 1) // 1 earnings rule
 }
@@ -150,10 +151,10 @@ func testGetRuleByID(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test valid rule ID
-	rule, err := engine.GetRuleByID(RuleGoodwillExclusion)
+	rule, err := engine.GetRuleByID(entities.RuleGoodwillExclusion)
 	assert.NoError(t, err)
 	assert.NotNil(t, rule)
-	assert.Equal(t, RuleGoodwillExclusion, rule.ID)
+	assert.Equal(t, entities.RuleGoodwillExclusion, rule.ID)
 
 	// Test invalid rule ID
 	rule, err = engine.GetRuleByID("nonexistent_rule")
@@ -200,7 +201,7 @@ func testRuleErrors(t *testing.T) {
 	assert.Error(t, err)
 
 	// Test getting rule from empty engine
-	rule, err := engine.GetRuleByID(RuleGoodwillExclusion)
+	rule, err := engine.GetRuleByID(entities.RuleGoodwillExclusion)
 	assert.Error(t, err)
 	assert.Nil(t, rule)
 
@@ -224,7 +225,7 @@ func testIndustryOverrides(t *testing.T) {
 	require.NoError(t, err)
 
 	// Get original rule before industry override
-	originalRule, err := engine.GetRuleByID(RuleCapitalizedSoftware)
+	originalRule, err := engine.GetRuleByID(entities.RuleCapitalizedSoftware)
 	require.NoError(t, err)
 	originalEnabled := originalRule.Enabled
 
@@ -237,7 +238,7 @@ func testIndustryOverrides(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify override was applied
-	modifiedRule, err := engine.GetRuleByID(RuleCapitalizedSoftware)
+	modifiedRule, err := engine.GetRuleByID(entities.RuleCapitalizedSoftware)
 	require.NoError(t, err)
 
 	// Rule should now be disabled by industry override (was true, now false)

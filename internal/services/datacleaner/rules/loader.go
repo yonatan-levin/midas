@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
 
 // loader implements the RuleLoader interface
@@ -16,7 +18,7 @@ func NewRuleLoader() RuleLoader {
 }
 
 // LoadFromFile loads rules from a JSON file
-func (l *loader) LoadFromFile(path string) (*RulesConfig, error) {
+func (l *loader) LoadFromFile(path string) (*entities.RulesConfig, error) {
 	// Read file contents
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -24,7 +26,7 @@ func (l *loader) LoadFromFile(path string) (*RulesConfig, error) {
 	}
 
 	// Parse JSON
-	var config RulesConfig
+	var config entities.RulesConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON from %s: %w", path, err)
 	}
@@ -38,7 +40,7 @@ func (l *loader) LoadFromFile(path string) (*RulesConfig, error) {
 }
 
 // LoadIndustryFromFile loads industry rules from a JSON file
-func (l *loader) LoadIndustryFromFile(path string) (*IndustryConfig, error) {
+func (l *loader) LoadIndustryFromFile(path string) (*entities.IndustryConfig, error) {
 	// Read file contents
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -46,7 +48,7 @@ func (l *loader) LoadIndustryFromFile(path string) (*IndustryConfig, error) {
 	}
 
 	// Parse JSON
-	var config IndustryConfig
+	var config entities.IndustryConfig
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON from %s: %w", path, err)
 	}
@@ -60,7 +62,7 @@ func (l *loader) LoadIndustryFromFile(path string) (*IndustryConfig, error) {
 }
 
 // ValidateSchema validates rules against JSON schema
-func (l *loader) ValidateSchema(rules *RulesConfig, schemaPath string) error {
+func (l *loader) ValidateSchema(rules *entities.RulesConfig, schemaPath string) error {
 	// Read schema file
 	schemaData, err := os.ReadFile(schemaPath)
 	if err != nil {
@@ -95,7 +97,7 @@ func (l *loader) ValidateSchema(rules *RulesConfig, schemaPath string) error {
 // Private helper methods
 
 // validateConfig performs basic validation on rules configuration
-func (l *loader) validateConfig(config *RulesConfig) error {
+func (l *loader) validateConfig(config *entities.RulesConfig) error {
 	if config.Version == "" {
 		return fmt.Errorf("version is required")
 	}
@@ -122,7 +124,7 @@ func (l *loader) validateConfig(config *RulesConfig) error {
 }
 
 // validateIndustryConfig performs basic validation on industry configuration
-func (l *loader) validateIndustryConfig(config *IndustryConfig) error {
+func (l *loader) validateIndustryConfig(config *entities.IndustryConfig) error {
 	if config.GICSCode == "" {
 		return fmt.Errorf("GICS code is required")
 	}
@@ -156,7 +158,7 @@ func (l *loader) validateIndustryConfig(config *IndustryConfig) error {
 }
 
 // validateRuleConfig validates a single rule configuration
-func (l *loader) validateRuleConfig(rule *CleaningRule) error {
+func (l *loader) validateRuleConfig(rule *entities.CleaningRule) error {
 	if rule.ID == "" {
 		return fmt.Errorf("rule ID is required")
 	}
@@ -266,27 +268,27 @@ func (l *loader) validateFieldType(fieldName string, value interface{}, schema i
 
 // Helper validation functions
 
-func (l *loader) isValidCategory(category RuleCategory) bool {
+func (l *loader) isValidCategory(category entities.RuleCategory) bool {
 	switch category {
-	case AssetQuality, LiabilityCompleteness, EarningsNormalization:
+	case entities.AssetQuality, entities.LiabilityCompleteness, entities.EarningsNormalization:
 		return true
 	default:
 		return false
 	}
 }
 
-func (l *loader) isValidAdjustment(adjustment AdjustmentType) bool {
+func (l *loader) isValidAdjustment(adjustment entities.AdjustmentType) bool {
 	switch adjustment {
-	case Exclude, Writedown, Reclassify, TreatAsDebt, FlagForReview:
+	case entities.Exclude, entities.Writedown, entities.Reclassify, entities.TreatAsDebt, entities.FlagForReview:
 		return true
 	default:
 		return false
 	}
 }
 
-func (l *loader) isValidSeverity(severity FlagSeverity) bool {
+func (l *loader) isValidSeverity(severity entities.FlagSeverity) bool {
 	switch severity {
-	case Info, Warning, Critical:
+	case entities.Info, entities.Warning, entities.Critical:
 		return true
 	default:
 		return false
@@ -319,15 +321,15 @@ func ValidateXBRLTag(tag string) error {
 }
 
 // GetRulePriority calculates rule priority based on category and severity
-func GetRulePriority(category RuleCategory, severity FlagSeverity) int {
+func GetRulePriority(category entities.RuleCategory, severity entities.FlagSeverity) int {
 	// Base priority by category
 	var basePriority int
 	switch category {
-	case AssetQuality:
+	case entities.AssetQuality:
 		basePriority = 100
-	case LiabilityCompleteness:
+	case entities.LiabilityCompleteness:
 		basePriority = 200
-	case EarningsNormalization:
+	case entities.EarningsNormalization:
 		basePriority = 300
 	default:
 		basePriority = 999
@@ -336,11 +338,11 @@ func GetRulePriority(category RuleCategory, severity FlagSeverity) int {
 	// Severity modifier
 	var severityModifier int
 	switch severity {
-	case Critical:
+	case entities.Critical:
 		severityModifier = 10
-	case Warning:
+	case entities.Warning:
 		severityModifier = 20
-	case Info:
+	case entities.Info:
 		severityModifier = 30
 	default:
 		severityModifier = 50

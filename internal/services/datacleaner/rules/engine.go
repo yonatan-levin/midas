@@ -3,22 +3,24 @@ package rules
 import (
 	"fmt"
 	"sync"
+
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
 
 // engine implements the RuleEngine interface
 type engine struct {
-	rules         map[string]*CleaningRule  // Rules indexed by ID
-	industryRules map[string][]CleaningRule // Rules indexed by GICS code
-	rulesConfig   *RulesConfig              // Original loaded configuration
-	loader        RuleLoader                // Rule loader instance
-	mu            sync.RWMutex              // Thread-safe access
+	rules         map[string]*entities.CleaningRule  // Rules indexed by ID
+	industryRules map[string][]entities.CleaningRule // Rules indexed by GICS code
+	rulesConfig   *entities.RulesConfig              // Original loaded configuration
+	loader        RuleLoader                         // Rule loader instance
+	mu            sync.RWMutex                       // Thread-safe access
 }
 
 // NewRuleEngine creates a new rules engine instance
 func NewRuleEngine() RuleEngine {
 	return &engine{
-		rules:         make(map[string]*CleaningRule),
-		industryRules: make(map[string][]CleaningRule),
+		rules:         make(map[string]*entities.CleaningRule),
+		industryRules: make(map[string][]entities.CleaningRule),
 		loader:        NewRuleLoader(),
 	}
 }
@@ -38,7 +40,7 @@ func (e *engine) LoadRules(configPath string) error {
 	e.rulesConfig = config
 
 	// Clear existing rules
-	e.rules = make(map[string]*CleaningRule)
+	e.rules = make(map[string]*entities.CleaningRule)
 
 	// Index rules by ID
 	for i := range config.Rules {
@@ -77,7 +79,7 @@ func (e *engine) LoadIndustryRules(industryPath string) error {
 	}
 
 	// Add special industry-specific rules
-	industryRules := make([]CleaningRule, 0, len(e.rules)+len(industryConfig.SpecialRules))
+	industryRules := make([]entities.CleaningRule, 0, len(e.rules)+len(industryConfig.SpecialRules))
 
 	// Add all existing rules
 	for _, rule := range e.rules {
@@ -98,11 +100,11 @@ func (e *engine) LoadIndustryRules(industryPath string) error {
 }
 
 // GetRules returns all loaded rules, optionally filtered by category
-func (e *engine) GetRules(category *RuleCategory) []CleaningRule {
+func (e *engine) GetRules(category *entities.RuleCategory) []entities.CleaningRule {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	var result []CleaningRule
+	var result []entities.CleaningRule
 
 	for _, rule := range e.rules {
 		// Filter by category if specified
@@ -120,7 +122,7 @@ func (e *engine) GetRules(category *RuleCategory) []CleaningRule {
 }
 
 // GetIndustryRules returns rules for a specific industry
-func (e *engine) GetIndustryRules(industry string) []CleaningRule {
+func (e *engine) GetIndustryRules(industry string) []entities.CleaningRule {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -128,7 +130,7 @@ func (e *engine) GetIndustryRules(industry string) []CleaningRule {
 	if industry != "" {
 		if rules, exists := e.industryRules[industry]; exists {
 			// Filter for enabled rules only
-			var enabledRules []CleaningRule
+			var enabledRules []entities.CleaningRule
 			for _, rule := range rules {
 				if rule.Enabled {
 					enabledRules = append(enabledRules, rule)
@@ -139,7 +141,7 @@ func (e *engine) GetIndustryRules(industry string) []CleaningRule {
 	}
 
 	// Fallback to general rules applicable to this industry
-	var result []CleaningRule
+	var result []entities.CleaningRule
 	for _, rule := range e.rules {
 		if rule.Enabled {
 			// If no industry specified, return all general rules (those marked as "all" industry)
@@ -160,11 +162,11 @@ func (e *engine) GetIndustryRules(industry string) []CleaningRule {
 }
 
 // GetRulesByCategory returns all enabled rules for a specific category
-func (e *engine) GetRulesByCategory(category RuleCategory) []CleaningRule {
+func (e *engine) GetRulesByCategory(category entities.RuleCategory) []entities.CleaningRule {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	var result []CleaningRule
+	var result []entities.CleaningRule
 
 	// Check base rules
 	for _, rule := range e.rules {
@@ -220,7 +222,7 @@ func (e *engine) ValidateRules() error {
 }
 
 // GetRuleByID returns a specific rule by ID
-func (e *engine) GetRuleByID(id string) (*CleaningRule, error) {
+func (e *engine) GetRuleByID(id string) (*entities.CleaningRule, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
@@ -249,7 +251,7 @@ func (e *engine) GetRuleVersion() string {
 // Private helper methods
 
 // isRuleApplicableToIndustry checks if a rule applies to a specific industry
-func (e *engine) isRuleApplicableToIndustry(rule *CleaningRule, industry string) bool {
+func (e *engine) isRuleApplicableToIndustry(rule *entities.CleaningRule, industry string) bool {
 	for _, applicableIndustry := range rule.Industry {
 		if applicableIndustry == "all" || applicableIndustry == industry {
 			return true
@@ -301,7 +303,7 @@ func (e *engine) hasCyclicDependency(ruleID string, visited, recStack map[string
 }
 
 // validateRule validates a single rule for correctness
-func (e *engine) validateRule(rule *CleaningRule) error {
+func (e *engine) validateRule(rule *entities.CleaningRule) error {
 	// Check required fields
 	if rule.ID == "" {
 		return fmt.Errorf("rule ID cannot be empty")
@@ -317,7 +319,7 @@ func (e *engine) validateRule(rule *CleaningRule) error {
 
 	// Validate category
 	switch rule.Category {
-	case AssetQuality, LiabilityCompleteness, EarningsNormalization:
+	case entities.AssetQuality, entities.LiabilityCompleteness, entities.EarningsNormalization:
 		// Valid categories
 	default:
 		return fmt.Errorf("invalid rule category: %s", rule.Category)
@@ -325,7 +327,7 @@ func (e *engine) validateRule(rule *CleaningRule) error {
 
 	// Validate adjustment type
 	switch rule.Adjustment {
-	case Exclude, Writedown, Reclassify, TreatAsDebt, FlagForReview:
+	case entities.Exclude, entities.Writedown, entities.Reclassify, entities.TreatAsDebt, entities.FlagForReview:
 		// Valid adjustment types
 	default:
 		return fmt.Errorf("invalid adjustment type: %s", rule.Adjustment)
@@ -333,7 +335,7 @@ func (e *engine) validateRule(rule *CleaningRule) error {
 
 	// Validate severity
 	switch rule.Severity {
-	case Info, Warning, Critical:
+	case entities.Info, entities.Warning, entities.Critical:
 		// Valid severities
 	default:
 		return fmt.Errorf("invalid severity: %s", rule.Severity)
@@ -357,7 +359,7 @@ func (e *engine) validateRule(rule *CleaningRule) error {
 }
 
 // validateThreshold validates threshold configuration
-func (e *engine) validateThreshold(threshold *ThresholdConfig) error {
+func (e *engine) validateThreshold(threshold *entities.ThresholdConfig) error {
 	// Check percentage thresholds are valid (0-100%)
 	if threshold.PercentageOfRevenue != nil {
 		if *threshold.PercentageOfRevenue < 0 || *threshold.PercentageOfRevenue > 1 {

@@ -30,16 +30,38 @@ type FinancialData struct {
 	TotalDebt           float64 `json:"total_debt"`            // Interest-bearing debt
 	InterestBearingDebt float64 `json:"interest_bearing_debt"` // Debt used for WACC calculation
 
+	// Asset Quality Fields (Category A from SEC guide)
+	IntangibleAssets           float64 `json:"intangible_assets"`            // Total intangible assets including goodwill
+	IndefiniteLivedIntangibles float64 `json:"indefinite_lived_intangibles"` // Trademarks, broadcast licenses (A2)
+	DeferredTaxAssets          float64 `json:"deferred_tax_assets"`          // Deferred tax assets gross (A4)
+	ValuationAllowance         float64 `json:"valuation_allowance"`          // DTA valuation allowance
+	EffectiveTaxRate           float64 `json:"effective_tax_rate"`           // Effective tax rate for DTA assessment
+	CostOfGoodsSold            float64 `json:"cost_of_goods_sold"`           // For inventory turnover calculations
+
 	// Inventory analysis
 	Inventory              float64 `json:"inventory"`
 	InventoryTurnover      float64 `json:"inventory_turnover"`
 	DeadInventoryWritedown float64 `json:"dead_inventory_writedown"` // Amount written down
+
+	// Liability Completeness Fields (Category B from SEC guide)
+	OperatingLeaseLiabilityCurrent    float64 `json:"operating_lease_liability_current"`    // Current portion of operating lease liabilities (B1)
+	OperatingLeaseLiabilityNoncurrent float64 `json:"operating_lease_liability_noncurrent"` // Non-current operating lease liabilities (B1)
+	OperatingLeaseLiability           float64 `json:"operating_lease_liability"`            // Total operating lease liability (B1)
+	PensionLiabilities                float64 `json:"pension_liabilities"`                  // Defined benefit pension obligations (B2)
+	OPEBLiability                     float64 `json:"opeb_liability"`                       // Other post-employment benefit liabilities (B2)
+	PensionPlanAssets                 float64 `json:"pension_plan_assets"`                  // Plan assets fair value (B2)
+	ProjectedBenefitObligation        float64 `json:"projected_benefit_obligation"`         // PBO for pension plans (B2)
+	ContingentLiabilities             float64 `json:"contingent_liabilities"`               // Disclosed contingent liabilities (B3)
+	EnvironmentalLiabilities          float64 `json:"environmental_liabilities"`            // Environmental remediation liabilities (B3)
+	LitigationLiabilities             float64 `json:"litigation_liabilities"`               // Litigation settlement liabilities (B3)
+	IncrementalBorrowingRate          float64 `json:"incremental_borrowing_rate"`           // IBR for lease capitalization (B1)
 
 	// Share information
 	SharesOutstanding        float64 `json:"shares_outstanding"`
 	DilutedSharesOutstanding float64 `json:"diluted_shares_outstanding"`
 
 	// Filing metadata
+	Period       string    `json:"period"`        // Short period identifier for tests (e.g., "2023Q4")
 	FilingPeriod string    `json:"filing_period"` // e.g., "2023Q4"
 	FilingDate   time.Time `json:"filing_date"`
 

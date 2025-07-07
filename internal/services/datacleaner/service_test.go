@@ -269,7 +269,7 @@ func testConcurrentCleaning(t *testing.T) {
 
 	// Test concurrent cleaning of different companies
 	companies := []string{"AAPL", "MSFT", "GOOGL", "TSLA", "AMZN"}
-	results := make(chan CleaningResult, len(companies))
+	results := make(chan entities.CleaningResult, len(companies))
 	errors := make(chan error, len(companies))
 
 	// Start concurrent cleaning
@@ -286,7 +286,7 @@ func testConcurrentCleaning(t *testing.T) {
 	}
 
 	// Collect results
-	var cleaningResults []CleaningResult
+	var cleaningResults []entities.CleaningResult
 	for i := 0; i < len(companies); i++ {
 		select {
 		case result := <-results:

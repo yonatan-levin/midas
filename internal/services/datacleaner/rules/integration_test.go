@@ -5,6 +5,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
 
 // TestRealConfigurationFiles tests the actual configuration files in ./config/datacleaner/
@@ -34,9 +36,9 @@ func testLoadProductionRules(t *testing.T) {
 	require.NoError(t, err, "Should be able to load production rules file")
 
 	// Verify we loaded the expected number of rules
-	assetQualityRules := engine.GetRulesByCategory(AssetQuality)
-	liabilityRules := engine.GetRulesByCategory(LiabilityCompleteness)
-	earningsRules := engine.GetRulesByCategory(EarningsNormalization)
+	assetQualityRules := engine.GetRulesByCategory(entities.AssetQuality)
+	liabilityRules := engine.GetRulesByCategory(entities.LiabilityCompleteness)
+	earningsRules := engine.GetRulesByCategory(entities.EarningsNormalization)
 
 	// Should have rules in each category
 	assert.Greater(t, len(assetQualityRules), 5, "Should have multiple asset quality rules")
@@ -44,10 +46,10 @@ func testLoadProductionRules(t *testing.T) {
 	assert.Greater(t, len(earningsRules), 5, "Should have multiple earnings rules")
 
 	// Test specific rules exist
-	goodwillRule, err := engine.GetRuleByID(RuleGoodwillExclusion)
+	goodwillRule, err := engine.GetRuleByID(entities.RuleGoodwillExclusion)
 	require.NoError(t, err, "Goodwill exclusion rule should exist")
 	assert.Equal(t, "Goodwill Exclusion", goodwillRule.Name)
-	assert.Equal(t, AssetQuality, goodwillRule.Category)
+	assert.Equal(t, entities.AssetQuality, goodwillRule.Category)
 	assert.True(t, goodwillRule.Enabled)
 
 	// Test rule with thresholds
@@ -56,7 +58,7 @@ func testLoadProductionRules(t *testing.T) {
 	assert.NotNil(t, inventoryRule.Threshold, "Inventory rule should have thresholds")
 
 	// Test industry-specific rule
-	softwareRule, err := engine.GetRuleByID(RuleCapitalizedSoftware)
+	softwareRule, err := engine.GetRuleByID(entities.RuleCapitalizedSoftware)
 	require.NoError(t, err, "Capitalized software rule should exist")
 	assert.Contains(t, softwareRule.Industry, "45", "Should apply to tech industry")
 }

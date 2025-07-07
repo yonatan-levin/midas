@@ -15,9 +15,9 @@ import (
 type service struct {
 	config      *config.DataCleanerConfig
 	rulesEngine rules.RuleEngine
-	cache       map[string]*CleaningResult // Simple in-memory cache for now
+	cache       map[string]*entities.CleaningResult // Simple in-memory cache for now
 	cacheMu     sync.RWMutex
-	stats       CleaningStats
+	stats       entities.CleaningStats
 	statsMu     sync.RWMutex
 }
 
@@ -47,9 +47,9 @@ func NewDataCleanerService(cfg *config.Config) (DataCleanerService, error) {
 	svc := &service{
 		config:      &cfg.DataCleaner,
 		rulesEngine: rulesEngine,
-		cache:       make(map[string]*CleaningResult),
-		stats: CleaningStats{
-			QualityDistribution: make(map[QualityGrade]int),
+		cache:       make(map[string]*entities.CleaningResult),
+		stats: entities.CleaningStats{
+			QualityDistribution: make(map[entities.QualityGrade]int),
 			CommonAdjustments:   make(map[string]int),
 			CommonFlags:         make(map[string]int),
 		},
@@ -59,7 +59,7 @@ func NewDataCleanerService(cfg *config.Config) (DataCleanerService, error) {
 }
 
 // CleanFinancialData cleans and normalizes financial data using configured rules
-func (s *service) CleanFinancialData(ctx context.Context, data *entities.FinancialData) (*CleaningResult, error) {
+func (s *service) CleanFinancialData(ctx context.Context, data *entities.FinancialData) (*entities.CleaningResult, error) {
 	if data == nil {
 		return nil, fmt.Errorf("financial data cannot be nil")
 	}
@@ -87,7 +87,7 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	}
 
 	// Create cleaning context
-	cleaningCtx := &CleaningContext{
+	cleaningCtx := &entities.CleaningContext{
 		IndustryCode:     getIndustryCode(data),
 		CompanySize:      getCompanySize(data),
 		DataVintage:      data.FilingDate,
@@ -97,13 +97,13 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	}
 
 	// Initialize result
-	result := &CleaningResult{
+	result := &entities.CleaningResult{
 		Success:          false,
 		Timestamp:        startTime,
 		IndustryCode:     cleaningCtx.IndustryCode,
 		IndustrySpecific: false,
-		Adjustments:      make([]Adjustment, 0),
-		Flags:            make([]Flag, 0),
+		Adjustments:      make([]entities.Adjustment, 0),
+		Flags:            make([]entities.Flag, 0),
 		QualityIssues:    make([]string, 0),
 		Errors:           make([]string, 0),
 		Warnings:         make([]string, 0),
@@ -146,7 +146,7 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	}
 
 	result.QualityScore = qualityScore
-	result.QualityGrade = string(GetQualityGrade(qualityScore))
+	result.QualityGrade = string(entities.GetQualityGrade(qualityScore))
 	result.QualityIssues = qualityIssues
 
 	// Mark as successful
@@ -166,7 +166,7 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 }
 
 // GetIndustryRules returns applicable rules for a specific industry
-func (s *service) GetIndustryRules(industryCode string) ([]rules.CleaningRule, error) {
+func (s *service) GetIndustryRules(industryCode string) ([]entities.CleaningRule, error) {
 	if industryCode == "" {
 		return s.rulesEngine.GetRules(nil), nil
 	}
@@ -190,7 +190,7 @@ func (s *service) GetQualityScore(ctx context.Context, data *entities.FinancialD
 	applicableRules := s.rulesEngine.GetIndustryRules(industryCode)
 
 	// Simulate applying rules without making changes
-	var flags []Flag
+	var flags []entities.Flag
 	for _, rule := range applicableRules {
 		if !rule.Enabled {
 			continue
@@ -199,7 +199,7 @@ func (s *service) GetQualityScore(ctx context.Context, data *entities.FinancialD
 		// Check if rule applies
 		if ruleApplies := s.checkRuleApplicability(&rule, data); ruleApplies {
 			// Create flag for quality assessment
-			flag := Flag{
+			flag := entities.Flag{
 				RuleID:      rule.ID,
 				Type:        string(rule.Category),
 				Severity:    rule.Severity,
@@ -271,9 +271,9 @@ func (s *service) loadIndustryRules(industryCode string) error {
 	return nil
 }
 
-func (s *service) applyClearingRules(ctx context.Context, data *entities.FinancialData, cleaningCtx *CleaningContext) (int, []Adjustment, []Flag, error) {
-	var adjustments []Adjustment
-	var flags []Flag
+func (s *service) applyClearingRules(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (int, []entities.Adjustment, []entities.Flag, error) {
+	var adjustments []entities.Adjustment
+	var flags []entities.Flag
 	rulesApplied := 0
 
 	// Get applicable rules
@@ -314,7 +314,7 @@ func (s *service) applyClearingRules(ctx context.Context, data *entities.Financi
 	return rulesApplied, adjustments, flags, nil
 }
 
-func (s *service) checkRuleApplicability(rule *rules.CleaningRule, data *entities.FinancialData) bool {
+func (s *service) checkRuleApplicability(rule *entities.CleaningRule, data *entities.FinancialData) bool {
 	// Check XBRL tags - for now, basic implementation
 	// TODO: Implement proper XBRL tag matching based on actual data structure
 
@@ -385,26 +385,26 @@ func (s *service) checkRuleApplicability(rule *rules.CleaningRule, data *entitie
 	}
 }
 
-func (s *service) applyRule(rule *rules.CleaningRule, data *entities.FinancialData) (*Adjustment, *Flag, error) {
+func (s *service) applyRule(rule *entities.CleaningRule, data *entities.FinancialData) (*entities.Adjustment, *entities.Flag, error) {
 	timestamp := time.Now()
 
 	switch rule.Adjustment {
-	case rules.Exclude:
+	case entities.Exclude:
 		return s.applyExclusionRule(rule, data, timestamp)
-	case rules.Writedown:
+	case entities.Writedown:
 		return s.applyWritedownRule(rule, data, timestamp)
-	case rules.FlagForReview:
+	case entities.FlagForReview:
 		return s.applyFlagRule(rule, data, timestamp)
-	case rules.Reclassify:
+	case entities.Reclassify:
 		return s.applyReclassifyRule(rule, data, timestamp)
-	case rules.TreatAsDebt:
+	case entities.TreatAsDebt:
 		return s.applyTreatAsDebtRule(rule, data, timestamp)
 	default:
 		return nil, nil, fmt.Errorf("unsupported adjustment type: %s", rule.Adjustment)
 	}
 }
 
-func (s *service) applyExclusionRule(rule *rules.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*Adjustment, *Flag, error) {
+func (s *service) applyExclusionRule(rule *entities.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*entities.Adjustment, *entities.Flag, error) {
 	var amount float64
 	var fromAccount string
 
@@ -471,12 +471,12 @@ func (s *service) applyExclusionRule(rule *rules.CleaningRule, data *entities.Fi
 		fromAccount = fmt.Sprintf("Other_%s", rule.ID)
 
 		// For earnings normalization rules, adjust normalized operating income
-		if rule.Category == rules.EarningsNormalization {
+		if rule.Category == entities.EarningsNormalization {
 			data.NormalizedOperatingIncome += amount // Add back excluded item
 		}
 	}
 
-	adjustment := &Adjustment{
+	adjustment := &entities.Adjustment{
 		ID:          fmt.Sprintf("adj_%d", timestamp.UnixNano()),
 		RuleID:      rule.ID,
 		Category:    rule.Category,
@@ -491,7 +491,7 @@ func (s *service) applyExclusionRule(rule *rules.CleaningRule, data *entities.Fi
 	return adjustment, nil, nil
 }
 
-func (s *service) applyWritedownRule(rule *rules.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*Adjustment, *Flag, error) {
+func (s *service) applyWritedownRule(rule *entities.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*entities.Adjustment, *entities.Flag, error) {
 	var amount float64
 	var fromAccount string
 
@@ -544,7 +544,7 @@ func (s *service) applyWritedownRule(rule *rules.CleaningRule, data *entities.Fi
 	}
 
 	if amount > 0 {
-		adjustment := &Adjustment{
+		adjustment := &entities.Adjustment{
 			ID:          fmt.Sprintf("adj_%d", timestamp.UnixNano()),
 			RuleID:      rule.ID,
 			Category:    rule.Category,
@@ -561,7 +561,7 @@ func (s *service) applyWritedownRule(rule *rules.CleaningRule, data *entities.Fi
 	return nil, nil, nil
 }
 
-func (s *service) applyFlagRule(rule *rules.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*Adjustment, *Flag, error) {
+func (s *service) applyFlagRule(rule *entities.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*entities.Adjustment, *entities.Flag, error) {
 	var amount float64
 
 	// Calculate amount for context in flag
@@ -596,7 +596,7 @@ func (s *service) applyFlagRule(rule *rules.CleaningRule, data *entities.Financi
 		amount = 0
 	}
 
-	flag := &Flag{
+	flag := &entities.Flag{
 		ID:             fmt.Sprintf("flag_%d", timestamp.UnixNano()),
 		RuleID:         rule.ID,
 		Type:           string(rule.Category),
@@ -610,7 +610,7 @@ func (s *service) applyFlagRule(rule *rules.CleaningRule, data *entities.Financi
 	return nil, flag, nil
 }
 
-func (s *service) applyReclassifyRule(rule *rules.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*Adjustment, *Flag, error) {
+func (s *service) applyReclassifyRule(rule *entities.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*entities.Adjustment, *entities.Flag, error) {
 	var amount float64
 	var fromAccount string
 
@@ -653,7 +653,7 @@ func (s *service) applyReclassifyRule(rule *rules.CleaningRule, data *entities.F
 	}
 
 	if amount > 0 {
-		adjustment := &Adjustment{
+		adjustment := &entities.Adjustment{
 			ID:          fmt.Sprintf("adj_%d", timestamp.UnixNano()),
 			RuleID:      rule.ID,
 			Category:    rule.Category,
@@ -670,7 +670,7 @@ func (s *service) applyReclassifyRule(rule *rules.CleaningRule, data *entities.F
 	return nil, nil, nil
 }
 
-func (s *service) applyTreatAsDebtRule(rule *rules.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*Adjustment, *Flag, error) {
+func (s *service) applyTreatAsDebtRule(rule *entities.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*entities.Adjustment, *entities.Flag, error) {
 	var amount float64
 	var fromAccount string
 
@@ -700,7 +700,7 @@ func (s *service) applyTreatAsDebtRule(rule *rules.CleaningRule, data *entities.
 	}
 
 	if amount > 0 {
-		adjustment := &Adjustment{
+		adjustment := &entities.Adjustment{
 			ID:          fmt.Sprintf("adj_%d", timestamp.UnixNano()),
 			RuleID:      rule.ID,
 			Category:    rule.Category,
@@ -717,20 +717,20 @@ func (s *service) applyTreatAsDebtRule(rule *rules.CleaningRule, data *entities.
 	return nil, nil, nil
 }
 
-func (s *service) calculateQualityScore(data *entities.FinancialData, flags []Flag) (float64, []string, error) {
+func (s *service) calculateQualityScore(data *entities.FinancialData, flags []entities.Flag) (float64, []string, error) {
 	baseScore := 100.0
 	var issues []string
 
 	// Deduct points for each flag based on severity
 	for _, flag := range flags {
 		switch flag.Severity {
-		case rules.Critical:
+		case entities.Critical:
 			baseScore -= 20
 			issues = append(issues, fmt.Sprintf("Critical: %s", flag.Description))
-		case rules.Warning:
+		case entities.Warning:
 			baseScore -= 10
 			issues = append(issues, fmt.Sprintf("Warning: %s", flag.Description))
-		case rules.Info:
+		case entities.Info:
 			baseScore -= 5
 			issues = append(issues, fmt.Sprintf("Info: %s", flag.Description))
 		}
@@ -755,25 +755,25 @@ func (s *service) calculateQualityScore(data *entities.FinancialData, flags []Fl
 	return baseScore, issues, nil
 }
 
-func (s *service) getCachedResult(key string) *CleaningResult {
+func (s *service) getCachedResult(key string) *entities.CleaningResult {
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
 	return s.cache[key]
 }
 
-func (s *service) setCachedResult(key string, result *CleaningResult) {
+func (s *service) setCachedResult(key string, result *entities.CleaningResult) {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 	s.cache[key] = result
 }
 
-func (s *service) updateStats(result *CleaningResult) {
+func (s *service) updateStats(result *entities.CleaningResult) {
 	s.statsMu.Lock()
 	defer s.statsMu.Unlock()
 
 	s.stats.TotalCompanies++
 	s.stats.AverageQualityScore = (s.stats.AverageQualityScore*float64(s.stats.TotalCompanies-1) + result.QualityScore) / float64(s.stats.TotalCompanies)
-	s.stats.QualityDistribution[GetQualityGrade(result.QualityScore)]++
+	s.stats.QualityDistribution[entities.GetQualityGrade(result.QualityScore)]++
 
 	for _, adj := range result.Adjustments {
 		s.stats.CommonAdjustments[adj.RuleID]++
@@ -817,28 +817,28 @@ func getIndustryCode(data *entities.FinancialData) string {
 	return "" // Use general rules
 }
 
-func getCompanySize(data *entities.FinancialData) CompanySize {
+func getCompanySize(data *entities.FinancialData) entities.CompanySize {
 	// TODO: Implement proper company size classification based on market cap
 	// For now, classify based on revenue as a proxy
 	switch {
 	case data.Revenue > 50000000000: // $50B+
-		return MegaCap
+		return entities.MegaCap
 	case data.Revenue > 10000000000: // $10B+
-		return LargeCap
+		return entities.LargeCap
 	case data.Revenue > 2000000000: // $2B+
-		return MidCap
+		return entities.MidCap
 	default:
-		return SmallCap
+		return entities.SmallCap
 	}
 }
 
 // createRiskWarningFlags creates additional warning flags for risky patterns
-func (s *service) createRiskWarningFlags(data *entities.FinancialData, timestamp time.Time) []Flag {
-	var flags []Flag
+func (s *service) createRiskWarningFlags(data *entities.FinancialData, timestamp time.Time) []entities.Flag {
+	var flags []entities.Flag
 
 	// Flag for excessive goodwill (warning level)
 	if data.Goodwill > data.TotalAssets*0.25 { // >25% of assets
-		flag := Flag{
+		flag := entities.Flag{
 			ID:             fmt.Sprintf("warning_flag_%d", timestamp.UnixNano()),
 			RuleID:         "excessive_goodwill_warning",
 			Type:           "asset_quality",
@@ -854,7 +854,7 @@ func (s *service) createRiskWarningFlags(data *entities.FinancialData, timestamp
 
 	// Flag for excessive intangibles (warning level)
 	if data.OtherIntangibles > data.TotalAssets*0.20 { // >20% of assets
-		flag := Flag{
+		flag := entities.Flag{
 			ID:             fmt.Sprintf("warning_flag_%d", timestamp.UnixNano()+1),
 			RuleID:         "excessive_intangibles_warning",
 			Type:           "asset_quality",
