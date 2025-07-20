@@ -1,21 +1,30 @@
 package adjustments
 
 import (
+	"context"
 	"fmt"
 	"time"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/pkg/finance/leases"
 )
 
 // LiabilityAdjuster handles Category B adjustments from SEC cleaning guide
 // Implements under-stated liabilities and off-balance-sheet exposures
 type LiabilityAdjuster struct {
 	// TODO: Add configuration for adjustment thresholds
+	leaseCalculator *leases.PerformanceOptimizedCalculator
 }
 
 // NewLiabilityAdjuster creates a new liability adjuster instance
 func NewLiabilityAdjuster() *LiabilityAdjuster {
-	return &LiabilityAdjuster{}
+	// TODO: Load configuration from proper source
+	config := leases.GetDefaultConfig()
+	leaseCalculator := leases.NewPerformanceOptimizedCalculator(config)
+
+	return &LiabilityAdjuster{
+		leaseCalculator: leaseCalculator,
+	}
 }
 
 // LiabilityAdjustmentResult represents the result of applying liability adjustments
@@ -79,9 +88,129 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 	}
 }
 
-// ProcessOperatingLeaseAdjustment implements B1 rule: Operating lease liabilities as debt
-func (la *LiabilityAdjuster) ProcessOperatingLeaseAdjustment(data *entities.FinancialData, rule *entities.CleaningRule, context *entities.CleaningContext) *AdjustmentResult {
-	// Calculate total operating lease liability
+// ProcessOperatingLeaseAdjustment implements B1 rule: Operating lease present value calculation
+func (la *LiabilityAdjuster) ProcessOperatingLeaseAdjustment(data *entities.FinancialData, rule *entities.CleaningRule, cleaningContext *entities.CleaningContext) *AdjustmentResult {
+	// Step 1: Calculate present value of operating lease commitments using sophisticated engine
+	ctx := context.Background() // TODO: Use proper context from caller
+
+	presentValueResult, err := la.leaseCalculator.CalculatePresentValue(ctx, data, cleaningContext)
+	if err != nil {
+		// Fallback to simple capitalization if PV calculation fails
+		return la.fallbackToSimpleCapitalization(data, rule, cleaningContext, err)
+	}
+
+	// Step 2: Validate present value result
+	if presentValueResult.PresentValue <= 0 {
+		return &AdjustmentResult{
+			Amount:      0.0,
+			Applied:     false,
+			Adjustments: []entities.Adjustment{},
+			Flags:       []entities.Flag{},
+			Reasoning:   "No meaningful operating lease present value calculated",
+		}
+	}
+
+	// Step 3: Calculate lease-to-asset ratio for materiality assessment
+	leaseRatio := presentValueResult.PresentValue / data.TotalAssets
+
+	// Step 4: Industry-specific threshold application
+	threshold := la.getLeaseThresholdForIndustry(cleaningContext.IndustryCode)
+
+	// Step 5: Create comprehensive adjustment record
+	adjustment := entities.Adjustment{
+		ID:          fmt.Sprintf("lease-pv-adj-%d", time.Now().UnixNano()),
+		RuleID:      rule.ID,
+		Category:    entities.LiabilityCompleteness,
+		Type:        entities.TreatAsDebt,
+		Amount:      presentValueResult.PresentValue,
+		FromAccount: "OperatingLeaseCommitments",
+		ToAccount:   "InterestBearingDebt",
+		Percentage:  leaseRatio * 100,
+		Reasoning: fmt.Sprintf("operating_lease_adj: Present value of operating lease commitments (%.1f%% of assets) calculated using %s method with %.1f%% discount rate over %d years",
+			leaseRatio*100, presentValueResult.CalculationMethod, presentValueResult.DiscountRate*100, presentValueResult.LeaseTermYears),
+		Applied:   true,
+		Timestamp: time.Now(),
+	}
+
+	// Step 6: Generate comprehensive flags based on calculation quality and materiality
+	var flags []entities.Flag
+
+	// Add calculation quality flag
+	if presentValueResult.EstimationQuality == "low" || presentValueResult.EstimationQuality == "very_low" {
+		flag := entities.Flag{
+			ID:         fmt.Sprintf("lease-quality-flag-%d", time.Now().UnixNano()),
+			RuleID:     rule.ID,
+			Type:       "lease_calculation_quality",
+			Severity:   la.getSeverityForQuality(presentValueResult.EstimationQuality),
+			Amount:     presentValueResult.PresentValue,
+			Percentage: presentValueResult.ConfidenceScore * 100,
+			Description: fmt.Sprintf("Lease present value calculated with %s quality (%.1f%% confidence)",
+				presentValueResult.EstimationQuality, presentValueResult.ConfidenceScore*100),
+			Recommendation: la.getQualityRecommendation(presentValueResult.EstimationQuality),
+			Timestamp:      time.Now(),
+		}
+		flags = append(flags, flag)
+	}
+
+	// Add validation warnings if present
+	for _, validationFlag := range presentValueResult.ValidationFlags {
+		flag := entities.Flag{
+			ID:             fmt.Sprintf("lease-validation-flag-%d", time.Now().UnixNano()),
+			RuleID:         rule.ID,
+			Type:           "lease_validation_warning",
+			Severity:       entities.FlagSeverityMedium,
+			Amount:         presentValueResult.PresentValue,
+			Percentage:     leaseRatio * 100,
+			Description:    fmt.Sprintf("Lease calculation validation warning: %s", validationFlag),
+			Recommendation: "Review lease commitment data and calculation assumptions",
+			Timestamp:      time.Now(),
+		}
+		flags = append(flags, flag)
+	}
+
+	// Add materiality flag if needed
+	if leaseRatio >= threshold {
+		severity := la.getSeverityForLeaseRatio(leaseRatio, cleaningContext.IndustryCode)
+
+		flag := entities.Flag{
+			ID:             fmt.Sprintf("lease-materiality-flag-%d", time.Now().UnixNano()),
+			RuleID:         rule.ID,
+			Type:           "operating_lease_obligation", // Updated to match test expectations
+			Severity:       severity,
+			Amount:         presentValueResult.PresentValue,
+			Percentage:     leaseRatio * 100,
+			Description:    fmt.Sprintf("Material operating lease present value (%.1f%% of assets) added to debt", leaseRatio*100),
+			Recommendation: la.getLeaseRecommendation(cleaningContext.IndustryCode, leaseRatio),
+			Timestamp:      time.Now(),
+		}
+		flags = append(flags, flag)
+	}
+
+	// Step 7: Build comprehensive reasoning
+	reasoning := fmt.Sprintf("Calculated present value of %.0f for operating lease commitments using %s method. "+
+		"Discount rate: %.2f%%, Lease term: %d years, Confidence: %.1f%%, Quality: %s",
+		presentValueResult.PresentValue,
+		presentValueResult.CalculationMethod,
+		presentValueResult.DiscountRate*100,
+		presentValueResult.LeaseTermYears,
+		presentValueResult.ConfidenceScore*100,
+		presentValueResult.EstimationQuality)
+
+	// TODO: Add monitoring metrics for calculation performance
+	// TODO: Log calculation details for audit trail
+
+	return &AdjustmentResult{
+		Amount:      presentValueResult.PresentValue,
+		Applied:     true,
+		Adjustments: []entities.Adjustment{adjustment},
+		Flags:       flags,
+		Reasoning:   reasoning,
+	}
+}
+
+// fallbackToSimpleCapitalization provides fallback when PV calculation fails
+func (la *LiabilityAdjuster) fallbackToSimpleCapitalization(data *entities.FinancialData, rule *entities.CleaningRule, cleaningContext *entities.CleaningContext, originalError error) *AdjustmentResult {
+	// Calculate total operating lease liability from balance sheet
 	totalLeaseObligation := data.OperatingLeaseLiability
 	if totalLeaseObligation == 0 {
 		totalLeaseObligation = data.OperatingLeaseLiabilityCurrent + data.OperatingLeaseLiabilityNoncurrent
@@ -93,19 +222,16 @@ func (la *LiabilityAdjuster) ProcessOperatingLeaseAdjustment(data *entities.Fina
 			Applied:     false,
 			Adjustments: []entities.Adjustment{},
 			Flags:       []entities.Flag{},
-			Reasoning:   "No operating lease obligations present to capitalize",
+			Reasoning:   fmt.Sprintf("Present value calculation failed (%v) and no fallback lease liability available", originalError),
 		}
 	}
 
 	// Calculate lease-to-asset ratio for materiality assessment
 	leaseRatio := totalLeaseObligation / data.TotalAssets
 
-	// Industry-specific threshold application
-	threshold := la.getLeaseThresholdForIndustry(context.IndustryCode)
-
-	// Create adjustment record (always treat leases as debt for WACC)
+	// Create fallback adjustment record
 	adjustment := entities.Adjustment{
-		ID:          fmt.Sprintf("lease-adj-%d", time.Now().UnixNano()),
+		ID:          fmt.Sprintf("lease-fallback-adj-%d", time.Now().UnixNano()),
 		RuleID:      rule.ID,
 		Category:    entities.LiabilityCompleteness,
 		Type:        entities.TreatAsDebt,
@@ -113,36 +239,32 @@ func (la *LiabilityAdjuster) ProcessOperatingLeaseAdjustment(data *entities.Fina
 		FromAccount: "OperatingLeaseObligations",
 		ToAccount:   "InterestBearingDebt",
 		Percentage:  leaseRatio * 100,
-		Reasoning:   fmt.Sprintf("Treated operating lease obligations (%.1f%% of assets) as debt per B1 rule", leaseRatio*100),
+		Reasoning:   fmt.Sprintf("Fallback to book value lease obligations (%.1f%% of assets) due to PV calculation failure", leaseRatio*100),
 		Applied:     true,
 		Timestamp:   time.Now(),
 	}
 
-	// Generate flags based on materiality and industry context
+	// Generate fallback error flag
 	var flags []entities.Flag
-	if leaseRatio >= threshold {
-		severity := la.getSeverityForLeaseRatio(leaseRatio, context.IndustryCode)
-
-		flag := entities.Flag{
-			ID:             fmt.Sprintf("lease-flag-%d", time.Now().UnixNano()),
-			RuleID:         rule.ID,
-			Type:           "operating_lease_obligation",
-			Severity:       severity,
-			Amount:         totalLeaseObligation,
-			Percentage:     leaseRatio * 100,
-			Description:    fmt.Sprintf("Material operating lease obligations (%.1f%% of assets) added to debt", leaseRatio*100),
-			Recommendation: la.getLeaseRecommendation(context.IndustryCode, leaseRatio),
-			Timestamp:      time.Now(),
-		}
-		flags = append(flags, flag)
+	flag := entities.Flag{
+		ID:             fmt.Sprintf("lease-fallback-flag-%d", time.Now().UnixNano()),
+		RuleID:         rule.ID,
+		Type:           "lease_calculation_fallback",
+		Severity:       entities.FlagSeverityHigh,
+		Amount:         totalLeaseObligation,
+		Percentage:     leaseRatio * 100,
+		Description:    fmt.Sprintf("Present value calculation failed, using book value lease obligations: %v", originalError),
+		Recommendation: "Review lease commitment data quality and calculation configuration",
+		Timestamp:      time.Now(),
 	}
+	flags = append(flags, flag)
 
 	return &AdjustmentResult{
 		Amount:      totalLeaseObligation,
 		Applied:     true,
 		Adjustments: []entities.Adjustment{adjustment},
 		Flags:       flags,
-		Reasoning:   fmt.Sprintf("Capitalized %.0f in operating lease obligations as debt", totalLeaseObligation),
+		Reasoning:   fmt.Sprintf("Fallback capitalization of %.0f in operating lease obligations due to PV calculation failure", totalLeaseObligation),
 	}
 }
 
@@ -186,7 +308,7 @@ func (la *LiabilityAdjuster) ProcessPensionAdjustment(data *entities.FinancialDa
 		FromAccount: "PensionUnderfunding",
 		ToAccount:   "InterestBearingDebt",
 		Percentage:  pensionRatio * 100,
-		Reasoning:   fmt.Sprintf("Added under-funded pension/OPEB obligations (%.1f%% of revenue) to debt per B2 rule", pensionRatio*100),
+		Reasoning:   fmt.Sprintf("pension_adjustment: Added under-funded pension/OPEB obligations (%.1f%% of revenue) to debt per B2 rule", pensionRatio*100),
 		Applied:     true,
 		Timestamp:   time.Now(),
 	}
@@ -238,13 +360,14 @@ func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities
 		}
 	}
 
-	// Calculate contingent liability ratio for materiality
-	contingentRatio := totalContingentLiability / data.Revenue
-
 	// Apply conservative probability weighting (typically 30-70% for disclosed contingencies)
 	// TODO: Integrate AI service for footnote analysis to get more precise probability estimates
 	probabilityWeight := la.getContingentLiabilityProbability(context.IndustryCode, totalContingentLiability)
 	weightedAmount := totalContingentLiability * probabilityWeight
+
+	// Calculate contingent liability ratios for materiality assessment
+	originalRatio := totalContingentLiability / data.Revenue // Use original amount for materiality
+	weightedRatio := weightedAmount / data.Revenue           // Use weighted amount for reporting
 
 	// Create adjustment record
 	adjustment := entities.Adjustment{
@@ -255,18 +378,18 @@ func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities
 		Amount:      weightedAmount,
 		FromAccount: "ContingentLiabilities",
 		ToAccount:   "EstimatedLiabilities",
-		Percentage:  contingentRatio * 100,
-		Reasoning:   fmt.Sprintf("Applied %.0f%% probability weighting to contingent liabilities (%.1f%% of revenue) per B3 rule", probabilityWeight*100, contingentRatio*100),
+		Percentage:  weightedRatio * 100,
+		Reasoning:   fmt.Sprintf("contingent_liabilities: Applied %.0f%% probability weighting to contingent liabilities (%.1f%% of revenue) per B3 rule", probabilityWeight*100, originalRatio*100),
 		Applied:     true,
 		Timestamp:   time.Now(),
 	}
 
-	// Generate flags for material contingent exposures
+	// Generate flags for material contingent exposures based on original ratio
 	var flags []entities.Flag
 	threshold := la.getContingentLiabilityThreshold(context.IndustryCode)
 
-	if contingentRatio >= threshold {
-		severity := la.getSeverityForContingentRatio(contingentRatio, context.IndustryCode)
+	if originalRatio >= threshold {
+		severity := la.getSeverityForContingentRatio(originalRatio, context.IndustryCode)
 
 		flag := entities.Flag{
 			ID:             fmt.Sprintf("contingent-flag-%d", time.Now().UnixNano()),
@@ -274,8 +397,8 @@ func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities
 			Type:           "contingent_liability_exposure",
 			Severity:       severity,
 			Amount:         weightedAmount,
-			Percentage:     contingentRatio * 100,
-			Description:    fmt.Sprintf("Material contingent liability exposure (%.1f%% of revenue) with %.0f%% probability weighting", contingentRatio*100, probabilityWeight*100),
+			Percentage:     originalRatio * 100,
+			Description:    fmt.Sprintf("Material contingent liability exposure (%.1f%% of revenue) with %.0f%% probability weighting", originalRatio*100, probabilityWeight*100),
 			Recommendation: la.getContingentLiabilityRecommendation(context.IndustryCode),
 			Timestamp:      time.Now(),
 		}
@@ -408,5 +531,37 @@ func (la *LiabilityAdjuster) getContingentLiabilityRecommendation(industryCode s
 		return "Assess patent portfolio risks and consider defensive strategies"
 	default:
 		return "Regularly evaluate contingent liability exposure and disclosure adequacy"
+	}
+}
+
+// getSeverityForQuality returns flag severity based on estimation quality
+func (la *LiabilityAdjuster) getSeverityForQuality(quality string) entities.FlagSeverity {
+	switch quality {
+	case "high":
+		return entities.FlagSeverityLow
+	case "medium":
+		return entities.FlagSeverityMedium
+	case "low":
+		return entities.FlagSeverityHigh
+	case "very_low":
+		return entities.FlagSeverityCritical
+	default:
+		return entities.FlagSeverityMedium
+	}
+}
+
+// getQualityRecommendation returns recommendation based on estimation quality
+func (la *LiabilityAdjuster) getQualityRecommendation(quality string) string {
+	switch quality {
+	case "high":
+		return "Lease present value calculation is highly reliable"
+	case "medium":
+		return "Consider obtaining additional lease commitment details for improved accuracy"
+	case "low":
+		return "Review lease commitment disclosures and consider manual verification"
+	case "very_low":
+		return "Lease calculation has significant uncertainty - recommend detailed analysis"
+	default:
+		return "Review lease calculation inputs and methodology"
 	}
 }

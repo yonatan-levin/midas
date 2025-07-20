@@ -39,7 +39,7 @@ func TestNewClient(t *testing.T) {
 func TestClient_GetCompanyFacts_Success(t *testing.T) {
 	// Mock SEC API response
 	mockResponse := &ports.SECCompanyFacts{
-		CIK:        "0000320193",
+		CIK:        "320193",
 		EntityName: "Apple Inc.",
 		Facts: map[string]ports.SECFactGroup{
 			"us-gaap:Revenues": {
@@ -71,7 +71,12 @@ func TestClient_GetCompanyFacts_Success(t *testing.T) {
 		assert.Equal(t, "application/json", r.Header.Get("Accept"))
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockResponse)
+		// Encode with error handling
+		if err := json.NewEncoder(w).Encode(mockResponse); err != nil {
+			t.Errorf("Failed to encode mock response: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer server.Close()
 
@@ -91,7 +96,7 @@ func TestClient_GetCompanyFacts_Success(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.NotNil(t, facts)
-	assert.Equal(t, "0000320193", facts.CIK)
+	assert.Equal(t, "320193", facts.CIK.String())
 	assert.Equal(t, "Apple Inc.", facts.EntityName)
 	assert.Len(t, facts.Facts, 1)
 	assert.Contains(t, facts.Facts, "us-gaap:Revenues")
@@ -154,7 +159,7 @@ func TestClient_GetCompanyFacts_RateLimit(t *testing.T) {
 func TestClient_GetCompanyFacts_WithRetry(t *testing.T) {
 	requestCount := 0
 	mockResponse := &ports.SECCompanyFacts{
-		CIK:        "0000320193",
+		CIK:        "320193",
 		EntityName: "Apple Inc.",
 		Facts: map[string]ports.SECFactGroup{
 			"us-gaap:Revenues": {
@@ -185,7 +190,12 @@ func TestClient_GetCompanyFacts_WithRetry(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockResponse)
+		// Encode with error handling
+		if err := json.NewEncoder(w).Encode(mockResponse); err != nil {
+			t.Errorf("Failed to encode mock response: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer server.Close()
 
@@ -317,7 +327,7 @@ func TestClient_RateLimiting(t *testing.T) {
 	// Create test server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mockResponse := &ports.SECCompanyFacts{
-			CIK:        "0000320193",
+			CIK:        "320193",
 			EntityName: "Apple Inc.",
 			Facts: map[string]ports.SECFactGroup{
 				"us-gaap:Revenues": {
@@ -329,7 +339,12 @@ func TestClient_RateLimiting(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(mockResponse)
+			// Encode with error handling
+			if err := json.NewEncoder(w).Encode(mockResponse); err != nil {
+				t.Errorf("Failed to encode mock response: %v", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
 	}))
 	defer server.Close()
 
@@ -364,7 +379,7 @@ func TestClient_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)
 		mockResponse := &ports.SECCompanyFacts{
-			CIK:        "0000320193",
+			CIK:        "320193",
 			EntityName: "Apple Inc.",
 			Facts: map[string]ports.SECFactGroup{
 				"us-gaap:Revenues": {
@@ -376,7 +391,12 @@ func TestClient_ContextCancellation(t *testing.T) {
 				},
 			},
 		}
-		json.NewEncoder(w).Encode(mockResponse)
+		// Encode with error handling
+		if err := json.NewEncoder(w).Encode(mockResponse); err != nil {
+			t.Errorf("Failed to encode mock response: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer server.Close()
 

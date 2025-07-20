@@ -228,7 +228,7 @@ func (c *Client) makeRequest(ctx context.Context, url string) (*ports.SECCompany
 	// Set required headers for SEC API
 	req.Header.Set("User-Agent", c.config.UserAgent)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Host", "data.sec.gov")
+	//req.Header.Set("Host", "data.sec.gov")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -254,6 +254,7 @@ func (c *Client) makeRequest(ctx context.Context, url string) (*ports.SECCompany
 	// Parse the JSON response
 	var facts ports.SECCompanyFacts
 	if err := json.NewDecoder(resp.Body).Decode(&facts); err != nil {
+
 		return nil, fmt.Errorf("failed to decode SEC response: %w", err)
 	}
 
@@ -283,7 +284,8 @@ func (c *Client) makeConceptRequest(ctx context.Context, url string) (*entities.
 	// Set required headers for SEC API
 	req.Header.Set("User-Agent", c.config.UserAgent)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Host", "data.sec.gov")
+
+	//req.Host = "data.sec.gov"  if we really need to force it
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

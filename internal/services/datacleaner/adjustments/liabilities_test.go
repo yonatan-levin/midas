@@ -60,8 +60,8 @@ func TestLiabilityAdjuster_ProcessOperatingLeaseAdjustment(t *testing.T) {
 			},
 			expectApplied:  true,
 			expectAmount:   50000,
-			expectFlags:    0, // Below materiality threshold for tech
-			expectSeverity: entities.FlagSeverityLow,
+			expectFlags:    0,                        // No flags - below materiality threshold and medium quality is acceptable
+			expectSeverity: entities.FlagSeverityLow, // Not used since no flags
 		},
 		{
 			name: "Retail company with significant lease obligations",
@@ -81,8 +81,8 @@ func TestLiabilityAdjuster_ProcessOperatingLeaseAdjustment(t *testing.T) {
 			},
 			expectApplied:  true,
 			expectAmount:   200000,
-			expectFlags:    1,                        // Should flag due to materiality
-			expectSeverity: entities.FlagSeverityLow, // 20% < (15% * 1.5 = 22.5%)
+			expectFlags:    1,                        // Only materiality flag
+			expectSeverity: entities.FlagSeverityLow, // 20% vs 15% threshold = low severity
 		},
 		{
 			name: "Manufacturing with equipment leases",
@@ -102,8 +102,8 @@ func TestLiabilityAdjuster_ProcessOperatingLeaseAdjustment(t *testing.T) {
 			},
 			expectApplied:  true,
 			expectAmount:   120000,
-			expectFlags:    1,
-			expectSeverity: entities.FlagSeverityLow, // 12% = (12% * 1.0), not >= 18%
+			expectFlags:    1,                        // Only materiality flag
+			expectSeverity: entities.FlagSeverityLow, // 12% vs 12% threshold = low severity
 		},
 	}
 

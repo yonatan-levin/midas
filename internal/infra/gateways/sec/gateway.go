@@ -39,7 +39,7 @@ func (g *Gateway) GetCompanyFacts(ctx context.Context, cik string) (*entities.Co
 
 	// Convert ports.SECCompanyFacts to entities.CompanyFactsResponse
 	return &entities.CompanyFactsResponse{
-		CIK:         facts.CIK,
+		CIK:         facts.CIK.String(),
 		EntityName:  facts.EntityName,
 		Facts:       convertFactsToMap(facts.Facts),
 		FactsCount:  len(facts.Facts),

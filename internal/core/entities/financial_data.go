@@ -11,16 +11,27 @@ import (
 // extracted and normalized from SEC XBRL filings
 type FinancialData struct {
 	// Company identification
-	Ticker string    `json:"ticker"`
-	CIK    string    `json:"cik"`
-	AsOf   time.Time `json:"as_of"`
+	Ticker       string    `json:"ticker"`
+	IndustryCode string    `json:"industry_code"` // TODO: Populate this field with the industry code and use it for the industry code detection.
+	CIK          string    `json:"cik"`
+	AsOf         time.Time `json:"as_of"`
 
 	// Income Statement (normalized values)
 	OperatingIncome           float64 `json:"operating_income"`            // Normalized operating income after adjustments
 	NormalizedOperatingIncome float64 `json:"normalized_operating_income"` // After removing non-recurring items
 	Revenue                   float64 `json:"revenue"`
+	ResearchAndDevelopment    float64 `json:"research_and_development"` // R&D expenses for capitalization analysis
 	InterestExpense           float64 `json:"interest_expense"`
 	TaxRate                   float64 `json:"tax_rate"` // Effective tax rate
+
+	// Earnings Normalization Fields (Category C from SEC guide)
+	RestructuringCharges     float64 `json:"restructuring_charges"`      // C1: Restructuring and integration charges
+	AssetSaleGains           float64 `json:"asset_sale_gains"`           // C2: Asset sale gains and impairment losses
+	LitigationSettlements    float64 `json:"litigation_settlements"`     // C3: Litigation settlements and fines
+	StockBasedCompensation   float64 `json:"stock_based_compensation"`   // C4: Stock-based compensation expense
+	DerivativeGainsLosses    float64 `json:"derivative_gains_losses"`    // C5: Fair value gains/losses on derivatives
+	CapitalizedInterest      float64 `json:"capitalized_interest"`       // C6: Capitalized interest adjustment
+	WorkingCapitalAdjustment float64 `json:"working_capital_adjustment"` // C7: Working capital window dressing
 
 	// Balance Sheet (adjusted values)
 	TotalAssets         float64 `json:"total_assets"`
@@ -44,17 +55,19 @@ type FinancialData struct {
 	DeadInventoryWritedown float64 `json:"dead_inventory_writedown"` // Amount written down
 
 	// Liability Completeness Fields (Category B from SEC guide)
-	OperatingLeaseLiabilityCurrent    float64 `json:"operating_lease_liability_current"`    // Current portion of operating lease liabilities (B1)
-	OperatingLeaseLiabilityNoncurrent float64 `json:"operating_lease_liability_noncurrent"` // Non-current operating lease liabilities (B1)
-	OperatingLeaseLiability           float64 `json:"operating_lease_liability"`            // Total operating lease liability (B1)
-	PensionLiabilities                float64 `json:"pension_liabilities"`                  // Defined benefit pension obligations (B2)
-	OPEBLiability                     float64 `json:"opeb_liability"`                       // Other post-employment benefit liabilities (B2)
-	PensionPlanAssets                 float64 `json:"pension_plan_assets"`                  // Plan assets fair value (B2)
-	ProjectedBenefitObligation        float64 `json:"projected_benefit_obligation"`         // PBO for pension plans (B2)
-	ContingentLiabilities             float64 `json:"contingent_liabilities"`               // Disclosed contingent liabilities (B3)
-	EnvironmentalLiabilities          float64 `json:"environmental_liabilities"`            // Environmental remediation liabilities (B3)
-	LitigationLiabilities             float64 `json:"litigation_liabilities"`               // Litigation settlement liabilities (B3)
-	IncrementalBorrowingRate          float64 `json:"incremental_borrowing_rate"`           // IBR for lease capitalization (B1)
+	OperatingLeaseLiabilityCurrent    float64            `json:"operating_lease_liability_current"`    // Current portion of operating lease liabilities (B1)
+	OperatingLeaseLiabilityNoncurrent float64            `json:"operating_lease_liability_noncurrent"` // Non-current operating lease liabilities (B1)
+	OperatingLeaseLiability           float64            `json:"operating_lease_liability"`            // Total operating lease liability (B1)
+	OperatingLeaseCommitments         map[string]float64 `json:"operating_lease_commitments"`          // Future lease commitments by year (B1)
+	PensionLiabilities                float64            `json:"pension_liabilities"`                  // Defined benefit pension obligations (B2)
+	OPEBLiability                     float64            `json:"opeb_liability"`                       // Other post-employment benefit liabilities (B2)
+	PensionPlanAssets                 float64            `json:"pension_plan_assets"`                  // Plan assets fair value (B2)
+	ProjectedBenefitObligation        float64            `json:"projected_benefit_obligation"`         // PBO for pension plans (B2)
+	ContingentLiabilities             float64            `json:"contingent_liabilities"`               // Disclosed contingent liabilities (B3)
+	EnvironmentalLiabilities          float64            `json:"environmental_liabilities"`            // Environmental remediation liabilities (B3)
+	LitigationLiabilities             float64            `json:"litigation_liabilities"`               // Litigation settlement liabilities (B3)
+	IncrementalBorrowingRate          float64            `json:"incremental_borrowing_rate"`           // IBR for lease capitalization (B1)
+	RiskFreeRate                      float64            `json:"risk_free_rate"`                       // Risk-free rate for discount rate calculations
 
 	// Share information
 	SharesOutstanding        float64 `json:"shares_outstanding"`

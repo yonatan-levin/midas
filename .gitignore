@@ -302,5 +302,5 @@ cython_debug/
 
 # Project specific
 # Add any project-specific files or directories here
-testdata/*
+#testdata/*
 .cursor/rules/generalspecdoc.mdc

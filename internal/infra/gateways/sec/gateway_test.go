@@ -44,7 +44,7 @@ func TestNewGateway(t *testing.T) {
 func TestGateway_GetCompanyFacts(t *testing.T) {
 	// Mock successful SEC response
 	mockCompanyFacts := &ports.SECCompanyFacts{
-		CIK:        "0000320193",
+		CIK:        "320193",
 		EntityName: "Apple Inc.",
 		Facts: map[string]ports.SECFactGroup{
 			"us-gaap:Revenues": {
@@ -88,7 +88,7 @@ func TestGateway_GetCompanyFacts(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.NotNil(t, financialData)
-		assert.Equal(t, "0000320193", financialData.CIK)
+		assert.Equal(t, "320193", financialData.CIK)
 		assert.Equal(t, "Apple Inc.", financialData.EntityName)
 		assert.Greater(t, len(financialData.Facts), 0)
 	})
@@ -114,7 +114,7 @@ func TestGateway_GetCompanyFacts(t *testing.T) {
 func TestGateway_GetCompanyConcepts(t *testing.T) {
 	// Mock SEC concept response
 	mockConceptResponse := &entities.ConceptResponse{
-		CIK:         "0000320193",
+		CIK:         "320193",
 		Tag:         "Revenues",
 		EntityName:  "Apple Inc.",
 		Taxonomy:    "us-gaap",
@@ -155,7 +155,7 @@ func TestGateway_GetCompanyConcepts(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.NotNil(t, conceptResponse)
-		assert.Equal(t, "0000320193", conceptResponse.CIK)
+		assert.Equal(t, "320193", conceptResponse.CIK)
 		assert.Equal(t, "Revenues", conceptResponse.Tag)
 		assert.Equal(t, "Apple Inc.", conceptResponse.EntityName)
 	})

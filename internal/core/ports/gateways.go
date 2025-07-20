@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
@@ -45,7 +46,7 @@ type RetryPolicy interface {
 
 // SECCompanyFacts represents the structure of SEC Company Facts API response
 type SECCompanyFacts struct {
-	CIK        string                  `json:"cik"`
+	CIK        json.Number             `json:"cik"`
 	EntityName string                  `json:"entityName"`
 	Facts      map[string]SECFactGroup `json:"facts"`
 	FilingDate time.Time               `json:"-"` // Derived from facts

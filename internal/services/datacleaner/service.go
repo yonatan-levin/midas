@@ -8,17 +8,21 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/adjustments"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/rules"
 )
 
 // service implements the DataCleanerService interface
 type service struct {
-	config      *config.DataCleanerConfig
-	rulesEngine rules.RuleEngine
-	cache       map[string]*entities.CleaningResult // Simple in-memory cache for now
-	cacheMu     sync.RWMutex
-	stats       entities.CleaningStats
-	statsMu     sync.RWMutex
+	config            *config.DataCleanerConfig
+	rulesEngine       rules.RuleEngine
+	assetAdjuster     *adjustments.AssetAdjuster
+	liabilityAdjuster *adjustments.LiabilityAdjuster
+	earningsAdjuster  *adjustments.EarningsAdjuster
+	cache             map[string]*entities.CleaningResult // Simple in-memory cache for now
+	cacheMu           sync.RWMutex
+	stats             entities.CleaningStats
+	statsMu           sync.RWMutex
 }
 
 // NewDataCleanerService creates a new DataCleaner service instance
@@ -45,9 +49,12 @@ func NewDataCleanerService(cfg *config.Config) (DataCleanerService, error) {
 	}
 
 	svc := &service{
-		config:      &cfg.DataCleaner,
-		rulesEngine: rulesEngine,
-		cache:       make(map[string]*entities.CleaningResult),
+		config:            &cfg.DataCleaner,
+		rulesEngine:       rulesEngine,
+		assetAdjuster:     adjustments.NewAssetAdjuster(),
+		liabilityAdjuster: adjustments.NewLiabilityAdjuster(),
+		earningsAdjuster:  adjustments.NewEarningsAdjuster(),
+		cache:             make(map[string]*entities.CleaningResult),
 		stats: entities.CleaningStats{
 			QualityDistribution: make(map[entities.QualityGrade]int),
 			CommonAdjustments:   make(map[string]int),
@@ -122,8 +129,8 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 		}
 	}
 
-	// Apply cleaning rules
-	rulesApplied, adjustments, flags, err := s.applyClearingRules(ctx, result.CleanedData, cleaningCtx)
+	// Apply active cleaning adjustments
+	adjustments, flags, rulesApplied, err := s.applyActiveAdjustments(ctx, result.CleanedData, cleaningCtx)
 	if err != nil {
 		result.Errors = append(result.Errors, err.Error())
 		result.ProcessingTime = time.Since(startTime)
@@ -271,20 +278,20 @@ func (s *service) loadIndustryRules(industryCode string) error {
 	return nil
 }
 
-func (s *service) applyClearingRules(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (int, []entities.Adjustment, []entities.Flag, error) {
-	var adjustments []entities.Adjustment
-	var flags []entities.Flag
-	rulesApplied := 0
+// applyActiveAdjustments applies Category A and B adjustments using dedicated adjusters
+func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) ([]entities.Adjustment, []entities.Flag, int, error) {
+	var allAdjustments []entities.Adjustment
+	var allFlags []entities.Flag
+	totalRulesApplied := 0
 
 	// Get applicable rules
 	applicableRules := s.rulesEngine.GetIndustryRules(cleaningCtx.IndustryCode)
 
-	for _, rule := range applicableRules {
-		// Check context cancellation
-		if err := ctx.Err(); err != nil {
-			return rulesApplied, adjustments, flags, err
-		}
+	// Separate rules by category
+	assetRules := make([]*entities.CleaningRule, 0)
+	liabilityRules := make([]*entities.CleaningRule, 0)
 
+	for i, rule := range applicableRules {
 		if !rule.Enabled {
 			continue
 		}
@@ -294,30 +301,60 @@ func (s *service) applyClearingRules(ctx context.Context, data *entities.Financi
 			continue
 		}
 
-		// Apply the rule
-		adjustment, flag, err := s.applyRule(&rule, data)
-		if err != nil {
-			return rulesApplied, adjustments, flags, fmt.Errorf("failed to apply rule %s: %w", rule.ID, err)
+		switch rule.Category {
+		case entities.AssetQuality:
+			assetRules = append(assetRules, &applicableRules[i])
+		case entities.LiabilityCompleteness:
+			liabilityRules = append(liabilityRules, &applicableRules[i])
 		}
-
-		if adjustment != nil {
-			adjustments = append(adjustments, *adjustment)
-		}
-
-		if flag != nil {
-			flags = append(flags, *flag)
-		}
-
-		rulesApplied++
 	}
 
-	return rulesApplied, adjustments, flags, nil
+	// Apply Category A (Asset Quality) adjustments
+	if len(assetRules) > 0 {
+		assetResult := s.assetAdjuster.ProcessAssetAdjustments(data, assetRules, cleaningCtx)
+		if assetResult.Applied {
+			allAdjustments = append(allAdjustments, assetResult.Adjustments...)
+			allFlags = append(allFlags, assetResult.Flags...)
+			totalRulesApplied += len(assetRules)
+		}
+	}
+
+	// Apply Category B (Liability Completeness) adjustments
+	if len(liabilityRules) > 0 {
+		liabilityResult := s.liabilityAdjuster.ProcessLiabilityAdjustments(data, liabilityRules, cleaningCtx)
+		if liabilityResult.Applied {
+			allAdjustments = append(allAdjustments, liabilityResult.Adjustments...)
+			allFlags = append(allFlags, liabilityResult.Flags...)
+			totalRulesApplied += len(liabilityRules)
+		}
+	}
+
+	// Apply Category C (Earnings Normalization) adjustments
+	earningsRules := make([]*entities.CleaningRule, 0)
+	for i, rule := range applicableRules {
+		if rule.Enabled && rule.Category == entities.EarningsNormalization {
+			if s.checkRuleApplicability(&rule, data) {
+				earningsRules = append(earningsRules, &applicableRules[i])
+			}
+		}
+	}
+
+	if len(earningsRules) > 0 {
+		earningsResult := s.earningsAdjuster.ProcessEarningsAdjustments(data, earningsRules, cleaningCtx)
+		if earningsResult.Applied {
+			allAdjustments = append(allAdjustments, earningsResult.Adjustments...)
+			allFlags = append(allFlags, earningsResult.Flags...)
+			totalRulesApplied += len(earningsRules)
+		}
+	}
+
+	return allAdjustments, allFlags, totalRulesApplied, nil
 }
 
 func (s *service) checkRuleApplicability(rule *entities.CleaningRule, data *entities.FinancialData) bool {
 	// Check XBRL tags - for now, basic implementation
 	// TODO: Implement proper XBRL tag matching based on actual data structure
-
+	// TODO: Change the approach to checkRuleApplicability by config and industry hardcoded numbers dosne't apply to all cases
 	// Basic rule applicability based on rule ID and data content
 	switch rule.ID {
 	case "goodwill_exclusion":
@@ -791,7 +828,7 @@ func generateCacheKey(data *entities.FinancialData) string {
 }
 
 func getIndustryCode(data *entities.FinancialData) string {
-	// TODO: Implement proper industry code detection from company data
+	// TODO: Rethink this function, its not maintainable and hardcoded IndustryCodes is not a good idea.
 	// For now, make some reasonable guesses based on ticker patterns and financials
 
 	// Explicit ticker mappings
@@ -837,7 +874,7 @@ func (s *service) createRiskWarningFlags(data *entities.FinancialData, timestamp
 	var flags []entities.Flag
 
 	// Flag for excessive goodwill (warning level)
-	if data.Goodwill > data.TotalAssets*0.25 { // >25% of assets
+	if data.Goodwill > data.TotalAssets*0.25 { // >25%  TODO: Consolidate this flag conditions in a configurable system.
 		flag := entities.Flag{
 			ID:             fmt.Sprintf("warning_flag_%d", timestamp.UnixNano()),
 			RuleID:         "excessive_goodwill_warning",
@@ -853,7 +890,7 @@ func (s *service) createRiskWarningFlags(data *entities.FinancialData, timestamp
 	}
 
 	// Flag for excessive intangibles (warning level)
-	if data.OtherIntangibles > data.TotalAssets*0.20 { // >20% of assets
+	if data.OtherIntangibles > data.TotalAssets*0.20 { // >20% of assets TODO: Consolidate this flag conditions in a configurable system.
 		flag := entities.Flag{
 			ID:             fmt.Sprintf("warning_flag_%d", timestamp.UnixNano()+1),
 			RuleID:         "excessive_intangibles_warning",

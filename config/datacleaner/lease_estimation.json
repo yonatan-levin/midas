@@ -1,0 +1,176 @@
+{
+  "version": "1.0.0",
+  "description": "Configurable lease estimation parameters for present value calculations",
+  "created_at": "2024-12-25T00:00:00Z",
+  "updated_at": "2024-12-25T00:00:00Z",
+  
+  "estimation_methods": {
+    "discount_rate": {
+      "primary_method": "incremental_borrowing_rate",
+      "fallback_methods": ["cost_of_debt", "risk_free_plus_spread", "industry_average"],
+      "algorithms": {
+        "incremental_borrowing_rate": {
+          "enabled": true,
+          "base_rate_source": "risk_free_rate",
+          "credit_spread_multiplier": 1.5,
+          "industry_adjustment": true,
+          "minimum_rate": 0.02,
+          "maximum_rate": 0.15
+        },
+        "cost_of_debt": {
+          "enabled": true,
+          "use_effective_rate": true,
+          "fallback_to_interest_expense": true,
+          "minimum_rate": 0.01,
+          "maximum_rate": 0.20
+        },
+        "risk_free_plus_spread": {
+          "enabled": true,
+          "base_spread": 0.03,
+          "industry_spread_adjustment": true,
+          "credit_rating_adjustment": true
+        },
+        "industry_average": {
+          "enabled": true,
+          "confidence_threshold": 0.7,
+          "minimum_sample_size": 5,
+          "age_limit_days": 365
+        }
+      }
+    },
+    "lease_term": {
+      "primary_method": "disclosed_commitments",
+      "fallback_methods": ["historical_analysis", "industry_benchmarks"],
+      "algorithms": {
+        "disclosed_commitments": {
+          "enabled": true,
+          "parse_footnotes": true,
+          "extract_payment_schedule": true,
+          "minimum_years": 1,
+          "maximum_years": 50
+        },
+        "historical_analysis": {
+          "enabled": true,
+          "analyze_renewal_patterns": true,
+          "weight_recent_years": 0.6,
+          "minimum_history_years": 3
+        },
+        "industry_benchmarks": {
+          "enabled": true,
+          "confidence_threshold": 0.6,
+          "peer_group_size": 10
+        }
+      }
+    },
+    "payment_schedule": {
+      "primary_method": "schedule_extraction",
+      "fallback_methods": ["straight_line", "growth_adjusted"],
+      "algorithms": {
+        "schedule_extraction": {
+          "enabled": true,
+          "parse_commitment_tables": true,
+          "extract_annual_payments": true,
+          "handle_variable_payments": true
+        },
+        "straight_line": {
+          "enabled": true,
+          "annual_escalation_rate": 0.03,
+          "apply_inflation_adjustment": true
+        },
+        "growth_adjusted": {
+          "enabled": true,
+          "base_growth_rate": 0.025,
+          "industry_adjustment": true,
+          "economic_cycle_adjustment": true
+        }
+      }
+    }
+  },
+  
+  "validation": {
+    "data_quality": {
+      "minimum_confidence_score": 0.6,
+      "require_multiple_sources": true,
+      "validate_calculation_inputs": true,
+      "flag_estimation_assumptions": true
+    },
+    "reasonableness_checks": {
+      "maximum_pv_to_revenue_ratio": 2.0,
+      "maximum_pv_to_assets_ratio": 0.8,
+      "minimum_discount_rate": 0.005,
+      "maximum_discount_rate": 0.25
+    },
+    "industry_benchmarks": {
+      "enable_peer_comparison": true,
+      "outlier_detection_threshold": 2.5,
+      "flag_significant_deviations": true
+    }
+  },
+  
+  "performance": {
+    "caching": {
+      "enabled": true,
+      "cache_ttl_seconds": 3600,
+      "cache_key_includes": ["ticker", "filing_date", "config_version"],
+      "invalidate_on_config_change": true
+    },
+    "circuit_breaker": {
+      "enabled": true,
+      "failure_threshold": 5,
+      "recovery_timeout_seconds": 30,
+      "half_open_max_calls": 3
+    },
+    "rate_limiting": {
+      "enabled": true,
+      "max_concurrent_calculations": 10,
+      "calculation_timeout_seconds": 30
+    }
+  },
+  
+  "fallback_parameters": {
+    "default_discount_rate": 0.06,
+    "default_lease_term_years": 10,
+    "default_escalation_rate": 0.03,
+    "emergency_calculation_method": "simple_multiplier",
+    "emergency_multiplier": 8.0
+  },
+  
+  "industry_defaults": {
+    "retail": {
+      "discount_rate_adjustment": 0.005,
+      "typical_lease_term_years": 12,
+      "escalation_rate": 0.035,
+      "materiality_threshold": 0.15
+    },
+    "technology": {
+      "discount_rate_adjustment": -0.01,
+      "typical_lease_term_years": 8,
+      "escalation_rate": 0.025,
+      "materiality_threshold": 0.08
+    },
+    "manufacturing": {
+      "discount_rate_adjustment": 0.002,
+      "typical_lease_term_years": 15,
+      "escalation_rate": 0.03,
+      "materiality_threshold": 0.12
+    },
+    "financial": {
+      "discount_rate_adjustment": -0.005,
+      "typical_lease_term_years": 10,
+      "escalation_rate": 0.02,
+      "materiality_threshold": 0.05
+    }
+  },
+  
+  "monitoring": {
+    "enabled": true,
+    "log_calculation_details": true,
+    "track_estimation_accuracy": true,
+    "alert_on_calculation_failures": true,
+    "performance_metrics": {
+      "track_calculation_time": true,
+      "track_cache_hit_rate": true,
+      "track_fallback_usage": true
+    }
+  }
+}

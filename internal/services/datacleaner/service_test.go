@@ -338,7 +338,7 @@ func createTestFinancialDataWithIssues() *entities.FinancialData {
 	return &entities.FinancialData{
 		// Company identification
 		Ticker: "TEST",
-		CIK:    "0001234567",
+		CIK:    "1234567",
 		AsOf:   time.Now().AddDate(0, -3, 0), // 3 months ago
 
 		// Income Statement items
@@ -377,12 +377,14 @@ func createTestFinancialDataWithIssues() *entities.FinancialData {
 func createTestTechCompanyData() *entities.FinancialData {
 	data := createTestFinancialDataWithIssues()
 	data.Ticker = "TECH"
-	data.CIK = "0001234568"
+	data.CIK = "1234568"
 
-	// Add tech-specific issues
-	data.OtherIntangibles = 300000000                                              // Higher intangibles typical for tech
+	// Add tech-specific issues that should trigger R&D and intangible flags
+	data.OtherIntangibles = 300000000                                              // Higher intangibles typical for tech (30% of assets)
 	data.TangibleAssets = data.TotalAssets - data.Goodwill - data.OtherIntangibles // Recalculate tangible assets
-	// TODO: Add R&D capitalization and other tech-specific items
+	data.ResearchAndDevelopment = 50000000                                         // $50M R&D that should be reviewed for capitalization
+	// Set industry context - this will be detected by the service
+	data.Ticker = "AAPL" // Use a known tech ticker to trigger industry detection
 
 	return data
 }
@@ -390,12 +392,14 @@ func createTestTechCompanyData() *entities.FinancialData {
 func createTestRetailCompanyData() *entities.FinancialData {
 	data := createTestFinancialDataWithIssues()
 	data.Ticker = "RETAIL"
-	data.CIK = "0001234569"
+	data.CIK = "1234569"
 
-	// Add retail-specific issues
-	data.Inventory = 250000000   // Higher inventory typical for retail
-	data.InventoryTurnover = 4.0 // Lower turnover for retail
-	// TODO: Add seasonal patterns and other retail-specific items
+	// Add retail-specific issues that should trigger inventory adjustments
+	data.Inventory = 400000000   // Much higher inventory typical for retail (40% of assets)
+	data.InventoryTurnover = 2.5 // Lower turnover that should trigger obsolescence concerns
+	data.Goodwill = 150000000    // Some goodwill from acquisitions
+	// Set industry context - use a known retail ticker
+	data.Ticker = "WMT" // Use Walmart ticker to trigger retail industry detection
 
 	return data
 }
@@ -404,7 +408,7 @@ func createTestCleanFinancialData() *entities.FinancialData {
 	return &entities.FinancialData{
 		// Company identification
 		Ticker: "CLEAN",
-		CIK:    "0001234570",
+		CIK:    "1234570",
 		AsOf:   time.Now().AddDate(0, -1, 0), // 1 month ago
 
 		// Income Statement items (clean, no adjustments needed)
@@ -416,9 +420,9 @@ func createTestCleanFinancialData() *entities.FinancialData {
 
 		// Balance Sheet items (clean, minimal adjustments needed)
 		TotalAssets:         1000000000, // $1B
-		TangibleAssets:      950000000,  // $950M (most assets are tangible)
+		TangibleAssets:      990000000,  // $990M (most assets are tangible)
 		Goodwill:            0,          // No goodwill
-		OtherIntangibles:    50000000,   // Minimal intangibles
+		OtherIntangibles:    10000000,   // Minimal intangibles (1% - below adjustment threshold)
 		TotalDebt:           200000000,  // $200M total debt
 		InterestBearingDebt: 200000000,  // $200M interest-bearing debt
 
@@ -443,23 +447,34 @@ func createTestCleanFinancialData() *entities.FinancialData {
 func createTestProblematicFinancialData() *entities.FinancialData {
 	data := createTestFinancialDataWithIssues()
 	data.Ticker = "PROBLEM"
-	data.CIK = "0001234571"
+	data.CIK = "1234571"
 
-	// Add multiple problematic issues
-	data.Goodwill = 400000000                                                      // 40% of assets
-	data.OtherIntangibles = 300000000                                              // 30% of assets
+	// Add multiple problematic issues that should significantly lower quality score
+	data.Goodwill = 400000000                                                      // 40% of assets - very high
+	data.OtherIntangibles = 300000000                                              // 30% of assets - very high
 	data.Inventory = 200000000                                                     // Suspicious inventory growth
 	data.InventoryTurnover = 2.0                                                   // Poor inventory turnover
 	data.TangibleAssets = data.TotalAssets - data.Goodwill - data.OtherIntangibles // Recalculate
 
-	// TODO: Add more problematic patterns
+	// Add severe quality issues to lower the score
+	data.ContingentLiabilities = 50000000     // $50M contingent liabilities (10% of revenue) - critical
+	data.LitigationLiabilities = 25000000     // $25M litigation liabilities
+	data.WorkingCapitalAdjustment = 100000000 // $100M working capital adjustment (20% of revenue) - critical
+	data.RestructuringCharges = 25000000      // $25M restructuring (5% of revenue) - high
+	data.StockBasedCompensation = 60000000    // $60M stock compensation (12% of revenue) - very high
+	data.AssetSaleGains = 20000000            // $20M asset sale gains
+	data.DerivativeGainsLosses = -15000000    // $15M derivative losses
+
+	// Add data quality issues
+	data.MissingFields = []string{"CashFlow", "CapEx", "WorkingCapital"} // Missing critical fields
+
 	return data
 }
 
 func createTestRiskyFinancialData() *entities.FinancialData {
 	data := createTestFinancialDataWithIssues()
 	data.Ticker = "RISKY"
-	data.CIK = "0001234572"
+	data.CIK = "1234572"
 
 	// Add various risk factors that should trigger flags
 	data.Goodwill = 350000000                                                      // High goodwill (35% of assets)
@@ -467,7 +482,16 @@ func createTestRiskyFinancialData() *entities.FinancialData {
 	data.TangibleAssets = data.TotalAssets - data.Goodwill - data.OtherIntangibles // Recalculate
 	data.InventoryTurnover = 1.5                                                   // Very poor inventory turnover
 
-	// TODO: Add contingent liabilities, aggressive accounting, etc.
+	// Add critical risk factors to trigger critical flags
+	data.ContingentLiabilities = 30000000    // $30M contingent liabilities (6% of revenue) - triggers critical flag
+	data.LitigationLiabilities = 15000000    // $15M litigation liabilities
+	data.WorkingCapitalAdjustment = 80000000 // $80M working capital adjustment (16% of revenue) - triggers critical flag
+
+	// Add earnings normalization fields to trigger earnings flags
+	data.RestructuringCharges = 15000000   // $15M restructuring (3% of revenue)
+	data.StockBasedCompensation = 40000000 // $40M stock compensation (8% of revenue)
+	data.AssetSaleGains = 10000000         // $10M asset sale gains
+
 	return data
 }
 

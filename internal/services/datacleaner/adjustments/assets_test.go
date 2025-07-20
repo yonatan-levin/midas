@@ -322,7 +322,7 @@ func TestAssetAdjuster_CalculateNetTangibleAssets(t *testing.T) {
 			financialData: &entities.FinancialData{
 				TotalAssets:                500000.0,
 				Goodwill:                   100000.0, // Will be excluded
-				IntangibleAssets:           50000.0,  // Will be reduced
+				OtherIntangibles:           50000.0,  // Will be reduced
 				IndefiniteLivedIntangibles: 30000.0,  // Will be excluded
 				DeferredTaxAssets:          40000.0,  // Will be haircut
 				Inventory:                  80000.0,  // Will be written down if obsolete
@@ -336,7 +336,7 @@ func TestAssetAdjuster_CalculateNetTangibleAssets(t *testing.T) {
 			financialData: &entities.FinancialData{
 				TotalAssets:                1000000.0,
 				Goodwill:                   50000.0,  // Minimal - 5%
-				IntangibleAssets:           30000.0,  // Minimal
+				OtherIntangibles:           30000.0,  // Minimal
 				IndefiniteLivedIntangibles: 0.0,      // None
 				DeferredTaxAssets:          20000.0,  // Minimal
 				Inventory:                  100000.0, // Reasonable
@@ -362,6 +362,138 @@ func TestAssetAdjuster_CalculateNetTangibleAssets(t *testing.T) {
 			// Verify audit trail
 			assert.NotEmpty(t, result.AuditTrail, "Should provide audit trail")
 			assert.Contains(t, result.AuditTrail, "Asset quality", "Should reference asset quality in audit trail")
+		})
+	}
+}
+
+func TestAssetAdjuster_ProcessAssetAdjustments_ActiveWorkflow(t *testing.T) {
+	tests := []struct {
+		name                     string
+		financialData            *entities.FinancialData
+		rules                    []*entities.CleaningRule
+		expectedOriginalGoodwill float64
+		expectedFinalGoodwill    float64
+		expectedOriginalAssets   float64
+		expectedFinalAssets      float64
+		expectedAdjustmentsMade  int
+		expectedFlagCount        int
+	}{
+		{
+			name: "active goodwill exclusion - data actually modified",
+			financialData: &entities.FinancialData{
+				Goodwill:         500000.0, // 50% of total assets - will be excluded
+				TotalAssets:      1000000.0,
+				OtherIntangibles: 100000.0,
+				TangibleAssets:   400000.0, // Will be recalculated
+			},
+			rules: []*entities.CleaningRule{
+				{
+					ID:         "goodwill_exclusion",
+					Category:   entities.AssetQuality,
+					Adjustment: entities.Exclude,
+					Enabled:    true,
+				},
+			},
+			expectedOriginalGoodwill: 500000.0,
+			expectedFinalGoodwill:    0.0, // Should be zeroed out
+			expectedOriginalAssets:   1000000.0,
+			expectedFinalAssets:      500000.0, // Reduced by goodwill amount
+			expectedAdjustmentsMade:  1,
+			expectedFlagCount:        1, // Should flag significant goodwill
+		},
+		{
+			name: "multiple asset adjustments - intangibles and goodwill",
+			financialData: &entities.FinancialData{
+				Goodwill:         300000.0, // 30% of assets
+				TotalAssets:      1000000.0,
+				OtherIntangibles: 200000.0, // 20% of assets - will be written down
+				TangibleAssets:   500000.0, // Will be recalculated
+			},
+			rules: []*entities.CleaningRule{
+				{
+					ID:         "goodwill_exclusion",
+					Category:   entities.AssetQuality,
+					Adjustment: entities.Exclude,
+					Enabled:    true,
+				},
+				{
+					ID:         "intangible_adjustment",
+					Category:   entities.AssetQuality,
+					Adjustment: entities.Writedown,
+					Enabled:    true,
+				},
+			},
+			expectedOriginalGoodwill: 300000.0,
+			expectedFinalGoodwill:    0.0, // Should be zeroed out
+			expectedOriginalAssets:   1000000.0,
+			expectedFinalAssets:      560000.0, // Complex calculation after both adjustments
+			expectedAdjustmentsMade:  2,        // Both goodwill and intangible adjustments
+			expectedFlagCount:        2,        // Flags for both adjustments
+		},
+		{
+			name: "no adjustments needed - clean company",
+			financialData: &entities.FinancialData{
+				Goodwill:         30000.0, // 3% of assets - below threshold
+				TotalAssets:      1000000.0,
+				OtherIntangibles: 20000.0, // 2% of assets - below threshold
+				TangibleAssets:   950000.0,
+			},
+			rules: []*entities.CleaningRule{
+				{
+					ID:         "goodwill_exclusion",
+					Category:   entities.AssetQuality,
+					Adjustment: entities.Exclude,
+					Enabled:    true,
+				},
+				{
+					ID:         "intangible_adjustment",
+					Category:   entities.AssetQuality,
+					Adjustment: entities.Writedown,
+					Enabled:    true,
+				},
+			},
+			expectedOriginalGoodwill: 30000.0,
+			expectedFinalGoodwill:    30000.0, // Should remain unchanged
+			expectedOriginalAssets:   1000000.0,
+			expectedFinalAssets:      1000000.0, // Should remain unchanged
+			expectedAdjustmentsMade:  0,         // No adjustments needed
+			expectedFlagCount:        0,         // No flags generated
+		},
+	}
+
+	adjuster := NewAssetAdjuster()
+	context := createDefaultContext()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Take snapshot of original data
+			originalData := copyFinancialData(tt.financialData)
+
+			// Verify original state
+			assert.Equal(t, tt.expectedOriginalGoodwill, originalData.Goodwill, "Original goodwill should match expected")
+			assert.Equal(t, tt.expectedOriginalAssets, originalData.TotalAssets, "Original assets should match expected")
+
+			// Apply active adjustments - THIS IS THE KEY DIFFERENCE
+			result := adjuster.ProcessAssetAdjustments(tt.financialData, tt.rules, context)
+
+			// Verify the financial data was actually modified
+			assert.Equal(t, tt.expectedFinalGoodwill, tt.financialData.Goodwill, "Final goodwill should be modified")
+			assert.Equal(t, tt.expectedFinalAssets, tt.financialData.TotalAssets, "Final assets should be modified")
+
+			// Verify adjustment results
+			assert.Equal(t, tt.expectedAdjustmentsMade > 0, result.Applied, "Applied flag should match expectations")
+			assert.Len(t, result.Adjustments, tt.expectedAdjustmentsMade, "Should have expected number of adjustments")
+			assert.Len(t, result.Flags, tt.expectedFlagCount, "Should have expected number of flags")
+
+			// Verify tangible assets were recalculated correctly
+			expectedTangibleAssets := tt.financialData.TotalAssets - tt.financialData.Goodwill - tt.financialData.OtherIntangibles
+			assert.InDelta(t, expectedTangibleAssets, tt.financialData.TangibleAssets, 1000.0, "Tangible assets should be recalculated correctly")
+
+			// Verify audit trail
+			if tt.expectedAdjustmentsMade > 0 {
+				assert.Contains(t, result.AuditTrail, "writedowns", "Audit trail should mention writedowns")
+				assert.Contains(t, result.AuditTrail, "adjusted from", "Audit trail should show before/after values")
+			}
 		})
 	}
 }

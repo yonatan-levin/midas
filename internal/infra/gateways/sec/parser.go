@@ -31,7 +31,7 @@ func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompany
 	}
 
 	p.logger.Debug("Parsing financial data",
-		zap.String("cik", facts.CIK),
+		zap.String("cik", facts.CIK.String()),
 		zap.String("entity_name", facts.EntityName),
 		zap.Int("fact_groups", len(facts.Facts)))
 
@@ -50,7 +50,7 @@ func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompany
 
 	// Parse each period
 	for period, periodData := range periods {
-		financialData, err := p.parsePeriodData(facts.CIK, period, periodData)
+		financialData, err := p.parsePeriodData(facts.CIK.String(), period, periodData)
 		if err != nil {
 			p.logger.Warn("Failed to parse period data",
 				zap.String("period", period),
@@ -68,7 +68,7 @@ func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompany
 	}
 
 	p.logger.Info("Successfully parsed financial data",
-		zap.String("cik", facts.CIK),
+		zap.String("cik", facts.CIK.String()),
 		zap.Int("periods_parsed", len(historical.Data)))
 
 	return historical, nil
@@ -128,51 +128,81 @@ func (p *Parser) NormalizeFinancialData(ctx context.Context, data *entities.Fina
 }
 
 // extractFiscalPeriods extracts data organized by fiscal periods
+// Updated to handle nested SEC Company Facts API structure
 func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]map[string]float64, error) {
 	periods := make(map[string]map[string]float64)
 
-	for fullConceptName, factGroup := range facts.Facts {
-		// Look for USD values (most common)
-		usdUnits, exists := factGroup.Units["USD"]
-		if !exists {
-			continue
-		}
+	// Iterate through taxonomy namespaces (e.g., "dei", "us-gaap")
+	for taxonomyNamespace, taxonomyGroup := range facts.Facts {
 
-		// Extract the local concept name (remove namespace prefix)
-		// e.g., "us-gaap:Revenues" -> "Revenues"
-		conceptName := fullConceptName
-		if colonIndex := strings.LastIndex(fullConceptName, ":"); colonIndex >= 0 {
-			conceptName = fullConceptName[colonIndex+1:]
-		}
-
-		// Process each fact in the USD units
-		for _, fact := range usdUnits {
-			// Create period key (e.g., "2023FY", "2023Q4")
-			periodKey := fmt.Sprintf("%d%s", fact.Fy, fact.Fp)
-
-			// Initialize period data if needed
-			if periods[periodKey] == nil {
-				periods[periodKey] = make(map[string]float64)
+		// TODO: Handle the real nested structure where concepts are inside taxonomy namespaces
+		// For now, check if this is the old flat structure or new nested structure
+		if taxonomyGroup.Units != nil {
+			// Old flat structure: "us-gaap:Revenues" -> factGroup
+			conceptName := taxonomyNamespace
+			if colonIndex := strings.LastIndex(taxonomyNamespace, ":"); colonIndex >= 0 {
+				conceptName = taxonomyNamespace[colonIndex+1:]
 			}
 
-			// Store the value using the local concept name
-			periods[periodKey][conceptName] = fact.Val
-
-			// Also store metadata for the most recent fact in this period
-			if _, exists := periods[periodKey]["_filing_date"]; !exists {
-				if filingDate, err := time.Parse("2006-01-02", fact.Filed); err == nil {
-					periods[periodKey]["_filing_date"] = float64(filingDate.Unix())
-				}
+			// Look for USD values (most common)
+			if usdUnits, exists := taxonomyGroup.Units["USD"]; exists {
+				p.processFacts(periods, conceptName, usdUnits)
 			}
-			if _, exists := periods[periodKey]["_end_date"]; !exists {
-				if endDate, err := time.Parse("2006-01-02", fact.End); err == nil {
-					periods[periodKey]["_end_date"] = float64(endDate.Unix())
-				}
+
+			// Also check for shares units for share count data
+			if sharesUnits, exists := taxonomyGroup.Units["shares"]; exists {
+				p.processFacts(periods, conceptName, sharesUnits)
+			}
+		} else {
+			// New nested structure: taxonomy -> concepts -> units
+			// For now, try to parse any available nested data using reflection
+			p.logger.Debug("Attempting nested taxonomy structure parsing",
+				zap.String("taxonomy", taxonomyNamespace))
+
+			// Try to handle nested structure by checking if taxonomyGroup is a map
+			if nestedFactsFound := p.tryParseNestedFacts(periods, taxonomyNamespace, taxonomyGroup); nestedFactsFound {
+				p.logger.Debug("Successfully parsed nested facts",
+					zap.String("taxonomy", taxonomyNamespace))
+			} else {
+				p.logger.Debug("No nested facts found in taxonomy",
+					zap.String("taxonomy", taxonomyNamespace))
 			}
 		}
 	}
 
+	if len(periods) == 0 {
+		return nil, fmt.Errorf("no financial periods extracted - data structure may be nested and not yet supported")
+	}
+
 	return periods, nil
+}
+
+// processFacts processes individual facts and organizes them by fiscal periods
+func (p *Parser) processFacts(periods map[string]map[string]float64, conceptName string, facts []ports.SECFact) {
+	for _, fact := range facts {
+		// Create period key (e.g., "2023FY", "2023Q4")
+		periodKey := fmt.Sprintf("%d%s", fact.Fy, fact.Fp)
+
+		// Initialize period data if needed
+		if periods[periodKey] == nil {
+			periods[periodKey] = make(map[string]float64)
+		}
+
+		// Store the value using the local concept name
+		periods[periodKey][conceptName] = fact.Val
+
+		// Also store metadata for the most recent fact in this period
+		if _, exists := periods[periodKey]["_filing_date"]; !exists {
+			if filingDate, err := time.Parse("2006-01-02", fact.Filed); err == nil {
+				periods[periodKey]["_filing_date"] = float64(filingDate.Unix())
+			}
+		}
+		if _, exists := periods[periodKey]["_end_date"]; !exists {
+			if endDate, err := time.Parse("2006-01-02", fact.End); err == nil {
+				periods[periodKey]["_end_date"] = float64(endDate.Unix())
+			}
+		}
+	}
 }
 
 // parsePeriodData converts raw period data to FinancialData entity
@@ -221,6 +251,7 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	if val, exists := p.findValue(data, []string{
 		"Assets",
 		"AssetsCurrent",
+		"AssetsNoncurrent",
 	}); exists {
 		financialData.TotalAssets = val
 	} else {
@@ -242,6 +273,8 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 
 	if val, exists := p.findValue(data, []string{
 		"LongTermDebt",
+		"LongTermDebtNoncurrent",
+		"LongTermDebtCurrent",
 		"LongTermDebtAndCapitalLeaseObligations",
 		"DebtCurrent",
 	}); exists {
@@ -254,6 +287,40 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		"Inventory",
 	}); exists {
 		financialData.Inventory = val
+	}
+
+	// Deferred Tax Assets - Critical for Category A adjustments
+	if val, exists := p.findValue(data, []string{
+		"DeferredTaxAssetsNet",
+		"DeferredIncomeTaxAssetsNet",
+	}); exists {
+		financialData.DeferredTaxAssets = val
+	}
+
+	// Operating Leases (ASC 842) - Critical for Category B adjustments
+	if val, exists := p.findValue(data, []string{
+		"OperatingLeaseLiability",
+		"OperatingLeaseLiabilityCurrent",
+		"OperatingLeaseLiabilityNoncurrent",
+	}); exists {
+		financialData.OperatingLeaseLiability = val
+	}
+
+	// Enhanced pension/benefit obligation mapping
+	if val, exists := p.findValue(data, []string{
+		"DefinedBenefitPlanPensionPlansProjectedBenefitObligationIncrease",
+		"ProjectedBenefitObligation",
+		"PensionAndOtherPostretirementBenefitPlansProjectedBenefitObligation",
+	}); exists {
+		financialData.ProjectedBenefitObligation = val
+	}
+
+	if val, exists := p.findValue(data, []string{
+		"DefinedBenefitPlanAssets",
+		"PensionPlanAssets",
+		"PensionAndOtherPostretirementDefinedBenefitPlansAssets",
+	}); exists {
+		financialData.PensionPlanAssets = val
 	}
 
 	// Extract share information
@@ -293,6 +360,23 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	}
 
 	return financialData, nil
+}
+
+// tryParseNestedFacts attempts to parse nested fact structures using interface{} type assertion
+func (p *Parser) tryParseNestedFacts(periods map[string]map[string]float64, taxonomyNamespace string, taxonomyGroup ports.SECFactGroup) bool {
+	// For nested structures, we need to use JSON unmarshaling to access the nested data
+	// This is a simplified approach that tries to extract common GAAP concepts
+
+	// Since we can't directly access nested structures with the current type definition,
+	// we'll implement a basic fallback that looks for commonly needed fields
+	// In a real implementation, we'd need to modify the SECFactGroup structure
+
+	// Log the attempt and return false for now, indicating we tried but couldn't parse
+	p.logger.Debug("Nested structure parsing attempted but not fully implemented",
+		zap.String("taxonomy", taxonomyNamespace),
+		zap.String("note", "Full nested parsing requires schema updates"))
+
+	return false
 }
 
 // findValue finds a value by trying multiple possible field names
@@ -347,22 +431,58 @@ func (p *Parser) calculateDeadInventoryWritedown(data *entities.FinancialData) f
 // GetSupportedConcepts returns the list of SEC XBRL concepts we can parse
 func (p *Parser) GetSupportedConcepts() []string {
 	return []string{
-		// Income Statement
+		// Income Statement - Core P&L Items
 		"us-gaap:OperatingIncomeLoss",
 		"us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxes",
 		"us-gaap:Revenues",
 		"us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+		"us-gaap:SalesRevenueNet",
 		"us-gaap:InterestExpense",
+		"us-gaap:InterestExpenseDebt",
+		"us-gaap:CostOfGoodsAndServicesSold",
 
-		// Balance Sheet
+		// Balance Sheet - Assets
 		"us-gaap:Assets",
+		"us-gaap:AssetsCurrent",
+		"us-gaap:AssetsNoncurrent",
 		"us-gaap:Goodwill",
 		"us-gaap:IntangibleAssetsNetExcludingGoodwill",
-		"us-gaap:LongTermDebt",
+		"us-gaap:IntangibleAssetsNet",
 		"us-gaap:InventoryNet",
+		"us-gaap:Inventory",
+		"us-gaap:DeferredTaxAssetsNet",
+		"us-gaap:PropertyPlantAndEquipmentNet",
+
+		// Balance Sheet - Liabilities & Debt
+		"us-gaap:LongTermDebt",
+		"us-gaap:LongTermDebtNoncurrent",
+		"us-gaap:LongTermDebtCurrent",
+		"us-gaap:Liabilities",
+		"us-gaap:LiabilitiesCurrent",
+		"us-gaap:LiabilitiesNoncurrent",
+
+		// Operating Leases (ASC 842)
+		"us-gaap:OperatingLeaseLiability",
+		"us-gaap:OperatingLeaseLiabilityCurrent",
+		"us-gaap:OperatingLeaseLiabilityNoncurrent",
+		"us-gaap:OperatingLeaseRightOfUseAsset",
+
+		// Pension & Benefits
+		"us-gaap:DefinedBenefitPlanPensionPlansProjectedBenefitObligationIncrease",
+		"us-gaap:DefinedBenefitPlanAssets",
 
 		// Share Information
 		"us-gaap:CommonStockSharesOutstanding",
+		"us-gaap:CommonStockSharesIssued",
 		"us-gaap:WeightedAverageNumberOfDilutedSharesOutstanding",
+		"us-gaap:WeightedAverageNumberOfSharesOutstandingBasic",
+
+		// Cash Flow Statement
+		"us-gaap:CashAndCashEquivalentsAtCarryingValue",
+		"us-gaap:NetCashProvidedByUsedInOperatingActivities",
+
+		// TODO: Add dynamic mapping framework for future extensibility
+		// This static approach should be replaced with configurable mapping
+		// to support new SEC fields without code changes
 	}
 }
