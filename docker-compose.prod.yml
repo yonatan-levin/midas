@@ -1,0 +1,199 @@
+# DCF Valuation API - Production Environment
+# docker-compose -f docker-compose.prod.yml up -d
+
+version: '3.8'
+
+services:
+  # Main API service
+  dcf-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - BUILD_DATE=${BUILD_DATE:-now}
+        - VERSION=${VERSION:-latest}
+    image: dcf-valuation-api:${VERSION:-latest}
+    container_name: dcf-valuation-api-prod
+    ports:
+      - "8080:8080"
+    environment:
+      # Application settings
+      - ENV=production
+      - LOG_LEVEL=info
+      - PORT=8080
+      - GIN_MODE=release
+      
+      # Database settings (use external PostgreSQL in production)
+      - DATABASE_DRIVER=${DATABASE_DRIVER:-postgres}
+      - DATABASE_POSTGRES_URL=${DATABASE_URL}
+      - DATABASE_MAX_OPEN_CONN=50
+      - DATABASE_MAX_IDLE_CONN=10
+      
+      # Cache settings
+      - CACHE_REDIS_URL=${REDIS_URL}
+      - CACHE_ENABLE=true
+      - CACHE_TTL=3600
+      
+      # SEC API settings
+      - SEC_BASE_URL=https://data.sec.gov
+      - SEC_USER_AGENT=${SEC_USER_AGENT}
+      - SEC_RATE_LIMIT=10
+      - SEC_TIMEOUT=30s
+      
+      # Market data settings
+      - MARKET_YFINANCE_ENABLED=true
+      - MARKET_YFINANCE_TIMEOUT=10s
+      
+      # Macro data settings
+      - MACRO_FRED_ENABLED=${FRED_ENABLED:-false}
+      - MACRO_FRED_API_KEY=${FRED_API_KEY}
+      - MACRO_MANUAL_RISK_FREE_RATE=${MANUAL_RISK_FREE_RATE:-0.045}
+      - MACRO_MANUAL_MARKET_RISK_PREMIUM=${MANUAL_MARKET_RISK_PREMIUM:-0.05}
+      
+      # DataCleaner settings
+      - DATACLEANER_ENABLED=true
+      - DATACLEANER_RULES_PATH=/app/config/datacleaner/rules.json
+      - DATACLEANER_INDUSTRY_RULES_PATH=/app/config/datacleaner/industry
+      - DATACLEANER_MIN_QUALITY_SCORE=60.0
+      - DATACLEANER_ENABLE_CACHING=true
+      - DATACLEANER_CACHE_TTL=6h
+      
+      # Security settings
+      - API_KEY_VALIDATION=strict
+      - RATE_LIMIT_ENABLED=true
+      - RATE_LIMIT_REQUESTS_PER_MINUTE=60
+      
+      # Monitoring
+      - ENABLE_METRICS=true
+      - METRICS_PORT=9090
+    volumes:
+      # Logs for production monitoring
+      - dcf_logs:/app/logs
+      # Read-only config mount
+      - ./config:/app/config:ro
+    networks:
+      - dcf-network
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      replicas: 2
+      update_config:
+        parallelism: 1
+        delay: 10s
+        failure_action: rollback
+        monitor: 60s
+        max_failure_ratio: 0.3
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.dcf-api.rule=Host(`api.dcf-valuation.com`)"
+      - "traefik.http.routers.dcf-api.tls=true"
+      - "traefik.http.routers.dcf-api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.dcf-api.loadbalancer.server.port=8080"
+
+  # Reverse proxy and load balancer
+  traefik:
+    image: traefik:v3.0
+    container_name: dcf-traefik
+    command:
+      - "--api.dashboard=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "letsencrypt:/letsencrypt"
+    networks:
+      - dcf-network
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+
+  # Monitoring and logging
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: dcf-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - "./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - dcf-network
+    restart: always
+    profiles:
+      - monitoring
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: dcf-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - "./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro"
+    depends_on:
+      - prometheus
+    networks:
+      - dcf-network
+    restart: always
+    profiles:
+      - monitoring
+
+# Named volumes for data persistence
+volumes:
+  dcf_logs:
+    driver: local
+    name: dcf_valuation_logs_prod
+  letsencrypt:
+    driver: local
+    name: dcf_letsencrypt
+  prometheus_data:
+    driver: local
+    name: dcf_prometheus_data
+  grafana_data:
+    driver: local
+    name: dcf_grafana_data
+
+# Custom network for service communication
+networks:
+  dcf-network:
+    driver: bridge
+    name: dcf-valuation-network-prod 

@@ -37,6 +37,20 @@ type ValuationResult struct {
 	CalculationMethod string   `json:"calculation_method"` // "standard_dcf", "simplified", etc.
 	DataQualityScore  float64  `json:"data_quality_score"` // 0-1 score based on data completeness
 	Warnings          []string `json:"warnings,omitempty"` // Any data quality or assumption warnings
+
+	// Extended fields for comprehensive analysis
+	CalculatedAt        time.Time       `json:"calculated_at"`
+	DataQualityGrade    QualityGrade    `json:"data_quality_grade"`   // A, B, C, D, F
+	CleaningReport      *CleaningReport `json:"cleaning_report"`      // Full cleaning report
+	CleaningFlags       []Flag          `json:"cleaning_flags"`       // Key risk flags
+	CleaningAdjustments []Adjustment    `json:"cleaning_adjustments"` // Applied adjustments
+	MarketRiskPremium   float64         `json:"market_risk_premium"`
+	EnterpriseValue     float64         `json:"enterprise_value"`
+	EquityValue         float64         `json:"equity_value"`
+	FinancialDataPeriod string          `json:"financial_data_period"`
+	MarketDataDate      time.Time       `json:"market_data_date"`
+	DataFreshnessScore  int             `json:"data_freshness_score"`
+	CalculationVersion  string          `json:"calculation_version"`
 }
 
 // DCFProjection represents the detailed cash flow projections

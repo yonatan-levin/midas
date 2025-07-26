@@ -318,3 +318,153 @@ const (
 	GICSRealEstate            = "60"
 	GICSTelecom               = "50"
 )
+
+// Pipeline Stage Entities
+
+// PipelineStage represents different stages in the data cleaning pipeline
+type PipelineStage string
+
+const (
+	StageAssetQuality          PipelineStage = "asset_quality"
+	StageLiabilityCompleteness PipelineStage = "liability_completeness"
+	StageEarningsNormalization PipelineStage = "earnings_normalization"
+	StageQualityAssessment     PipelineStage = "quality_assessment"
+	StageFlagging              PipelineStage = "flagging"
+)
+
+// StageResult represents the result of a single pipeline stage
+type StageResult struct {
+	Stage        PipelineStage `json:"stage"`
+	Success      bool          `json:"success"`
+	Adjustments  []Adjustment  `json:"adjustments"`
+	Flags        []Flag        `json:"flags"`
+	Duration     time.Duration `json:"duration"`
+	RulesApplied int           `json:"rules_applied"`
+	Errors       []string      `json:"errors,omitempty"`
+	Warnings     []string      `json:"warnings,omitempty"`
+}
+
+// PipelineResult represents the complete result of the data cleaning pipeline
+type PipelineResult struct {
+	Success       bool            `json:"success"`
+	StageResults  []StageResult   `json:"stage_results"`
+	TotalDuration time.Duration   `json:"total_duration"`
+	CleanedData   *FinancialData  `json:"cleaned_data"`
+	Summary       PipelineSummary `json:"summary"`
+}
+
+// PipelineSummary provides aggregate statistics for the pipeline execution
+type PipelineSummary struct {
+	TotalAdjustments  int `json:"total_adjustments"`
+	TotalFlags        int `json:"total_flags"`
+	TotalRulesApplied int `json:"total_rules_applied"`
+	StagesProcessed   int `json:"stages_processed"`
+	ErrorCount        int `json:"error_count"`
+	WarningCount      int `json:"warning_count"`
+}
+
+// Reporting Entities
+
+// CleaningReport represents a comprehensive report of the data cleaning process
+type CleaningReport struct {
+	ReportID       string                 `json:"report_id"`
+	Ticker         string                 `json:"ticker"`
+	GeneratedAt    time.Time              `json:"generated_at"`
+	ProcessingTime time.Duration          `json:"processing_time"`
+	QualityScore   float64                `json:"quality_score"` // 0-100
+	QualityGrade   QualityGrade           `json:"quality_grade"` // A, B, C, D, F
+	Success        bool                   `json:"success"`
+	Summary        ReportSummary          `json:"summary"`
+	AuditTrail     AuditTrail             `json:"audit_trail"`
+	Sections       []ReportSection        `json:"sections"`
+	Metadata       map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// ReportSummary provides high-level summary statistics for the cleaning report
+type ReportSummary struct {
+	TotalAdjustments int           `json:"total_adjustments"`
+	TotalFlags       int           `json:"total_flags"`
+	RulesApplied     int           `json:"rules_applied"`
+	OriginalAssets   float64       `json:"original_assets"`
+	AdjustedAssets   float64       `json:"adjusted_assets"`
+	AdjustmentImpact float64       `json:"adjustment_impact"` // Positive = increase, negative = decrease
+	StagesProcessed  int           `json:"stages_processed"`
+	ProcessingTime   time.Duration `json:"processing_time"`
+}
+
+// AuditTrail provides detailed tracking of all changes made during cleaning
+type AuditTrail struct {
+	Adjustments     []Adjustment  `json:"adjustments"`
+	Flags           []Flag        `json:"flags"`
+	StagesProcessed int           `json:"stages_processed"`
+	TotalDuration   time.Duration `json:"total_duration"`
+	ProcessingOrder []string      `json:"processing_order"` // Stage names in order processed
+	Timestamp       time.Time     `json:"timestamp"`
+}
+
+// ReportSection represents a section of the cleaning report
+type ReportSection struct {
+	Title       string                 `json:"title"`
+	Content     string                 `json:"content"`
+	Data        map[string]interface{} `json:"data,omitempty"`
+	Order       int                    `json:"order"`
+	Collapsible bool                   `json:"collapsible"`
+}
+
+// Adjustment Result Entities
+
+// AdjustmentResult represents the result of applying a data cleaning adjustment
+type AdjustmentResult struct {
+	Amount      float64      `json:"amount"`
+	Applied     bool         `json:"applied"`
+	Adjustments []Adjustment `json:"adjustments"`
+	Flags       []Flag       `json:"flags"`
+	Reasoning   string       `json:"reasoning"`
+}
+
+// TangibleAssetsResult represents the result of calculating net tangible assets
+type TangibleAssetsResult struct {
+	AdjustedTangibleAssets float64      `json:"adjusted_tangible_assets"`
+	Adjustments            []Adjustment `json:"adjustments"`
+	AuditTrail             string       `json:"audit_trail"`
+}
+
+// AssetAdjustmentResult represents the result of applying asset adjustments
+type AssetAdjustmentResult struct {
+	Applied                bool         `json:"applied"`
+	TotalAssetAdjustment   float64      `json:"total_asset_adjustment"`
+	AdjustedTangibleAssets float64      `json:"adjusted_tangible_assets"`
+	Adjustments            []Adjustment `json:"adjustments"`
+	Flags                  []Flag       `json:"flags"`
+	AuditTrail             string       `json:"audit_trail"`
+}
+
+// LiabilityAdjustmentResult represents the result of applying liability adjustments
+type LiabilityAdjustmentResult struct {
+	Applied                  bool         `json:"applied"`
+	TotalLiabilityAdjustment float64      `json:"total_liability_adjustment"`
+	AdjustedTotalDebt        float64      `json:"adjusted_total_debt"`
+	Adjustments              []Adjustment `json:"adjustments"`
+	Flags                    []Flag       `json:"flags"`
+	AuditTrail               string       `json:"audit_trail"`
+}
+
+// Quality Assessment Entities
+
+// QualityResult represents the result of data quality assessment
+type QualityResult struct {
+	QualityScore  float64  `json:"quality_score"`  // 0-100 scale
+	QualityGrade  string   `json:"quality_grade"`  // A, B, C, D, F
+	QualityIssues []string `json:"quality_issues"` // List of issues found
+}
+
+// Recommendation represents a recommendation for improving data quality
+type Recommendation struct {
+	ID          string    `json:"id"`
+	Type        string    `json:"type"`
+	Priority    string    `json:"priority"`    // High, Medium, Low
+	Description string    `json:"description"` // What the issue is
+	Action      string    `json:"action"`      // What should be done
+	Impact      string    `json:"impact"`      // Expected impact of fix
+	Timestamp   time.Time `json:"timestamp"`
+}

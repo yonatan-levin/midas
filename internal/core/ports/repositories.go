@@ -102,3 +102,47 @@ type TickerMappingRepository interface {
 	// LoadFromSEC loads ticker mappings from SEC data
 	LoadFromSEC(ctx context.Context) error
 }
+
+// MetricsService defines the interface for metrics collection and reporting
+type MetricsService interface {
+	// HTTP Metrics
+	RecordHTTPRequest(method, endpoint string, statusCode int, duration time.Duration, responseSize int)
+	IncHTTPRequestsInFlight()
+	DecHTTPRequestsInFlight()
+
+	// Valuation Metrics
+	RecordValuationRequest(ticker, requestType, status string, duration time.Duration)
+	RecordValuationError(ticker, errorType string)
+	IncDCFCalculations()
+	IncWACCCalculations()
+
+	// Data Source Metrics
+	RecordSECAPIRequest(endpoint, status string)
+	RecordMarketAPIRequest(provider, status string)
+	RecordMacroAPIRequest(provider, status string)
+	RecordDataFetch(source, ticker string, duration time.Duration)
+
+	// Cache Metrics
+	RecordCacheRequest(cacheType, operation, result string)
+	SetCacheHitRatio(cacheType string, ratio float64)
+
+	// Business Metrics Setters
+	SetAverageWACC(wacc float64)
+	SetAverageGrowthRate(rate float64)
+
+	// Getters for Health Checks and Reporting
+	GetTotalRequests() int64
+	GetActiveConnections() int
+	GetAverageResponseTime() float64
+	GetErrorRate() float64
+	GetCacheHitRate() float64
+	GetTotalValuations() int64
+	GetSuccessfulValuations() int64
+	GetFailedValuations() int64
+	GetAverageWACC() float64
+	GetAverageGrowthRate() float64
+	GetUniqueTickersServed() int64
+
+	// Health Check
+	HealthCheck() error
+}

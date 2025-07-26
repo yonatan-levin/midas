@@ -1,0 +1,123 @@
+# DCF Valuation API - Development Environment
+# docker-compose up --build to start all services
+
+version: '3.8'
+
+services:
+  # Main API service
+  dcf-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dcf-valuation-api
+    ports:
+      - "8080:8080"
+    environment:
+      # Application settings
+      - ENV=development
+      - LOG_LEVEL=debug
+      - PORT=8080
+      - GIN_MODE=debug
+      
+      # Database settings
+      - DATABASE_DRIVER=sqlite
+      - DATABASE_SQLITE_PATH=/app/data/dcf.db
+      - DATABASE_MAX_OPEN_CONN=25
+      - DATABASE_MAX_IDLE_CONN=5
+      
+      # Cache settings
+      - CACHE_REDIS_URL=redis://redis:6379
+      - CACHE_ENABLE=true
+      - CACHE_TTL=3600
+      
+      # SEC API settings
+      - SEC_BASE_URL=https://data.sec.gov
+      - SEC_USER_AGENT=DCF-Valuation-API development@example.com
+      - SEC_RATE_LIMIT=10
+      - SEC_TIMEOUT=30s
+      
+      # Market data settings
+      - MARKET_YFINANCE_ENABLED=true
+      - MARKET_YFINANCE_TIMEOUT=10s
+      
+      # Macro data settings
+      - MACRO_FRED_ENABLED=false
+      - MACRO_MANUAL_RISK_FREE_RATE=0.045
+      - MACRO_MANUAL_MARKET_RISK_PREMIUM=0.05
+      
+      # DataCleaner settings
+      - DATACLEANER_ENABLED=true
+      - DATACLEANER_RULES_PATH=/app/config/datacleaner/rules.json
+      - DATACLEANER_INDUSTRY_RULES_PATH=/app/config/datacleaner/industry
+      - DATACLEANER_MIN_QUALITY_SCORE=50.0
+      - DATACLEANER_ENABLE_CACHING=true
+      - DATACLEANER_CACHE_TTL=1h
+    volumes:
+      # Data persistence
+      - dcf_data:/app/data
+      - dcf_logs:/app/logs
+      # Configuration (for development - mount local config)
+      - ./config:/app/config:ro
+    depends_on:
+      - redis
+    networks:
+      - dcf-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Redis cache service
+  redis:
+    image: redis:7-alpine
+    container_name: dcf-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - dcf-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  # Redis Commander - Web UI for Redis (development only)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: dcf-redis-commander
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    networks:
+      - dcf-network
+    restart: unless-stopped
+    profiles:
+      - debug
+
+# Named volumes for data persistence
+volumes:
+  dcf_data:
+    driver: local
+    name: dcf_valuation_data
+  dcf_logs:
+    driver: local
+    name: dcf_valuation_logs
+  redis_data:
+    driver: local
+    name: dcf_redis_data
+
+# Custom network for service communication
+networks:
+  dcf-network:
+    driver: bridge
+    name: dcf-valuation-network 

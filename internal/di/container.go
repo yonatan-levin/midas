@@ -2,6 +2,7 @@ package di
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -9,6 +10,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/infra/gateways/macro"
@@ -17,7 +19,106 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/infra/repositories/cache"
 	"github.com/midas/dcf-valuation-api/internal/infra/repositories/sqlite"
 	"github.com/midas/dcf-valuation-api/internal/infra/resilience"
+	"github.com/midas/dcf-valuation-api/internal/services/auth"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
+	"github.com/midas/dcf-valuation-api/internal/services/metrics"
+	"github.com/midas/dcf-valuation-api/internal/services/ratelimit"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
+)
+
+// RateLimiterCacheAdapter adapts ports.CacheRepository to ratelimit.CacheStore
+type RateLimiterCacheAdapter struct {
+	cache ports.CacheRepository
+}
+
+// Increment implements ratelimit.CacheStore.Increment
+func (a *RateLimiterCacheAdapter) Increment(ctx context.Context, key string, window time.Duration) (int, time.Time, error) {
+	// Get current value
+	var currentCount int
+	err := a.cache.Get(ctx, key, &currentCount)
+	if err != nil {
+		// Key doesn't exist, start with 0
+		currentCount = 0
+	}
+
+	// Increment
+	newCount := currentCount + 1
+	resetTime := time.Now().Add(window)
+
+	// Store updated count
+	err = a.cache.Set(ctx, key, newCount, window)
+	if err != nil {
+		return 0, time.Time{}, fmt.Errorf("failed to store incremented count: %w", err)
+	}
+
+	return newCount, resetTime, nil
+}
+
+// Get implements ratelimit.CacheStore.Get
+func (a *RateLimiterCacheAdapter) Get(ctx context.Context, key string) (int, time.Time, error) {
+	var count int
+	err := a.cache.Get(ctx, key, &count)
+	if err != nil {
+		return 0, time.Time{}, ratelimit.ErrCacheKeyNotFound
+	}
+
+	// We can't determine exact reset time from the cache interface
+	// Return a reasonable estimate
+	resetTime := time.Now().Add(time.Minute)
+
+	return count, resetTime, nil
+}
+
+// Set implements ratelimit.CacheStore.Set
+func (a *RateLimiterCacheAdapter) Set(ctx context.Context, key string, value int, window time.Duration) error {
+	return a.cache.Set(ctx, key, value, window)
+}
+
+// Delete implements ratelimit.CacheStore.Delete
+func (a *RateLimiterCacheAdapter) Delete(ctx context.Context, key string) error {
+	return a.cache.Delete(ctx, key)
+}
+
+// Module contains all dependency injection providers for the application
+var Module = fx.Options(
+	// Logging Module
+	fx.Provide(NewLogger),
+
+	// Database Module
+	fx.Provide(NewDatabase),
+
+	// Cache/Redis
+	fx.Provide(NewRedisClient),
+
+	// Resilience Factories
+	fx.Provide(NewCircuitBreakerFactory),
+	fx.Provide(NewRetryPolicyFactory),
+
+	// Repositories
+	fx.Provide(fx.Annotate(NewFinancialDataRepository, fx.As(new(ports.FinancialDataRepository)))),
+	fx.Provide(fx.Annotate(NewMarketDataRepository, fx.As(new(ports.MarketDataRepository)))),
+	fx.Provide(fx.Annotate(NewMacroDataRepository, fx.As(new(ports.MacroDataRepository)))),
+	fx.Provide(fx.Annotate(NewTickerMappingRepository, fx.As(new(ports.TickerMappingRepository)))),
+	fx.Provide(fx.Annotate(NewCacheRepository, fx.As(new(ports.CacheRepository)))),
+	fx.Provide(fx.Annotate(NewAuthRepository, fx.As(new(auth.Repository)))),
+
+	// Gateways
+	fx.Provide(fx.Annotate(NewSECGateway, fx.As(new(ports.SECGateway)))),
+	fx.Provide(fx.Annotate(NewMarketDataGateway, fx.As(new(ports.MarketDataGateway)))),
+	fx.Provide(fx.Annotate(NewMacroDataGateway, fx.As(new(ports.MacroDataGateway)))),
+
+	// Services
+	fx.Provide(NewAuthService),
+	fx.Provide(NewDataCleanerService),
+	fx.Provide(NewValuationService),
+	fx.Provide(NewRateLimiterService),
+	fx.Provide(NewMetricsService),
+
+	// Handler Module
+	fx.Provide(NewHealthHandler),
+
+	// Lifecycle hooks
+	fx.Invoke(RegisterHooks),
 )
 
 // Container holds the dependency injection container
@@ -57,7 +158,13 @@ func NewContainer() *Container {
 		fx.Provide(NewMacroDataGateway),
 
 		// Service Module
+		fx.Provide(NewDataCleanerService),
 		fx.Provide(NewValuationService),
+		fx.Provide(NewRateLimiterService),
+		fx.Provide(NewMetricsService),
+
+		// Handler Module
+		fx.Provide(NewHealthHandler),
 
 		// Lifecycle hooks
 		fx.Invoke(RegisterHooks),
@@ -87,6 +194,16 @@ func NewLogger(cfg *config.Config) (*zap.Logger, error) {
 	return zap.NewDevelopment()
 }
 
+// mapDatabaseDriver maps configuration driver names to actual registered driver names
+func mapDatabaseDriver(configDriver string) string {
+	switch configDriver {
+	case "sqlite":
+		return "sqlite3" // SQLite driver registers as "sqlite3"
+	default:
+		return configDriver // postgres, etc. remain unchanged
+	}
+}
+
 // NewDatabase creates a database connection
 func NewDatabase(cfg *config.Config, logger *zap.Logger) (*sqlx.DB, error) {
 	var dsn string
@@ -97,11 +214,15 @@ func NewDatabase(cfg *config.Config, logger *zap.Logger) (*sqlx.DB, error) {
 		dsn = cfg.Database.PostgresURL
 	}
 
+	// Map driver name to actual registered driver
+	actualDriver := mapDatabaseDriver(cfg.Database.Driver)
+
 	logger.Info("Connecting to database",
 		zap.String("driver", cfg.Database.Driver),
+		zap.String("actual_driver", actualDriver),
 		zap.String("dsn", dsn))
 
-	db, err := sqlx.Connect(cfg.Database.Driver, dsn)
+	db, err := sqlx.Connect(actualDriver, dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -249,6 +370,10 @@ func NewCacheRepository(redisClient *redis.Client, logger *zap.Logger) ports.Cac
 	return cache.NewMemoryCacheRepository()
 }
 
+func NewAuthRepository(db *sqlx.DB) auth.Repository {
+	return sqlite.NewAuthRepository(db.DB)
+}
+
 // Gateway Providers
 
 func NewSECGateway(
@@ -279,42 +404,111 @@ func NewMacroDataGateway(
 
 // Service Providers
 
+func NewAuthService(repository auth.Repository, logger *zap.Logger) *auth.Service {
+	return auth.NewService(repository, logger)
+}
+
+func NewRateLimiterService(cache ports.CacheRepository, logger *zap.Logger) *ratelimit.RateLimiter {
+	// Create a rate limiter cache store adapter
+	cacheStore := &RateLimiterCacheAdapter{cache: cache}
+	limiter := ratelimit.NewRateLimiter(cacheStore, logger)
+
+	// Set up default rate limits
+	ctx := context.Background()
+	if err := limiter.SetDefaultLimits(ctx); err != nil {
+		logger.Warn("Failed to set default rate limits", zap.Error(err))
+	}
+
+	return limiter
+}
+
+func NewDataCleanerService(cfg *config.Config, logger *zap.Logger) (datacleaner.DataCleanerService, error) {
+	return datacleaner.NewDataCleanerService(cfg)
+}
+
 func NewValuationService(
 	financialRepo ports.FinancialDataRepository,
 	marketRepo ports.MarketDataRepository,
 	macroRepo ports.MacroDataRepository,
 	cache ports.CacheRepository,
+	dataCleaner datacleaner.DataCleanerService,
+	metricsService ports.MetricsService,
+	cfg *config.Config,
 	logger *zap.Logger,
 ) *valuation.Service {
-	return valuation.NewService(financialRepo, marketRepo, macroRepo, cache, logger)
+	return valuation.NewService(
+		financialRepo,
+		marketRepo,
+		macroRepo,
+		cache,
+		dataCleaner,
+		metricsService,
+		cfg,
+		logger,
+	)
+}
+
+// Handler Providers
+
+func NewHealthHandler(
+	logger *zap.Logger,
+	db *sqlx.DB,
+	redis *redis.Client,
+	cache ports.CacheRepository,
+	rateLimiter *ratelimit.RateLimiter,
+	secGateway ports.SECGateway,
+	marketGateway ports.MarketDataGateway,
+	macroGateway ports.MacroDataGateway,
+	metricsService ports.MetricsService,
+) *handlers.HealthHandler {
+	return handlers.NewHealthHandler(
+		logger,
+		db,
+		redis,
+		cache,
+		rateLimiter,
+		secGateway,
+		marketGateway,
+		macroGateway,
+		metricsService,
+	)
+}
+
+// NewMetricsService creates a new Prometheus metrics service
+func NewMetricsService(logger *zap.Logger) *metrics.Service {
+	return metrics.NewService(logger)
+}
+
+// RegisterHooksParams defines the parameters for RegisterHooks
+type RegisterHooksParams struct {
+	fx.In
+	Lifecycle   fx.Lifecycle
+	DB          *sqlx.DB
+	Logger      *zap.Logger
+	RedisClient *redis.Client `optional:"true"`
 }
 
 // RegisterHooks registers application lifecycle hooks
-func RegisterHooks(
-	lifecycle fx.Lifecycle,
-	db *sqlx.DB,
-	redisClient *redis.Client,
-	logger *zap.Logger,
-) {
-	lifecycle.Append(fx.Hook{
+func RegisterHooks(params RegisterHooksParams) {
+	params.Lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			logger.Info("Application starting...")
+			params.Logger.Info("Application starting...")
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
-			logger.Info("Application stopping...")
+			params.Logger.Info("Application stopping...")
 
 			// Close database connection
-			if db != nil {
-				if err := db.Close(); err != nil {
-					logger.Error("Failed to close database", zap.Error(err))
+			if params.DB != nil {
+				if err := params.DB.Close(); err != nil {
+					params.Logger.Error("Failed to close database", zap.Error(err))
 				}
 			}
 
 			// Close Redis connection
-			if redisClient != nil {
-				if err := redisClient.Close(); err != nil {
-					logger.Error("Failed to close Redis", zap.Error(err))
+			if params.RedisClient != nil {
+				if err := params.RedisClient.Close(); err != nil {
+					params.Logger.Error("Failed to close Redis", zap.Error(err))
 				}
 			}
 

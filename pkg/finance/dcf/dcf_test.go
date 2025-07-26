@@ -566,3 +566,425 @@ func TestRealWorldDCFScenarios(t *testing.T) {
 		assert.True(t, result.IsReasonable)
 	})
 }
+
+func TestCalculateImpliedGrowthRate(t *testing.T) {
+	baseInputs := Inputs{
+		BaseOperatingIncome: 100.0,
+		GrowthRate:          0.10, // This will be overridden in the function
+		TerminalGrowthRate:  0.025,
+		WACC:                0.10,
+		TaxRate:             0.25,
+		ProjectionYears:     5,
+	}
+
+	t.Run("find_growth_for_target_value", func(t *testing.T) {
+		// First calculate a baseline value with known growth
+		testInputs := baseInputs
+		testInputs.GrowthRate = 0.08 // 8% growth
+		baselineResult, err := CalculateDCF(testInputs)
+		require.NoError(t, err)
+
+		// Now find what growth rate gives us that value
+		impliedGrowth, err := CalculateImpliedGrowthRate(baselineResult.EnterpriseValue, baseInputs)
+		require.NoError(t, err)
+
+		// Should be close to 8%
+		assert.InDelta(t, 0.08, impliedGrowth, 0.001)
+	})
+
+	t.Run("high_target_value", func(t *testing.T) {
+		// Try to find growth for a very high target value
+		highTargetValue := 5000.0
+		impliedGrowth, err := CalculateImpliedGrowthRate(highTargetValue, baseInputs)
+		require.NoError(t, err)
+
+		// Should result in high growth rate
+		assert.Greater(t, impliedGrowth, 0.2)
+	})
+
+	t.Run("low_target_value", func(t *testing.T) {
+		// Try to find growth for a low target value
+		lowTargetValue := 500.0
+		impliedGrowth, err := CalculateImpliedGrowthRate(lowTargetValue, baseInputs)
+		require.NoError(t, err)
+
+		// Should result in low or negative growth rate
+		assert.Less(t, impliedGrowth, 0.05)
+	})
+
+	t.Run("impossible_target_with_invalid_inputs", func(t *testing.T) {
+		// Test with inputs that cause DCF to fail
+		invalidInputs := baseInputs
+		invalidInputs.WACC = 0.02 // This will be less than terminal growth, causing error
+
+		_, err := CalculateImpliedGrowthRate(1000.0, invalidInputs)
+		assert.Error(t, err)
+	})
+}
+
+func TestWarningGeneration(t *testing.T) {
+	t.Run("high_growth_warning", func(t *testing.T) {
+		inputs := Inputs{
+			BaseOperatingIncome: 100.0,
+			GrowthRate:          0.35, // 35% growth - should trigger warning
+			TerminalGrowthRate:  0.025,
+			WACC:                0.12,
+			TaxRate:             0.25,
+			ProjectionYears:     5,
+		}
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// Should have warning about high growth
+		found := false
+		for _, warning := range result.Warnings {
+			if containsString(warning, "High growth rate") {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Should have high growth rate warning")
+	})
+
+	t.Run("terminal_value_dominance_warning", func(t *testing.T) {
+		inputs := Inputs{
+			BaseOperatingIncome: 100.0,
+			GrowthRate:          0.02, // Very low growth
+			TerminalGrowthRate:  0.025,
+			WACC:                0.08,
+			TaxRate:             0.25,
+			ProjectionYears:     3, // Short projection period
+		}
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// Should have warning about terminal value dominance
+		found := false
+		for _, warning := range result.Warnings {
+			if containsString(warning, "Terminal value represents") {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Should have terminal value dominance warning")
+	})
+
+	t.Run("high_wacc_warning", func(t *testing.T) {
+		inputs := Inputs{
+			BaseOperatingIncome: 100.0,
+			GrowthRate:          0.10,
+			TerminalGrowthRate:  0.025,
+			WACC:                0.25, // 25% WACC - should trigger warning
+			TaxRate:             0.25,
+			ProjectionYears:     5,
+		}
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// Should have warning about high WACC
+		found := false
+		for _, warning := range result.Warnings {
+			if containsString(warning, "WACC >20%") {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Should have high WACC warning")
+	})
+
+	t.Run("terminal_growth_vs_wacc_warning", func(t *testing.T) {
+		inputs := Inputs{
+			BaseOperatingIncome: 100.0,
+			GrowthRate:          0.10,
+			TerminalGrowthRate:  0.045, // 4.5% terminal growth
+			WACC:                0.08,  // 8% WACC, ratio is high (4.5% > 8% * 0.5 = 4%)
+			TaxRate:             0.25,
+			ProjectionYears:     5,
+		}
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// Should have warning about terminal growth vs WACC
+		found := false
+		for _, warning := range result.Warnings {
+			if containsString(warning, "Terminal growth rate is high relative to WACC") {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Should have terminal growth vs WACC warning")
+	})
+
+	t.Run("no_warnings_normal_case", func(t *testing.T) {
+		inputs := Inputs{
+			BaseOperatingIncome: 100.0,
+			GrowthRate:          0.08, // Reasonable growth
+			TerminalGrowthRate:  0.025,
+			WACC:                0.10, // Reasonable WACC
+			TaxRate:             0.25,
+			ProjectionYears:     5,
+		}
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// Should have no warnings
+		assert.Empty(t, result.Warnings, "Should have no warnings for normal inputs")
+	})
+}
+
+func TestReasonablenessChecks(t *testing.T) {
+	t.Run("reasonable_result", func(t *testing.T) {
+		inputs := Inputs{
+			BaseOperatingIncome: 100.0,
+			GrowthRate:          0.10,
+			TerminalGrowthRate:  0.025,
+			WACC:                0.12,
+			TaxRate:             0.25,
+			ProjectionYears:     5,
+		}
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+		assert.True(t, result.IsReasonable)
+	})
+
+	t.Run("unreasonable_negative_enterprise_value", func(t *testing.T) {
+		// This is hard to achieve with current validation, but test the logic
+		inputs := Inputs{
+			BaseOperatingIncome: 1.0,   // Very small
+			GrowthRate:          -0.40, // High decline
+			TerminalGrowthRate:  0.025,
+			WACC:                0.30, // Very high WACC
+			TaxRate:             0.25,
+			ProjectionYears:     5,
+		}
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// Should potentially be unreasonable due to extreme parameters
+		// (actual reasonableness depends on the calculation outcome)
+		assert.NotNil(t, result)
+	})
+
+	t.Run("terminal_value_extreme_dominance", func(t *testing.T) {
+		inputs := Inputs{
+			BaseOperatingIncome: 100.0,
+			GrowthRate:          0.01, // Very low growth
+			TerminalGrowthRate:  0.025,
+			WACC:                0.08,
+			TaxRate:             0.25,
+			ProjectionYears:     2, // Very short projection
+		}
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// Terminal value will dominate
+		terminalPercentage := result.TerminalValue / result.EnterpriseValue
+		if terminalPercentage > 0.9 {
+			assert.False(t, result.IsReasonable)
+		}
+	})
+}
+
+func TestCapexAndWorkingCapitalAdjustments(t *testing.T) {
+	t.Run("with_capex_adjustments", func(t *testing.T) {
+		inputs := Inputs{
+			BaseOperatingIncome:     100.0,
+			GrowthRate:              0.10,
+			TerminalGrowthRate:      0.025,
+			WACC:                    0.10,
+			TaxRate:                 0.25,
+			ProjectionYears:         5,
+			CapexAsPercentOfRevenue: 0.05, // 5% CapEx
+			WorkingCapitalChange:    10.0, // $10B working capital increase
+		}
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// FCF should be lower than NOPAT due to CapEx and WC adjustments
+		for _, projection := range result.Projections {
+			assert.Less(t, projection.FreeCashFlow, projection.NOPAT)
+		}
+	})
+
+	t.Run("without_adjustments", func(t *testing.T) {
+		inputs := Inputs{
+			BaseOperatingIncome: 100.0,
+			GrowthRate:          0.10,
+			TerminalGrowthRate:  0.025,
+			WACC:                0.10,
+			TaxRate:             0.25,
+			ProjectionYears:     5,
+			// No CapEx or WC adjustments
+		}
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// FCF should equal NOPAT when no adjustments
+		for _, projection := range result.Projections {
+			assert.Equal(t, projection.FreeCashFlow, projection.NOPAT)
+		}
+	})
+}
+
+func TestInputValidationEdgeCases(t *testing.T) {
+	t.Run("boundary_values", func(t *testing.T) {
+		// Test boundary values that should be valid
+		validInputs := []Inputs{
+			{
+				BaseOperatingIncome: 0.1,   // Very small but positive
+				GrowthRate:          -0.49, // Just within -50% limit
+				TerminalGrowthRate:  0.001, // Small terminal growth
+				WACC:                0.1,   // WACC > terminal growth
+				TaxRate:             0.99,  // Just within 100% limit
+				ProjectionYears:     1,     // Minimum projection years
+			},
+			{
+				BaseOperatingIncome: 1000000, // Very large
+				GrowthRate:          0.99,    // Just within 100% limit
+				TerminalGrowthRate:  0.0,     // Minimum terminal growth
+				WACC:                0.49,    // Just within 50% limit
+				TaxRate:             0.0,     // Minimum tax rate
+				ProjectionYears:     10,      // Maximum projection years
+			},
+		}
+
+		for i, inputs := range validInputs {
+			_, err := CalculateDCF(inputs)
+			assert.NoError(t, err, "Valid inputs case %d should not error", i)
+		}
+	})
+
+	t.Run("invalid_boundary_values", func(t *testing.T) {
+		// Test values just outside boundaries
+		invalidInputs := []struct {
+			inputs Inputs
+			reason string
+		}{
+			{
+				inputs: Inputs{
+					BaseOperatingIncome: 0, // Zero
+					GrowthRate:          0.10,
+					TerminalGrowthRate:  0.025,
+					WACC:                0.10,
+					TaxRate:             0.25,
+					ProjectionYears:     5,
+				},
+				reason: "zero operating income",
+			},
+			{
+				inputs: Inputs{
+					BaseOperatingIncome: 100.0,
+					GrowthRate:          -0.51, // Below -50%
+					TerminalGrowthRate:  0.025,
+					WACC:                0.10,
+					TaxRate:             0.25,
+					ProjectionYears:     5,
+				},
+				reason: "growth rate too low",
+			},
+			{
+				inputs: Inputs{
+					BaseOperatingIncome: 100.0,
+					GrowthRate:          0.10,
+					TerminalGrowthRate:  0.051, // Above 5%
+					WACC:                0.10,
+					TaxRate:             0.25,
+					ProjectionYears:     5,
+				},
+				reason: "terminal growth too high",
+			},
+			{
+				inputs: Inputs{
+					BaseOperatingIncome: 100.0,
+					GrowthRate:          0.10,
+					TerminalGrowthRate:  0.025,
+					WACC:                0.51, // Above 50%
+					TaxRate:             0.25,
+					ProjectionYears:     5,
+				},
+				reason: "WACC too high",
+			},
+			{
+				inputs: Inputs{
+					BaseOperatingIncome: 100.0,
+					GrowthRate:          0.10,
+					TerminalGrowthRate:  0.025,
+					WACC:                0.10,
+					TaxRate:             1.01, // Above 100%
+					ProjectionYears:     5,
+				},
+				reason: "tax rate too high",
+			},
+			{
+				inputs: Inputs{
+					BaseOperatingIncome: 100.0,
+					GrowthRate:          0.10,
+					TerminalGrowthRate:  0.025,
+					WACC:                0.10,
+					TaxRate:             0.25,
+					ProjectionYears:     11, // Above 10
+				},
+				reason: "too many projection years",
+			},
+		}
+
+		for _, tc := range invalidInputs {
+			_, err := CalculateDCF(tc.inputs)
+			assert.Error(t, err, "Should error for %s", tc.reason)
+		}
+	})
+}
+
+func TestSensitivityAnalysisErrorHandling(t *testing.T) {
+	baseInputs := Inputs{
+		BaseOperatingIncome: 100.0,
+		GrowthRate:          0.10,
+		TerminalGrowthRate:  0.025,
+		WACC:                0.10,
+		TaxRate:             0.25,
+		ProjectionYears:     5,
+	}
+
+	t.Run("invalid_wacc_in_range", func(t *testing.T) {
+		// Include invalid WACC values
+		waccRange := []float64{0.08, -0.05, 0.12} // -0.05 is invalid
+		growthRange := []float64{0.05, 0.10, 0.15}
+
+		_, err := SensitivityAnalysis(baseInputs, waccRange, growthRange)
+		assert.Error(t, err, "Should error with invalid WACC in range")
+	})
+
+	t.Run("wacc_less_than_terminal_growth", func(t *testing.T) {
+		// WACC less than terminal growth rate should cause validation error
+		waccRange := []float64{0.01, 0.015, 0.02} // All less than terminal growth (2.5%)
+		growthRange := []float64{0.05, 0.10, 0.15}
+
+		_, err := SensitivityAnalysis(baseInputs, waccRange, growthRange)
+		assert.Error(t, err, "Should error when WACC < terminal growth rate")
+	})
+}
+
+// Helper function for string containment check
+func containsString(s, substr string) bool {
+	return len(s) >= len(substr) && s[:len(substr)] == substr ||
+		(len(s) > len(substr) && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

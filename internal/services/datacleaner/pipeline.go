@@ -3,8 +3,6 @@ package datacleaner
 import (
 	"context"
 	"fmt"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
@@ -12,369 +10,335 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/rules"
 )
 
-// PipelineStage represents a processing stage in the data cleaning pipeline
-type PipelineStage string
-
-// Pipeline stage constants - these define the sequential processing stages
-const (
-	AssetQualityStage          PipelineStage = "asset_quality"          // Category A: Asset quality adjustments
-	LiabilityCompletenessStage PipelineStage = "liability_completeness" // Category B: Liability completeness
-	EarningsNormalizationStage PipelineStage = "earnings_normalization" // Category C: Earnings normalization
-)
-
 // StageProcessor defines the interface for processing a pipeline stage
 type StageProcessor interface {
-	ProcessStage(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*StageResult, error)
+	ProcessStage(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*entities.StageResult, error)
 }
 
-// StageResult represents the result of processing a single pipeline stage
-type StageResult struct {
-	Stage        PipelineStage         `json:"stage"`
-	Success      bool                  `json:"success"`
-	Adjustments  []entities.Adjustment `json:"adjustments"`
-	Flags        []entities.Flag       `json:"flags"`
-	Duration     time.Duration         `json:"duration"`
-	RulesApplied int                   `json:"rules_applied"`
-	Errors       []string              `json:"errors,omitempty"`
-	Warnings     []string              `json:"warnings,omitempty"`
-}
-
-// PipelineResult represents the complete result of pipeline execution
-type PipelineResult struct {
-	Success       bool                    `json:"success"`
-	StageResults  []StageResult           `json:"stage_results"`
-	TotalDuration time.Duration           `json:"total_duration"`
-	CleanedData   *entities.FinancialData `json:"cleaned_data"`
-	Summary       PipelineSummary         `json:"summary"`
-}
-
-// PipelineSummary provides aggregate statistics from pipeline execution
-type PipelineSummary struct {
-	TotalAdjustments  int `json:"total_adjustments"`
-	TotalFlags        int `json:"total_flags"`
-	TotalRulesApplied int `json:"total_rules_applied"`
-	StagesProcessed   int `json:"stages_processed"`
-	ErrorCount        int `json:"error_count"`
-	WarningCount      int `json:"warning_count"`
-}
-
-// PipelineOrchestrator manages the execution of the multi-stage data cleaning pipeline
+// PipelineOrchestrator manages the execution of data cleaning stages
 type PipelineOrchestrator struct {
-	processors map[PipelineStage]StageProcessor
-	mu         sync.RWMutex
-	config     *PipelineConfig
+	stageProcessors map[entities.PipelineStage]StageProcessor
+	config          *PipelineConfig
+	rulesEngine     rules.RuleEngine
 }
 
 // PipelineConfig holds configuration for pipeline execution
 type PipelineConfig struct {
-	MaxStageTimeout time.Duration `json:"max_stage_timeout"`
-	ContinueOnError bool          `json:"continue_on_error"`
-	EnableParallel  bool          `json:"enable_parallel"`
-	LogLevel        string        `json:"log_level"`
+	EnableParallelProcessing bool          `json:"enable_parallel_processing"`
+	StageTimeout             time.Duration `json:"stage_timeout"`
+	ContinueOnStageFailure   bool          `json:"continue_on_stage_failure"`
 }
 
-// NewPipelineOrchestrator creates a new pipeline orchestrator instance
-func NewPipelineOrchestrator() *PipelineOrchestrator {
-	return &PipelineOrchestrator{
-		processors: make(map[PipelineStage]StageProcessor),
+// NewPipelineOrchestrator creates a new pipeline orchestrator
+func NewPipelineOrchestrator(rulesEngine rules.RuleEngine) *PipelineOrchestrator {
+	orchestrator := &PipelineOrchestrator{
+		stageProcessors: make(map[entities.PipelineStage]StageProcessor),
 		config: &PipelineConfig{
-			MaxStageTimeout: 30 * time.Second,
-			ContinueOnError: false,
-			EnableParallel:  false, // Sequential for now to maintain data consistency
-			LogLevel:        "info",
+			EnableParallelProcessing: false, // Sequential by default for consistency
+			StageTimeout:             30 * time.Second,
+			ContinueOnStageFailure:   true,
 		},
+		rulesEngine: rulesEngine,
+	}
+
+	// Register default stage processors
+	orchestrator.registerDefaultProcessors()
+
+	return orchestrator
+}
+
+// registerDefaultProcessors registers the default stage processors
+func (po *PipelineOrchestrator) registerDefaultProcessors() {
+	po.stageProcessors[entities.StageAssetQuality] = &AssetQualityStageProcessor{
+		assetAdjuster: adjustments.NewAssetAdjuster(),
+		rulesEngine:   po.rulesEngine,
+	}
+	po.stageProcessors[entities.StageLiabilityCompleteness] = &LiabilityCompletenessStageProcessor{
+		liabilityAdjuster: adjustments.NewLiabilityAdjuster(),
+		rulesEngine:       po.rulesEngine,
+	}
+	po.stageProcessors[entities.StageEarningsNormalization] = &EarningsNormalizationStageProcessor{
+		earningsAdjuster: adjustments.NewEarningsAdjuster(),
+		rulesEngine:      po.rulesEngine,
+	}
+	po.stageProcessors[entities.StageQualityAssessment] = &QualityAssessmentStageProcessor{
+		rulesEngine: po.rulesEngine,
+	}
+	po.stageProcessors[entities.StageFlagging] = &FlaggingStageProcessor{
+		rulesEngine: po.rulesEngine,
 	}
 }
 
-// NewPipelineOrchestratorWithConfig creates a new pipeline orchestrator with custom config
-func NewPipelineOrchestratorWithConfig(config *PipelineConfig) *PipelineOrchestrator {
-	return &PipelineOrchestrator{
-		processors: make(map[PipelineStage]StageProcessor),
-		config:     config,
-	}
-}
-
-// RegisterStage registers a stage processor for a specific pipeline stage
-func (po *PipelineOrchestrator) RegisterStage(stage PipelineStage, processor StageProcessor) error {
-	po.mu.Lock()
-	defer po.mu.Unlock()
-
-	if _, exists := po.processors[stage]; exists {
-		return fmt.Errorf("stage %s is already registered", stage)
-	}
-
-	if processor == nil {
-		return fmt.Errorf("processor cannot be nil for stage %s", stage)
-	}
-
-	po.processors[stage] = processor
-	return nil
-}
-
-// UnregisterStage removes a stage processor
-func (po *PipelineOrchestrator) UnregisterStage(stage PipelineStage) {
-	po.mu.Lock()
-	defer po.mu.Unlock()
-	delete(po.processors, stage)
-}
-
-// GetRegisteredStages returns a list of all registered pipeline stages
-func (po *PipelineOrchestrator) GetRegisteredStages() []PipelineStage {
-	po.mu.RLock()
-	defer po.mu.RUnlock()
-
-	stages := make([]PipelineStage, 0, len(po.processors))
-	for stage := range po.processors {
-		stages = append(stages, stage)
-	}
-	return stages
+// RegisterStageProcessor registers a custom stage processor
+func (po *PipelineOrchestrator) RegisterStageProcessor(stage entities.PipelineStage, processor StageProcessor) {
+	po.stageProcessors[stage] = processor
 }
 
 // ExecutePipeline executes the complete data cleaning pipeline
-func (po *PipelineOrchestrator) ExecutePipeline(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*PipelineResult, error) {
-	if data == nil {
-		return nil, fmt.Errorf("financial data cannot be nil")
-	}
-	if cleaningCtx == nil {
-		return nil, fmt.Errorf("cleaning context cannot be nil")
-	}
+func (po *PipelineOrchestrator) ExecutePipeline(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*entities.PipelineResult, error) {
+	start := time.Now()
 
-	startTime := time.Now()
-
-	// Create a copy of the data to avoid modifying the original
-	cleanedData := *data
-
-	// Initialize pipeline result
-	result := &PipelineResult{
-		Success:      true,
-		StageResults: make([]StageResult, 0),
-		CleanedData:  &cleanedData,
-		Summary: PipelineSummary{
-			StagesProcessed: 0,
-		},
+	// Define processing order
+	stages := []entities.PipelineStage{
+		entities.StageAssetQuality,
+		entities.StageLiabilityCompleteness,
+		entities.StageEarningsNormalization,
+		entities.StageQualityAssessment,
+		entities.StageFlagging,
 	}
 
-	// Define the processing order for stages
-	stageOrder := []PipelineStage{
-		AssetQualityStage,
-		LiabilityCompletenessStage,
-		EarningsNormalizationStage,
+	result := &entities.PipelineResult{
+		Success:       true,
+		StageResults:  make([]entities.StageResult, 0, len(stages)),
+		CleanedData:   data, // Start with original data
+		TotalDuration: 0,
 	}
 
-	// Execute stages in sequence
-	var allErrors []string
-	po.mu.RLock()
-	defer po.mu.RUnlock()
+	// Process each stage sequentially
+	for _, stage := range stages {
+		stageStart := time.Now()
 
-	for _, stage := range stageOrder {
-		processor, exists := po.processors[stage]
+		processor, exists := po.stageProcessors[stage]
 		if !exists {
-			// Skip stages that aren't registered
+			// Create a warning for missing processor
+			stageResult := entities.StageResult{
+				Stage:        stage,
+				Success:      false,
+				Duration:     time.Since(stageStart),
+				RulesApplied: 0,
+				Errors:       []string{fmt.Sprintf("no processor registered for stage %s", stage)},
+			}
+			result.StageResults = append(result.StageResults, stageResult)
+
+			if !po.config.ContinueOnStageFailure {
+				result.Success = false
+				break
+			}
 			continue
 		}
 
-		// Check for context cancellation before each stage
-		if err := ctx.Err(); err != nil {
-			return nil, fmt.Errorf("pipeline cancelled: %w", err)
-		}
-
-		// Execute the stage with timeout
-		stageCtx, cancel := context.WithTimeout(ctx, po.config.MaxStageTimeout)
-		stageResult, err := po.executeStage(stageCtx, stage, processor, &cleanedData, cleaningCtx)
+		// Execute stage with timeout
+		stageCtx, cancel := context.WithTimeout(ctx, po.config.StageTimeout)
+		stageResult, err := processor.ProcessStage(stageCtx, result.CleanedData, cleaningCtx)
 		cancel()
 
 		if err != nil {
-			stageResult = &StageResult{
-				Stage:    stage,
-				Success:  false,
-				Duration: time.Since(startTime),
-				Errors:   []string{err.Error()},
-			}
-			allErrors = append(allErrors, fmt.Sprintf("stage %s failed: %v", stage, err))
-
-			if !po.config.ContinueOnError {
-				result.Success = false
-				result.TotalDuration = time.Since(startTime)
-				return nil, fmt.Errorf("pipeline failed at stage %s: %w", stage, err)
+			stageResult = &entities.StageResult{
+				Stage:        stage,
+				Success:      false,
+				Duration:     time.Since(stageStart),
+				RulesApplied: 0,
+				Errors:       []string{err.Error()},
 			}
 		}
 
-		// Add stage result to pipeline result
+		// Update stage duration if not set
+		if stageResult.Duration == 0 {
+			stageResult.Duration = time.Since(stageStart)
+			}
+
 		result.StageResults = append(result.StageResults, *stageResult)
-		result.Summary.StagesProcessed++
 
-		// Aggregate summary statistics
-		result.Summary.TotalAdjustments += len(stageResult.Adjustments)
-		result.Summary.TotalFlags += len(stageResult.Flags)
-		result.Summary.TotalRulesApplied += stageResult.RulesApplied
-		result.Summary.ErrorCount += len(stageResult.Errors)
-		result.Summary.WarningCount += len(stageResult.Warnings)
-	}
-
-	// Calculate total duration
-	result.TotalDuration = time.Since(startTime)
-
-	// Set overall success based on any errors encountered
-	if len(allErrors) > 0 {
-		result.Success = false
-		if !po.config.ContinueOnError {
-			return nil, fmt.Errorf("pipeline execution failed: %s", strings.Join(allErrors, "; "))
+		// Check if stage failed
+		if !stageResult.Success {
+			if !po.config.ContinueOnStageFailure {
+				result.Success = false
+				break
+			}
 		}
-		// If ContinueOnError is true, return the result with Success=false but no error
+	}
+
+	// Calculate total duration and summary
+	result.TotalDuration = time.Since(start)
+	result.Summary = po.calculateSummary(result)
+
+	// Check if any stage failed - if so, overall success should be false
+	for _, stageResult := range result.StageResults {
+		if !stageResult.Success {
+		result.Success = false
+			break
+		}
 	}
 
 	return result, nil
 }
 
-// executeStage executes a single pipeline stage with proper error handling and timing
-func (po *PipelineOrchestrator) executeStage(ctx context.Context, stage PipelineStage, processor StageProcessor, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*StageResult, error) {
-	stageStart := time.Now()
-
-	// Execute the stage processor
-	result, err := processor.ProcessStage(ctx, data, cleaningCtx)
-	if err != nil {
-		return nil, fmt.Errorf("stage execution failed: %w", err)
+// calculateSummary calculates pipeline summary statistics
+func (po *PipelineOrchestrator) calculateSummary(result *entities.PipelineResult) entities.PipelineSummary {
+	summary := entities.PipelineSummary{
+		StagesProcessed: len(result.StageResults),
 	}
 
-	// Ensure result has proper timing information
-	if result != nil {
-		result.Duration = time.Since(stageStart)
+	for _, stageResult := range result.StageResults {
+		summary.TotalAdjustments += len(stageResult.Adjustments)
+		summary.TotalFlags += len(stageResult.Flags)
+		summary.TotalRulesApplied += stageResult.RulesApplied
+		summary.ErrorCount += len(stageResult.Errors)
+		summary.WarningCount += len(stageResult.Warnings)
 	}
 
-	return result, nil
+	return summary
 }
 
-// AssetQualityStageProcessor implements StageProcessor for asset quality adjustments
+// AssetQualityStageProcessor handles Category A asset quality adjustments
 type AssetQualityStageProcessor struct {
-	adjuster    *adjustments.AssetAdjuster
-	rulesEngine rules.RuleEngine
+	assetAdjuster *adjustments.AssetAdjuster
+	rulesEngine   rules.RuleEngine
 }
 
-// NewAssetQualityStageProcessor creates a new asset quality stage processor
-func NewAssetQualityStageProcessor(adjuster *adjustments.AssetAdjuster, rulesEngine rules.RuleEngine) *AssetQualityStageProcessor {
-	return &AssetQualityStageProcessor{
-		adjuster:    adjuster,
-		rulesEngine: rulesEngine,
-	}
-}
-
-// ProcessStage implements the StageProcessor interface for asset quality
-func (asp *AssetQualityStageProcessor) ProcessStage(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*StageResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
+// ProcessStage processes the asset quality stage
+func (asp *AssetQualityStageProcessor) ProcessStage(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*entities.StageResult, error) {
 	start := time.Now()
 
-	// Get applicable asset quality rules
-	rules := asp.rulesEngine.GetRulesByCategory(entities.AssetQuality)
-	assetRules := make([]*entities.CleaningRule, 0)
+	// Get asset quality rules
+	assetRules := asp.rulesEngine.GetRulesByCategory(entities.AssetQuality)
+	if len(assetRules) == 0 {
+		return &entities.StageResult{
+			Stage:        entities.StageAssetQuality,
+			Success:      true,
+			Duration:     time.Since(start),
+			RulesApplied: 0,
+			Warnings:     []string{"no asset quality rules found"},
+		}, nil
+	}
 
-	for i, rule := range rules {
-		if rule.Enabled {
-			assetRules = append(assetRules, &rules[i])
-		}
+	// Convert rules to pointers for compatibility
+	rulePointers := make([]*entities.CleaningRule, len(assetRules))
+	for i := range assetRules {
+		rulePointers[i] = &assetRules[i]
 	}
 
 	// Apply asset adjustments
-	result := asp.adjuster.ProcessAssetAdjustments(data, assetRules, cleaningCtx)
+	adjustmentResult := asp.assetAdjuster.ProcessAssetAdjustments(data, rulePointers, cleaningCtx)
 
-	return &StageResult{
-		Stage:        AssetQualityStage,
-		Success:      result.Applied,
-		Adjustments:  result.Adjustments,
-		Flags:        result.Flags,
+	return &entities.StageResult{
+		Stage:        entities.StageAssetQuality,
+		Success:      true,
+		Adjustments:  adjustmentResult.Adjustments,
+		Flags:        adjustmentResult.Flags,
 		Duration:     time.Since(start),
 		RulesApplied: len(assetRules),
 	}, nil
 }
 
-// LiabilityCompletenessStageProcessor implements StageProcessor for liability completeness
+// LiabilityCompletenessStageProcessor handles Category B liability completeness
 type LiabilityCompletenessStageProcessor struct {
-	adjuster    *adjustments.LiabilityAdjuster
-	rulesEngine rules.RuleEngine
+	liabilityAdjuster *adjustments.LiabilityAdjuster
+	rulesEngine       rules.RuleEngine
 }
 
-// NewLiabilityCompletenessStageProcessor creates a new liability completeness stage processor
-func NewLiabilityCompletenessStageProcessor(adjuster *adjustments.LiabilityAdjuster, rulesEngine rules.RuleEngine) *LiabilityCompletenessStageProcessor {
-	return &LiabilityCompletenessStageProcessor{
-		adjuster:    adjuster,
-		rulesEngine: rulesEngine,
-	}
-}
-
-// ProcessStage implements the StageProcessor interface for liability completeness
-func (lsp *LiabilityCompletenessStageProcessor) ProcessStage(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*StageResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
+// ProcessStage processes the liability completeness stage
+func (lsp *LiabilityCompletenessStageProcessor) ProcessStage(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*entities.StageResult, error) {
 	start := time.Now()
 
-	// Get applicable liability completeness rules
-	rules := lsp.rulesEngine.GetRulesByCategory(entities.LiabilityCompleteness)
-	liabilityRules := make([]*entities.CleaningRule, 0)
+	// Get liability rules
+	liabilityRules := lsp.rulesEngine.GetRulesByCategory(entities.LiabilityCompleteness)
+	if len(liabilityRules) == 0 {
+		return &entities.StageResult{
+			Stage:        entities.StageLiabilityCompleteness,
+			Success:      true,
+			Duration:     time.Since(start),
+			RulesApplied: 0,
+			Warnings:     []string{"no liability rules found"},
+		}, nil
+	}
 
-	for i, rule := range rules {
-		if rule.Enabled {
-			liabilityRules = append(liabilityRules, &rules[i])
-		}
+	// Convert rules to pointers for compatibility
+	rulePointers := make([]*entities.CleaningRule, len(liabilityRules))
+	for i := range liabilityRules {
+		rulePointers[i] = &liabilityRules[i]
 	}
 
 	// Apply liability adjustments
-	result := lsp.adjuster.ProcessLiabilityAdjustments(data, liabilityRules, cleaningCtx)
+	adjustmentResult := lsp.liabilityAdjuster.ProcessLiabilityAdjustments(data, rulePointers, cleaningCtx)
 
-	return &StageResult{
-		Stage:        LiabilityCompletenessStage,
-		Success:      result.Applied,
-		Adjustments:  result.Adjustments,
-		Flags:        result.Flags,
+	return &entities.StageResult{
+		Stage:        entities.StageLiabilityCompleteness,
+		Success:      true,
+		Adjustments:  adjustmentResult.Adjustments,
+		Flags:        adjustmentResult.Flags,
 		Duration:     time.Since(start),
 		RulesApplied: len(liabilityRules),
 	}, nil
 }
 
-// EarningsNormalizationStageProcessor implements StageProcessor for earnings normalization
+// EarningsNormalizationStageProcessor handles Category C earnings normalization
 type EarningsNormalizationStageProcessor struct {
-	adjuster    *adjustments.EarningsAdjuster
-	rulesEngine rules.RuleEngine
+	earningsAdjuster *adjustments.EarningsAdjuster
+	rulesEngine      rules.RuleEngine
 }
 
-// NewEarningsNormalizationStageProcessor creates a new earnings normalization stage processor
-func NewEarningsNormalizationStageProcessor(adjuster *adjustments.EarningsAdjuster, rulesEngine rules.RuleEngine) *EarningsNormalizationStageProcessor {
-	return &EarningsNormalizationStageProcessor{
-		adjuster:    adjuster,
-		rulesEngine: rulesEngine,
-	}
-}
-
-// ProcessStage implements the StageProcessor interface for earnings normalization
-func (esp *EarningsNormalizationStageProcessor) ProcessStage(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*StageResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
+// ProcessStage processes the earnings normalization stage
+func (esp *EarningsNormalizationStageProcessor) ProcessStage(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*entities.StageResult, error) {
 	start := time.Now()
 
-	// Get applicable earnings normalization rules
-	rules := esp.rulesEngine.GetRulesByCategory(entities.EarningsNormalization)
-	earningsRules := make([]*entities.CleaningRule, 0)
+	// Get earnings rules
+	earningsRules := esp.rulesEngine.GetRulesByCategory(entities.EarningsNormalization)
+	if len(earningsRules) == 0 {
+		return &entities.StageResult{
+			Stage:        entities.StageEarningsNormalization,
+			Success:      true,
+			Duration:     time.Since(start),
+			RulesApplied: 0,
+			Warnings:     []string{"no earnings rules found"},
+		}, nil
+	}
 
-	for i, rule := range rules {
-		if rule.Enabled {
-			earningsRules = append(earningsRules, &rules[i])
-		}
+	// Convert rules to pointers for compatibility
+	rulePointers := make([]*entities.CleaningRule, len(earningsRules))
+	for i := range earningsRules {
+		rulePointers[i] = &earningsRules[i]
 	}
 
 	// Apply earnings adjustments
-	result := esp.adjuster.ProcessEarningsAdjustments(data, earningsRules, cleaningCtx)
+	adjustmentResult := esp.earningsAdjuster.ProcessEarningsAdjustments(data, rulePointers, cleaningCtx)
 
-	return &StageResult{
-		Stage:        EarningsNormalizationStage,
-		Success:      result.Applied,
-		Adjustments:  result.Adjustments,
-		Flags:        result.Flags,
+	return &entities.StageResult{
+		Stage:        entities.StageEarningsNormalization,
+		Success:      true, // Stage is successful even if no adjustments needed
+		Adjustments:  adjustmentResult.Adjustments,
+		Flags:        adjustmentResult.Flags,
 		Duration:     time.Since(start),
 		RulesApplied: len(earningsRules),
+	}, nil
+}
+
+// QualityAssessmentStageProcessor handles data quality assessment
+type QualityAssessmentStageProcessor struct {
+	rulesEngine rules.RuleEngine
+}
+
+// ProcessStage processes the quality assessment stage
+func (qsp *QualityAssessmentStageProcessor) ProcessStage(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*entities.StageResult, error) {
+	start := time.Now()
+
+	// TODO: Define QualityAssessment rule category in entities
+	// For now, return a basic successful result
+	return &entities.StageResult{
+		Stage:        entities.StageQualityAssessment,
+		Success:      true,
+		Duration:     time.Since(start),
+		RulesApplied: 0,
+		Warnings:     []string{"quality assessment not yet implemented"},
+	}, nil
+}
+
+// FlaggingStageProcessor handles risk flagging
+type FlaggingStageProcessor struct {
+	rulesEngine rules.RuleEngine
+}
+
+// ProcessStage processes the flagging stage
+func (fsp *FlaggingStageProcessor) ProcessStage(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (*entities.StageResult, error) {
+	start := time.Now()
+
+	// TODO: Define Flagging rule category in entities
+	// For now, return a basic successful result
+	return &entities.StageResult{
+		Stage:        entities.StageFlagging,
+		Success:      true,
+		Duration:     time.Since(start),
+		RulesApplied: 0,
+		Warnings:     []string{"flagging not yet implemented"},
 	}, nil
 }

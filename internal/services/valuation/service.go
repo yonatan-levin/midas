@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
@@ -16,12 +17,14 @@ import (
 
 // Service provides valuation operations
 type Service struct {
-	financialRepo ports.FinancialDataRepository
-	marketRepo    ports.MarketDataRepository
-	macroRepo     ports.MacroDataRepository
-	cache         ports.CacheRepository
-	dataCleaner   *datacleaner.DataCleanerService
-	logger        *zap.Logger
+	financialRepo  ports.FinancialDataRepository
+	marketRepo     ports.MarketDataRepository
+	macroRepo      ports.MacroDataRepository
+	cache          ports.CacheRepository
+	dataCleaner    datacleaner.DataCleanerService
+	metricsService ports.MetricsService
+	config         *config.Config
+	logger         *zap.Logger
 }
 
 // NewService creates a new valuation service
@@ -30,51 +33,34 @@ func NewService(
 	marketRepo ports.MarketDataRepository,
 	macroRepo ports.MacroDataRepository,
 	cache ports.CacheRepository,
-	dataCleaner *datacleaner.DataCleanerService,
+	dataCleaner datacleaner.DataCleanerService,
+	metricsService ports.MetricsService,
+	cfg *config.Config,
 	logger *zap.Logger,
 ) *Service {
 	return &Service{
-		financialRepo: financialRepo,
-		marketRepo:    marketRepo,
-		macroRepo:     macroRepo,
-		cache:         cache,
-		dataCleaner:   dataCleaner,
-		logger:        logger,
+		financialRepo:  financialRepo,
+		marketRepo:     marketRepo,
+		macroRepo:      macroRepo,
+		cache:          cache,
+		dataCleaner:    dataCleaner,
+		metricsService: metricsService,
+		config:         cfg,
+		logger:         logger,
 	}
 }
 
-// ValuationResult represents the output of a valuation calculation
-type ValuationResult struct {
-	Ticker                string                      `json:"ticker"`
-	CalculatedAt          time.Time                   `json:"calculated_at"`
-	TangibleValuePerShare float64                     `json:"tangible_value_per_share"`
-	DCFValuePerShare      float64                     `json:"dcf_value_per_share"`
-	WACC                  float64                     `json:"wacc"`
-	GrowthRate            float64                     `json:"growth_rate"`
-	TerminalGrowthRate    float64                     `json:"terminal_growth_rate"`
-	DataQualityScore      float64                     `json:"data_quality_score"`   // 0-100 from cleaning process
-	DataQualityGrade      entities.QualityGrade       `json:"data_quality_grade"`   // A, B, C, D, F
-	CleaningReport        *datacleaner.CleaningReport `json:"cleaning_report"`      // Full cleaning report
-	CleaningFlags         []entities.Flag             `json:"cleaning_flags"`       // Key risk flags
-	CleaningAdjustments   []entities.Adjustment       `json:"cleaning_adjustments"` // Applied adjustments
-	MarketRiskPremium     float64                     `json:"market_risk_premium"`
-	EnterpriseValue       float64                     `json:"enterprise_value"`
-	EquityValue           float64                     `json:"equity_value"`
-	FinancialDataPeriod   string                      `json:"financial_data_period"`
-	MarketDataDate        time.Time                   `json:"market_data_date"`
-	DataFreshnessScore    int                         `json:"data_freshness_score"`
-	CalculationVersion    string                      `json:"calculation_version"`
-}
-
 // CalculateValuation performs a complete DCF valuation for a ticker
-func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*ValuationResult, error) {
+func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*entities.ValuationResult, error) {
+	start := time.Now()
 	s.logger.Info("Starting valuation calculation", zap.String("ticker", ticker))
 
 	// Check cache first
 	cacheKey := fmt.Sprintf("valuation:%s", ticker)
-	var cachedResult ValuationResult
+	var cachedResult entities.ValuationResult
 	if err := s.cache.Get(ctx, cacheKey, &cachedResult); err == nil {
 		s.logger.Info("Returning cached valuation", zap.String("ticker", ticker))
+		s.metricsService.RecordValuationRequest(ticker, "single", "cache_hit", time.Since(start))
 		return &cachedResult, nil
 	}
 
@@ -96,41 +82,53 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*Valua
 		return nil, fmt.Errorf("failed to fetch macro data: %w", err)
 	}
 
-	// Clean the latest financial data using DataCleaner service
-	latestData := historicalData.GetLatest() // Get most recent period
-	cleaningContext := &entities.CleaningContext{
-		IndustryCode:     historicalData.IndustryCode,
-		CompanySize:      s.determineCompanySize(marketData),
-		DataVintage:      latestData.AsOf,
-		EnableIndustry:   true,
-		EnableCaching:    true,
-		QualityThreshold: 75.0, // Configurable quality threshold
-	}
-
-	cleaningResult, err := s.dataCleaner.CleanFinancialData(ctx, latestData, cleaningContext)
-	if err != nil {
-		s.logger.Warn("Data cleaning failed, proceeding with raw data", zap.String("ticker", ticker), zap.Error(err))
-		// Proceed with uncleaned data but log the issue
-		cleaningResult = &datacleaner.CleaningResult{
-			CleanedData:  latestData,
-			QualityScore: 50.0, // Lower score for uncleaned data
-			QualityGrade: entities.GradeC,
-			Success:      false,
-			Adjustments:  []entities.Adjustment{},
-			Flags:        []entities.Flag{},
+	// Apply data cleaning if service is available
+	var cleaningResult *entities.CleaningResult
+	if s.dataCleaner != nil {
+		latest, latestPeriod := historicalData.GetLatestPeriod()
+		if latest != nil {
+			var err error
+			cleaningResult, err = s.dataCleaner.CleanFinancialData(ctx, latest)
+			if err != nil {
+				s.logger.Warn("Data cleaning failed, using original data",
+					zap.Error(err),
+					zap.String("ticker", ticker))
+			} else {
+				s.logger.Info("Data cleaning applied successfully",
+					zap.String("ticker", ticker),
+					zap.Float64("quality_score", cleaningResult.QualityScore))
+				// Update historical data with cleaned data
+				historicalData.Data[latestPeriod] = cleaningResult.CleanedData
+			}
 		}
+	} else {
+		s.logger.Info("DataCleaner service not available, using original data", zap.String("ticker", ticker))
 	}
 
-	// Calculate valuation using cleaned data
-	result, err := s.performValuation(cleaningResult, marketData, macroData)
+	// Calculate valuation using potentially cleaned data
+	result, err := s.performValuation(historicalData, marketData, macroData)
 	if err != nil {
+		s.metricsService.RecordValuationRequest(ticker, "single", "error", time.Since(start))
+		s.metricsService.RecordValuationError(ticker, "calculation_failed")
 		return nil, fmt.Errorf("failed to perform valuation: %w", err)
 	}
 
-	// Cache the result for 1 hour
-	if err := s.cache.Set(ctx, cacheKey, result, 1*time.Hour); err != nil {
+	// Add cleaning results if available
+	if cleaningResult != nil {
+		result.DataQualityScore = cleaningResult.QualityScore
+		result.DataQualityGrade = entities.GetQualityGrade(cleaningResult.QualityScore)
+		result.CleaningFlags = cleaningResult.Flags
+		result.CleaningAdjustments = cleaningResult.Adjustments
+		// Note: CleaningReport would need the full report structure to be implemented
+	}
+
+	// Cache the result for configurable TTL
+	if err := s.cache.Set(ctx, cacheKey, result, s.config.Valuation.CacheTTL); err != nil {
 		s.logger.Warn("Failed to cache valuation result", zap.Error(err))
 	}
+
+	// Record successful valuation metrics
+	s.metricsService.RecordValuationRequest(ticker, "single", "success", time.Since(start))
 
 	s.logger.Info("Valuation calculation completed", zap.String("ticker", ticker), zap.Float64("dcf_value", result.DCFValuePerShare))
 	return result, nil
@@ -141,7 +139,7 @@ func (s *Service) performValuation(
 	historicalData *entities.HistoricalFinancialData,
 	marketData *entities.MarketData,
 	macroData *entities.MacroData,
-) (*ValuationResult, error) {
+) (*entities.ValuationResult, error) {
 
 	// Validate minimum data requirements
 	if !historicalData.HasMinimumData(3) {
@@ -187,6 +185,10 @@ func (s *Service) performValuation(
 		return nil, fmt.Errorf("failed to calculate WACC: %w", err)
 	}
 
+	// Record WACC calculation metric
+	s.metricsService.IncWACCCalculations()
+	s.metricsService.SetAverageWACC(waccResult.WACC)
+
 	// Calculate terminal growth rate (conservative approach)
 	terminalGrowthRate := s.calculateTerminalGrowthRate(growthResult.GrowthRate)
 
@@ -205,6 +207,10 @@ func (s *Service) performValuation(
 		return nil, fmt.Errorf("failed to calculate DCF: %w", err)
 	}
 
+	// Record DCF calculation metrics
+	s.metricsService.IncDCFCalculations()
+	s.metricsService.SetAverageGrowthRate(growthResult.GrowthRate)
+
 	// Calculate per-share values
 	sharesOutstanding := marketData.SharesOutstanding
 	if sharesOutstanding <= 0 {
@@ -220,7 +226,7 @@ func (s *Service) performValuation(
 	// Calculate data freshness score
 	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
 
-	result := &ValuationResult{
+	result := &entities.ValuationResult{
 		Ticker:                historicalData.Ticker,
 		CalculatedAt:          time.Now(),
 		TangibleValuePerShare: tangibleValuePerShare,

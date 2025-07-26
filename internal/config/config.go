@@ -9,6 +9,16 @@ import (
 
 // Config holds all configuration settings for the application
 type Config struct {
+	// Application settings
+	Version       string `mapstructure:"version"`
+	Environment   string `mapstructure:"environment"`
+	BuildTime     string `mapstructure:"build_time"`
+	GitCommit     string `mapstructure:"git_commit"`
+	LogLevel      string `mapstructure:"log_level"`
+	Port          string `mapstructure:"port"`
+	EnableSwagger bool   `mapstructure:"enable_swagger"`
+
+	// Component configurations
 	Server      ServerConfig      `mapstructure:"server"`
 	Database    DatabaseConfig    `mapstructure:"database"`
 	Cache       CacheConfig       `mapstructure:"cache"`
@@ -96,6 +106,13 @@ type ValuationConfig struct {
 	DefaultTaxRate           float64 `mapstructure:"default_tax_rate"`
 	MinDataPointsForGrowth   int     `mapstructure:"min_data_points_for_growth"`
 	MaxBulkSize              int     `mapstructure:"max_bulk_size"`
+
+	// Cache settings
+	CacheTTL time.Duration `mapstructure:"cache_ttl"` // TTL for valuation results cache
+
+	// Performance thresholds
+	SlowRequestThreshold time.Duration `mapstructure:"slow_request_threshold"` // Threshold for logging slow requests
+	DataFetchTimeout     time.Duration `mapstructure:"data_fetch_timeout"`     // Timeout for slow data fetch warnings
 
 	// DCF calculation specific settings
 	DCFProjectionYears    int     `mapstructure:"dcf_projection_years"`    // Number of explicit forecast years
@@ -231,6 +248,9 @@ func setDefaults() {
 	viper.SetDefault("valuation.default_tax_rate", 0.21)            // 21%
 	viper.SetDefault("valuation.min_data_points_for_growth", 2)
 	viper.SetDefault("valuation.max_bulk_size", 50)
+	viper.SetDefault("valuation.cache_ttl", "1h")              // 1 hour cache TTL for valuation results
+	viper.SetDefault("valuation.slow_request_threshold", "5s") // Log slow requests after 5 seconds
+	viper.SetDefault("valuation.data_fetch_timeout", "10s")    // Warn about slow data fetch after 10 seconds
 
 	// DCF calculation defaults
 	viper.SetDefault("valuation.dcf_projection_years", 5)         // 5-year explicit forecast

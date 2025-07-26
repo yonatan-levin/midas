@@ -8,10 +8,137 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/metrics"
 )
+
+// MockMetricsService for testing
+type MockMetricsService struct {
+	mock.Mock
+}
+
+func (m *MockMetricsService) RecordHTTPRequest(method, endpoint string, statusCode int, duration time.Duration, responseSize int) {
+	m.Called(method, endpoint, statusCode, duration, responseSize)
+}
+
+func (m *MockMetricsService) IncHTTPRequestsInFlight() {
+	m.Called()
+}
+
+func (m *MockMetricsService) DecHTTPRequestsInFlight() {
+	m.Called()
+}
+
+func (m *MockMetricsService) RecordValuationRequest(ticker, requestType, status string, duration time.Duration) {
+	m.Called(ticker, requestType, status, duration)
+}
+
+func (m *MockMetricsService) RecordValuationError(ticker, errorType string) {
+	m.Called(ticker, errorType)
+}
+
+func (m *MockMetricsService) IncDCFCalculations() {
+	m.Called()
+}
+
+func (m *MockMetricsService) IncWACCCalculations() {
+	m.Called()
+}
+
+func (m *MockMetricsService) RecordSECAPIRequest(endpoint, status string) {
+	m.Called(endpoint, status)
+}
+
+func (m *MockMetricsService) RecordMarketAPIRequest(provider, status string) {
+	m.Called(provider, status)
+}
+
+func (m *MockMetricsService) RecordMacroAPIRequest(provider, status string) {
+	m.Called(provider, status)
+}
+
+func (m *MockMetricsService) RecordDataFetch(source, ticker string, duration time.Duration) {
+	m.Called(source, ticker, duration)
+}
+
+func (m *MockMetricsService) RecordCacheRequest(cacheType, operation, result string) {
+	m.Called(cacheType, operation, result)
+}
+
+func (m *MockMetricsService) SetCacheHitRatio(cacheType string, ratio float64) {
+	m.Called(cacheType, ratio)
+}
+
+func (m *MockMetricsService) SetAverageWACC(wacc float64) {
+	m.Called(wacc)
+}
+
+func (m *MockMetricsService) SetAverageGrowthRate(rate float64) {
+	m.Called(rate)
+}
+
+func (m *MockMetricsService) GetTotalRequests() int64 {
+	args := m.Called()
+	return args.Get(0).(int64)
+}
+
+func (m *MockMetricsService) GetActiveConnections() int {
+	args := m.Called()
+	return args.Get(0).(int)
+}
+
+func (m *MockMetricsService) GetAverageResponseTime() float64 {
+	args := m.Called()
+	return args.Get(0).(float64)
+}
+
+func (m *MockMetricsService) GetErrorRate() float64 {
+	args := m.Called()
+	return args.Get(0).(float64)
+}
+
+func (m *MockMetricsService) GetCacheHitRate() float64 {
+	args := m.Called()
+	return args.Get(0).(float64)
+}
+
+func (m *MockMetricsService) GetTotalValuations() int64 {
+	args := m.Called()
+	return args.Get(0).(int64)
+}
+
+func (m *MockMetricsService) GetSuccessfulValuations() int64 {
+	args := m.Called()
+	return args.Get(0).(int64)
+}
+
+func (m *MockMetricsService) GetFailedValuations() int64 {
+	args := m.Called()
+	return args.Get(0).(int64)
+}
+
+func (m *MockMetricsService) GetAverageWACC() float64 {
+	args := m.Called()
+	return args.Get(0).(float64)
+}
+
+func (m *MockMetricsService) GetAverageGrowthRate() float64 {
+	args := m.Called()
+	return args.Get(0).(float64)
+}
+
+func (m *MockMetricsService) GetUniqueTickersServed() int64 {
+	args := m.Called()
+	return args.Get(0).(int64)
+}
+
+func (m *MockMetricsService) HealthCheck() error {
+	args := m.Called()
+	return args.Error(0)
+}
 
 // Mock repositories for testing
 type MockFinancialDataRepository struct {
@@ -145,16 +272,43 @@ func (m *MockCacheRepository) DeletePattern(ctx context.Context, pattern string)
 	return args.Error(0)
 }
 
-func createTestService() (*Service, *MockFinancialDataRepository, *MockMarketDataRepository, *MockMacroDataRepository, *MockCacheRepository) {
+// MockDataCleanerService for testing
+type MockDataCleanerService struct {
+	mock.Mock
+}
+
+func (m *MockDataCleanerService) CleanFinancialData(ctx context.Context, data *entities.FinancialData) (*entities.CleaningResult, error) {
+	args := m.Called(ctx, data)
+	return args.Get(0).(*entities.CleaningResult), args.Error(1)
+}
+
+func (m *MockDataCleanerService) GetIndustryRules(industryCode string) ([]entities.CleaningRule, error) {
+	args := m.Called(industryCode)
+	return args.Get(0).([]entities.CleaningRule), args.Error(1)
+}
+
+func (m *MockDataCleanerService) GetQualityScore(ctx context.Context, data *entities.FinancialData) (float64, error) {
+	args := m.Called(ctx, data)
+	return args.Get(0).(float64), args.Error(1)
+}
+
+func (m *MockDataCleanerService) ValidateData(data *entities.FinancialData) error {
+	args := m.Called(data)
+	return args.Error(0)
+}
+
+func createTestService() (*Service, *MockFinancialDataRepository, *MockMarketDataRepository, *MockMacroDataRepository, *MockCacheRepository, *MockDataCleanerService) {
 	financialRepo := &MockFinancialDataRepository{}
 	marketRepo := &MockMarketDataRepository{}
 	macroRepo := &MockMacroDataRepository{}
 	cache := &MockCacheRepository{}
+	dataCleaner := &MockDataCleanerService{}
 	logger := zap.NewNop()
+	metricsService := &MockMetricsService{}
 
-	service := NewService(financialRepo, marketRepo, macroRepo, cache, logger)
+	service := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, metricsService, logger)
 
-	return service, financialRepo, marketRepo, macroRepo, cache
+	return service, financialRepo, marketRepo, macroRepo, cache, dataCleaner
 }
 
 func createTestData() (*entities.HistoricalFinancialData, *entities.MarketData, *entities.MacroData) {
@@ -241,14 +395,30 @@ func createTestData() (*entities.HistoricalFinancialData, *entities.MarketData, 
 }
 
 func TestService_CalculateValuation(t *testing.T) {
-	service, financialRepo, marketRepo, macroRepo, cache := createTestService()
+	service, financialRepo, marketRepo, macroRepo, cache, _ := createTestService()
 	ctx := context.Background()
 
 	historicalData, marketData, macroData := createTestData()
 
 	t.Run("successful valuation calculation", func(t *testing.T) {
+		// Setup DataCleaner mock
+		dataCleaner := &MockDataCleanerService{}
+		cleaningResult := &entities.CleaningResult{
+			Success:      true,
+			QualityScore: 85.0,
+			CleanedData:  historicalData.Data["2023FY"], // Use the same data
+			Flags:        []entities.Flag{},
+			Adjustments:  []entities.Adjustment{},
+		}
+		dataCleaner.On("CleanFinancialData", ctx, mock.AnythingOfType("*entities.FinancialData")).Return(cleaningResult, nil)
+
+		// Create service with mocked DataCleaner
+		logger := zap.NewNop()
+		mockMetrics := &MockMetricsService{}
+		service := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, mockMetrics, logger)
+
 		// Setup expectations - cache miss first
-		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult")).Return(errors.New("cache miss"))
+		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 
 		// Then data retrieval
 		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
@@ -256,7 +426,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		macroRepo.On("GetLatest", ctx).Return(macroData, nil)
 
 		// Cache storage
-		cache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult"), 1*time.Hour).Return(nil)
+		cache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
 
 		result, err := service.CalculateValuation(ctx, "AAPL")
 
@@ -268,18 +438,24 @@ func TestService_CalculateValuation(t *testing.T) {
 		assert.Greater(t, result.WACC, 0.0)
 		assert.NotEmpty(t, result.FinancialDataPeriod)
 
+		// Verify DataCleaner integration
+		assert.Equal(t, 85.0, result.DataQualityScore)
+		assert.NotNil(t, result.CleaningFlags)
+		assert.NotNil(t, result.CleaningAdjustments)
+
 		// Verify all mock expectations
 		financialRepo.AssertExpectations(t)
 		marketRepo.AssertExpectations(t)
 		macroRepo.AssertExpectations(t)
 		cache.AssertExpectations(t)
+		dataCleaner.AssertExpectations(t)
 	})
 
 	t.Run("returns cached result if available", func(t *testing.T) {
 		// Reset mocks
 		cache.ExpectedCalls = nil
 
-		cachedResult := &ValuationResult{
+		cachedResult := &entities.ValuationResult{
 			Ticker:                "AAPL",
 			CalculatedAt:          time.Now().Add(-30 * time.Minute),
 			TangibleValuePerShare: 150.0,
@@ -289,8 +465,8 @@ func TestService_CalculateValuation(t *testing.T) {
 		}
 
 		// Setup cache hit expectation
-		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult")).Run(func(args mock.Arguments) {
-			dest := args.Get(2).(*ValuationResult)
+		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Run(func(args mock.Arguments) {
+			dest := args.Get(2).(*entities.ValuationResult)
 			*dest = *cachedResult
 		}).Return(nil)
 
@@ -315,7 +491,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		macroRepo.ExpectedCalls = nil
 		cache.ExpectedCalls = nil
 
-		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult")).Return(errors.New("cache miss"))
+		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return((*entities.HistoricalFinancialData)(nil), errors.New("no data found"))
 
 		result, err := service.CalculateValuation(ctx, "AAPL")
@@ -335,7 +511,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		macroRepo.ExpectedCalls = nil
 		cache.ExpectedCalls = nil
 
-		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult")).Return(errors.New("cache miss"))
+		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
 		marketRepo.On("GetLatest", ctx, "AAPL").Return((*entities.MarketData)(nil), errors.New("no market data"))
 
@@ -357,7 +533,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		macroRepo.ExpectedCalls = nil
 		cache.ExpectedCalls = nil
 
-		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*valuation.ValuationResult")).Return(errors.New("cache miss"))
+		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
 		marketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
 		macroRepo.On("GetLatest", ctx).Return((*entities.MacroData)(nil), errors.New("no macro data"))
@@ -376,7 +552,7 @@ func TestService_CalculateValuation(t *testing.T) {
 }
 
 func TestService_performValuation(t *testing.T) {
-	service, _, _, _, _ := createTestService()
+	service, _, _, _, _, _ := createTestService()
 	historicalData, marketData, macroData := createTestData()
 
 	t.Run("successful valuation with good data", func(t *testing.T) {
@@ -441,7 +617,7 @@ func TestService_performValuation(t *testing.T) {
 }
 
 func TestService_calculateTangibleValuePerShare(t *testing.T) {
-	service, _, _, _, _ := createTestService()
+	service, _, _, _, _, _ := createTestService()
 	_, marketData, _ := createTestData()
 
 	t.Run("calculate with valid data", func(t *testing.T) {
@@ -472,7 +648,7 @@ func TestService_calculateTangibleValuePerShare(t *testing.T) {
 }
 
 func TestService_calculateTerminalGrowthRate(t *testing.T) {
-	service, _, _, _, _ := createTestService()
+	service, _, _, _, _, _ := createTestService()
 
 	t.Run("normal growth rate", func(t *testing.T) {
 		historicalCAGR := 0.08 // 8%
@@ -508,7 +684,7 @@ func TestService_calculateTerminalGrowthRate(t *testing.T) {
 }
 
 func TestService_calculateDataFreshnessScore(t *testing.T) {
-	service, _, _, _, _ := createTestService()
+	service, _, _, _, _, _ := createTestService()
 
 	t.Run("fresh data gets high score", func(t *testing.T) {
 		financial := &entities.FinancialData{
@@ -541,4 +717,113 @@ func TestService_calculateDataFreshnessScore(t *testing.T) {
 
 		assert.LessOrEqual(t, score, 60) // Should be lower score for stale data
 	})
+}
+
+// TestValuationWithCleaningIntegration tests integration between ValuationService and DataCleaner
+func TestValuationWithCleaningIntegration(t *testing.T) {
+	// Simple test to verify DataCleaner is properly injected
+	t.Run("data_cleaner_injection_verification", func(t *testing.T) {
+		// Create mocks
+		mockFinancialRepo := &MockFinancialDataRepository{}
+		mockMarketRepo := &MockMarketDataRepository{}
+		mockMacroRepo := &MockMacroDataRepository{}
+		mockCache := &MockCacheRepository{}
+		mockDataCleaner := &MockDataCleanerService{}
+
+		// Create service with DataCleaner injected
+		mockMetrics := &MockMetricsService{}
+		service := NewService(mockFinancialRepo, mockMarketRepo, mockMacroRepo, mockCache, mockDataCleaner, mockMetrics, zap.NewNop())
+
+		// Verify DataCleaner is injected
+		assert.NotNil(t, service)
+		// TODO: Add more detailed verification once DataCleaner integration is complete
+	})
+}
+
+// TestValuationService_MetricsInstrumentation tests that valuation calculations are properly instrumented with metrics
+func TestValuationService_MetricsInstrumentation(t *testing.T) {
+	logger := zap.NewNop()
+	metricsService := metrics.NewService(logger)
+
+	// Create mocks
+	mockFinancialRepo := &MockFinancialDataRepository{}
+	mockMarketRepo := &MockMarketDataRepository{}
+	mockMacroRepo := &MockMacroDataRepository{}
+	mockCache := &MockCacheRepository{}
+	mockDataCleaner := &MockDataCleanerService{}
+
+	// Create service with metrics
+	service := NewService(
+		mockFinancialRepo,
+		mockMarketRepo,
+		mockMacroRepo,
+		mockCache,
+		mockDataCleaner,
+		metricsService,
+		logger,
+	)
+
+	// Setup test data
+	ctx := context.Background()
+	ticker := "AAPL"
+
+	// Mock successful data retrieval
+	financialData := &entities.FinancialData{
+		Ticker:            ticker,
+		Revenue:           100000000000,
+		OperatingIncome:   25000000000,
+		NetIncome:         20000000000,
+		TotalAssets:       350000000000,
+		TotalDebt:         100000000000,
+		SharesOutstanding: 16000000000,
+		InterestExpense:   3000000000,
+		IncomeTaxExpense:  5000000000,
+		Period:            "2023-12-31",
+		FilingDate:        time.Now(),
+	}
+
+	marketData := &entities.MarketData{
+		Ticker:    ticker,
+		Price:     150.0,
+		Beta:      1.2,
+		Timestamp: time.Now(),
+	}
+
+	macroData := &entities.MacroData{
+		RiskFreeRate:      0.05,
+		MarketRiskPremium: 0.06,
+		Timestamp:         time.Now(),
+	}
+
+	// Setup mocks
+	mockCache.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(nil) // Cache miss
+	mockFinancialRepo.On("GetLatest", ctx, ticker).Return(financialData, nil)
+	mockMarketRepo.On("GetLatest", ctx, ticker).Return(marketData, nil)
+	mockMacroRepo.On("GetLatest", ctx).Return(macroData, nil)
+	mockDataCleaner.On("CleanFinancialData", mock.Anything, financialData).Return(financialData, nil)
+	mockCache.On("Set", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Record initial metrics
+	initialDCFCalculations := metricsService.GetTotalValuations()
+	initialSuccessfulValuations := metricsService.GetSuccessfulValuations()
+
+	// Execute valuation
+	result, err := service.CalculateValuation(ctx, ticker)
+
+	// Verify calculation succeeded
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, ticker, result.Ticker)
+	assert.Greater(t, result.DCFValue, 0.0)
+	assert.Greater(t, result.TangibleBookValue, 0.0)
+
+	// Verify metrics were recorded
+	assert.Greater(t, metricsService.GetTotalValuations(), initialDCFCalculations, "Should increment DCF calculations")
+	assert.Greater(t, metricsService.GetSuccessfulValuations(), initialSuccessfulValuations, "Should increment successful valuations")
+
+	// Verify all mocks were called
+	mockFinancialRepo.AssertExpectations(t)
+	mockMarketRepo.AssertExpectations(t)
+	mockMacroRepo.AssertExpectations(t)
+	mockDataCleaner.AssertExpectations(t)
 }

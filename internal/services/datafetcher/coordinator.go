@@ -7,40 +7,42 @@ import (
 	"time"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/core/ports"
 )
 
 // DataCoordinator handles multi-source data fetching coordination
 type DataCoordinator struct {
-	config *DataFetcherConfig
-}
-
-// CoordinationResult represents the result of coordinated data fetching
-type CoordinationResult struct {
-	FinancialData  *entities.FinancialData   `json:"financial_data"`
-	MarketData     *entities.MarketData      `json:"market_data"`
-	MacroData      *entities.MacroData       `json:"macro_data"`
-	SourceMetadata map[DataSource]SourceInfo `json:"source_metadata"`
-	Errors         []FetchError              `json:"errors"`
-	Warnings       []string                  `json:"warnings"`
+	config        *DataFetcherConfig
+	secGateway    ports.SECGateway
+	marketGateway ports.MarketDataGateway
+	macroGateway  ports.MacroDataGateway
 }
 
 // sourceTask represents a task to fetch data from a specific source
 type sourceTask struct {
-	source   DataSource
+	source   entities.DataSource
 	ticker   string
 	cik      string
-	metadata SourceInfo
+	metadata entities.SourceInfo
 }
 
 // NewDataCoordinator creates a new DataCoordinator instance
-func NewDataCoordinator(config *DataFetcherConfig) *DataCoordinator {
+func NewDataCoordinator(
+	config *DataFetcherConfig,
+	secGateway ports.SECGateway,
+	marketGateway ports.MarketDataGateway,
+	macroGateway ports.MacroDataGateway,
+) *DataCoordinator {
 	return &DataCoordinator{
-		config: config,
+		config:        config,
+		secGateway:    secGateway,
+		marketGateway: marketGateway,
+		macroGateway:  macroGateway,
 	}
 }
 
 // CoordinateFetch orchestrates data fetching from multiple sources
-func (dc *DataCoordinator) CoordinateFetch(ctx context.Context, request *FetchRequest) (*CoordinationResult, error) {
+func (dc *DataCoordinator) CoordinateFetch(ctx context.Context, request *entities.FetchRequest) (*entities.CoordinationResult, error) {
 	if request == nil {
 		return nil, fmt.Errorf("fetch request cannot be nil")
 	}
@@ -49,7 +51,7 @@ func (dc *DataCoordinator) CoordinateFetch(ctx context.Context, request *FetchRe
 	sources := request.DataSources
 	if len(sources) == 0 {
 		// Default to all sources if none specified
-		sources = []DataSource{SECSource, MarketSource, MacroSource}
+		sources = []entities.DataSource{entities.SECSource, entities.MarketSource, entities.MacroSource}
 	}
 
 	if dc.config.ConcurrentFetching {
@@ -60,22 +62,21 @@ func (dc *DataCoordinator) CoordinateFetch(ctx context.Context, request *FetchRe
 }
 
 // coordinateConcurrent fetches data from multiple sources concurrently
-func (dc *DataCoordinator) coordinateConcurrent(ctx context.Context, request *FetchRequest, sources []DataSource) (*CoordinationResult, error) {
-	result := &CoordinationResult{
-		SourceMetadata: make(map[DataSource]SourceInfo),
-		Errors:         make([]FetchError, 0),
+func (dc *DataCoordinator) coordinateConcurrent(ctx context.Context, request *entities.FetchRequest, sources []entities.DataSource) (*entities.CoordinationResult, error) {
+	result := &entities.CoordinationResult{
+		SourceMetadata: make(map[entities.DataSource]entities.SourceInfo),
+		Errors:         make([]entities.FetchError, 0),
 		Warnings:       make([]string, 0),
 	}
 
 	// Create channels for results
-
 	resultChan := make(chan sourceResult, len(sources))
 	var wg sync.WaitGroup
 
 	// Launch goroutines for each source
 	for _, source := range sources {
 		wg.Add(1)
-		go func(src DataSource) {
+		go func(src entities.DataSource) {
 			defer wg.Done()
 			srcResult := dc.fetchFromSource(ctx, request, src)
 			resultChan <- srcResult
@@ -90,187 +91,213 @@ func (dc *DataCoordinator) coordinateConcurrent(ctx context.Context, request *Fe
 
 	// Collect results
 	for srcResult := range resultChan {
-		result.SourceMetadata[srcResult.source] = srcResult.metadata
-
-		if srcResult.err != nil {
-			result.Errors = append(result.Errors, FetchError{
-				Source:  srcResult.source,
-				Type:    "fetch_error",
-				Message: srcResult.err.Error(),
-			})
-			continue
-		}
-
-		// Merge data based on source type
-		switch srcResult.source {
-		case SECSource:
-			result.FinancialData = srcResult.financialData
-		case MarketSource:
-			result.MarketData = srcResult.marketData
-		case MacroSource:
-			result.MacroData = srcResult.macroData
-		}
+		dc.mergeSourceResult(result, srcResult)
 	}
 
 	return result, nil
 }
 
 // coordinateSequential fetches data from sources sequentially
-func (dc *DataCoordinator) coordinateSequential(ctx context.Context, request *FetchRequest, sources []DataSource) (*CoordinationResult, error) {
-	result := &CoordinationResult{
-		SourceMetadata: make(map[DataSource]SourceInfo),
-		Errors:         make([]FetchError, 0),
+func (dc *DataCoordinator) coordinateSequential(ctx context.Context, request *entities.FetchRequest, sources []entities.DataSource) (*entities.CoordinationResult, error) {
+	result := &entities.CoordinationResult{
+		SourceMetadata: make(map[entities.DataSource]entities.SourceInfo),
+		Errors:         make([]entities.FetchError, 0),
 		Warnings:       make([]string, 0),
 	}
 
 	for _, source := range sources {
 		srcResult := dc.fetchFromSource(ctx, request, source)
-		result.SourceMetadata[srcResult.source] = srcResult.metadata
+		dc.mergeSourceResult(result, srcResult)
 
-		if srcResult.err != nil {
-			result.Errors = append(result.Errors, FetchError{
-				Source:  srcResult.source,
-				Type:    "fetch_error",
-				Message: srcResult.err.Error(),
-			})
-			continue
-		}
-
-		// Merge data based on source type
-		switch srcResult.source {
-		case SECSource:
-			result.FinancialData = srcResult.financialData
-		case MarketSource:
-			result.MarketData = srcResult.marketData
-		case MacroSource:
-			result.MacroData = srcResult.macroData
+		// Stop on critical errors if configured
+		if srcResult.err != nil && dc.config.MaxRetries <= 1 {
+			break
 		}
 	}
 
 	return result, nil
 }
 
-// sourceResult represents the result of fetching from a single source
+// sourceResult holds the result from fetching a single source
 type sourceResult struct {
-	source        DataSource
+	source        entities.DataSource
 	financialData *entities.FinancialData
 	marketData    *entities.MarketData
 	macroData     *entities.MacroData
-	metadata      SourceInfo
+	metadata      entities.SourceInfo
 	err           error
 }
 
-// fetchFromSource fetches data from a specific source with retry logic
-func (dc *DataCoordinator) fetchFromSource(ctx context.Context, request *FetchRequest, source DataSource) sourceResult {
-	startTime := time.Now()
+// fetchFromSource fetches data from a specific source
+func (dc *DataCoordinator) fetchFromSource(ctx context.Context, request *entities.FetchRequest, source entities.DataSource) sourceResult {
+	start := time.Now()
 
-	var err error
-	var financialData *entities.FinancialData
-	var marketData *entities.MarketData
-	var macroData *entities.MacroData
-
-	// Implement retry logic
-	for attempt := 0; attempt <= dc.config.MaxRetries; attempt++ {
-		if attempt > 0 {
-			// Exponential backoff with jitter
-			backoffDuration := time.Duration(attempt*attempt) * 100 * time.Millisecond
-			select {
-			case <-time.After(backoffDuration):
-			case <-ctx.Done():
-				err = ctx.Err()
-				break
-			}
-		}
-
-		// Check context before each attempt
-		if ctx.Err() != nil {
-			err = ctx.Err()
-			break
-		}
-
-		// Create timeout context for this attempt
-		attemptCtx, cancel := context.WithTimeout(ctx, dc.config.TimeoutDuration)
+	result := sourceResult{
+		source: source,
+		metadata: entities.SourceInfo{
+			FetchTime: start,
+			FromCache: false,
+		},
+	}
 
 		switch source {
-		case SECSource:
-			financialData, err = dc.fetchSECData(attemptCtx, request.Ticker, request.CIK)
-		case MarketSource:
-			marketData, err = dc.fetchMarketData(attemptCtx, request.Ticker)
-		case MacroSource:
-			macroData, err = dc.fetchMacroData(attemptCtx)
+	case entities.SECSource:
+		result.financialData, result.err = dc.fetchSECData(ctx, request.Ticker, request.CIK)
+	case entities.MarketSource:
+		result.marketData, result.err = dc.fetchMarketData(ctx, request.Ticker)
+	case entities.MacroSource:
+		result.macroData, result.err = dc.fetchMacroData(ctx)
 		default:
-			err = fmt.Errorf("unknown data source: %s", source)
+		result.err = fmt.Errorf("unknown data source: %s", source)
 		}
 
-		cancel()
-
-		// If successful, break out of retry loop
-		if err == nil {
-			break
-		}
-
-		// If it's the last attempt or context is cancelled, don't retry
-		if attempt == dc.config.MaxRetries || ctx.Err() != nil {
-			break
-		}
+	result.metadata.Duration = time.Since(start)
+	if result.err != nil {
+		result.metadata.StatusCode = 500
+	} else {
+		result.metadata.StatusCode = 200
 	}
 
-	metadata := SourceInfo{
-		FetchTime: time.Now(),
-		Duration:  time.Since(startTime),
-		FromCache: false, // TODO: Implement cache detection
-		DataAge:   0,     // TODO: Calculate data age
-		Retries:   0,     // TODO: Track actual retry count
+	return result
+}
+
+// mergeSourceResult merges a source result into the coordination result
+func (dc *DataCoordinator) mergeSourceResult(result *entities.CoordinationResult, srcResult sourceResult) {
+	// Update source metadata
+	result.SourceMetadata[srcResult.source] = srcResult.metadata
+
+	// Merge data
+	if srcResult.financialData != nil {
+		result.FinancialData = srcResult.financialData
+	}
+	if srcResult.marketData != nil {
+		result.MarketData = srcResult.marketData
+	}
+	if srcResult.macroData != nil {
+		result.MacroData = srcResult.macroData
 	}
 
-	return sourceResult{
-		source:        source,
-		financialData: financialData,
-		marketData:    marketData,
-		macroData:     macroData,
-		metadata:      metadata,
-		err:           err,
+	// Add errors
+	if srcResult.err != nil {
+		result.Errors = append(result.Errors, entities.FetchError{
+			Source:  srcResult.source,
+			Type:    "fetch_error",
+			Message: srcResult.err.Error(),
+		})
 	}
 }
 
 // fetchSECData fetches financial data from SEC source
 func (dc *DataCoordinator) fetchSECData(ctx context.Context, ticker, cik string) (*entities.FinancialData, error) {
-	// TODO: Implement actual SEC gateway interaction
-	// For now, return a mock error indicating this needs implementation
-	return nil, fmt.Errorf("SEC data fetching not yet implemented")
+	// Use CIK if provided, otherwise use ticker
+	identifier := cik
+	if identifier == "" {
+		identifier = ticker
+	}
+
+	companyFacts, err := dc.secGateway.GetCompanyFacts(ctx, identifier)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch SEC data: %w", err)
+	}
+
+	// Check if companyFacts is nil (can happen on context cancellation)
+	if companyFacts == nil {
+		return nil, fmt.Errorf("received nil company facts for ticker %s", ticker)
+	}
+
+	// Convert SEC facts to FinancialData
+	// This is a simplified conversion - in production, you'd use the parser
+	financialData := &entities.FinancialData{
+		Ticker: ticker,
+		CIK:    companyFacts.CIK,
+		AsOf:   time.Now(),
+	}
+
+	// Extract basic financial metrics from facts
+	if companyFacts.Facts != nil {
+		if assets, ok := companyFacts.Facts["Assets"]; ok {
+			if assetsMap, ok := assets.(map[string]interface{}); ok {
+				if units, ok := assetsMap["units"]; ok {
+					if unitsMap, ok := units.(map[string]interface{}); ok {
+						if usdData, ok := unitsMap["USD"]; ok {
+							if usdArray, ok := usdData.([]interface{}); ok && len(usdArray) > 0 {
+								if latestData, ok := usdArray[0].(map[string]interface{}); ok {
+									if val, ok := latestData["val"]; ok {
+										if valFloat, ok := val.(float64); ok {
+											financialData.TotalAssets = valFloat
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if revenues, ok := companyFacts.Facts["Revenues"]; ok {
+			if revenuesMap, ok := revenues.(map[string]interface{}); ok {
+				if units, ok := revenuesMap["units"]; ok {
+					if unitsMap, ok := units.(map[string]interface{}); ok {
+						if usdData, ok := unitsMap["USD"]; ok {
+							if usdArray, ok := usdData.([]interface{}); ok && len(usdArray) > 0 {
+								if latestData, ok := usdArray[0].(map[string]interface{}); ok {
+									if val, ok := latestData["val"]; ok {
+										if valFloat, ok := val.(float64); ok {
+											financialData.Revenue = valFloat
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return financialData, nil
 }
 
 // fetchMarketData fetches market data from market source
 func (dc *DataCoordinator) fetchMarketData(ctx context.Context, ticker string) (*entities.MarketData, error) {
-	// TODO: Implement actual market gateway interaction
-	// For now, return a mock error indicating this needs implementation
-	return nil, fmt.Errorf("market data fetching not yet implemented")
+	marketData, err := dc.marketGateway.GetQuote(ctx, ticker)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch market data: %w", err)
+	}
+	return marketData, nil
 }
 
 // fetchMacroData fetches macro economic data
 func (dc *DataCoordinator) fetchMacroData(ctx context.Context) (*entities.MacroData, error) {
-	// TODO: Implement actual macro gateway interaction
-	// For now, return a mock error indicating this needs implementation
-	return nil, fmt.Errorf("macro data fetching not yet implemented")
+	treasuryRates, err := dc.macroGateway.GetTreasuryRates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch treasury rates: %w", err)
+	}
+
+	marketRiskPremium, err := dc.macroGateway.GetMarketRiskPremium(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch market risk premium: %w", err)
+	}
+
+	macroData := &entities.MacroData{
+		AsOf:               treasuryRates.AsOf,
+		RiskFreeRate:       treasuryRates.Yield10Year,
+		RiskFreeRate3Month: treasuryRates.Yield2Year,
+		MarketRiskPremium:  marketRiskPremium,
+		Source:             "coordinator",
+	}
+
+	return macroData, nil
 }
 
-// GetCoordinationMetrics returns metrics about coordination performance
-func (dc *DataCoordinator) GetCoordinationMetrics() *CoordinationMetrics {
-	// TODO: Implement proper metrics collection
-	return &CoordinationMetrics{
+// GetCoordinationMetrics returns coordination metrics
+func (dc *DataCoordinator) GetCoordinationMetrics() *entities.CoordinationMetrics {
+	return &entities.CoordinationMetrics{
 		TotalCoordinations: 0,
 		ConcurrentRequests: 0,
 		AverageLatency:     0,
 		RetryRate:          0.0,
-		SourceErrorRates:   make(map[DataSource]float64),
+		SourceErrorRates:   make(map[entities.DataSource]float64),
 	}
-}
-
-// CoordinationMetrics holds metrics about coordination operations
-type CoordinationMetrics struct {
-	TotalCoordinations int64                  `json:"total_coordinations"`
-	ConcurrentRequests int                    `json:"concurrent_requests"`
-	AverageLatency     time.Duration          `json:"average_latency"`
-	RetryRate          float64                `json:"retry_rate"`
-	SourceErrorRates   map[DataSource]float64 `json:"source_error_rates"`
 }

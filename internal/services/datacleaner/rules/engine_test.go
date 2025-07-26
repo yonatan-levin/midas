@@ -429,3 +429,238 @@ func createTempFile(t *testing.T, filename, content string) string {
 }
 
 // NOTE: Constructor functions are now implemented in engine.go and loader.go
+
+func TestRuleEngine_EdgeCases(t *testing.T) {
+	t.Run("nil_data_handling", func(t *testing.T) {
+		engine := NewRuleEngine()
+
+		// Test with nil category
+		rules := engine.GetRules(nil)
+		assert.Empty(t, rules, "Should return empty slice for empty engine")
+
+		// Test validation with no rules
+		err := engine.ValidateRules()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "no rules loaded")
+
+		// Test version with no config
+		version := engine.GetRuleVersion()
+		assert.Empty(t, version)
+	})
+
+	t.Run("concurrent_access", func(t *testing.T) {
+		rulesData := createTestRulesJSON()
+		tempFile := createTempFile(t, "concurrent_rules.json", rulesData)
+		defer os.Remove(tempFile)
+
+		engine := NewRuleEngine()
+		err := engine.LoadRules(tempFile)
+		require.NoError(t, err)
+
+		// Test concurrent reads
+		done := make(chan bool, 10)
+		for i := 0; i < 10; i++ {
+			go func() {
+				defer func() { done <- true }()
+				rules := engine.GetRules(nil)
+				assert.Len(t, rules, 3)
+
+				rule, err := engine.GetRuleByID(entities.RuleGoodwillExclusion)
+				assert.NoError(t, err)
+				assert.NotNil(t, rule)
+			}()
+		}
+
+		// Wait for all goroutines
+		for i := 0; i < 10; i++ {
+			<-done
+		}
+	})
+
+	t.Run("rule_validation_edge_cases", func(t *testing.T) {
+		engine := NewRuleEngine()
+
+		// Test validation with malformed rules - loader validates during load
+		invalidRuleData := createInvalidRuleFieldsJSON()
+		invalidFile := createTempFile(t, "invalid_fields.json", invalidRuleData)
+		defer os.Remove(invalidFile)
+
+		err := engine.LoadRules(invalidFile)
+		assert.Error(t, err) // Should fail during loading due to validation
+		assert.Contains(t, err.Error(), "rule ID")
+	})
+
+	t.Run("industry_rules_edge_cases", func(t *testing.T) {
+		rulesData := createTestRulesJSON()
+		rulesFile := createTempFile(t, "base_rules.json", rulesData)
+		defer os.Remove(rulesFile)
+
+		engine := NewRuleEngine()
+		err := engine.LoadRules(rulesFile)
+		require.NoError(t, err)
+
+		// Test with empty industry code
+		industryRules := engine.GetIndustryRules("")
+		assert.NotEmpty(t, industryRules) // Should return general rules
+
+		// Test with non-existent industry
+		unknownRules := engine.GetIndustryRules("99999")
+		assert.NotEmpty(t, unknownRules) // Should return applicable general rules
+	})
+
+	t.Run("dependency_validation", func(t *testing.T) {
+		// Test with missing dependencies - this should pass loading but fail validation
+		missingDepData := createMissingDependencyJSON()
+		missingDepFile := createTempFile(t, "missing_dep.json", missingDepData)
+		defer os.Remove(missingDepFile)
+
+		engine := NewRuleEngine()
+		err := engine.LoadRules(missingDepFile)
+		require.NoError(t, err) // Loading should succeed
+
+		err = engine.ValidateRules()
+		assert.Error(t, err) // Validation should fail
+		assert.Contains(t, err.Error(), "dependency")
+	})
+
+	t.Run("threshold_validation_edge_cases", func(t *testing.T) {
+		// Test with invalid threshold values - should pass loading but fail validation
+		invalidThresholdData := createInvalidThresholdJSON()
+		invalidFile := createTempFile(t, "invalid_threshold.json", invalidThresholdData)
+		defer os.Remove(invalidFile)
+
+		engine := NewRuleEngine()
+		err := engine.LoadRules(invalidFile)
+		require.NoError(t, err) // Loading should succeed
+
+		err = engine.ValidateRules()
+		assert.Error(t, err) // Validation should fail
+		assert.Contains(t, err.Error(), "threshold")
+	})
+}
+
+func TestRuleEngine_GetRulesByCategory_Comprehensive(t *testing.T) {
+	rulesData := createTestRulesJSON()
+	tempFile := createTempFile(t, "category_rules.json", rulesData)
+	defer os.Remove(tempFile)
+
+	engine := NewRuleEngine()
+	err := engine.LoadRules(tempFile)
+	require.NoError(t, err)
+
+	tests := []struct {
+		category    entities.RuleCategory
+		expectedLen int
+		expectedIDs []string
+	}{
+		{
+			category:    entities.AssetQuality,
+			expectedLen: 2,
+			expectedIDs: []string{entities.RuleGoodwillExclusion, entities.RuleCapitalizedSoftware},
+		},
+		{
+			category:    entities.EarningsNormalization,
+			expectedLen: 1,
+			expectedIDs: []string{"stock_compensation"},
+		},
+		{
+			category:    entities.LiabilityCompleteness,
+			expectedLen: 0,
+			expectedIDs: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(string(tt.category), func(t *testing.T) {
+			rules := engine.GetRulesByCategory(tt.category)
+			assert.Len(t, rules, tt.expectedLen)
+
+			for _, expectedID := range tt.expectedIDs {
+				found := false
+				for _, rule := range rules {
+					if rule.ID == expectedID {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "Should find rule %s", expectedID)
+			}
+		})
+	}
+}
+
+// Additional helper functions for edge case testing
+
+func createInvalidRuleFieldsJSON() string {
+	return `{
+		"version": "1.0.0",
+		"description": "Invalid rules for testing",
+		"rules": [
+			{
+				"id": "",
+				"name": "",
+				"description": "Empty required fields",
+				"category": "invalid_category",
+				"xbrl_tags": [],
+				"adjustment": "invalid_adjustment",
+				"industry": ["all"],
+				"severity": "invalid_severity",
+				"version": "1.0",
+				"enabled": true,
+				"source": "test"
+			}
+		]
+	}`
+}
+
+func createMissingDependencyJSON() string {
+	return `{
+		"version": "1.0.0",
+		"description": "Rules with missing dependencies",
+		"rules": [
+			{
+				"id": "test_rule",
+				"name": "Test Rule",
+				"description": "Rule with missing dependency",
+				"category": "asset_quality",
+				"xbrl_tags": ["TestTag"],
+				"adjustment": "exclude",
+				"industry": ["all"],
+				"severity": "warning",
+				"version": "1.0",
+				"enabled": true,
+				"source": "test",
+				"dependencies": ["nonexistent_rule"]
+			}
+		]
+	}`
+}
+
+func createInvalidThresholdJSON() string {
+	return `{
+		"version": "1.0.0",
+		"description": "Rules with invalid thresholds",
+		"rules": [
+			{
+				"id": "invalid_threshold_rule",
+				"name": "Invalid Threshold Rule",
+				"description": "Rule with invalid threshold values",
+				"category": "asset_quality",
+				"xbrl_tags": ["TestTag"],
+				"adjustment": "exclude",
+				"threshold": {
+					"percentage_of_revenue": 1.5,
+					"percentage_of_assets": -0.1,
+					"growth_multiple": 0.5,
+					"turnover_decline": 1.2,
+					"age_in_years": -5
+				},
+				"industry": ["all"],
+				"severity": "warning",
+				"version": "1.0",
+				"enabled": true,
+				"source": "test"
+			}
+		]
+	}`
+}

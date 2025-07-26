@@ -387,3 +387,61 @@ CREATE TRIGGER IF NOT EXISTS update_cache_metadata_updated_at
 BEGIN
     UPDATE cache_metadata SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END; 
+
+-- API Keys table for authentication (SQLite compatible)
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    key_hash VARCHAR(255) NOT NULL UNIQUE,
+    user_id VARCHAR(255) NOT NULL,
+    permissions TEXT NOT NULL DEFAULT '[]', -- JSON array as TEXT for SQLite
+    rate_limit INTEGER NOT NULL DEFAULT 1000,
+    expires_at TIMESTAMP NULL,
+    is_active BOOLEAN NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP NULL,
+    usage_count INTEGER NOT NULL DEFAULT 0
+);
+
+-- Indexes for API keys table
+CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
+CREATE INDEX IF NOT EXISTS idx_api_keys_active ON api_keys(is_active);
+CREATE INDEX IF NOT EXISTS idx_api_keys_expires ON api_keys(expires_at);
+
+-- API key usage tracking for rate limiting and monitoring
+CREATE TABLE IF NOT EXISTS api_key_usage (
+    id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+    api_key_id TEXT NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
+    endpoint VARCHAR(255) NOT NULL,
+    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    response_status INTEGER NOT NULL,
+    response_time_ms INTEGER NOT NULL,
+    user_agent TEXT,
+    ip_address TEXT
+);
+
+-- Indexes for usage tracking
+CREATE INDEX IF NOT EXISTS idx_usage_api_key_timestamp ON api_key_usage(api_key_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON api_key_usage(timestamp);
+CREATE INDEX IF NOT EXISTS idx_usage_endpoint ON api_key_usage(endpoint);
+
+-- Trigger to update api_keys last_used_at and usage_count
+CREATE TRIGGER IF NOT EXISTS update_api_key_usage
+    AFTER INSERT ON api_key_usage
+    FOR EACH ROW
+BEGIN
+    UPDATE api_keys 
+    SET last_used_at = NEW.timestamp,
+        usage_count = usage_count + 1,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = NEW.api_key_id;
+END;
+
+-- Trigger to update api_keys updated_at timestamp
+CREATE TRIGGER IF NOT EXISTS update_api_keys_updated_at 
+    AFTER UPDATE ON api_keys
+    FOR EACH ROW
+BEGIN
+    UPDATE api_keys SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;
