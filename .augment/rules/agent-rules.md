@@ -1,0 +1,117 @@
+---
+type: "always_apply"
+description: "Agent Rules"
+---
+# Cursor Project Rules – DCF Valuation API (Go Version)
+
+## 1  Overview
+
+- **Goal:** Expose a REST API that returns two intrinsic‐value metrics per ticker:
+  - *Net Tangible Asset Value / Share*
+  - *DCF Fair Value / Share* (5‑year projection, WACC‑discounted)
+- **Core data sources:**
+  1. **SEC Company Facts API** (quarterly/annual fundamentals)
+  2. **Market‑price API** (latest share price, beta)
+  3. **Macro API** (risk‑free 10‑yr U.S. Treasury yield)
+- **Primary stack:** Go 1.22, **Gin** for HTTP routing, **Viper** for config, **go-sqlite3 / pgx** (SQLite for local / Postgres for prod), **Redis** via `go-redis`, **sqlc** for type‑safe queries, **go-financial** for math helpers.
+
+## 2  Architecture
+
+```
+cmd/
+ └─ server/       ← main.go (wire DI & start HTTP)
+internal/
+ ├─ api/          ← Gin handlers, versioned /api/v1
+ ├─ core/         ← Domain models (entities, value objects)
+ ├─ services/     ← Use‑cases: fetch, clean, compute, cache
+ ├─ infra/        ← External gateways (SEC, market, macro), DB, Redis
+ └─ config/       ← Viper env‑driven settings
+pkg/
+ └─ finance/      ← Pure financial math (WACC, DCF) – reusable
+scripts/          ← Dev helper scripts (e.g. lint, migrate)
+```
+
+- **Clean Architecture:** Infra at the edge; domain & finance packages have no external deps.
+- **Concurrency‑first:** `context.Context` + goroutines + rate‑limited worker pools for I/O.
+- **Dependency injection:** Use Uber **fx** for lifecycle/wiring; swap mocks in tests.
+
+## 3  Data Pipeline Rules
+
+1. **Fetch** company facts JSON once per filing; persist raw blob (S3‑style) + parsed key metrics table.
+2. **Normalize earnings**
+   - Remove tags flagged as non‑recurring (list in `core/constants.go`).
+   - Calculate `NormalizedOperatingIncome` field.
+3. **Strip accounting distortions**
+   - Exclude goodwill & other intangibles from assets.
+   - Detect dead inventory: if Inventory > 1.5 × 5‑yr median & turnover ↓ 25 %+, mark excess 40 % down.
+4. **Derive growth rate**
+   - 5‑yr CAGR of normalized operating income (fallback: avg YoY < 5 periods).
+5. **Compute WACC**
+   - Equity = latest close × DilutedShares.
+   - Debt = Interest‑bearingDebt (book, fallback 0).
+   - CostEquity = Rf + β × MRP (default MRP = 5 %).
+   - After‑tax CostDebt = (InterestExpense ÷ Debt) × (1 – TaxRate).
+6. **DCF**
+   - 5 explicit years, terminal growth = min(3 %, half of CAGR).
+   - Discount with WACC (re‑calc per request if price shift > 1 %).
+
+## 4  API Contract
+
+| Method | Path                          | Query                          | Response (200)                                                                        |
+| ------ | ----------------------------- | ------------------------------ | ------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/fair-value/{ticker}` | `?override_beta=&override_rf=` | `{ ticker, wacc, growth_rate, tangible_value_per_share, dcf_value_per_share, as_of }` |
+| POST   | `/api/v1/bulk`                | body = [`tickers` list]        | list of objects above                                                                 |
+
+- Responses include `as_of` UTC timestamp and filing period used.
+- Errors use RFC 7807 Problem JSON with Gin error middleware.
+
+## 5  Coding Standards
+
+- **Formatter:** `gofmt` + `goimports`; CI fails if diff.
+- **Linter:** `golangci-lint` (revive, govet, staticcheck, ineffassign, etc.).
+- **Modules:** Go modules with `go.work` for multi‑module workspace if needed.
+- **Comments:** Follow GoDoc style; public identifiers need comments.
+- **Logging:** Use **zap** (structured JSON); no fmt.Printf in prod paths.
+- **Secrets:** `.env` consumed by Viper; never committed.
+
+## 6  Testing Rules
+
+1. **TDD mandatory:** Write failing test before code.
+2. **Coverage:** ≥ 90 % for `internal/` & `pkg/finance` (enforced via `go test -cover`).
+3. **Property tests:** Use **gopter** for finance formulas (e.g. WACC monotonicity).
+4. **Integration tests:** Spin up SQLite & Redis via `docker‑compose` in GH Actions.
+5. **Golden master:** Store sample Apple filing JSON in `testdata/` and assert deterministic outputs.
+
+## 7  CI/CD
+
+GitHub Actions:
+
+1. **lint** – golangci‑lint
+2. **test** – `go test ./... -coverprofile=coverage.out`
+3. **build** – `docker build --platform linux/amd64,linux/arm64` multi‑arch
+4. **deploy** – optional: render.com / fly.io using rolling release.
+
+## 8  Security & Compliance
+
+- Rate‑limit SEC calls (≤ 10 req/sec) with token bucket.
+- Validate external JSON with `encoding/json` + manual struct checks.
+- Enforce HTTPS outbound; strip secrets from logs.
+- Respect SEC fair‑use & caching guidelines.
+
+## 9  Cursor AI Assistant Prompts
+
+- Obey these rules before generating Go code.
+- Suggest tests first, then implementation.
+- Prefer context‑aware functions; no global vars except DI container.
+- Inline finance formulas with concise comments.
+- Cite authoritative sources in commit messages when adding finance logic.
+
+## 10  Roadmap Placeholders
+
+- v0.1: Single‑ticker endpoint, SQLite store.
+- v0.2: Bulk endpoint, Redis cache.
+- v1.0: Nightly ingestion scheduler; Swagger docs at `/docs` via `swag`.
+
+ **TL;DR** – Go 1.22 + Gin, clean architecture, strict lint/tests, finance best‑practice. All code & AI suggestions must align with these project rules.
+
+

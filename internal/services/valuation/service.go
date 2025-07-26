@@ -9,6 +9,7 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
 	"github.com/midas/dcf-valuation-api/pkg/finance/dcf"
 	"github.com/midas/dcf-valuation-api/pkg/finance/wacc"
 )
@@ -19,6 +20,7 @@ type Service struct {
 	marketRepo    ports.MarketDataRepository
 	macroRepo     ports.MacroDataRepository
 	cache         ports.CacheRepository
+	dataCleaner   *datacleaner.DataCleanerService
 	logger        *zap.Logger
 }
 
@@ -28,6 +30,7 @@ func NewService(
 	marketRepo ports.MarketDataRepository,
 	macroRepo ports.MacroDataRepository,
 	cache ports.CacheRepository,
+	dataCleaner *datacleaner.DataCleanerService,
 	logger *zap.Logger,
 ) *Service {
 	return &Service{
@@ -35,26 +38,32 @@ func NewService(
 		marketRepo:    marketRepo,
 		macroRepo:     macroRepo,
 		cache:         cache,
+		dataCleaner:   dataCleaner,
 		logger:        logger,
 	}
 }
 
 // ValuationResult represents the output of a valuation calculation
 type ValuationResult struct {
-	Ticker                string    `json:"ticker"`
-	CalculatedAt          time.Time `json:"calculated_at"`
-	TangibleValuePerShare float64   `json:"tangible_value_per_share"`
-	DCFValuePerShare      float64   `json:"dcf_value_per_share"`
-	WACC                  float64   `json:"wacc"`
-	GrowthRate            float64   `json:"growth_rate"`
-	TerminalGrowthRate    float64   `json:"terminal_growth_rate"`
-	MarketRiskPremium     float64   `json:"market_risk_premium"`
-	EnterpriseValue       float64   `json:"enterprise_value"`
-	EquityValue           float64   `json:"equity_value"`
-	FinancialDataPeriod   string    `json:"financial_data_period"`
-	MarketDataDate        time.Time `json:"market_data_date"`
-	DataFreshnessScore    int       `json:"data_freshness_score"`
-	CalculationVersion    string    `json:"calculation_version"`
+	Ticker                string                      `json:"ticker"`
+	CalculatedAt          time.Time                   `json:"calculated_at"`
+	TangibleValuePerShare float64                     `json:"tangible_value_per_share"`
+	DCFValuePerShare      float64                     `json:"dcf_value_per_share"`
+	WACC                  float64                     `json:"wacc"`
+	GrowthRate            float64                     `json:"growth_rate"`
+	TerminalGrowthRate    float64                     `json:"terminal_growth_rate"`
+	DataQualityScore      float64                     `json:"data_quality_score"`   // 0-100 from cleaning process
+	DataQualityGrade      entities.QualityGrade       `json:"data_quality_grade"`   // A, B, C, D, F
+	CleaningReport        *datacleaner.CleaningReport `json:"cleaning_report"`      // Full cleaning report
+	CleaningFlags         []entities.Flag             `json:"cleaning_flags"`       // Key risk flags
+	CleaningAdjustments   []entities.Adjustment       `json:"cleaning_adjustments"` // Applied adjustments
+	MarketRiskPremium     float64                     `json:"market_risk_premium"`
+	EnterpriseValue       float64                     `json:"enterprise_value"`
+	EquityValue           float64                     `json:"equity_value"`
+	FinancialDataPeriod   string                      `json:"financial_data_period"`
+	MarketDataDate        time.Time                   `json:"market_data_date"`
+	DataFreshnessScore    int                         `json:"data_freshness_score"`
+	CalculationVersion    string                      `json:"calculation_version"`
 }
 
 // CalculateValuation performs a complete DCF valuation for a ticker
@@ -87,8 +96,33 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*Valua
 		return nil, fmt.Errorf("failed to fetch macro data: %w", err)
 	}
 
-	// Calculate valuation
-	result, err := s.performValuation(historicalData, marketData, macroData)
+	// Clean the latest financial data using DataCleaner service
+	latestData := historicalData.GetLatest() // Get most recent period
+	cleaningContext := &entities.CleaningContext{
+		IndustryCode:     historicalData.IndustryCode,
+		CompanySize:      s.determineCompanySize(marketData),
+		DataVintage:      latestData.AsOf,
+		EnableIndustry:   true,
+		EnableCaching:    true,
+		QualityThreshold: 75.0, // Configurable quality threshold
+	}
+
+	cleaningResult, err := s.dataCleaner.CleanFinancialData(ctx, latestData, cleaningContext)
+	if err != nil {
+		s.logger.Warn("Data cleaning failed, proceeding with raw data", zap.String("ticker", ticker), zap.Error(err))
+		// Proceed with uncleaned data but log the issue
+		cleaningResult = &datacleaner.CleaningResult{
+			CleanedData:  latestData,
+			QualityScore: 50.0, // Lower score for uncleaned data
+			QualityGrade: entities.GradeC,
+			Success:      false,
+			Adjustments:  []entities.Adjustment{},
+			Flags:        []entities.Flag{},
+		}
+	}
+
+	// Calculate valuation using cleaned data
+	result, err := s.performValuation(cleaningResult, marketData, macroData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to perform valuation: %w", err)
 	}
