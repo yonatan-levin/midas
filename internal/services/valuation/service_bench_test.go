@@ -13,12 +13,14 @@ import (
 
 func BenchmarkService_CalculateValuation_SingleTicker(b *testing.B) {
 	// Skip this benchmark for now as it requires full mock setup
-	b.Skip("Requires complete mock repository setup")
+	// TODO: Implement proper benchmark when service is fully integrated
+	b.Skip("Requires complete service integration - will be enabled in future phase")
 }
 
 func BenchmarkService_CalculateValuation_Parallel(b *testing.B) {
 	// Skip this benchmark for now as it requires full mock setup
-	b.Skip("Requires complete mock repository setup")
+	// TODO: Implement proper parallel benchmark when service is fully integrated
+	b.Skip("Requires complete service integration - will be enabled in future phase")
 }
 
 func BenchmarkFinancialDataCreation(b *testing.B) {

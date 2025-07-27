@@ -1,0 +1,331 @@
+name: Performance Testing
+
+on:
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'internal/**'
+      - 'pkg/**'
+      - 'cmd/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/performance-testing.yml'
+  push:
+    branches: [ master ]
+  schedule:
+    # Run nightly performance tests at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_duration:
+        description: 'Test duration in seconds'
+        required: false
+        default: '30'
+      concurrency:
+        description: 'Number of concurrent users'
+        required: false
+        default: '5'
+
+env:
+  GO_VERSION: '1.22'
+  BENCHMARK_CONFIG_PATH: 'config/performance/benchmark_config.json'
+
+jobs:
+  performance-test:
+    runs-on: ubuntu-latest
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch full history for baseline comparison
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Install dependencies
+      run: go mod download
+    
+    - name: Build application
+      run: |
+        go build -o bin/dcf-server ./cmd/server
+        chmod +x bin/dcf-server
+    
+    - name: Setup test database
+      run: |
+        # Create test database directory
+        mkdir -p testdata/db
+        
+        # Initialize SQLite database for testing
+        go run -tags tools scripts/setup_test_db.go
+    
+    - name: Start DCF API server
+      run: |
+        # Start server in background for performance testing
+        export CONFIG_ENV=test
+        export DATABASE_URL="sqlite://testdata/db/test.db"
+        export REDIS_URL="redis://localhost:6379"
+        export LOG_LEVEL=warn
+        export API_KEY_FOR_TESTING=test-performance-api-key-2024
+        
+        ./bin/dcf-server &
+        SERVER_PID=$!
+        echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+        
+        # Wait for server to be ready
+        sleep 5
+        
+        # Health check
+        curl -f http://localhost:8080/api/v1/health || exit 1
+        
+        echo "DCF API server started successfully (PID: $SERVER_PID)"
+    
+    - name: Run performance benchmarks
+      run: |
+        # Create results directory
+        mkdir -p performance/results
+        
+        # Customize config for CI environment
+        DURATION="${{ github.event.inputs.test_duration || '30' }}"
+        CONCURRENCY="${{ github.event.inputs.concurrency || '5' }}"
+        
+        # Run lightweight performance tests for CI
+        go run scripts/benchmark_runner.go scripts/benchmark_executor.go scripts/benchmark_analyzer.go \
+          -config=${{ env.BENCHMARK_CONFIG_PATH }} \
+          -duration=${DURATION}s \
+          -concurrency=${CONCURRENCY} \
+          -output=performance/results/ci-results.json \
+          -format=json \
+          -scenarios=single_ticker_baseline,health_check_performance,cache_performance_test
+    
+    - name: Load baseline results
+      id: baseline
+      run: |
+        # Try to get baseline from main branch
+        BASELINE_FILE="performance/baselines/main-baseline.json"
+        
+        if [ -f "$BASELINE_FILE" ]; then
+          echo "baseline_exists=true" >> $GITHUB_OUTPUT
+          echo "baseline_path=$BASELINE_FILE" >> $GITHUB_OUTPUT
+        else
+          echo "baseline_exists=false" >> $GITHUB_OUTPUT
+          echo "No baseline found - will create new baseline"
+        fi
+    
+    - name: Analyze performance results
+      id: analysis
+      run: |
+        RESULTS_FILE="performance/results/ci-results.json"
+        ANALYSIS_FILE="performance/results/analysis.json"
+        REPORT_FILE="performance/results/report.md"
+        
+        # Generate performance analysis
+        if [ "${{ steps.baseline.outputs.baseline_exists }}" == "true" ]; then
+          go run -tags cli scripts/performance_analyzer.go \
+            -results="$RESULTS_FILE" \
+            -baseline="${{ steps.baseline.outputs.baseline_path }}" \
+            -output="$ANALYSIS_FILE" \
+            -report="$REPORT_FILE" \
+            -threshold=0.20
+        else
+          go run -tags cli scripts/performance_analyzer.go \
+            -results="$RESULTS_FILE" \
+            -output="$ANALYSIS_FILE" \
+            -report="$REPORT_FILE" \
+            -create-baseline
+        fi
+        
+        # Check if performance regression detected
+        if [ -f "$ANALYSIS_FILE" ]; then
+          HAS_REGRESSION=$(jq -r '.has_regression // false' "$ANALYSIS_FILE")
+          echo "has_regression=$HAS_REGRESSION" >> $GITHUB_OUTPUT
+          
+          # Set exit code for regression detection
+          if [ "$HAS_REGRESSION" == "true" ]; then
+            echo "regression_detected=true" >> $GITHUB_OUTPUT
+          else
+            echo "regression_detected=false" >> $GITHUB_OUTPUT
+          fi
+        fi
+    
+    - name: Upload performance results
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-results-${{ github.sha }}
+        path: |
+          performance/results/
+        retention-days: 30
+    
+    - name: Comment performance results on PR
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          const reportPath = 'performance/results/report.md';
+          
+          if (fs.existsSync(reportPath)) {
+            const report = fs.readFileSync(reportPath, 'utf8');
+            const hasRegression = '${{ steps.analysis.outputs.regression_detected }}' === 'true';
+            
+            const header = hasRegression 
+              ? '⚠️ **Performance Regression Detected**' 
+              : '✅ **Performance Test Results**';
+            
+            const body = `${header}\n\n${report}\n\n---\n*Automated performance testing results for commit ${{ github.sha }}*`;
+            
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+          }
+    
+    - name: Update baseline (main branch only)
+      if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+      run: |
+        # Update baseline for main branch
+        cp performance/results/ci-results.json performance/baselines/main-baseline.json
+        
+        # Commit baseline update (if there are changes)
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        if ! git diff --quiet performance/baselines/main-baseline.json; then
+          git add performance/baselines/main-baseline.json
+          git commit -m "Update performance baseline [skip ci]"
+          git push
+        fi
+    
+    - name: Fail on performance regression
+      if: steps.analysis.outputs.regression_detected == 'true'
+      run: |
+        echo "❌ Performance regression detected!"
+        echo "Check the analysis results and performance report for details."
+        exit 1
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        # Stop server if still running
+        if [ ! -z "$SERVER_PID" ]; then
+          kill $SERVER_PID || true
+        fi
+        
+        # Cleanup test files
+        rm -rf testdata/db/test.db
+    
+  scheduled-performance-test:
+    # Extended performance testing for scheduled runs
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Install dependencies
+      run: go mod download
+    
+    - name: Build application
+      run: |
+        go build -o bin/dcf-server ./cmd/server
+        chmod +x bin/dcf-server
+    
+    - name: Setup test database
+      run: |
+        mkdir -p testdata/db
+        go run -tags tools scripts/setup_test_db.go
+    
+    - name: Start DCF API server
+      run: |
+        export CONFIG_ENV=test
+        export DATABASE_URL="sqlite://testdata/db/test.db"
+        export REDIS_URL="redis://localhost:6379"
+        export LOG_LEVEL=warn
+        export API_KEY_FOR_TESTING=test-performance-api-key-2024
+        
+        ./bin/dcf-server &
+        SERVER_PID=$!
+        echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
+        
+        sleep 5
+        curl -f http://localhost:8080/api/v1/health || exit 1
+    
+    - name: Run comprehensive performance tests
+      run: |
+        mkdir -p performance/results
+        
+        # Run all benchmark scenarios for nightly testing
+        go run scripts/benchmark_runner.go scripts/benchmark_executor.go scripts/benchmark_analyzer.go \
+          -config=${{ env.BENCHMARK_CONFIG_PATH }} \
+          -duration=120s \
+          -concurrency=10 \
+          -output=performance/results/nightly-results.json \
+          -format=json \
+          -all-scenarios
+    
+    - name: Generate comprehensive report
+      run: |
+        # Generate detailed performance report
+        go run -tags cli scripts/performance_analyzer.go \
+          -results=performance/results/nightly-results.json \
+          -output=performance/results/nightly-analysis.json \
+          -report=performance/results/nightly-report.md \
+          -detailed
+    
+    - name: Archive nightly results
+      uses: actions/upload-artifact@v3
+      with:
+        name: nightly-performance-results-${{ github.run_number }}
+        path: |
+          performance/results/nightly-*
+        retention-days: 90
+    
+    - name: Cleanup
+      if: always()
+      run: |
+        if [ ! -z "$SERVER_PID" ]; then
+          kill $SERVER_PID || true
+        fi
+        rm -rf testdata/db/test.db 

@@ -71,10 +71,16 @@ func TestBusinessMetricsFromValuationService(t *testing.T) {
 	metricsService.SetAverageWACC(0.085)      // 8.5%
 	metricsService.SetAverageGrowthRate(0.06) // 6%
 
+	// Create in-memory database for testing
+	db, dbErr := sqlx.Open("sqlite3", ":memory:")
+	require.NoError(t, dbErr)
+	defer db.Close()
+
 	healthHandler := &HealthHandler{
 		logger:         logger,
 		startTime:      time.Now(),
 		metricsService: metricsService,
+		db:             db,
 	}
 
 	gin.SetMode(gin.TestMode)

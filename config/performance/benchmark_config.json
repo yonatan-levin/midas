@@ -1,0 +1,76 @@
+{
+  "base_url": "http://localhost:8080",
+  "api_key": "test-performance-api-key-2024",
+  "scenarios": [
+    {
+      "name": "single_ticker_baseline",
+      "test_type": "single",
+      "duration": "60s",
+      "concurrency": 5,
+      "requests_per_sec": 10,
+      "tickers": ["AAPL"]
+    },
+    {
+      "name": "single_ticker_peak_load",
+      "test_type": "single", 
+      "duration": "60s",
+      "concurrency": 20,
+      "requests_per_sec": 50,
+      "tickers": ["AAPL"]
+    },
+    {
+      "name": "bulk_valuation_test",
+      "test_type": "bulk",
+      "duration": "45s",
+      "concurrency": 10,
+      "requests_per_sec": 15,
+      "tickers": ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA"]
+    },
+    {
+      "name": "health_check_performance",
+      "test_type": "health",
+      "duration": "30s",
+      "concurrency": 3,
+      "requests_per_sec": 20,
+      "tickers": ["HEALTH_CHECK"]
+    },
+    {
+      "name": "cache_performance_test",
+      "test_type": "cache",
+      "duration": "60s",
+      "concurrency": 15,
+      "requests_per_sec": 25,
+      "tickers": ["AAPL", "AAPL", "AAPL", "MSFT", "MSFT"]
+    },
+    {
+      "name": "error_handling_test",
+      "test_type": "error",
+      "duration": "30s",
+      "concurrency": 5,
+      "requests_per_sec": 10,
+      "tickers": ["INVALID_TICKER_123", "AAPL", "ANOTHER_INVALID"]
+    },
+    {
+      "name": "cold_start_test", 
+      "test_type": "cold_start",
+      "duration": "30s",
+      "concurrency": 3,
+      "requests_per_sec": 5,
+      "tickers": ["AAPL"]
+    },
+    {
+      "name": "concurrent_users_simulation",
+      "test_type": "mixed",
+      "duration": "90s",
+      "concurrency": 25,
+      "requests_per_sec": 35,
+      "tickers": ["AAPL", "MSFT", "GOOGL", "TSLA", "NVDA", "AMZN", "META", "NFLX"]
+    }
+  ],
+  "sla_thresholds": {
+    "max_avg_latency_ms": 500,
+    "max_p95_latency_ms": 1000,
+    "min_throughput_rps": 10,
+    "max_error_rate_percent": 1.0
+  }
+} 
