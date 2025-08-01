@@ -21,6 +21,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/infra/resilience"
 	"github.com/midas/dcf-valuation-api/internal/services/auth"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
+	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
 	"github.com/midas/dcf-valuation-api/internal/services/ratelimit"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
@@ -79,8 +80,8 @@ func (a *RateLimiterCacheAdapter) Delete(ctx context.Context, key string) error 
 	return a.cache.Delete(ctx, key)
 }
 
-// Module contains all dependency injection providers for the application
-var Module = fx.Options(
+// CoreModule contains core infrastructure providers (database, cache, gateways)
+var CoreModule = fx.Options(
 	// Logging Module
 	fx.Provide(NewLogger),
 
@@ -106,19 +107,43 @@ var Module = fx.Options(
 	fx.Provide(fx.Annotate(NewSECGateway, fx.As(new(ports.SECGateway)))),
 	fx.Provide(fx.Annotate(NewMarketDataGateway, fx.As(new(ports.MarketDataGateway)))),
 	fx.Provide(fx.Annotate(NewMacroDataGateway, fx.As(new(ports.MacroDataGateway)))),
+)
 
+// ServiceModule contains business logic services
+var ServiceModule = fx.Options(
 	// Services
 	fx.Provide(NewAuthService),
 	fx.Provide(NewDataCleanerService),
+
+	// Data fetcher service (NEW)
+	fx.Provide(NewDataFetcher),
+
+	// Metrics Service - concrete type
+	fx.Provide(NewMetricsService), // returns *metrics.Service
+
+	// Bind concrete to interface without constructing anything new
+	fx.Provide(
+		func(s *metrics.Service) ports.MetricsService { return s },
+	),
+
 	fx.Provide(NewValuationService),
 	fx.Provide(NewRateLimiterService),
-	fx.Provide(NewMetricsService),
+)
 
+// HandlerModule contains HTTP handlers
+var HandlerModule = fx.Options(
 	// Handler Module
 	fx.Provide(NewHealthHandler),
 
 	// Lifecycle hooks
 	fx.Invoke(RegisterHooks),
+)
+
+// Module contains all dependency injection providers for the application
+var Module = fx.Options(
+	CoreModule,
+	ServiceModule,
+	HandlerModule,
 )
 
 // Container holds the dependency injection container
@@ -129,45 +154,11 @@ type Container struct {
 // NewContainer creates a new dependency injection container
 func NewContainer() *Container {
 	app := fx.New(
-		// Configuration Module
+		// Configuration Module (not included in Module as it's app-specific)
 		fx.Provide(config.Load),
 
-		// Logging Module
-		fx.Provide(NewLogger),
-
-		// Database Module
-		fx.Provide(NewDatabase),
-
-		// Redis Module
-		fx.Provide(NewRedisClient),
-
-		// Resilience Module
-		fx.Provide(NewCircuitBreakerFactory),
-		fx.Provide(NewRetryPolicyFactory),
-
-		// Repository Module
-		fx.Provide(NewFinancialDataRepository),
-		fx.Provide(NewMarketDataRepository),
-		fx.Provide(NewMacroDataRepository),
-		fx.Provide(NewTickerMappingRepository),
-		fx.Provide(NewCacheRepository),
-
-		// Gateway Module
-		fx.Provide(NewSECGateway),
-		fx.Provide(NewMarketDataGateway),
-		fx.Provide(NewMacroDataGateway),
-
-		// Service Module
-		fx.Provide(NewDataCleanerService),
-		fx.Provide(NewValuationService),
-		fx.Provide(NewRateLimiterService),
-		fx.Provide(NewMetricsService),
-
-		// Handler Module
-		fx.Provide(NewHealthHandler),
-
-		// Lifecycle hooks
-		fx.Invoke(RegisterHooks),
+		// Include the shared Module with all providers
+		Module,
 
 		// Disable fx logs in production
 		fx.NopLogger,
@@ -190,8 +181,43 @@ func (c *Container) Stop(ctx context.Context) error {
 
 // NewLogger creates a new structured logger
 func NewLogger(cfg *config.Config) (*zap.Logger, error) {
-	// Use development logger for now, can be configured later
-	return zap.NewDevelopment()
+	var config zap.Config
+
+	switch cfg.LogLevel {
+	case "debug":
+		config = zap.NewDevelopmentConfig()
+		config.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
+	case "info":
+		config = zap.NewProductionConfig()
+		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
+	case "warn":
+		config = zap.NewProductionConfig()
+		config.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
+	case "error":
+		config = zap.NewProductionConfig()
+		config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
+	default:
+		config = zap.NewProductionConfig()
+		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
+	}
+
+	// Customize output format for better readability
+	config.Encoding = "json"
+	config.OutputPaths = []string{"stdout"}
+	config.ErrorOutputPaths = []string{"stderr"}
+
+	// Add caller information in development
+	if cfg.LogLevel == "debug" {
+		config.Development = true
+		config.DisableCaller = false
+		config.DisableStacktrace = false
+	} else {
+		config.Development = false
+		config.DisableCaller = true
+		config.DisableStacktrace = true
+	}
+
+	return config.Build()
 }
 
 // mapDatabaseDriver maps configuration driver names to actual registered driver names
@@ -432,6 +458,7 @@ func NewValuationService(
 	macroRepo ports.MacroDataRepository,
 	cache ports.CacheRepository,
 	dataCleaner datacleaner.DataCleanerService,
+	dataFetcher *datafetcher.DataFetcher,
 	metricsService ports.MetricsService,
 	cfg *config.Config,
 	logger *zap.Logger,
@@ -442,9 +469,25 @@ func NewValuationService(
 		macroRepo,
 		cache,
 		dataCleaner,
+		dataFetcher,
 		metricsService,
 		cfg,
 		logger,
+	)
+}
+
+// NewDataFetcher creates a new DataFetcher service
+func NewDataFetcher(
+	secGateway ports.SECGateway,
+	marketGateway ports.MarketDataGateway,
+	macroGateway ports.MacroDataGateway,
+	cache ports.CacheRepository,
+) *datafetcher.DataFetcher {
+	return datafetcher.NewDataFetcher(
+		secGateway,
+		marketGateway,
+		macroGateway,
+		cache,
 	)
 }
 

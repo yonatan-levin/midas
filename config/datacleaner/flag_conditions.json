@@ -1,0 +1,527 @@
+{
+    "version": "1.1.0",
+    "global_variables": {
+      "min_materiality_threshold": 0.05,
+      "high_risk_threshold": 0.10,
+      "fiscal_year": 2024,
+      "reporting_standards": "US-GAAP",
+      "goodwill_threshold": 0.25,
+      "intangibles_threshold": 0.20,
+      "high_revenue_threshold": 10000000000,
+      "mid_revenue_threshold": 2000000000
+    },
+    "flags": [
+      {
+        "name": "high_leverage_flag",
+        "description": "Flag for companies with high leverage ratios",
+        "enabled": true,
+        "priority": 100,
+        "conditions": {
+          "operator": "AND",
+          "conditions": [
+            {
+              "type": "numeric",
+              "field": "debt_to_equity_ratio",
+              "operator": "gt",
+              "value": 2.0,
+              "null_behavior": "false"
+            },
+            {
+              "type": "numeric",
+              "field": "interest_coverage_ratio",
+              "operator": "lt",
+              "value": 2.5,
+              "null_behavior": "false"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "risk_flags.high_leverage",
+              "value": true
+            }
+          },
+          {
+            "type": "log",
+            "parameters": {
+              "level": "warning",
+              "message": "High leverage detected for company"
+            }
+          }
+        ],
+        "metadata": {
+          "category": "financial_risk",
+          "severity": "high"
+        }
+      },
+      {
+        "name": "revenue_volatility_flag",
+        "description": "Flag for companies with volatile revenue patterns",
+        "enabled": true,
+        "priority": 90,
+        "conditions": {
+          "operator": "OR",
+          "conditions": [
+            {
+              "type": "numeric",
+              "field": "revenue_coefficient_variation",
+              "operator": "gt",
+              "value": 0.3,
+              "null_behavior": "false"
+            },
+            {
+              "type": "numeric",
+              "field": "revenue_yoy_change",
+              "operator": "lt",
+              "value": -0.2,
+              "null_behavior": "false"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "risk_flags.revenue_volatility",
+              "value": true
+            }
+          }
+        ]
+      },
+      {
+        "name": "material_adjustment_flag",
+        "description": "Flag for material adjustments that exceed threshold",
+        "enabled": true,
+        "priority": 85,
+        "conditions": {
+          "operator": "AND",
+          "conditions": [
+            {
+              "type": "numeric",
+              "field": "total_adjustments",
+              "operator": "ne",
+              "value": 0
+            },
+            {
+              "type": "numeric",
+              "field": "adjustment_to_revenue_ratio",
+              "operator": "gt",
+              "value": "$min_materiality_threshold",
+              "null_behavior": "false"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "requires_review.material_adjustments",
+              "value": true
+            }
+          },
+          {
+            "type": "alert",
+            "parameters": {
+              "type": "email",
+              "recipient": "review-team@company.com",
+              "subject": "Material adjustments detected"
+            }
+          }
+        ]
+      },
+      {
+        "name": "industry_specific_tech_flag",
+        "description": "Special handling for technology companies",
+        "enabled": true,
+        "priority": 80,
+        "conditions": {
+          "operator": "AND",
+          "conditions": [
+            {
+              "type": "string",
+              "field": "industry_code",
+              "operator": "eq",
+              "value": "TECH",
+              "case_sensitive": false
+            },
+            {
+              "type": "numeric",
+              "field": "rd_expense_ratio",
+              "operator": "gt",
+              "value": 0.15,
+              "null_behavior": "false"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "valuation_adjustments.capitalize_rd",
+              "value": true
+            }
+          },
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "valuation_adjustments.rd_amortization_years",
+              "value": 5
+            }
+          }
+        ]
+      },
+      {
+        "name": "negative_equity_flag",
+        "description": "Flag for companies with negative equity",
+        "enabled": true,
+        "priority": 95,
+        "conditions": {
+          "operator": "AND",
+          "conditions": [
+            {
+              "type": "numeric",
+              "field": "stockholders_equity",
+              "operator": "lt",
+              "value": 0,
+              "null_behavior": "false"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "risk_flags.negative_equity",
+              "value": true
+            }
+          },
+          {
+            "type": "log",
+            "parameters": {
+              "level": "error",
+              "message": "Negative equity detected - requires special valuation approach"
+            }
+          }
+        ]
+      },
+      {
+        "name": "cash_flow_quality_flag",
+        "description": "Flag for poor cash flow quality",
+        "enabled": true,
+        "priority": 75,
+        "conditions": {
+          "operator": "OR",
+          "groups": [
+            {
+              "operator": "AND",
+              "conditions": [
+                {
+                  "type": "numeric",
+                  "field": "operating_cash_flow",
+                  "operator": "lt",
+                  "value": 0,
+                  "null_behavior": "false"
+                },
+                {
+                  "type": "numeric",
+                  "field": "net_income",
+                  "operator": "gt",
+                  "value": 0,
+                  "null_behavior": "false"
+                }
+              ]
+            },
+            {
+              "operator": "AND",
+              "conditions": [
+                {
+                  "type": "numeric",
+                  "field": "cash_flow_to_net_income_ratio",
+                  "operator": "lt",
+                  "value": 0.5,
+                  "null_behavior": "false"
+                },
+                {
+                  "type": "numeric",
+                  "field": "receivables_growth_rate",
+                  "operator": "gt",
+                  "value": 0.3,
+                  "null_behavior": "false"
+                }
+              ]
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "quality_flags.poor_cash_flow_quality",
+              "value": true
+            }
+          }
+        ]
+      },
+      {
+        "name": "data_completeness_flag",
+        "description": "Flag for incomplete financial data",
+        "enabled": true,
+        "priority": 70,
+        "conditions": {
+          "operator": "OR",
+          "conditions": [
+            {
+              "type": "exists",
+              "field": "total_assets",
+              "operator": "eq",
+              "value": false
+            },
+            {
+              "type": "exists",
+              "field": "total_revenue",
+              "operator": "eq",
+              "value": false
+            },
+            {
+              "type": "exists",
+              "field": "net_income",
+              "operator": "eq",
+              "value": false
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "data_quality.incomplete_financials",
+              "value": true
+            }
+          },
+          {
+            "type": "log",
+            "parameters": {
+              "level": "warning",
+              "message": "Incomplete financial data detected"
+            }
+          }
+        ]
+      },
+      {
+        "name": "complex_structure_flag",
+        "description": "Flag for companies with complex structures",
+        "enabled": true,
+        "priority": 65,
+        "conditions": {
+          "operator": "OR",
+          "conditions": [
+            {
+              "type": "numeric",
+              "field": "number_of_segments",
+              "operator": "gt",
+              "value": 5,
+              "null_behavior": "false"
+            },
+            {
+              "type": "numeric",
+              "field": "foreign_operations_percentage",
+              "operator": "gt",
+              "value": 0.5,
+              "null_behavior": "false"
+            },
+            {
+              "type": "boolean",
+              "field": "has_vies",
+              "operator": "eq",
+              "value": true,
+              "null_behavior": "false"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "complexity_flags.complex_structure",
+              "value": true
+            }
+          }
+        ]
+      },
+      {
+        "name": "audit_concern_flag",
+        "description": "Flag for audit-related concerns",
+        "enabled": true,
+        "priority": 85,
+        "conditions": {
+          "operator": "OR",
+          "conditions": [
+            {
+              "type": "string",
+              "field": "audit_opinion",
+              "operator": "ne",
+              "value": "unqualified",
+              "case_sensitive": false,
+              "null_behavior": "false"
+            },
+            {
+              "type": "boolean",
+              "field": "has_material_weakness",
+              "operator": "eq",
+              "value": true,
+              "null_behavior": "false"
+            },
+            {
+              "type": "regex",
+              "field": "auditor_notes",
+              "operator": "matches",
+              "value": "(?i)(going concern|material uncertainty|significant doubt)",
+              "null_behavior": "ignore"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "audit_flags.has_concerns",
+              "value": true
+            }
+          },
+          {
+            "type": "alert",
+            "parameters": {
+              "type": "dashboard",
+              "priority": "high"
+            }
+          }
+        ]
+      },
+      {
+        "name": "excessive_goodwill_warning",
+        "description": "Flags companies with high goodwill relative to total assets",
+        "enabled": true,
+        "priority": 100,
+        "conditions": {
+          "operator": "AND",
+          "conditions": [
+            {
+              "type": "numeric",
+              "field": "Goodwill",
+              "operator": "gt",
+              "value": 0
+            },
+            {
+              "type": "numeric",
+              "field": "Goodwill",
+              "operator": "gt",
+              "value": "${TotalAssets * goodwill_threshold}"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "log",
+            "parameters": {
+              "level": "warning",
+              "message": "High goodwill relative to total assets may indicate overpayment for acquisitions"
+            }
+          },
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "risk_flags.excessive_goodwill",
+              "value": true
+            }
+          }
+        ],
+        "metadata": {
+          "category": "asset_quality",
+          "severity": "warning",
+          "recommendation": "Review acquisition history and goodwill impairment risks"
+        }
+      },
+      {
+        "name": "excessive_intangibles_warning",
+        "description": "Flags companies with high intangible assets relative to total assets",
+        "enabled": true,
+        "priority": 90,
+        "conditions": {
+          "operator": "AND",
+          "conditions": [
+            {
+              "type": "numeric",
+              "field": "OtherIntangibles",
+              "operator": "gt",
+              "value": 0
+            },
+            {
+              "type": "numeric",
+              "field": "OtherIntangibles",
+              "operator": "gt",
+              "value": "${TotalAssets * intangibles_threshold}"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "log",
+            "parameters": {
+              "level": "warning",
+              "message": "High intangible assets may lack substance and be subject to writedowns"
+            }
+          },
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "risk_flags.excessive_intangibles",
+              "value": true
+            }
+          }
+        ],
+        "metadata": {
+          "category": "asset_quality",
+          "severity": "warning",
+          "recommendation": "Review intangible asset valuation and amortization policies"
+        }
+      },
+      {
+        "name": "company_size_classification",
+        "description": "Classifies company size based on revenue",
+        "enabled": true,
+        "priority": 50,
+        "conditions": {
+          "operator": "OR",
+          "conditions": [
+            {
+              "type": "numeric",
+              "field": "Revenue",
+              "operator": "gte",
+              "value": "${high_revenue_threshold}"
+            },
+            {
+              "type": "numeric",
+              "field": "Revenue",
+              "operator": "gte",
+              "value": "${mid_revenue_threshold}"
+            }
+          ]
+        },
+        "actions": [
+          {
+            "type": "set_field",
+            "parameters": {
+              "field": "company_size",
+              "value": "${Revenue >= high_revenue_threshold ? 'LargeCap' : (Revenue >= mid_revenue_threshold ? 'MidCap' : 'SmallCap')}"
+            }
+          }
+        ],
+        "metadata": {
+          "category": "classification",
+          "severity": "info"
+        }
+      }
+    ]
+  }

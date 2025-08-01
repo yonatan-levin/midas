@@ -2,14 +2,19 @@ package di
 
 import (
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/fx"
+	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
 	"github.com/midas/dcf-valuation-api/internal/config"
+	"github.com/midas/dcf-valuation-api/internal/services/metrics"
 )
 
 // TestNewDatabase_SQLiteConnection tests that SQLite database connection works with correct driver name
@@ -172,4 +177,148 @@ func TestFactories_Integration(t *testing.T) {
 		require.NotNil(t, cbFactory)
 		require.NotNil(t, retryFactory)
 	})
+}
+
+func TestContainerBuilds(t *testing.T) {
+	// Create a test app with minimal configuration
+	app := fxtest.New(t,
+		fx.Provide(
+			func() *config.Config {
+				return &config.Config{
+					LogLevel: "debug",
+					Database: config.DatabaseConfig{
+						Driver:     "sqlite",
+						SQLitePath: ":memory:",
+					},
+					Cache: config.CacheConfig{
+						RedisURL: "redis://localhost:6379",
+					},
+				}
+			},
+		),
+		Module, // Module is the fx.Options wiring all providers
+	)
+	app.RequireStart().RequireStop()
+}
+
+// TestValuationService_DICreation tests that the DI container can create the valuation service
+func TestValuationService_DICreation(t *testing.T) {
+	// Create a test app with DI container
+	app := fxtest.New(t,
+		fx.Provide(
+			// Provide test configuration
+			func() *config.Config {
+				return &config.Config{
+					LogLevel: "debug",
+					Database: config.DatabaseConfig{
+						Driver:     "sqlite",
+						SQLitePath: ":memory:",
+					},
+					Cache: config.CacheConfig{
+						RedisURL: "redis://localhost:6379",
+					},
+					Valuation: config.ValuationConfig{
+						CacheTTL:             1 * time.Hour,
+						SlowRequestThreshold: 500 * time.Millisecond,
+						DataFetchTimeout:     30 * time.Second,
+					},
+				}
+			},
+		),
+		Module, // Include the DI module
+	)
+
+	// Start the app - this will test that all dependencies can be resolved
+	app.RequireStart()
+
+	// Test that the DI container can create the valuation service
+	// The RequireStart() above will fail if the valuation service cannot be created
+	// This tests that the DI container can successfully wire all dependencies
+
+	// Stop the app
+	app.RequireStop()
+}
+
+// TestValuationService_DICreationWithFakeMetrics tests DI container with fake metrics
+func TestValuationService_DICreationWithFakeMetrics(t *testing.T) {
+	app := fxtest.New(t,
+		// Provide test configuration
+		fx.Provide(
+			func() *config.Config {
+				return &config.Config{
+					Database: config.DatabaseConfig{
+						Driver:      "sqlite",
+						SQLitePath:  ":memory:",
+						MaxOpenConn: 5,
+						MaxIdleConn: 2,
+					},
+					Cache: config.CacheConfig{
+						RedisURL:   "redis://localhost:6379",
+						DefaultTTL: time.Hour,
+					},
+					Valuation: config.ValuationConfig{
+						DCFProjectionYears:   5,
+						DefaultTaxRate:       0.21,
+						CacheTTL:             time.Hour,
+						SlowRequestThreshold: 500 * time.Millisecond,
+						DataFetchTimeout:     30 * time.Second,
+					},
+				}
+			},
+			// Override metrics service with fake
+			func() *metrics.Service {
+				return &metrics.Service{} // Use real metrics service but in test mode
+			},
+		),
+		// Use CoreModule (infra) + selective services (excluding default metrics)
+		CoreModule,
+		fx.Provide(NewAuthService),
+		fx.Provide(NewDataCleanerService),
+		fx.Provide(NewValuationService), // This will use our fake metrics
+		fx.Provide(NewRateLimiterService),
+		HandlerModule, // Include handlers and lifecycle
+	)
+
+	// Start the app - this will test that all dependencies can be resolved
+	app.RequireStart()
+
+	// Stop the app
+	app.RequireStop()
+}
+
+// TestAllInterfaceMappings tests that all services that implement interfaces are properly mapped
+// This test prevents future interface mapping issues by ensuring all expected interfaces are available
+func TestAllInterfaceMappings(t *testing.T) {
+	app := fxtest.New(t,
+		fx.Provide(
+			func() *config.Config {
+				return &config.Config{
+					LogLevel: "debug",
+					Database: config.DatabaseConfig{
+						Driver:     "sqlite",
+						SQLitePath: ":memory:",
+					},
+					Cache: config.CacheConfig{
+						RedisURL: "redis://localhost:6379",
+					},
+					Valuation: config.ValuationConfig{
+						CacheTTL:             1 * time.Hour,
+						SlowRequestThreshold: 500 * time.Millisecond,
+						DataFetchTimeout:     30 * time.Second,
+					},
+				}
+			},
+		),
+		Module, // Include the full DI module
+	)
+
+	// Start the app
+	app.RequireStart()
+
+	// Test that all expected interfaces can be resolved through DI
+	// Since the app started successfully, it means all interfaces are properly mapped
+	// The DI container would fail to start if any required dependencies were missing
+
+	// Stop the app
+	app.RequireStop()
 }

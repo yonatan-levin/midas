@@ -11,9 +11,9 @@
 
 This document catalogs all TODO comments found throughout the codebase, organized by priority and implementation phase. These tasks represent technical debt, feature enhancements, and architectural improvements needed for production readiness.
 
-**Total TODO Items**: 32 identified  
+**Total TODO Items**: 35 identified (updated from 32)  
 **High Priority**: 8 items  
-**Medium Priority**: 15 items  
+**Medium Priority**: 18 items (updated from 15)  
 **Low Priority**: 9 items  
 
 ---
@@ -28,27 +28,60 @@ This document catalogs all TODO comments found throughout the codebase, organize
 
 ### **XBRL Tag Matching System**
 **Location**: `internal/services/datacleaner/service.go:369-370`
-- [ ] **Implement proper XBRL tag matching based on actual data structure**
-- [ ] **Change the approach to checkRuleApplicability by config - hardcoded numbers don't apply to all cases**
+- [X] **Implement proper XBRL tag matching based on actual data structure**
+- [X] **Change the approach to checkRuleApplicability by config - hardcoded numbers don't apply to all cases**
 - **Impact**: Core business logic accuracy
 - **Effort**: 60 minutes
 
 ### **Industry Code Detection System**
 **Location**: `internal/services/datacleaner/service.go:844`
-- [ ] **Rethink industry code function - not maintainable, hardcoded IndustryCodes not a good idea**
+- [X] **Rethink industry code function - not maintainable, hardcoded IndustryCodes not a good idea**
 - **Related**: Add industry code field to FinancialData entity (from PHASE_3_INTEGRATION.md:385)
 - **Impact**: Industry-specific rule accuracy
 - **Effort**: 45 minutes
 
 ### **Flag Conditions Configuration**
 **Location**: `internal/services/datacleaner/service.go:890,906`
-- [ ] **Consolidate flag conditions in a configurable system** (2 instances)
+- [X] **Consolidate flag conditions in a configurable system** (2 instances)
 - **Impact**: Maintainability and flexibility
 - **Effort**: 30 minutes
+
+### **Phase 3B-3D High Priority Tasks Completion Notes**
+
+**✅ XBRL Tag Matching System (Completed 2025-01-31)**
+- Created comprehensive XBRL tag configuration system in `internal/config/xbrl_config.go`
+- Implemented XBRLTagMatcherService with full transformation support (multiply_by_thousand, to_decimal, etc.)
+- Added configurable tag mappings with alternative tags support in `config/datacleaner/xbrl_tag_mappings.json`
+- Includes validation rules for balance sheet equation, assets positivity, and revenue range checks
+- Full integration test suite in `internal/integration/xbrl_tag_matcher_test.go`
+
+**✅ Industry Code Detection System (Completed 2025-01-31)**
+- Developed flexible industry code detection service in `internal/services/datacleaner/industry_detector.go`
+- Created comprehensive industry mapping configuration in `config/datacleaner/industry_codes.json`
+- Supports multiple detection methods: exact name, SIC codes, NAICS codes, keywords, and regex patterns
+- Includes sub-industry classification (e.g., TECH_AI, FIN_IB)
+- Priority-based matching with confidence scoring
+- Full integration test suite in `internal/integration/industry_code_detector_test.go`
+
+**✅ Flag Conditions Configuration (Completed 2025-01-31)**
+- Built complete flag condition evaluation system in `internal/services/datacleaner/flag_evaluator.go`
+- Created flexible condition configuration supporting AND/OR/NOT operators and nested groups
+- Implemented multiple condition types: numeric, string, boolean, date, exists, regex
+- Added configurable actions: set_field, log, alert, transform
+- Global variables support for reusable thresholds
+- Full integration test suite in `internal/integration/flag_condition_evaluator_test.go`
 
 ---
 
 ## ⚠️ **MEDIUM PRIORITY TODOS** (Technical Debt & Enhancements)
+
+### **Phase 2.5 MVP Infrastructure** 🆕
+**Location**: `scripts/launch_staging.sh`
+- [ ] **Add migration command when available** (Line 91)
+- [ ] **Add seed script when SQL seed is created** (Line 96)
+- [ ] **Add cloud deployment configuration variables** (from Phase 2.5.1)
+- **Impact**: MVP deployment readiness
+- **Effort**: 1 hour
 
 ### **Financial Data Extraction Improvements**
 **Location**: Multiple files in `internal/services/datacleaner/service.go`
@@ -138,12 +171,35 @@ This document catalogs all TODO comments found throughout the codebase, organize
 
 ---
 
+### **Proper API documentation**
+**Location**: `internal/api/v1/handlers/health.go`
+- [ ] **Add proper API documentation for the health check endpoint**
+- **Impact**: Better API documentation
+- **Effort**: 15 minutes
+**Location**: `internal/api/v1/handlers/performance.go`
+- [ ] **Add proper API documentation for the performance dashboard endpoint**
+- **Impact**: Better API documentation
+- **Effort**: 15 minutes
+**Location**: `internal/api/v1/handlers/fair_value.go`
+- [ ] **Add proper API documentation for the fair value endpoint**
+- **Impact**: Better API documentation
+- **Effort**: 15 minutes
+**Location**: `internal/api/server.go`
+- [ ] **Add proper API documentation for the server entry point**
+- **Impact**: Better API documentation
+- **Effort**: 15 minutes
+
 ## 📈 **PRIORITY MATRIX**
 
 ### **Phase 3B Implementation (Next 3 hours)**
-1. ✅ **Category C Earnings Normalization** - Critical for phase completion
-2. ✅ **AI Integration Structure** - Required for phase completion
-3. ✅ **XBRL Tag Matching** - Core business logic improvement
+1. ✅ **Category C Earnings Normalization** - Critical for phase completion ✅ **COMPLETED 2025-01-19**
+2. ✅ **AI Integration Structure** - Required for phase completion ✅ **COMPLETED 2025-01-19**
+3. [ ] **XBRL Tag Matching** - Core business logic improvement
+
+### **Phase 2.5 MVP Implementation (Current)** 🆕
+1. **Staging Infrastructure** - Scripts and configuration for local deployment
+2. **Database Migrations** - Schema setup and demo data seeding
+3. **API Documentation** - Swagger/OpenAPI generation
 
 ### **Technical Debt Resolution (Next Sprint)**
 1. **Industry Code Detection System** - Architecture improvement
@@ -161,9 +217,15 @@ This document catalogs all TODO comments found throughout the codebase, organize
 
 ### **Immediate Actions (Phase 3B)**
 - Focus on high-priority TODOs that block phase completion
-- Implement Category C earnings normalization adjuster
-- Create AI service integration structure
-- Improve XBRL tag matching system
+- ✅ **Category C earnings normalization adjuster** ✅ **COMPLETED 2025-01-19**
+- ✅ **AI service integration structure** ✅ **COMPLETED 2025-01-19**
+- [ ] **Improve XBRL tag matching system**
+
+### **Current Actions (Phase 2.5)** 🆕
+- [ ] **Complete staging infrastructure setup**
+- [ ] **Implement database migrations and seeding**
+- [ ] **Add E2E tests with testcontainers**
+- [ ] **Performance baseline with k6**
 
 ### **Technical Debt Sprint**
 - Refactor industry code detection system
@@ -184,6 +246,7 @@ This document catalogs all TODO comments found throughout the codebase, organize
 - PHASE_3_INTEGRATION.md priority items
 - Test coverage improvement requirements
 - Architecture improvement needs
+- Phase 2.5 MVP requirements 🆕
 
 **Update Frequency**: This catalog should be updated after each major implementation phase to reflect completed items and newly identified tasks.
 
@@ -192,6 +255,19 @@ This document catalogs all TODO comments found throughout the codebase, organize
 ---
 
 ## 🎯 **RECENT COMPLETIONS**
+
+### **Phase 2.5 Task 2.5.1 Progress** 🆕 **PARTIAL COMPLETION 2025-01-28**
+- [x] **Created launch_staging.sh script** - Single-command launch for local staging
+- [x] **Created stop_staging.sh script** - Clean shutdown of staging environment
+- [x] **Updated README.md** - Added Quick Start documentation
+- [ ] **Database migrations** - Still needs implementation
+- [ ] **Demo data seeding** - SQL seed script pending
+- **Impact**: Simplified local development and testing workflow
+- **Technical Details**:
+  - Scripts handle .env creation from config.env.example
+  - Docker Compose integration for Redis
+  - Health check verification built-in
+  - Cross-platform support (Windows/Linux/macOS)
 
 ### **Test Fixes** ✅ **COMPLETED 2025-01-19**
 - [x] **Fixed TestAssetAdjuster_ProcessAssetAdjustments_ActiveWorkflow** - Resolved floating point precision issues in intangible asset retention rate calculations
@@ -202,6 +278,25 @@ This document catalogs all TODO comments found throughout the codebase, organize
   - Enhanced test data with earnings normalization fields to trigger proper flag generation
   - Updated quality scoring expectations to reflect new business logic
 
+### **Category C Earnings Normalization** ✅ **COMPLETED 2025-01-19**
+- [x] **Implemented ProcessEarningsAdjustments** - Complete Category C earnings normalization system
+- [x] **Added all earnings adjustment rules** - Restructuring charges, asset sales, litigation, stock compensation, derivatives, capitalized interest, working capital
+- **Impact**: Critical Phase 3B completion requirement
+- **Technical Details**:
+  - Implemented comprehensive earnings normalization with 7 adjustment types
+  - Added proper threshold checking and materiality assessment
+  - Integrated with existing cleaning pipeline and quality scoring
+
+### **AI Integration Structure** ✅ **COMPLETED 2025-01-19**
+- [x] **Created AI service interfaces** - Complete interface definitions for footnote analysis
+- [x] **Implemented mock AI service** - Full mock implementation for testing
+- [x] **Added AI integration points** - Ready for actual AI service integration
+- **Impact**: Advanced analytics capability foundation
+- **Technical Details**:
+  - Defined FootnoteAnalysisRequest/Response structures
+  - Implemented AIService interface with mock implementation
+  - Added configuration support for AI service integration
+
 ---
 
-*This catalog represents a comprehensive inventory of all identified TODO items as of January 19, 2025. Items are prioritized based on business impact, implementation phase requirements, and technical debt severity.*
+*This catalog represents a comprehensive inventory of all identified TODO items as of January 28, 2025. Items are prioritized based on business impact, implementation phase requirements, and technical debt severity.*

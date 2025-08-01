@@ -1,0 +1,152 @@
+{
+  "version": "1.0.0",
+  "default_namespace": "us-gaap",
+  "tag_mappings": {
+    "assets": {
+      "xbrl_tag": "us-gaap:Assets",
+      "internal_field": "total_assets",
+      "data_type": "decimal",
+      "required": true,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["Assets", "TotalAssets"],
+      "context": "instant"
+    },
+    "current_assets": {
+      "xbrl_tag": "us-gaap:AssetsCurrent",
+      "internal_field": "current_assets",
+      "data_type": "decimal",
+      "required": false,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["CurrentAssets"],
+      "context": "instant"
+    },
+    "liabilities": {
+      "xbrl_tag": "us-gaap:Liabilities",
+      "internal_field": "total_liabilities",
+      "data_type": "decimal",
+      "required": true,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["Liabilities", "TotalLiabilities"],
+      "context": "instant"
+    },
+    "equity": {
+      "xbrl_tag": "us-gaap:StockholdersEquity",
+      "internal_field": "stockholders_equity",
+      "data_type": "decimal",
+      "required": true,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["ShareholdersEquity", "Equity"],
+      "context": "instant"
+    },
+    "revenue": {
+      "xbrl_tag": "us-gaap:Revenues",
+      "internal_field": "total_revenue",
+      "data_type": "decimal",
+      "required": true,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["Revenue", "Sales", "TotalRevenues"],
+      "context": "duration"
+    },
+    "net_income": {
+      "xbrl_tag": "us-gaap:NetIncomeLoss",
+      "internal_field": "net_income",
+      "data_type": "decimal",
+      "required": true,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["NetIncome", "ProfitLoss"],
+      "context": "duration"
+    },
+    "cash_and_equivalents": {
+      "xbrl_tag": "us-gaap:CashAndCashEquivalentsAtCarryingValue",
+      "internal_field": "cash_and_equivalents",
+      "data_type": "decimal",
+      "required": false,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["Cash", "CashAndEquivalents"],
+      "context": "instant"
+    },
+    "long_term_debt": {
+      "xbrl_tag": "us-gaap:LongTermDebt",
+      "internal_field": "long_term_debt",
+      "data_type": "decimal",
+      "required": false,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["LongTermDebtNoncurrent"],
+      "context": "instant"
+    },
+    "operating_income": {
+      "xbrl_tag": "us-gaap:OperatingIncomeLoss",
+      "internal_field": "operating_income",
+      "data_type": "decimal",
+      "required": false,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["OperatingIncome", "IncomeFromOperations"],
+      "context": "duration"
+    },
+    "earnings_per_share": {
+      "xbrl_tag": "us-gaap:EarningsPerShareBasic",
+      "internal_field": "eps_basic",
+      "data_type": "decimal",
+      "required": false,
+      "transformations": ["to_decimal"],
+      "alternative_tags": ["EPS", "BasicEPS"],
+      "context": "duration"
+    },
+    "company_name": {
+      "xbrl_tag": "dei:EntityRegistrantName",
+      "internal_field": "company_name",
+      "data_type": "string",
+      "required": true,
+      "transformations": ["trim"],
+      "alternative_tags": ["RegistrantName", "CompanyName"],
+      "context": "instant"
+    },
+    "fiscal_year_end": {
+      "xbrl_tag": "dei:CurrentFiscalYearEndDate",
+      "internal_field": "fiscal_year_end",
+      "data_type": "date",
+      "required": false,
+      "transformations": [],
+      "alternative_tags": ["FiscalYearEnd"],
+      "context": "instant"
+    }
+  },
+  "validation_rules": [
+    {
+      "name": "balance_sheet_equation",
+      "type": "consistency",
+      "field": "total_assets",
+      "parameters": {
+        "equation": "total_assets = total_liabilities + stockholders_equity",
+        "tolerance": 0.01
+      },
+      "error_message": "Balance sheet does not balance: Assets != Liabilities + Equity"
+    },
+    {
+      "name": "assets_positive",
+      "type": "range",
+      "field": "total_assets",
+      "parameters": {
+        "min": 0
+      },
+      "error_message": "Total assets must be positive"
+    },
+    {
+      "name": "revenue_range",
+      "type": "range",
+      "field": "total_revenue",
+      "parameters": {
+        "min": 0,
+        "max": 1000000000000
+      },
+      "error_message": "Revenue value appears to be out of reasonable range"
+    },
+    {
+      "name": "company_name_required",
+      "type": "required",
+      "field": "company_name",
+      "parameters": {},
+      "error_message": "Company name is required"
+    }
+  ]
+}

@@ -163,6 +163,13 @@ func (s *Server) setupRoutes() {
 	fairValueGroup.Use(s.authMiddleware())                                    // Apply authentication to this group
 	fairValueGroup.Use(s.requirePermission(entities.PermissionReadFairValue)) // Require fair value permission
 	{
+		// Handle empty ticker case for proper validation error
+		fairValueGroup.GET("/", func(c *gin.Context) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "ticker parameter is required",
+				"code":  "INVALID_TICKER",
+			})
+		})
 		fairValueGroup.GET("/:ticker", fairValueHandler.GetFairValue)
 		fairValueGroup.POST("/bulk", fairValueHandler.GetBulkFairValue)
 	}

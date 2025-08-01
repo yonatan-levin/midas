@@ -11,6 +11,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
+	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	"github.com/midas/dcf-valuation-api/pkg/finance/dcf"
 	"github.com/midas/dcf-valuation-api/pkg/finance/wacc"
 )
@@ -22,6 +23,7 @@ type Service struct {
 	macroRepo      ports.MacroDataRepository
 	cache          ports.CacheRepository
 	dataCleaner    datacleaner.DataCleanerService
+	dataFetcher    *datafetcher.DataFetcher
 	metricsService ports.MetricsService
 	config         *config.Config
 	logger         *zap.Logger
@@ -34,6 +36,7 @@ func NewService(
 	macroRepo ports.MacroDataRepository,
 	cache ports.CacheRepository,
 	dataCleaner datacleaner.DataCleanerService,
+	dataFetcher *datafetcher.DataFetcher,
 	metricsService ports.MetricsService,
 	cfg *config.Config,
 	logger *zap.Logger,
@@ -44,6 +47,7 @@ func NewService(
 		macroRepo:      macroRepo,
 		cache:          cache,
 		dataCleaner:    dataCleaner,
+		dataFetcher:    dataFetcher,
 		metricsService: metricsService,
 		config:         cfg,
 		logger:         logger,
@@ -64,10 +68,30 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*entit
 		return &cachedResult, nil
 	}
 
-	// Fetch financial data
+	// Fetch financial data - first try repository, then DataFetcher if not found
 	historicalData, err := s.financialRepo.GetHistorical(ctx, ticker, 10) // Get up to 10 periods
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch financial data: %w", err)
+	if err != nil || len(historicalData.Data) == 0 {
+		s.logger.Info("No historical data in repository, fetching via DataFetcher", zap.String("ticker", ticker))
+		
+		// Use DataFetcher to fetch and store data
+		fetchRequest := &entities.FetchRequest{
+			Ticker: ticker,
+		}
+		
+		_, fetchErr := s.dataFetcher.Fetch(ctx, fetchRequest)
+		if fetchErr != nil {
+			return nil, fmt.Errorf("failed to fetch data via DataFetcher: %w", fetchErr)
+		}
+		
+		// DataFetcher should have populated the database, try repository again
+		historicalData, err = s.financialRepo.GetHistorical(ctx, ticker, 10)
+		if err != nil || len(historicalData.Data) == 0 {
+			return nil, fmt.Errorf("failed to fetch financial data: no historical data found for ticker %s", ticker)
+		}
+		
+		s.logger.Info("Successfully fetched data via DataFetcher", 
+			zap.String("ticker", ticker), 
+			zap.Int("periods", len(historicalData.Data)))
 	}
 
 	// Fetch market data

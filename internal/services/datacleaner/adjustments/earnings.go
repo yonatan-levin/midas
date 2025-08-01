@@ -10,7 +10,6 @@ import (
 // EarningsAdjuster handles Category C adjustments from SEC cleaning guide
 // Implements earnings distortion removal and normalization
 type EarningsAdjuster struct {
-	// TODO: Add configuration for adjustment thresholds
 }
 
 // NewEarningsAdjuster creates a new earnings adjuster instance

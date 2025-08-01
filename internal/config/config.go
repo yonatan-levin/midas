@@ -195,6 +195,12 @@ func Load() (*Config, error) {
 
 // setDefaults sets default configuration values
 func setDefaults() {
+	// Application defaults
+	viper.SetDefault("port", "8080")
+	viper.SetDefault("environment", "development")
+	viper.SetDefault("log_level", "debug")
+	viper.SetDefault("enable_swagger", false)
+
 	// Server defaults
 	viper.SetDefault("server.port", "8080")
 	viper.SetDefault("server.read_timeout", "30s")

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -28,25 +27,15 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	// Initialize logger
-	logger, err := initLogger(cfg.LogLevel)
-	if err != nil {
-		log.Fatalf("Failed to initialize logger: %v", err)
-	}
-	defer logger.Sync()
-
-	logger.Info("Starting DCF Valuation API Server",
-		zap.String("version", cfg.Version),
-		zap.String("port", cfg.Port),
-		zap.String("environment", cfg.Environment))
+	log.Printf("Starting DCF Valuation API Server (version: %s, port: %s, environment: %s)",
+		cfg.Version, cfg.Port, cfg.Environment)
 
 	// Create Fx application with dependency injection
 	app := fx.New(
-		// Provide configuration and logger
+		// Provide configuration
 		fx.Provide(func() *config.Config { return cfg }),
-		fx.Provide(func() *zap.Logger { return logger }),
 
-		// Include DI container module
+		// Include DI container module (includes logger creation)
 		di.Module,
 
 		// Provide HTTP server
@@ -69,25 +58,22 @@ func main() {
 	defer startCancel()
 
 	if err := app.Start(startCtx); err != nil {
-		logger.Fatal("Failed to start application", zap.Error(err))
+		log.Fatalf("Failed to start application: %v", err)
 	}
-
-	logger.Info("DCF Valuation API Server started successfully",
-		zap.String("address", fmt.Sprintf(":%s", cfg.Port)))
 
 	// Wait for shutdown signal
 	<-sigChan
-	logger.Info("Shutdown signal received, gracefully shutting down...")
+	log.Println("Shutdown signal received, gracefully shutting down...")
 
 	// Stop the application with timeout
 	stopCtx, stopCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer stopCancel()
 
 	if err := app.Stop(stopCtx); err != nil {
-		logger.Error("Error during shutdown", zap.Error(err))
+		log.Printf("Error during shutdown: %v", err)
 	}
 
-	logger.Info("Server shutdown completed")
+	log.Println("Server shutdown completed")
 }
 
 // registerHooks registers application lifecycle hooks
@@ -112,45 +98,4 @@ func registerHooks(lc fx.Lifecycle, server *api.Server, logger *zap.Logger) {
 			return server.Shutdown(ctx)
 		},
 	})
-}
-
-// initLogger initializes the structured logger based on log level
-func initLogger(logLevel string) (*zap.Logger, error) {
-	var config zap.Config
-
-	switch logLevel {
-	case "debug":
-		config = zap.NewDevelopmentConfig()
-		config.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
-	case "info":
-		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	case "warn":
-		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
-	case "error":
-		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
-	default:
-		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	}
-
-	// Customize output format for better readability
-	config.Encoding = "json"
-	config.OutputPaths = []string{"stdout"}
-	config.ErrorOutputPaths = []string{"stderr"}
-
-	// Add caller information in development
-	if logLevel == "debug" {
-		config.Development = true
-		config.DisableCaller = false
-		config.DisableStacktrace = false
-	} else {
-		config.Development = false
-		config.DisableCaller = true
-		config.DisableStacktrace = true
-	}
-
-	return config.Build()
 }

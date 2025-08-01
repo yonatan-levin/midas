@@ -8,21 +8,25 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/adjustments"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/rules"
 )
 
 // service implements the DataCleanerService interface
 type service struct {
-	config            *config.DataCleanerConfig
-	rulesEngine       rules.RuleEngine
-	assetAdjuster     *adjustments.AssetAdjuster
-	liabilityAdjuster *adjustments.LiabilityAdjuster
-	earningsAdjuster  *adjustments.EarningsAdjuster
-	cache             map[string]*entities.CleaningResult // Simple in-memory cache for now
-	cacheMu           sync.RWMutex
-	stats             entities.CleaningStats
-	statsMu           sync.RWMutex
+	config             *config.DataCleanerConfig
+	rulesEngine        rules.RuleEngine
+	assetAdjuster      *adjustments.AssetAdjuster
+	liabilityAdjuster  *adjustments.LiabilityAdjuster
+	earningsAdjuster   *adjustments.EarningsAdjuster
+	industryClassifier *industry.IndustryClassifier
+	flagEvaluator      ports.FlagConditionEvaluator
+	cache              map[string]*entities.CleaningResult // Simple in-memory cache for now
+	cacheMu            sync.RWMutex
+	stats              entities.CleaningStats
+	statsMu            sync.RWMutex
 }
 
 // NewDataCleanerService creates a new DataCleaner service instance
@@ -48,13 +52,32 @@ func NewDataCleanerService(cfg *config.Config) (DataCleanerService, error) {
 		return nil, fmt.Errorf("rules validation failed: %w", err)
 	}
 
+	// Initialize flag evaluator with loaded config
+	flagConfigPath := "config/datacleaner/flag_conditions.json"
+	flagConfig, err := config.LoadFlagConditionsConfig(flagConfigPath)
+	if err != nil {
+		// Log warning but continue with empty config for fallback
+		// TODO: Add proper logging
+		flagConfig = &config.FlagConditionsConfig{
+			Version: "1.0",
+			Flags:   []config.FlagConfig{},
+		}
+	}
+
+	flagEvaluator, err := NewFlagConditionEvaluatorService(flagConfig, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize flag evaluator: %w", err)
+	}
+
 	svc := &service{
-		config:            &cfg.DataCleaner,
-		rulesEngine:       rulesEngine,
-		assetAdjuster:     adjustments.NewAssetAdjuster(),
-		liabilityAdjuster: adjustments.NewLiabilityAdjuster(),
-		earningsAdjuster:  adjustments.NewEarningsAdjuster(),
-		cache:             make(map[string]*entities.CleaningResult),
+		config:             &cfg.DataCleaner,
+		rulesEngine:        rulesEngine,
+		assetAdjuster:      adjustments.NewAssetAdjuster(),
+		liabilityAdjuster:  adjustments.NewLiabilityAdjuster(),
+		earningsAdjuster:   adjustments.NewEarningsAdjuster(),
+		industryClassifier: industry.NewIndustryClassifier(),
+		flagEvaluator:      flagEvaluator,
+		cache:              make(map[string]*entities.CleaningResult),
 		stats: entities.CleaningStats{
 			QualityDistribution: make(map[entities.QualityGrade]int),
 			CommonAdjustments:   make(map[string]int),
@@ -94,8 +117,14 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	}
 
 	// Create cleaning context
+	industryCode, err := s.getIndustryCode(data)
+	if err != nil {
+		// Log warning but continue with empty industry code for general rules
+		industryCode = ""
+	}
+
 	cleaningCtx := &entities.CleaningContext{
-		IndustryCode:     getIndustryCode(data),
+		IndustryCode:     industryCode,
 		CompanySize:      getCompanySize(data),
 		DataVintage:      data.FilingDate,
 		EnableIndustry:   s.config.EnableIndustryRules,
@@ -193,7 +222,11 @@ func (s *service) GetQualityScore(ctx context.Context, data *entities.FinancialD
 	}
 
 	// Get applicable rules
-	industryCode := getIndustryCode(data)
+	industryCode, err := s.getIndustryCode(data)
+	if err != nil {
+		// Log warning but continue with empty industry code for general rules
+		industryCode = ""
+	}
 	applicableRules := s.rulesEngine.GetIndustryRules(industryCode)
 
 	// Simulate applying rules without making changes
@@ -827,31 +860,26 @@ func generateCacheKey(data *entities.FinancialData) string {
 	return fmt.Sprintf("%s_%s_%v", data.Ticker, data.FilingPeriod, data.FilingDate.Unix())
 }
 
-func getIndustryCode(data *entities.FinancialData) string {
-	// TODO: Rethink this function, its not maintainable and hardcoded IndustryCodes is not a good idea.
-	// For now, make some reasonable guesses based on ticker patterns and financials
-
-	// Explicit ticker mappings
-	switch data.Ticker {
-	case "TECH":
-		return "45" // Technology
-	case "RETAIL":
-		return "25" // Consumer Discretionary (Retail)
-	case "AAPL", "MSFT", "GOOGL":
-		return "45" // Technology
-	case "WMT", "TGT":
-		return "25" // Retail
+// getIndustryCode determines the industry code for the given financial data using the IndustryClassifier
+func (s *service) getIndustryCode(data *entities.FinancialData) (string, error) {
+	if data == nil {
+		return "", fmt.Errorf("financial data cannot be nil")
 	}
 
-	// Pattern-based detection for test data
-	if data.Ticker == "RISKY" || data.Ticker == "PROBLEM" {
-		// Check if high intangibles suggest tech company
-		if data.OtherIntangibles > data.TotalAssets*0.15 {
-			return "45" // Technology (high intangibles suggest tech)
-		}
+	// Use the industry classifier to determine the sector
+	sectorConfig, err := s.industryClassifier.ClassifyIndustry(data.Ticker, data)
+	if err != nil {
+		// Log the error but return empty string to maintain backward compatibility
+		// This allows the system to fall back to general rules
+		return "", fmt.Errorf("failed to classify industry for ticker %s: %w", data.Ticker, err)
 	}
 
-	return "" // Use general rules
+	if sectorConfig == nil {
+		// No specific industry classification found, use general rules
+		return "", nil
+	}
+
+	return sectorConfig.SectorCode, nil
 }
 
 func getCompanySize(data *entities.FinancialData) entities.CompanySize {
@@ -869,12 +897,59 @@ func getCompanySize(data *entities.FinancialData) entities.CompanySize {
 	}
 }
 
-// createRiskWarningFlags creates additional warning flags for risky patterns
+// createRiskWarningFlags creates additional warning flags for risky patterns using the FlagConditionEvaluator
 func (s *service) createRiskWarningFlags(data *entities.FinancialData, timestamp time.Time) []entities.Flag {
+	ctx := context.Background()
+
+	// Convert FinancialData to map for flag evaluator
+	dataMap := map[string]interface{}{
+		"Ticker":           data.Ticker,
+		"TotalAssets":      data.TotalAssets,
+		"Goodwill":         data.Goodwill,
+		"OtherIntangibles": data.OtherIntangibles,
+		"Revenue":          data.Revenue,
+		"FilingDate":       data.FilingDate,
+	}
+
+	// Use the flag evaluator to evaluate configured conditions
+	flagResults, err := s.flagEvaluator.EvaluateFlags(ctx, dataMap)
+	if err != nil {
+		// Log error but continue with hardcoded flags to maintain system stability
+		// TODO: Add proper logging
+		return s.createHardcodedRiskFlags(data, timestamp)
+	}
+
+	// Convert FlagResults to entities.Flag format
+	var flags []entities.Flag
+	for i, result := range flagResults {
+		if result.Triggered {
+			flag := entities.Flag{
+				ID:          fmt.Sprintf("config_flag_%d_%d", timestamp.UnixNano(), i),
+				RuleID:      result.FlagName,
+				Type:        "risk_warning",
+				Severity:    "warning",
+				Description: result.Details,
+				Timestamp:   result.Timestamp,
+			}
+			flags = append(flags, flag)
+		}
+	}
+
+	// If no configured flags triggered, fall back to hardcoded logic for backward compatibility
+	if len(flags) == 0 {
+		return s.createHardcodedRiskFlags(data, timestamp)
+	}
+
+	return flags
+}
+
+// createHardcodedRiskFlags maintains the original hardcoded logic as fallback
+// TODO: Remove this once flag configuration is fully implemented
+func (s *service) createHardcodedRiskFlags(data *entities.FinancialData, timestamp time.Time) []entities.Flag {
 	var flags []entities.Flag
 
 	// Flag for excessive goodwill (warning level)
-	if data.Goodwill > data.TotalAssets*0.25 { // >25%  TODO: Consolidate this flag conditions in a configurable system.
+	if data.Goodwill > data.TotalAssets*0.25 { // >25%
 		flag := entities.Flag{
 			ID:             fmt.Sprintf("warning_flag_%d", timestamp.UnixNano()),
 			RuleID:         "excessive_goodwill_warning",
@@ -890,7 +965,7 @@ func (s *service) createRiskWarningFlags(data *entities.FinancialData, timestamp
 	}
 
 	// Flag for excessive intangibles (warning level)
-	if data.OtherIntangibles > data.TotalAssets*0.20 { // >20% of assets TODO: Consolidate this flag conditions in a configurable system.
+	if data.OtherIntangibles > data.TotalAssets*0.20 { // >20% of assets
 		flag := entities.Flag{
 			ID:             fmt.Sprintf("warning_flag_%d", timestamp.UnixNano()+1),
 			RuleID:         "excessive_intangibles_warning",

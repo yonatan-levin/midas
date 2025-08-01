@@ -1,0 +1,309 @@
+MIDAS PROJECT STRUCTURE
+========================
+
+Project: Midas - Financial Technology Platform
+Language: Go (Golang)
+Architecture: Clean Architecture with Dependency Injection
+
+ROOT DIRECTORY
+├── Dockerfile                          # Docker container configuration
+├── README.md                          # Project documentation
+├── docker-compose.yml                # Development Docker setup
+├── docker-compose.prod.yml           # Production Docker setup
+├── go.mod                             # Go module dependencies
+├── go.sum                             # Go module checksums
+├── go.work                            # Go workspace configuration
+├── go.work.sum                        # Go workspace checksums
+├── config.env.example                # Environment configuration template
+├── main.exe                           # Compiled main executable
+├── server.exe                         # Compiled server executable
+├── datafetcher.test.exe              # Compiled test executable
+├── coverage                           # Test coverage data
+├── finance_coverage                   # Finance module coverage
+├── leases_coverage                    # Leases module coverage
+
+ENTRY POINTS
+├── cmd/
+│   └── server/
+│       └── main.go                    # Main application entry point
+
+CONFIGURATION
+├── config/
+│   ├── alerting/
+│   │   ├── alert_rules.yaml          # Alert configuration rules
+│   │   └── notification_channels.yaml # Notification setup
+│   ├── datacleaner/
+│   │   ├── industry/
+│   │   │   ├── retail.json           # Retail industry rules
+│   │   │   └── technology.json       # Technology industry rules
+│   │   ├── lease_estimation.json     # Lease estimation config
+│   │   ├── rules.json                # Data cleaning rules
+│   │   └── schema.json               # Data schema definitions
+│   └── performance/
+│       └── benchmark_config.json     # Performance benchmarking config
+
+DATA STORAGE
+├── data/
+│   └── midas.db                      # SQLite database file
+└── migrations/                       # Database migration files
+
+DOCUMENTATION
+├── docs/
+│   ├── NEW_INTEGRATION_PLAN.md       # New integration strategy
+│   ├── PHASE_1_DETAILED_PLAN.md      # Phase 1 implementation plan
+│   ├── PHASE_2_DETAILED_PLAN.md      # Phase 2 implementation plan
+│   ├── PHASE_2.5_DETAILED_PLAN.md    # Phase 2.5 implementation plan
+│   ├── PHASE_2_COMPLETION_SUMMARY.md # Phase 2 completion status
+│   ├── TODO_TASKS_CATALOG.md         # Task tracking catalog
+│   ├── columns name.txt              # Database column documentation
+│   ├── sec_data_cleaning_guide.md    # SEC data cleaning guide
+│   └── old_intergration_docs/        # Archive of old documentation
+│       ├── Old_FINAL_PHASE_2_STATUS.md
+│       ├── Old_PHASE_2_COMPREHENSIVE_PLAN.md
+│       ├── Old_PHASE_3_INTEGRATION.md
+│       ├── Old_PHASE_3_INTEGRATION_CONVERSATION_SUMMARY.md
+│       ├── Old_PROJECT_REALITY_CHECK_ANALYSIS.md
+│       ├── Old_STEP_4_IMPLEMENTATION_PLAN.md
+│       └── PHASE_2_Missing_GAPS.md
+
+CORE APPLICATION (CLEAN ARCHITECTURE)
+├── internal/
+│   ├── api/                          # API Layer (Controllers)
+│   │   ├── server.go                 # HTTP server setup
+│   │   └── v1/handlers/              # API v1 handlers
+│   │       ├── fair_value.go         # Fair value endpoints
+│   │       ├── health.go             # Health check endpoints
+│   │       ├── health_test.go        # Health handler tests
+│   │       ├── metrics_improvement_test.go # Metrics tests
+│   │       └── performance.go        # Performance endpoints
+│   │
+│   ├── config/                       # Configuration Management
+│   │   └── config.go                 # Application configuration
+│   │
+│   ├── core/                         # Domain Layer (Business Logic)
+│   │   ├── constants/
+│   │   │   └── non_recurring.go      # Non-recurring item constants
+│   │   ├── entities/                 # Domain entities
+│   │   │   ├── ai_analysis.go        # AI analysis entities
+│   │   │   ├── alerting.go           # Alerting entities
+│   │   │   ├── auth.go               # Authentication entities
+│   │   │   ├── data_cleaning.go      # Data cleaning entities
+│   │   │   ├── data_fetcher.go       # Data fetcher entities
+│   │   │   ├── data_validation.go    # Data validation entities
+│   │   │   ├── external.go           # External service entities
+│   │   │   ├── financial_data.go     # Financial data entities
+│   │   │   ├── industry.go           # Industry entities
+│   │   │   ├── market_data.go        # Market data entities
+│   │   │   ├── rate_limiting.go      # Rate limiting entities
+│   │   │   └── valuation.go          # Valuation entities
+│   │   └── ports/                    # Interface definitions
+│   │       ├── alerting.go           # Alerting interfaces
+│   │       ├── gateways.go           # Gateway interfaces
+│   │       └── repositories.go       # Repository interfaces
+│   │
+│   ├── di/                          # Dependency Injection
+│   │   ├── container.go              # DI container setup
+│   │   └── container_test.go         # DI container tests
+│   │
+│   ├── infra/                       # Infrastructure Layer
+│   │   ├── alerting/                # Alerting infrastructure
+│   │   ├── database/
+│   │   │   └── schema.sql           # Database schema
+│   │   ├── gateways/                # External service gateways
+│   │   │   ├── macro/               # Macroeconomic data gateway
+│   │   │   │   ├── gateway.go
+│   │   │   │   └── gateway_test.go
+│   │   │   ├── market/              # Market data gateway
+│   │   │   │   ├── gateway.go
+│   │   │   │   ├── gateway_test.go
+│   │   │   │   ├── yfinance_client.go
+│   │   │   │   └── yfinance_client_test.go
+│   │   │   └── sec/                 # SEC data gateway
+│   │   │       ├── client.go
+│   │   │       ├── client_test.go
+│   │   │       ├── gateway.go
+│   │   │       ├── gateway_test.go
+│   │   │       ├── parser.go
+│   │   │       └── parser_test.go
+│   │   ├── repositories/            # Data persistence layer
+│   │   │   ├── cache/               # Caching repositories
+│   │   │   │   ├── memory_cache_repository.go
+│   │   │   │   ├── memory_cache_repository_test.go
+│   │   │   │   ├── redis_cache_repository.go
+│   │   │   │   └── redis_cache_repository_test.go
+│   │   │   └── sqlite/              # SQLite repositories
+│   │   │       ├── auth_repository.go
+│   │   │       ├── financial_data_repository.go
+│   │   │       ├── financial_data_repository_test.go
+│   │   │       ├── macro_data_repository.go
+│   │   │       ├── macro_data_repository_test.go
+│   │   │       ├── market_data_repository.go
+│   │   │       ├── market_data_repository_test.go
+│   │   │       ├── test_helper.go
+│   │   │       ├── ticker_mapping_repository.go
+│   │   │       └── ticker_mapping_repository_test.go
+│   │   └── resilience/              # Resilience patterns
+│   │       ├── circuit_breaker.go
+│   │       ├── circuit_breaker_test.go
+│   │       ├── retry.go
+│   │       └── retry_test.go
+│   │
+│   ├── integration/                 # Integration tests
+│   │   ├── performance_monitoring_test.go
+│   │   ├── service_test.go
+│   │   └── test_setup.go
+│   │
+│   └── services/                    # Application Services (Use Cases)
+│       ├── alerting/                # Alerting service
+│       │   ├── configuration.go
+│       │   ├── configuration_test.go
+│       │   ├── integration_service.go
+│       │   ├── integration_service_test.go
+│       │   ├── regression_detection.go
+│       │   └── regression_detection_test.go
+│       ├── auth/                    # Authentication service
+│       │   ├── service.go
+│       │   └── service_test.go
+│       ├── datacleaner/             # Data cleaning service
+│       │   ├── adjustments/         # Financial adjustments
+│       │   │   ├── assets.go
+│       │   │   ├── assets_test.go
+│       │   │   ├── earnings.go
+│       │   │   ├── earnings_test.go
+│       │   │   ├── integration_test.go
+│       │   │   ├── liabilities.go
+│       │   │   ├── liabilities_test.go
+│       │   │   └── real_sec_data_test.go
+│       │   ├── ai/                  # AI integration
+│       │   │   ├── interfaces.go
+│       │   │   ├── mock_service.go
+│       │   │   └── mock_service_test.go
+│       │   ├── flagging/            # Data quality flagging
+│       │   │   ├── industry_analyzer.go
+│       │   │   ├── risk_analyzer.go
+│       │   │   ├── system.go
+│       │   │   └── system_test.go
+│       │   ├── industry/            # Industry classification
+│       │   │   ├── classifier.go
+│       │   │   └── classifier_test.go
+│       │   ├── rules/               # Rule engine
+│       │   │   ├── engine.go
+│       │   │   ├── engine_test.go
+│       │   │   ├── integration_test.go
+│       │   │   ├── loader.go
+│       │   │   └── types.go
+│       │   ├── integration_test.go
+│       │   ├── pipeline.go
+│       │   ├── pipeline_test.go
+│       │   ├── reporting.go
+│       │   ├── reporting_test.go
+│       │   ├── service.go
+│       │   ├── service_test.go
+│       │   └── types.go
+│       ├── datafetcher/             # Data fetching service
+│       │   ├── coordinator.go
+│       │   ├── coordinator_test.go
+│       │   ├── service.go
+│       │   ├── service_test.go
+│       │   ├── validator.go
+│       │   └── validator_test.go
+│       ├── metrics/                 # Metrics service
+│       │   ├── middleware.go
+│       │   ├── middleware_test.go
+│       │   ├── service.go
+│       │   └── service_test.go
+│       ├── ratelimit/               # Rate limiting service
+│       │   ├── redis_cache.go
+│       │   ├── redis_cache_test.go
+│       │   ├── service.go
+│       │   └── service_test.go
+│       └── valuation/               # Valuation service
+│           ├── service.go
+│           ├── service_bench_test.go
+│           └── service_test.go
+
+SHARED PACKAGES
+├── pkg/                             # Reusable packages
+│   └── finance/                     # Financial calculation packages
+│       ├── dcf/                     # Discounted Cash Flow
+│       │   ├── dcf.go
+│       │   └── dcf_test.go
+│       ├── growth/                  # Growth calculations
+│       │   ├── growth.go
+│       │   └── growth_test.go
+│       ├── leases/                  # Lease calculations
+│       │   ├── config.go
+│       │   ├── config_test.go
+│       │   ├── estimation.go
+│       │   ├── estimation_test.go
+│       │   ├── leases               # Lease data
+│       │   ├── leases_coverage      # Coverage reports
+│       │   ├── performance.go
+│       │   └── performance_test.go
+│       └── wacc/                    # Weighted Average Cost of Capital
+│           ├── wacc.go
+│           ├── wacc_property_test.go
+│           └── wacc_test.go
+
+PERFORMANCE MONITORING
+├── performance/
+│   ├── baselines/                   # Performance baselines
+│   └── results/                     # Performance test results
+
+SCRIPTS & UTILITIES
+├── scripts/                         # Utility scripts
+│   ├── benchmark_analyzer.go        # Benchmark analysis
+│   ├── benchmark_analyzer_test.go
+│   ├── benchmark_executor.go        # Benchmark execution
+│   ├── benchmark_executor_test.go
+│   ├── benchmark_runner.go          # Benchmark runner
+│   ├── benchmark_test.go
+│   ├── docker-build.sh             # Docker build script
+│   ├── docker-run.sh               # Docker run script
+│   ├── launch_staging.ps1          # Windows staging launcher
+│   ├── launch_staging.sh           # Unix staging launcher
+│   ├── load_tester.go               # Load testing utility
+│   ├── performance_analyzer.go      # Performance analysis
+│   ├── performance_cli_test.go      # Performance CLI tests
+│   ├── performance_types.go         # Performance types
+│   ├── setup_test_db.go             # Test database setup
+│   ├── stop_staging.ps1            # Windows staging stopper
+│   ├── stop_staging.sh             # Unix staging stopper
+│   └── testdata/                    # Script test data
+
+TEST DATA
+├── testdata/                        # Test data files
+│   ├── CIK-example-2016onwards.json # SEC CIK example data
+│   ├── CIK-example-2016onwards.min.json # Minified SEC data
+│   ├── gitignore                    # Git ignore rules
+│   └── test.json                    # General test data
+
+ARCHITECTURE SUMMARY
+====================
+
+This is a Go-based financial technology platform following Clean Architecture principles:
+
+1. **Domain Layer** (internal/core/): Contains business entities and interfaces
+2. **Application Layer** (internal/services/): Use cases and business logic
+3. **Infrastructure Layer** (internal/infra/): External dependencies and persistence
+4. **API Layer** (internal/api/): HTTP handlers and controllers
+5. **Dependency Injection** (internal/di/): Wiring all components together
+
+KEY FEATURES:
+- Financial data processing and cleaning
+- Valuation calculations (DCF, WACC, Growth models)
+- Market data integration (Yahoo Finance, SEC)
+- Performance monitoring and alerting
+- Rate limiting and caching
+- Comprehensive testing with integration tests
+- Docker containerization
+- SQLite database with migration support
+
+TESTING STRATEGY:
+- Unit tests for all major components
+- Integration tests for service interactions
+- Performance benchmarking
+- Real SEC data testing
+- Property-based testing for financial calculations
+
+The project appears to be in active development with multiple phases completed and ongoing work on integration improvements.

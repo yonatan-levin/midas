@@ -1,81 +1,73 @@
-# Binaries for programs and plugins
+### .gitignore for Go projects
+# Generated 2025-07-27
+# Notes:
+# - Keep go.mod and go.sum tracked for reproducible builds.
+# - If you purposefully vendor dependencies, uncomment the vendor/ line below.
+# - Keep testdata/ (seeds/corpus) in repo; we only ignore fuzz crashers/suppressions.
+# - Prefer a secret manager for production; .env* is ignored for local dev convenience.
+
+# Go build artifacts / binaries
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
 *.out
+*.a
 
-# Dependency directories (remove the comment below to include it)
+# Common build output directories
+bin/
+build/
+dist/
+out/
+release/
+tmp/
+*.tmp
+
+# GoReleaser output
+dist/
+
+# Dependency vendoring (uncomment if you vendor)
 # vendor/
 
-# Go workspace file
-go.work
+# Coverage & profiling outputs
+coverage.*
+*.cover
+*.coverprofile
+*.cov
+cover.out
+profile.out
+*.prof
+*.pprof
+coverage/
+# Go fuzzing (keep corpus; ignore crashers/suppressions/workdir)
+testdata/**/Fuzz*/crashers/
+testdata/**/Fuzz*/suppressions/
+testdata/**/Fuzz*/workdir/
+testdata/**/Fuzz*/minimization/
 
-# Go build cache
-go-build/
-
-# Go module cache
-go-mod-cache/
-
-# Go test cache
-go-test-cache/
-
-# Go coverage cache
-go-coverage-cache/
-
-# Go tool cache
-go-tool-cache/
-
-# Go debug cache
-go-debug-cache/
-
-# Go mod cache
-go-mod-cache/
-
-# Go sum cache
-go-sum-cache/
-
-# Go proxy cache
-go-proxy-cache/
-
-# Go pkg cache
-go-pkg-cache/
-
-# Go src cache
-go-src-cache/
-
-# Go cache directory
-.cache/
-
-# IDE and Editor files
+# Editor / IDE files
 .vscode/
+.idea/
+*.iml
+.history/
+*.swp
+*.swo
+*~
 .vs/
 .cursor/
 .cursor/rules/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
-Thumbs.db
-
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 # Sublime Text
 *.sublime-project
 *.sublime-workspace
-
 # Vim
-*.swp
-*.swo
-*~
-
 # Emacs
-*~
 \#*\#
 /.emacs.desktop
 /.emacs.desktop.lock
@@ -83,25 +75,55 @@ Thumbs.db
 auto-save-list
 tramp
 .\#*
-
 # OS generated files
 .DS_Store
 .DS_Store?
+Thumbs.db
 ._*
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db
-
-# Windows
 *.lnk
-
-# Linux
-*~
 
 # Logs
 *.log
 logs/
+*.gz
+
+# Caches (tooling may create these locally)
+.cache/
+.parcel-cache
+.nyc_output
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+.node_repl_history
+
+# Environment files (for local dev only)
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Ensure Go module files are not ignored
+!go.mod
+!go.sum
+
+# Go workspace and cache files
+go.work
+go-build/
+go-mod-cache/
+go-test-cache/
+go-coverage-cache/
+go-tool-cache/
+go-debug-cache/
+go-sum-cache/
+go-proxy-cache/
+go-pkg-cache/
+go-src-cache/
 
 # Runtime data
 pids
@@ -110,11 +132,7 @@ pids
 *.pid.lock
 
 # Coverage directory used by tools like istanbul
-coverage/
 *.lcov
-
-# nyc test coverage
-.nyc_output
 
 # Grunt intermediate storage (https://gruntjs.com/creating-plugins#storing-task-files)
 .grunt
@@ -124,67 +142,26 @@ bower_components
 
 # node_modules
 node_modules/
-
 # Optional npm cache directory
 .npm
-
 # Optional eslint cache
 .eslintcache
 
-# Microbundle cache
-.rpt2_cache/
-.rts2_cache_cjs/
-.rts2_cache_es/
-.rts2_cache_umd/
-
-# Optional REPL history
-.node_repl_history
-
 # Output of 'npm pack'
 *.tgz
-
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variables file
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# parcel-bundler cache (https://parceljs.org/)
-.cache
-.parcel-cache
-
 # Next.js build output
 .next
-
 # Nuxt.js build / generate output
 .nuxt
-dist
-
 # Gatsby files
-.cache/
 public
-
 # Storybook build outputs
-.out
 .storybook-out
-
 # Temporary folders
-tmp/
 temp/
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
 
 # Database files
 *.db
@@ -222,9 +199,7 @@ dev/
 development/
 
 # Production builds
-build/
-dist/
-bin/
+# (already covered above: build/, dist/, bin/)
 
 # Configuration files with secrets
 config/secrets.yaml
@@ -304,3 +279,10 @@ cython_debug/
 # Add any project-specific files or directories here
 #testdata/*
 .cursor/rules/generalspecdoc.mdc
+.claude/
+# Coverage reports
+coverage
+*_coverage
+coverage.out
+*.coverage
+

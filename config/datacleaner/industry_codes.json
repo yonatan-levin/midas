@@ -1,0 +1,217 @@
+{
+  "version": "1.0.0",
+  "default_code": "NA",
+  "mappings": [
+    {
+      "name": "Technology",
+      "code": "TECH",
+      "priority": 100,
+      "matchers": {
+        "sic_codes": ["7370", "7371", "7372", "7373", "7374"],
+        "naics_codes": ["5112", "5415"],
+        "keywords": ["software", "technology", "internet", "cloud", "saas", "artificial intelligence", "ai", "machine learning"],
+        "patterns": ["\\b(tech|software|digital|cyber)\\b"],
+        "exact_names": ["Microsoft Corporation", "Apple Inc.", "Google LLC", "Meta Platforms Inc."]
+      },
+      "sub_industries": [
+        {
+          "name": "Software as a Service",
+          "code": "TECH_SAAS",
+          "matchers": {
+            "keywords": ["saas", "software as a service", "subscription software"],
+            "patterns": ["\\bsaas\\b", "software.as.a.service"]
+          }
+        },
+        {
+          "name": "Artificial Intelligence",
+          "code": "TECH_AI",
+          "matchers": {
+            "keywords": ["artificial intelligence", "machine learning", "deep learning", "neural network"],
+            "patterns": ["\\b(ai|ml)\\b"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Financial Services",
+      "code": "FIN",
+      "priority": 90,
+      "matchers": {
+        "sic_codes": ["6020", "6021", "6022", "6029", "6035", "6036"],
+        "naics_codes": ["522", "523", "524"],
+        "keywords": ["bank", "financial", "investment", "insurance", "capital", "fund", "asset management"],
+        "patterns": ["\\b(bank|finance|financial)\\b"],
+        "exact_names": ["JPMorgan Chase & Co.", "Bank of America Corporation", "Wells Fargo & Company"]
+      },
+      "sub_industries": [
+        {
+          "name": "Investment Banking",
+          "code": "FIN_IB",
+          "matchers": {
+            "keywords": ["investment banking", "capital markets", "underwriting"],
+            "sic_codes": ["6211"]
+          }
+        },
+        {
+          "name": "Asset Management",
+          "code": "FIN_AM",
+          "matchers": {
+            "keywords": ["asset management", "fund management", "portfolio management"],
+            "sic_codes": ["6282"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Healthcare",
+      "code": "HEALTH",
+      "priority": 85,
+      "matchers": {
+        "sic_codes": ["8011", "8062", "8063", "8069", "8071", "8072"],
+        "naics_codes": ["621", "622", "623"],
+        "keywords": ["healthcare", "medical", "pharmaceutical", "biotech", "hospital", "clinic", "health"],
+        "patterns": ["\\b(health|medical|pharma|bio)\\b"],
+        "exact_names": ["Johnson & Johnson", "Pfizer Inc.", "UnitedHealth Group"]
+      },
+      "sub_industries": [
+        {
+          "name": "Pharmaceuticals",
+          "code": "HEALTH_PHARMA",
+          "matchers": {
+            "keywords": ["pharmaceutical", "drug", "medicine"],
+            "sic_codes": ["2834"]
+          }
+        },
+        {
+          "name": "Biotechnology",
+          "code": "HEALTH_BIOTECH",
+          "matchers": {
+            "keywords": ["biotechnology", "biotech", "genetic", "genomic"],
+            "sic_codes": ["2836"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Retail",
+      "code": "RETAIL",
+      "priority": 80,
+      "matchers": {
+        "sic_codes": ["5311", "5331", "5399", "5411", "5499", "5611", "5699"],
+        "naics_codes": ["44", "45"],
+        "keywords": ["retail", "store", "shop", "ecommerce", "e-commerce", "online retail", "marketplace"],
+        "patterns": ["\\b(retail|store|shop)\\b"],
+        "exact_names": ["Walmart Inc.", "Amazon.com Inc.", "Target Corporation"]
+      },
+      "sub_industries": [
+        {
+          "name": "E-commerce",
+          "code": "RETAIL_ECOM",
+          "matchers": {
+            "keywords": ["e-commerce", "ecommerce", "online retail", "digital commerce"],
+            "naics_codes": ["454110"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Manufacturing",
+      "code": "MFG",
+      "priority": 75,
+      "matchers": {
+        "sic_codes": ["2000-3999"],
+        "naics_codes": ["31", "32", "33"],
+        "keywords": ["manufacturing", "factory", "production", "industrial", "assembly"],
+        "patterns": ["\\b(manufactur|factory|industrial)\\b"],
+        "exact_names": ["General Electric", "3M Company", "Boeing Company"]
+      }
+    },
+    {
+      "name": "Energy",
+      "code": "ENERGY",
+      "priority": 70,
+      "matchers": {
+        "sic_codes": ["1311", "2911", "4911", "4922", "4923", "4924", "4925"],
+        "naics_codes": ["211", "221", "486"],
+        "keywords": ["energy", "oil", "gas", "petroleum", "electricity", "power", "renewable", "solar", "wind"],
+        "patterns": ["\\b(energy|oil|gas|power)\\b"],
+        "exact_names": ["ExxonMobil", "Chevron Corporation", "NextEra Energy"]
+      },
+      "sub_industries": [
+        {
+          "name": "Renewable Energy",
+          "code": "ENERGY_RENEW",
+          "matchers": {
+            "keywords": ["renewable", "solar", "wind", "hydroelectric", "clean energy"],
+            "patterns": ["\\b(solar|wind|renewable)\\b"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Real Estate",
+      "code": "RESTATE",
+      "priority": 65,
+      "matchers": {
+        "sic_codes": ["6500-6599"],
+        "naics_codes": ["531"],
+        "keywords": ["real estate", "property", "reit", "realty", "properties", "development"],
+        "patterns": ["\\b(real.?estate|property|reit)\\b"],
+        "exact_names": ["American Tower Corporation", "Prologis Inc.", "Simon Property Group"]
+      }
+    },
+    {
+      "name": "Telecommunications",
+      "code": "TELECOM",
+      "priority": 60,
+      "matchers": {
+        "sic_codes": ["4812", "4813", "4899"],
+        "naics_codes": ["517"],
+        "keywords": ["telecom", "telecommunications", "wireless", "mobile", "broadband", "5g"],
+        "patterns": ["\\b(telecom|wireless|mobile)\\b"],
+        "exact_names": ["AT&T Inc.", "Verizon Communications", "T-Mobile US"]
+      }
+    },
+    {
+      "name": "Transportation",
+      "code": "TRANS",
+      "priority": 55,
+      "matchers": {
+        "sic_codes": ["4011", "4213", "4512", "4513", "4522"],
+        "naics_codes": ["48", "49"],
+        "keywords": ["transportation", "logistics", "shipping", "freight", "airline", "railroad"],
+        "patterns": ["\\b(transport|logistics|shipping)\\b"],
+        "exact_names": ["United Parcel Service", "FedEx Corporation", "Union Pacific Corporation"]
+      }
+    },
+    {
+      "name": "Consumer Goods",
+      "code": "CONS",
+      "priority": 50,
+      "matchers": {
+        "sic_codes": ["2000-2099", "2300-2399"],
+        "naics_codes": ["311", "312", "313", "314", "315"],
+        "keywords": ["consumer", "food", "beverage", "household", "personal care"],
+        "patterns": ["\\b(consumer|food|beverage)\\b"],
+        "exact_names": ["Procter & Gamble", "Coca-Cola Company", "PepsiCo Inc."]
+      }
+    }
+  ],
+  "validation_rules": [
+    {
+      "name": "code_format",
+      "type": "format",
+      "parameters": {
+        "pattern": "^[A-Z][A-Z0-9_]{0,19}$",
+        "description": "Industry codes must be uppercase alphanumeric with underscores, max 20 chars"
+      },
+      "error_message": "Invalid industry code format"
+    },
+    {
+      "name": "code_not_empty",
+      "type": "required",
+      "parameters": {},
+      "error_message": "Industry code cannot be empty"
+    }
+  ]
+}
