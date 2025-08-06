@@ -219,7 +219,7 @@ func testErrorHandling(t *testing.T) {
 		// Missing critical financial data (revenue, assets, etc.)
 	}
 
-	result, err = service.CleanFinancialData(ctx, incompleteData)
+	_, err = service.CleanFinancialData(ctx, incompleteData)
 	assert.Error(t, err, "Should error with incomplete data")
 
 	// Test context cancellation
@@ -227,7 +227,7 @@ func testErrorHandling(t *testing.T) {
 	cancel() // Cancel immediately
 
 	data := createTestFinancialDataWithIssues()
-	result, err = service.CleanFinancialData(cancelCtx, data)
+	_, err = service.CleanFinancialData(cancelCtx, data)
 	assert.Error(t, err, "Should error with cancelled context")
 }
 

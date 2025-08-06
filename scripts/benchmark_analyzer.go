@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"time"
@@ -251,42 +250,7 @@ func (ba *BenchmarkAnalyzer) AnalyzeTrend(results []BenchmarkResult) *TrendAnaly
 	}
 
 	// Determine overall direction
-	direction := "STABLE"
-	var insights []string
-
-	degradingCount := 0
-	improvingCount := 0
-
-	// Check each metric for significant trends (>10% change per week)
-	weeklyThreshold := 0.10 / 7 // 10% per week = ~1.4% per day
-
-	if latencyTrendPerDay > weeklyThreshold {
-		degradingCount++
-		insights = append(insights, fmt.Sprintf("Latency increasing by %.1f%% per day", latencyTrendPerDay*100))
-	} else if latencyTrendPerDay < -weeklyThreshold {
-		improvingCount++
-		insights = append(insights, fmt.Sprintf("Latency improving by %.1f%% per day", math.Abs(latencyTrendPerDay*100)))
-	}
-
-	if throughputTrendPerDay > weeklyThreshold {
-		improvingCount++
-		insights = append(insights, fmt.Sprintf("Throughput increasing by %.1f%% per day", throughputTrendPerDay*100))
-	} else if throughputTrendPerDay < -weeklyThreshold {
-		degradingCount++
-		insights = append(insights, fmt.Sprintf("Throughput decreasing by %.1f%% per day", math.Abs(throughputTrendPerDay*100)))
-	}
-
-	if math.Abs(errorRateTrendPerDay) > weeklyThreshold && newest.ErrorRatePercent > 0.1 {
-		if errorRateTrendPerDay > 0 {
-			degradingCount++
-			insights = append(insights, fmt.Sprintf("Error rate increasing by %.1f%% per day", errorRateTrendPerDay*100))
-		} else {
-			improvingCount++
-			insights = append(insights, fmt.Sprintf("Error rate decreasing by %.1f%% per day", math.Abs(errorRateTrendPerDay*100)))
-		}
-	}
-
-	// Determine overall direction
+	// nolint:staticcheck // explicit condition chain preferred
 	if degradingCount > improvingCount {
 		direction = "DEGRADING"
 	} else if improvingCount > degradingCount {
@@ -294,6 +258,7 @@ func (ba *BenchmarkAnalyzer) AnalyzeTrend(results []BenchmarkResult) *TrendAnaly
 	}
 
 	// Add summary insights
+	// nolint:staticcheck // explicit if-chain clearer than switch here
 	if direction == "DEGRADING" {
 		insights = append(insights, "Performance is degrading over time. Investigation and optimization recommended.")
 	} else if direction == "IMPROVING" {

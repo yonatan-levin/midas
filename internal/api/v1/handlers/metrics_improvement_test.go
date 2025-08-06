@@ -29,7 +29,7 @@ func TestRealMetricsCollection(t *testing.T) {
 	// Create in-memory database for testing
 	db, err := sqlx.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Create health handler
 	healthHandler := &HealthHandler{
@@ -74,7 +74,7 @@ func TestBusinessMetricsFromValuationService(t *testing.T) {
 	// Create in-memory database for testing
 	db, dbErr := sqlx.Open("sqlite3", ":memory:")
 	require.NoError(t, dbErr)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	healthHandler := &HealthHandler{
 		logger:         logger,

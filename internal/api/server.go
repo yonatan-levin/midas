@@ -65,6 +65,10 @@ func NewServer(
 		metricsService:   metricsService,
 	}
 
+	// Global middlewares
+	engine.Use(server.requestIDMiddleware())       // attach request ID to each request
+	engine.Use(server.securityHeadersMiddleware()) // basic security headers
+
 	// Setup middleware
 	server.setupMiddleware()
 
@@ -195,6 +199,20 @@ func (s *Server) setupRoutes() {
 		// TODO: Add Swagger/OpenAPI documentation endpoints
 		s.logger.Info("Swagger documentation will be available at /docs")
 	}
+
+	// ----- NEW AUTH ROUTES -----
+	authHandler := handlers.NewAuthHandler(s.authService, s.logger)
+	authGroup := v1.Group("/auth")
+	authGroup.Use(s.authMiddleware())
+	authGroup.Use(s.requirePermission(entities.PermissionManageKeys))
+	{
+		authGroup.POST("/keys", authHandler.CreateAPIKey)
+	}
+}
+
+// Engine returns the underlying Gin engine (useful for tests)
+func (s *Server) Engine() *gin.Engine {
+	return s.engine
 }
 
 // Middleware implementations

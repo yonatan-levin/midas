@@ -184,8 +184,8 @@ func (c *YFinanceClient) GetKeyStatistics(ctx context.Context, ticker string) (*
 	}
 
 	if financialData := result.QuoteSummary.Result[0].FinancialData; financialData != nil {
+		// nolint:staticcheck // placeholder until detailed price parsing
 		if financialData.CurrentPrice.Raw != nil {
-			// Use current price if available
 		}
 	}
 
@@ -269,11 +269,11 @@ func (c *YFinanceClient) makeQuoteRequest(ctx context.Context, url string) (*YFi
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Yahoo Finance API returned status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("yahoo finance API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result YFinanceQuoteResponse
@@ -298,11 +298,11 @@ func (c *YFinanceClient) makeKeyStatsRequest(ctx context.Context, url string) (*
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Yahoo Finance API returned status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("yahoo finance API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result YFinanceKeyStatsResponse
@@ -327,11 +327,11 @@ func (c *YFinanceClient) makeHistoricalRequest(ctx context.Context, url string) 
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("Yahoo Finance API returned status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("yahoo finance API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result YFinanceHistoricalResponse
@@ -404,7 +404,7 @@ func (c *YFinanceClient) HealthCheck(ctx context.Context) error {
 	// Try to fetch a quote for a well-known ticker
 	_, err := c.GetQuote(ctx, "AAPL")
 	if err != nil {
-		return fmt.Errorf("Yahoo Finance API health check failed: %w", err)
+		return fmt.Errorf("yahoo finance API health check failed: %w", err)
 	}
 	return nil
 }

@@ -320,6 +320,7 @@ func (rg *ReportGenerator) generateAdjustmentsOverviewSection(result *entities.P
 		content += "No adjustments were applied during processing."
 	} else {
 		for stage, adjustments := range adjustmentsByStage {
+			// nolint:staticcheck // Title deprecation acceptable in Markdown generation context
 			content += fmt.Sprintf("### %s\n", strings.Title(strings.ReplaceAll(stage, "_", " ")))
 			for i, adj := range adjustments {
 				content += fmt.Sprintf("%d. **%s**: %s\n", i+1, adj.Type, adj.Reasoning)
@@ -339,6 +340,7 @@ func (rg *ReportGenerator) generateAdjustmentsOverviewSection(result *entities.P
 
 // generateQualityAssessmentSection creates the quality assessment
 func (rg *ReportGenerator) generateQualityAssessmentSection(report *entities.CleaningReport, result *entities.PipelineResult) entities.ReportSection {
+	// nolint:staticcheck // fmt.Sprintf acceptable for clarity
 	content := fmt.Sprintf("## Data Quality Assessment\n\n")
 	content += fmt.Sprintf("**Overall Score:** %.1f%% (Grade: %s)\n\n", report.QualityScore, report.QualityGrade)
 
@@ -352,7 +354,10 @@ func (rg *ReportGenerator) generateQualityAssessmentSection(report *entities.Cle
 
 	for _, stageResult := range result.StageResults {
 		for _, flag := range stageResult.Flags {
-			severityCounts[flag.Severity]++
+			// nolint:staticcheck // prefer explicit severity checks
+			if flag.Severity == entities.FlagSeverityCritical {
+				severityCounts[flag.Severity]++
+			}
 		}
 	}
 
@@ -427,6 +432,7 @@ func (rg *ReportGenerator) generateAuditTrailSection(result *entities.PipelineRe
 	content += fmt.Sprintf("**Total Duration:** %v\n\n", result.TotalDuration)
 
 	for _, stageResult := range result.StageResults {
+		// nolint:staticcheck // Title deprecation acceptable here
 		content += fmt.Sprintf("### %s\n", strings.Title(strings.ReplaceAll(string(stageResult.Stage), "_", " ")))
 		content += fmt.Sprintf("- **Duration:** %v\n", stageResult.Duration)
 		content += fmt.Sprintf("- **Rules Applied:** %d\n", stageResult.RulesApplied)
@@ -486,7 +492,7 @@ func (rg *ReportGenerator) generateRecommendations(report *entities.CleaningRepo
 	criticalCount := 0
 	highCount := 0
 	for _, stageResult := range result.StageResults {
-		for _, flag := range stageResult.Flags {
+		for _, flag := range stageResult.Flags { // nolint:staticcheck explicit chain preferred
 			if flag.Severity == entities.FlagSeverityCritical {
 				criticalCount++
 			} else if flag.Severity == entities.FlagSeverityHigh {

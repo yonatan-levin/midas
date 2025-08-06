@@ -33,7 +33,7 @@ func TestHealthHandler_GetMetrics_RealMetricsCollection(t *testing.T) {
 	// Create in-memory database for testing
 	db, err := sqlx.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Create health handler with metrics tracking
 	healthHandler := &HealthHandler{
@@ -79,7 +79,7 @@ func TestHealthHandler_GetMetrics_WithDatabaseStats(t *testing.T) {
 	// Create in-memory database for testing
 	db, err := sqlx.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Create metrics service for testing
 	mockMetricsService := metrics.NewService(logger)
@@ -121,7 +121,7 @@ func TestHealthHandler_GetMetrics_ErrorRateCalculation(t *testing.T) {
 	// Create in-memory database for testing
 	db, err := sqlx.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	healthHandler := &HealthHandler{
 		logger:         logger,
@@ -162,7 +162,7 @@ func TestHealthHandler_GetMetrics_CacheHitRateTracking(t *testing.T) {
 	// Create in-memory database for testing
 	db, err := sqlx.Open("sqlite3", ":memory:")
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	healthHandler := &HealthHandler{
 		logger:         logger,

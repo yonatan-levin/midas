@@ -401,6 +401,8 @@ func TestLiabilityAdjuster_IndustryThresholds(t *testing.T) {
 }
 
 // Helper functions for test data creation
+// createTestFinancialData returns minimal FinancialData for liability tests
+// nolint:unused
 func createTestFinancialData(ticker string) *entities.FinancialData {
 	return &entities.FinancialData{
 		Ticker:      ticker,
@@ -424,6 +426,8 @@ func createTestCleaningContext(industryCode string) *entities.CleaningContext {
 	}
 }
 
+// createTestLiabilityRule builds a mock CleaningRule for liabilities
+// nolint:unused
 func createTestLiabilityRule(ruleID string) *entities.CleaningRule {
 	return &entities.CleaningRule{
 		ID:       ruleID,

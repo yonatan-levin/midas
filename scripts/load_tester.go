@@ -110,7 +110,7 @@ func runLoadTest(config *LoadTestConfig) *LoadTestResult {
 		successfulReqs int64
 		failedReqs     int64
 		totalLatency   int64
-		minLatency     int64 = int64(time.Hour)
+		minLatency     = int64(time.Hour)
 		maxLatency     int64
 	)
 
@@ -288,7 +288,7 @@ func executeRequest(client *http.Client, task RequestTask, apiKey string) Reques
 		metric.Latency = time.Since(startTime)
 		return metric
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response to ensure complete processing
 	_, err = io.ReadAll(resp.Body)

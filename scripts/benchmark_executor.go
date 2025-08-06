@@ -80,7 +80,7 @@ func (be *BenchmarkExecutor) MakeRequest(ctx context.Context, method, endpoint s
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Read response body
 	respBody, err := io.ReadAll(resp.Body)
@@ -287,7 +287,7 @@ func (be *BenchmarkExecutor) runLoadTestWithBody(ctx context.Context, scenario T
 					return
 				case <-requestQueue:
 					var endpoint string
-					var method string = "GET"
+					method := "GET"
 					var reqBody []byte
 
 					if fixedEndpoint != "" {

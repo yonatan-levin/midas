@@ -234,7 +234,7 @@ func (c *Client) makeRequest(ctx context.Context, url string) (*ports.SECCompany
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Handle different HTTP status codes
 	switch resp.StatusCode {
@@ -291,7 +291,7 @@ func (c *Client) makeConceptRequest(ctx context.Context, url string) (*entities.
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Handle different HTTP status codes
 	switch resp.StatusCode {
@@ -341,7 +341,7 @@ func (c *Client) makeTickerMappingRequest(ctx context.Context, url string) (map[
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	// Handle different HTTP status codes
 	switch resp.StatusCode {

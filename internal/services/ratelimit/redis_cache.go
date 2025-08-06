@@ -300,7 +300,7 @@ func (r *RedisCacheStore) HealthCheck(ctx context.Context) error {
 	// Simple ping to verify connectivity
 	err := r.client.Ping(ctx).Err()
 	if err != nil {
-		return fmt.Errorf("Redis health check failed: %w", err)
+		return fmt.Errorf("redis health check failed: %w", err)
 	}
 
 	// Test basic operations
@@ -309,17 +309,17 @@ func (r *RedisCacheStore) HealthCheck(ctx context.Context) error {
 	// Set a test value
 	err = r.client.Set(ctx, testKey, "test", time.Second).Err()
 	if err != nil {
-		return fmt.Errorf("Redis set operation failed: %w", err)
+		return fmt.Errorf("redis set operation failed: %w", err)
 	}
 
 	// Get the test value
 	val, err := r.client.Get(ctx, testKey).Result()
 	if err != nil {
-		return fmt.Errorf("Redis get operation failed: %w", err)
+		return fmt.Errorf("redis get operation failed: %w", err)
 	}
 
 	if val != "test" {
-		return fmt.Errorf("Redis returned unexpected value: %s", val)
+		return fmt.Errorf("redis returned unexpected value: %s", val)
 	}
 
 	// Clean up test key

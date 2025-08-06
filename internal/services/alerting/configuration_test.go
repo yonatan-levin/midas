@@ -500,11 +500,11 @@ func TestConfigurationLoader_EnvironmentVariableSubstitution(t *testing.T) {
 	ctx := context.Background()
 
 	// Set test environment variables
-	os.Setenv("TEST_EMAIL_PASSWORD", "secret123")
-	os.Setenv("TEST_SLACK_WEBHOOK", "https://hooks.slack.com/services/test")
+	_ = os.Setenv("TEST_EMAIL_PASSWORD", "secret123")                            // nolint:errcheck
+	_ = os.Setenv("TEST_SLACK_WEBHOOK", "https://hooks.slack.com/services/test") // nolint:errcheck
 	defer func() {
-		os.Unsetenv("TEST_EMAIL_PASSWORD")
-		os.Unsetenv("TEST_SLACK_WEBHOOK")
+		_ = os.Unsetenv("TEST_EMAIL_PASSWORD") // nolint:errcheck
+		_ = os.Unsetenv("TEST_SLACK_WEBHOOK")  // nolint:errcheck
 	}()
 
 	configContent := `

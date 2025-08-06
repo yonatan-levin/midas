@@ -554,7 +554,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		assert.Nil(t, result)
 		// The test should fail when DataFetcher is nil, which is expected behavior
 		// This tests that the service properly handles the case when DataFetcher is not configured
-		assert.Contains(t, err.Error(), "runtime error")
+		assert.Contains(t, err.Error(), "data fetcher not configured")
 
 		freshFinancialRepo.AssertExpectations(t)
 		freshCache.AssertExpectations(t)

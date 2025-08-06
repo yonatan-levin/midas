@@ -40,7 +40,7 @@ type TestStruct struct {
 
 func TestRedisCacheRepository_Set_Get(t *testing.T) {
 	client := setupTestRedisClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -103,7 +103,7 @@ func TestRedisCacheRepository_Set_Get(t *testing.T) {
 
 func TestRedisCacheRepository_Delete(t *testing.T) {
 	client := setupTestRedisClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -138,7 +138,7 @@ func TestRedisCacheRepository_Delete(t *testing.T) {
 
 func TestRedisCacheRepository_Exists(t *testing.T) {
 	client := setupTestRedisClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -166,7 +166,7 @@ func TestRedisCacheRepository_Exists(t *testing.T) {
 
 func TestRedisCacheRepository_SetNX(t *testing.T) {
 	client := setupTestRedisClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -210,7 +210,7 @@ func TestRedisCacheRepository_SetNX(t *testing.T) {
 
 func TestRedisCacheRepository_GetKeys(t *testing.T) {
 	client := setupTestRedisClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -253,7 +253,7 @@ func TestRedisCacheRepository_GetKeys(t *testing.T) {
 
 func TestRedisCacheRepository_DeletePattern(t *testing.T) {
 	client := setupTestRedisClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -295,7 +295,7 @@ func TestRedisCacheRepository_DeletePattern(t *testing.T) {
 
 func TestRedisCacheRepository_Integration(t *testing.T) {
 	client := setupTestRedisClient(t)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()

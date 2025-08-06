@@ -70,6 +70,6 @@ func loadSchemaFileForTests() (string, error) {
 // This is a helper for defer cleanup in tests
 func cleanupTestDatabase(db *sqlx.DB) {
 	if db != nil {
-		db.Close()
+		_ = db.Close() // nolint:errcheck
 	}
 }

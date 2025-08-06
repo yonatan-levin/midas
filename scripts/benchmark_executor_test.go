@@ -19,7 +19,7 @@ func TestBenchmarkExecutor_HTTPClient(t *testing.T) {
 		apiKey := r.Header.Get("X-API-Key")
 		if apiKey != "test-api-key" {
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error": "unauthorized"}`))
+			_, _ = w.Write([]byte(`{"error": "unauthorized"}`))
 			return
 		}
 
@@ -29,7 +29,7 @@ func TestBenchmarkExecutor_HTTPClient(t *testing.T) {
 		// Return mock valuation response
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"ticker": "AAPL",
 			"wacc": 0.08,
 			"growth_rate": 0.05,
@@ -79,18 +79,18 @@ func TestBenchmarkExecutor_AuthenticationHandling(t *testing.T) {
 		apiKey := r.Header.Get("X-API-Key")
 		if apiKey == "" {
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error": "missing api key"}`))
+			_, _ = w.Write([]byte(`{"error": "missing api key"}`))
 			return
 		}
 
 		if apiKey != "valid-key" {
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error": "invalid api key"}`))
+			_, _ = w.Write([]byte(`{"error": "invalid api key"}`))
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"success": true}`))
+		_, _ = w.Write([]byte(`{"success": true}`))
 	}))
 	defer server.Close()
 
@@ -149,7 +149,7 @@ func TestScenarioExecution_SingleTicker(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"ticker": "AAPL",
 			"dcf_value_per_share": 123.45
 		}`))
@@ -203,7 +203,7 @@ func TestScenarioExecution_BulkRequests(t *testing.T) {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[
+		_, _ = w.Write([]byte(`[
 			{"ticker": "AAPL", "dcf_value_per_share": 123.45},
 			{"ticker": "MSFT", "dcf_value_per_share": 234.56},
 			{"ticker": "GOOGL", "dcf_value_per_share": 345.67}
@@ -244,12 +244,12 @@ func TestErrorHandling_APIErrors(t *testing.T) {
 		// Return errors for first few requests, then success
 		if errorCount <= 2 {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"error": "internal server error"}`))
+			_, _ = w.Write([]byte(`{"error": "internal server error"}`))
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ticker": "AAPL", "dcf_value_per_share": 123.45}`))
+		_, _ = w.Write([]byte(`{"ticker": "AAPL", "dcf_value_per_share": 123.45}`))
 	}))
 	defer server.Close()
 
@@ -294,7 +294,7 @@ func TestConcurrencyHandling_ParallelRequests(t *testing.T) {
 		concurrentRequests--
 
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"ticker": "AAPL", "dcf_value_per_share": 123.45}`))
+		_, _ = w.Write([]byte(`{"ticker": "AAPL", "dcf_value_per_share": 123.45}`))
 	}))
 	defer server.Close()
 
@@ -328,7 +328,7 @@ func TestLatencyMeasurement_Accuracy(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(expectedDelay)
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"success": true}`))
+		_, _ = w.Write([]byte(`{"success": true}`))
 	}))
 	defer server.Close()
 

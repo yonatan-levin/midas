@@ -90,7 +90,7 @@ func TestGateway_GetTreasuryRates_FREDSuccess(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -114,7 +114,7 @@ func TestGateway_GetTreasuryRates_FREDFailure(t *testing.T) {
 	// Create failing FRED server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte("Internal Server Error"))
+		_, _ = w.Write([]byte("Internal Server Error"))
 	}))
 	defer server.Close()
 
@@ -151,7 +151,7 @@ func TestGateway_GetTreasuryRates_FREDInvalidData(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(response)
 	}))
 	defer server.Close()
 
@@ -328,7 +328,7 @@ func TestGateway_getFREDSeries(t *testing.T) {
 				w.WriteHeader(tc.statusCode)
 				if tc.fredResponse != nil {
 					w.Header().Set("Content-Type", "application/json")
-					json.NewEncoder(w).Encode(tc.fredResponse)
+					_ = json.NewEncoder(w).Encode(tc.fredResponse)
 				}
 			}))
 			defer server.Close()
@@ -359,7 +359,7 @@ func TestGateway_ContextCancellation(t *testing.T) {
 				Observations: []FREDObservation{{Value: "4.50"}},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		}))
 		defer server.Close()
 
@@ -384,7 +384,7 @@ func TestGateway_ContextCancellation(t *testing.T) {
 				Observations: []FREDObservation{{Value: "4.50"}},
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
+			_ = json.NewEncoder(w).Encode(response)
 		}))
 		defer server.Close()
 

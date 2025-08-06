@@ -106,7 +106,7 @@ func TestClient_GetCompanyFacts_NotFound(t *testing.T) {
 	// Create test server that returns 404
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte("Company not found"))
+		_, _ = w.Write([]byte("Company not found"))
 	}))
 	defer server.Close()
 
@@ -133,7 +133,7 @@ func TestClient_GetCompanyFacts_RateLimit(t *testing.T) {
 	// Create test server that returns 429
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
-		w.Write([]byte("Rate limited"))
+		_, _ = w.Write([]byte("Rate limited"))
 	}))
 	defer server.Close()
 
@@ -185,7 +185,7 @@ func TestClient_GetCompanyFacts_WithRetry(t *testing.T) {
 		requestCount++
 		if requestCount < 3 {
 			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("Server error"))
+			_, _ = w.Write([]byte("Server error"))
 			return
 		}
 
@@ -238,7 +238,7 @@ func TestClient_GetTickerCIKMapping_Success(t *testing.T) {
 		assert.Equal(t, "application/json", r.Header.Get("Accept"))
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockMapping)
+		_ = json.NewEncoder(w).Encode(mockMapping)
 	}))
 	defer server.Close()
 
@@ -276,7 +276,7 @@ func TestClient_HealthCheck_Success(t *testing.T) {
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockMapping)
+		_ = json.NewEncoder(w).Encode(mockMapping)
 	}))
 	defer server.Close()
 
@@ -339,12 +339,12 @@ func TestClient_RateLimiting(t *testing.T) {
 				},
 			},
 		}
-			// Encode with error handling
-			if err := json.NewEncoder(w).Encode(mockResponse); err != nil {
-				t.Errorf("Failed to encode mock response: %v", err)
-				http.Error(w, "Internal server error", http.StatusInternalServerError)
-				return
-			}
+		// Encode with error handling
+		if err := json.NewEncoder(w).Encode(mockResponse); err != nil {
+			t.Errorf("Failed to encode mock response: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer server.Close()
 

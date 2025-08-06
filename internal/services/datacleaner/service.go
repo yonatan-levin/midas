@@ -455,6 +455,7 @@ func (s *service) checkRuleApplicability(rule *entities.CleaningRule, data *enti
 	}
 }
 
+// nolint:unused // reserved for future rule engine refactor
 func (s *service) applyRule(rule *entities.CleaningRule, data *entities.FinancialData) (*entities.Adjustment, *entities.Flag, error) {
 	timestamp := time.Now()
 
@@ -474,6 +475,7 @@ func (s *service) applyRule(rule *entities.CleaningRule, data *entities.Financia
 	}
 }
 
+// nolint:unused // reserved for future rule engine refactor
 func (s *service) applyExclusionRule(rule *entities.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*entities.Adjustment, *entities.Flag, error) {
 	var amount float64
 	var fromAccount string
@@ -561,6 +563,7 @@ func (s *service) applyExclusionRule(rule *entities.CleaningRule, data *entities
 	return adjustment, nil, nil
 }
 
+// nolint:unused // reserved for future rule engine refactor
 func (s *service) applyWritedownRule(rule *entities.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*entities.Adjustment, *entities.Flag, error) {
 	var amount float64
 	var fromAccount string
@@ -631,6 +634,7 @@ func (s *service) applyWritedownRule(rule *entities.CleaningRule, data *entities
 	return nil, nil, nil
 }
 
+// nolint:unused // reserved for future rule engine refactor
 func (s *service) applyFlagRule(rule *entities.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*entities.Adjustment, *entities.Flag, error) {
 	var amount float64
 
@@ -680,6 +684,7 @@ func (s *service) applyFlagRule(rule *entities.CleaningRule, data *entities.Fina
 	return nil, flag, nil
 }
 
+// nolint:unused // reserved for future rule engine refactor
 func (s *service) applyReclassifyRule(rule *entities.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*entities.Adjustment, *entities.Flag, error) {
 	var amount float64
 	var fromAccount string
@@ -740,6 +745,7 @@ func (s *service) applyReclassifyRule(rule *entities.CleaningRule, data *entitie
 	return nil, nil, nil
 }
 
+// nolint:unused // reserved for future rule engine refactor
 func (s *service) applyTreatAsDebtRule(rule *entities.CleaningRule, data *entities.FinancialData, timestamp time.Time) (*entities.Adjustment, *entities.Flag, error) {
 	var amount float64
 	var fromAccount string

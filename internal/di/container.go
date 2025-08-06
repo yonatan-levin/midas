@@ -117,15 +117,15 @@ var ServiceModule = fx.Options(
 
 	// Data fetcher service (NEW)
 	fx.Provide(NewDataFetcher),
-
+	
 	// Metrics Service - concrete type
 	fx.Provide(NewMetricsService), // returns *metrics.Service
-
+	
 	// Bind concrete to interface without constructing anything new
 	fx.Provide(
 		func(s *metrics.Service) ports.MetricsService { return s },
 	),
-
+	
 	fx.Provide(NewValuationService),
 	fx.Provide(NewRateLimiterService),
 )

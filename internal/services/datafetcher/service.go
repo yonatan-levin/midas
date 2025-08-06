@@ -150,8 +150,8 @@ func (df *DataFetcher) Fetch(ctx context.Context, request *entities.FetchRequest
 		if err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("validation error: %v", err))
 		} else {
-		result.QualityReport = qualityReport
-	}
+			result.QualityReport = qualityReport
+		}
 	}
 
 	// Cache result if successful and caching is enabled
@@ -288,8 +288,9 @@ func (df *DataFetcher) GetHealth(ctx context.Context) map[string]interface{} {
 		health["cache"] = map[string]interface{}{
 			"status": "healthy",
 		}
-		// Clean up test data
-		df.cacheRepo.Delete(ctx, testKey)
+		// nolint:staticcheck // no-op branch intentional for test key cleanup failure
+		if err := df.cacheRepo.Delete(ctx, testKey); err != nil {
+		}
 	}
 
 	return health

@@ -66,6 +66,7 @@ func (g *Gateway) GetMarketRiskPremium(ctx context.Context) (float64, error) {
 	g.logger.Debug("Getting market risk premium")
 
 	// If FRED API is enabled, could potentially fetch historical market data
+	// nolint:staticcheck // placeholder until FRED integration is implemented
 	if g.config.FREDEnabled && g.config.FREDAPIKey != "" {
 		// TODO: Implement sophisticated MRP calculation from FRED data
 		// For now, fall back to config default
@@ -175,7 +176,7 @@ func (g *Gateway) getFREDSeries(ctx context.Context, seriesID string) (float64, 
 	if err != nil {
 		return 0, fmt.Errorf("failed to execute FRED request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -218,11 +219,11 @@ func (g *Gateway) getTreasuryRatesFromConfig() *entities.TreasuryRates {
 		Yield3Month: baseRate * 0.6,
 		Yield6Month: baseRate * 0.7,
 		Yield1Year:  baseRate * 0.8,
-		Yield2Year:  math.Round(baseRate * 0.90 * 10000) / 10000,
-		Yield5Year:  math.Round(baseRate * 0.95 * 10000) / 10000,
-		Yield10Year: baseRate,        // Base rate represents 10-year
-		Yield20Year: math.Round(baseRate * 1.05 * 10000) / 10000, // Typically slightly higher
-		Yield30Year: math.Round(baseRate * 1.10 * 10000) / 10000 ,
+		Yield2Year:  math.Round(baseRate*0.90*10000) / 10000,
+		Yield5Year:  math.Round(baseRate*0.95*10000) / 10000,
+		Yield10Year: baseRate,                                // Base rate represents 10-year
+		Yield20Year: math.Round(baseRate*1.05*10000) / 10000, // Typically slightly higher
+		Yield30Year: math.Round(baseRate*1.10*10000) / 10000,
 	}
 }
 

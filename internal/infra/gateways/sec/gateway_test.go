@@ -74,7 +74,7 @@ func TestGateway_GetCompanyFacts(t *testing.T) {
 		assert.Equal(t, "Test User Agent", r.Header.Get("User-Agent"))
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockCompanyFacts)
+		_ = json.NewEncoder(w).Encode(mockCompanyFacts)
 	}))
 	defer server.Close()
 
@@ -141,7 +141,7 @@ func TestGateway_GetCompanyConcepts(t *testing.T) {
 		assert.Equal(t, "Test User Agent", r.Header.Get("User-Agent"))
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockConceptResponse)
+		_ = json.NewEncoder(w).Encode(mockConceptResponse)
 	}))
 	defer server.Close()
 
@@ -200,7 +200,7 @@ func TestGateway_GetTickerCIKMapping(t *testing.T) {
 		assert.Equal(t, "Test User Agent", r.Header.Get("User-Agent"))
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockMapping)
+		_ = json.NewEncoder(w).Encode(mockMapping)
 	}))
 	defer server.Close()
 
@@ -222,7 +222,7 @@ func TestGateway_GetTickerCIKMapping(t *testing.T) {
 	t.Run("handles empty mapping", func(t *testing.T) {
 		emptyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{})
 		}))
 		defer emptyServer.Close()
 
@@ -244,7 +244,7 @@ func TestGateway_HealthCheck(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Return simple successful response for ticker mapping
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{})
 		}))
 		defer server.Close()
 
@@ -284,7 +284,7 @@ func TestGateway_ContextCancellation(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(100 * time.Millisecond)
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{})
 		}))
 		defer server.Close()
 
@@ -305,7 +305,7 @@ func TestGateway_ContextCancellation(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(200 * time.Millisecond)
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{})
 		}))
 		defer server.Close()
 
@@ -327,7 +327,7 @@ func TestGateway_RateLimiting(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requestCount++
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{})
 		}))
 		defer server.Close()
 
@@ -362,7 +362,7 @@ func TestGateway_RetryLogic(t *testing.T) {
 			}
 			// Succeed on third attempt
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{})
 		}))
 		defer server.Close()
 

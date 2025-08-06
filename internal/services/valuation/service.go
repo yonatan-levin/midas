@@ -72,25 +72,30 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*entit
 	historicalData, err := s.financialRepo.GetHistorical(ctx, ticker, 10) // Get up to 10 periods
 	if err != nil || len(historicalData.Data) == 0 {
 		s.logger.Info("No historical data in repository, fetching via DataFetcher", zap.String("ticker", ticker))
-		
+
+		// Check if DataFetcher is configured before attempting to use it
+		if s.dataFetcher == nil {
+			return nil, fmt.Errorf("no historical data found for ticker %s and data fetcher not configured", ticker)
+		}
+
 		// Use DataFetcher to fetch and store data
 		fetchRequest := &entities.FetchRequest{
 			Ticker: ticker,
 		}
-		
+
 		_, fetchErr := s.dataFetcher.Fetch(ctx, fetchRequest)
 		if fetchErr != nil {
 			return nil, fmt.Errorf("failed to fetch data via DataFetcher: %w", fetchErr)
 		}
-		
+
 		// DataFetcher should have populated the database, try repository again
 		historicalData, err = s.financialRepo.GetHistorical(ctx, ticker, 10)
 		if err != nil || len(historicalData.Data) == 0 {
 			return nil, fmt.Errorf("failed to fetch financial data: no historical data found for ticker %s", ticker)
 		}
-		
-		s.logger.Info("Successfully fetched data via DataFetcher", 
-			zap.String("ticker", ticker), 
+
+		s.logger.Info("Successfully fetched data via DataFetcher",
+			zap.String("ticker", ticker),
 			zap.Int("periods", len(historicalData.Data)))
 	}
 
@@ -286,16 +291,6 @@ func (s *Service) calculateTangibleValuePerShare(financial *entities.FinancialDa
 	}
 
 	return tangibleEquity / shares
-}
-
-// calculateCostOfDebt calculates the effective cost of debt
-func (s *Service) calculateCostOfDebt(financial *entities.FinancialData) float64 {
-	if financial.InterestBearingDebt <= 0 {
-		return 0 // No debt
-	}
-
-	// Calculate as interest expense / total debt
-	return financial.InterestExpense / financial.InterestBearingDebt
 }
 
 // calculateTerminalGrowthRate calculates a conservative terminal growth rate

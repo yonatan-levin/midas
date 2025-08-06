@@ -312,6 +312,7 @@ func (s *EnhancedRegressionDetectionService) performTTest(data1, data2 []float64
 	// Calculate degrees of freedom (Welch-Satterthwaite equation)
 	s1Sq := var1 / float64(n1)
 	s2Sq := var2 / float64(n2)
+	// nolint:staticcheck // math.Pow readable here
 	df := math.Pow(s1Sq+s2Sq, 2) / (math.Pow(s1Sq, 2)/float64(n1-1) + math.Pow(s2Sq, 2)/float64(n2-1))
 
 	// Approximate p-value calculation (simplified)
@@ -465,7 +466,7 @@ func calculateVariance(data []float64) float64 {
 	mean := calculateMean(data)
 	sum := 0.0
 	for _, v := range data {
-		sum += math.Pow(v-mean, 2)
+		sum += math.Pow(v-mean, 2) // nolint:staticcheck
 	}
 	return sum / float64(len(data)-1)
 }

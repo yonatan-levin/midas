@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	
+
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
@@ -36,31 +36,31 @@ func (s *XBRLTagMatcherService) MatchTags(ctx context.Context, xbrlData *entitie
 	if xbrlData == nil {
 		return nil, fmt.Errorf("xbrlData cannot be nil")
 	}
-	
+
 	var results []entities.MatchResult
-	
+
 	// Process each fact in the XBRL data
 	for tag, value := range xbrlData.Facts {
 		// Normalize the tag (handle namespaces)
 		normalizedTag := s.normalizeTag(tag, xbrlData.Namespace)
-		
+
 		// Try to match the tag
 		result, err := s.MatchSingleTag(ctx, normalizedTag, value)
 		if err != nil {
 			s.logger.Printf("Warning: failed to match tag %s: %v", tag, err)
 			continue
 		}
-		
+
 		if result != nil {
 			results = append(results, *result)
 		}
 	}
-	
+
 	// Check for required tags
 	if err := s.checkRequiredTags(results); err != nil {
 		return results, fmt.Errorf("missing required tags: %w", err)
 	}
-	
+
 	return results, nil
 }
 
@@ -72,21 +72,21 @@ func (s *XBRLTagMatcherService) MatchSingleTag(ctx context.Context, xbrlTag stri
 		// Tag not found in configuration, this might be expected
 		return nil, nil
 	}
-	
+
 	// Transform the value based on configuration
 	transformedValue, transformations, err := s.applyTransformations(value, mapping.Transformations)
 	if err != nil {
 		return nil, fmt.Errorf("failed to apply transformations: %w", err)
 	}
-	
+
 	// Validate data type
 	if err := s.validateDataType(transformedValue, mapping.DataType); err != nil {
 		return nil, fmt.Errorf("data type validation failed: %w", err)
 	}
-	
+
 	// Calculate confidence score
 	confidence := s.calculateConfidence(xbrlTag, mapping, transformations)
-	
+
 	return &entities.MatchResult{
 		InternalField:          mapping.InternalField,
 		Value:                  transformedValue,
@@ -103,43 +103,42 @@ func (s *XBRLTagMatcherService) ValidateMatches(ctx context.Context, matches []e
 	for _, match := range matches {
 		matchMap[match.InternalField] = match.Value
 	}
-	
+
 	// Apply validation rules
 	for _, rule := range s.config.ValidationRules {
 		if err := s.applyValidationRule(rule, matchMap); err != nil {
 			return fmt.Errorf("validation rule '%s' failed: %w", rule.Name, err)
 		}
 	}
-	
+
 	return nil
 }
 
 // GetRequiredTags returns the list of required XBRL tags
 func (s *XBRLTagMatcherService) GetRequiredTags() []string {
 	var tags []string
-	
+
 	for _, mapping := range s.config.GetRequiredMappings() {
 		tags = append(tags, mapping.XBRLTag)
 		// Include alternative tags as well
 		tags = append(tags, mapping.AlternativeTags...)
 	}
-	
+
 	return tags
 }
 
 // normalizeTag normalizes an XBRL tag by handling namespaces
 func (s *XBRLTagMatcherService) normalizeTag(tag, namespace string) string {
-	// Remove namespace prefix if present
-	parts := strings.Split(tag, ":")
-	if len(parts) == 2 {
-		return parts[1]
+	// If tag already has namespace prefix, keep it as-is
+	if strings.Contains(tag, ":") {
+		return tag
 	}
-	
-	// If no namespace in tag, prepend the default namespace
-	if namespace != "" && !strings.Contains(tag, ":") {
+
+	// If no namespace in tag, prepend the default namespace if available
+	if namespace != "" {
 		return fmt.Sprintf("%s:%s", namespace, tag)
 	}
-	
+
 	return tag
 }
 
@@ -147,11 +146,11 @@ func (s *XBRLTagMatcherService) normalizeTag(tag, namespace string) string {
 func (s *XBRLTagMatcherService) applyTransformations(value interface{}, transformations []string) (interface{}, []string, error) {
 	applied := []string{}
 	result := value
-	
+
 	for _, transform := range transformations {
 		var err error
 		var wasApplied bool
-		
+
 		switch transform {
 		case "multiply_by_thousand":
 			result, wasApplied, err = s.transformMultiplyByThousand(result)
@@ -167,16 +166,16 @@ func (s *XBRLTagMatcherService) applyTransformations(value interface{}, transfor
 			s.logger.Printf("Unknown transformation: %s", transform)
 			continue
 		}
-		
+
 		if err != nil {
 			return nil, applied, fmt.Errorf("transformation '%s' failed: %w", transform, err)
 		}
-		
+
 		if wasApplied {
 			applied = append(applied, transform)
 		}
 	}
-	
+
 	return result, applied, nil
 }
 
@@ -244,11 +243,11 @@ func (s *XBRLTagMatcherService) transformRemoveCurrencySymbol(value interface{})
 		// Remove common currency symbols
 		cleaned := strings.TrimSpace(str)
 		symbols := []string{"$", "€", "£", "¥", "₹", "¢"}
-		
+
 		for _, symbol := range symbols {
 			cleaned = strings.ReplaceAll(cleaned, symbol, "")
 		}
-		
+
 		cleaned = strings.TrimSpace(cleaned)
 		return cleaned, cleaned != str, nil
 	}
@@ -276,28 +275,28 @@ func (s *XBRLTagMatcherService) validateDataType(value interface{}, expectedType
 	case "date", "duration":
 		// TODO: Add date/duration validation
 	}
-	
+
 	return nil
 }
 
 // calculateConfidence calculates a confidence score for a match
 func (s *XBRLTagMatcherService) calculateConfidence(tag string, mapping *config.XBRLTagMapping, transformations []string) float64 {
 	confidence := 1.0
-	
+
 	// Reduce confidence if alternative tag was used
 	isPrimaryTag := mapping.XBRLTag == tag
 	if !isPrimaryTag {
 		confidence *= 0.8
 	}
-	
+
 	// Reduce confidence for each transformation applied
 	confidence *= (1.0 - 0.05*float64(len(transformations)))
-	
+
 	// Ensure confidence stays in valid range
 	if confidence < 0.1 {
 		confidence = 0.1
 	}
-	
+
 	return confidence
 }
 
@@ -308,7 +307,7 @@ func (s *XBRLTagMatcherService) checkRequiredTags(results []entities.MatchResult
 	for _, result := range results {
 		matchedFields[result.InternalField] = true
 	}
-	
+
 	// Check each required mapping
 	var missingFields []string
 	for _, mapping := range s.config.GetRequiredMappings() {
@@ -316,11 +315,11 @@ func (s *XBRLTagMatcherService) checkRequiredTags(results []entities.MatchResult
 			missingFields = append(missingFields, mapping.InternalField)
 		}
 	}
-	
+
 	if len(missingFields) > 0 {
 		return fmt.Errorf("missing required fields: %s", strings.Join(missingFields, ", "))
 	}
-	
+
 	return nil
 }
 
@@ -331,7 +330,7 @@ func (s *XBRLTagMatcherService) applyValidationRule(rule config.ValidationRule, 
 		// Field doesn't exist, skip validation unless it's a required field check
 		return nil
 	}
-	
+
 	switch rule.Type {
 	case "required":
 		if !exists {
@@ -346,7 +345,7 @@ func (s *XBRLTagMatcherService) applyValidationRule(rule config.ValidationRule, 
 	default:
 		s.logger.Printf("Unknown validation type: %s", rule.Type)
 	}
-	
+
 	return nil
 }
 
@@ -356,15 +355,15 @@ func (s *XBRLTagMatcherService) validateRange(value interface{}, params map[stri
 	if err != nil {
 		return fmt.Errorf("cannot validate range for non-numeric value: %w", err)
 	}
-	
+
 	if minVal, ok := params["min"].(float64); ok && numValue < minVal {
-		return fmt.Errorf(errorMsg)
+		return fmt.Errorf(errorMsg) // nolint:staticcheck
 	}
-	
+
 	if maxVal, ok := params["max"].(float64); ok && numValue > maxVal {
-		return fmt.Errorf(errorMsg)
+		return fmt.Errorf(errorMsg) // nolint:staticcheck
 	}
-	
+
 	return nil
 }
 
@@ -374,13 +373,13 @@ func (s *XBRLTagMatcherService) validateFormat(value interface{}, params map[str
 	if !ok {
 		return fmt.Errorf("format validation requires string value, got %T", value)
 	}
-	
+
 	if pattern, ok := params["pattern"].(string); ok {
 		// TODO: Implement regex pattern matching
 		_ = pattern
 		_ = strValue
 	}
-	
+
 	return nil
 }
 
@@ -394,7 +393,7 @@ func (s *XBRLTagMatcherService) validateConsistency(data map[string]interface{},
 func (s *XBRLTagMatcherService) toFloat64(value interface{}) (float64, error) {
 	v := reflect.ValueOf(value)
 	v = reflect.Indirect(v)
-	
+
 	switch v.Kind() {
 	case reflect.Float64:
 		return v.Float(), nil

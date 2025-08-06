@@ -514,7 +514,7 @@ func (e *DiscountRateEstimator) estimateIncrementalBorrowingRate(data *entities.
 	// Calculate credit spread based on existing debt costs
 	creditSpread := 0.03 // Default 3%
 	confidenceScore := 0.5
-	dataSources := []string{"risk_free_rate", "default_credit_spread"}
+	var dataSources []string
 
 	if data.TotalDebt > 0 && data.InterestExpense > 0 {
 		effectiveRate := data.InterestExpense / data.TotalDebt
@@ -565,7 +565,7 @@ func (e *DiscountRateEstimator) estimateIncrementalBorrowingRate(data *entities.
 func (e *DiscountRateEstimator) estimateCostOfDebt(data *entities.FinancialData, context *entities.CleaningContext) (*DiscountRateResult, error) {
 	var rate float64
 	var confidenceScore float64
-	dataSources := []string{}
+	var dataSources []string
 
 	// Try to calculate effective debt cost
 	if data.TotalDebt > 0 && data.InterestExpense > 0 {

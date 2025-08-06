@@ -12,6 +12,7 @@ import (
 type SECGateway interface {
 	GetCompanyFacts(ctx context.Context, cik string) (*entities.CompanyFactsResponse, error)
 	GetCompanyConcepts(ctx context.Context, cik string, tag string) (*entities.ConceptResponse, error)
+	GetTickerCIKMapping(ctx context.Context) (map[string]string, error)
 	HealthCheck(ctx context.Context) error
 }
 

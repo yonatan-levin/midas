@@ -200,7 +200,7 @@ func TestCircuitBreaker(t *testing.T) {
 		}
 
 		// Trigger open state
-		cb.Call(ctx, failingCall)
+		_, _ = cb.Call(ctx, failingCall)
 		assert.Equal(t, StateOpen, cb.GetState())
 
 		// Reset should close it

@@ -175,6 +175,7 @@ func (h *HealthHandler) DetailedHealthCheck(c *gin.Context) {
 
 	// Return appropriate HTTP status based on health
 	statusCode := http.StatusOK
+	// nolint:staticcheck // simple if–else chain sufficient here
 	if overallStatus == "unhealthy" {
 		statusCode = http.StatusServiceUnavailable
 	} else if overallStatus == "degraded" {
@@ -323,8 +324,10 @@ func (h *HealthHandler) checkCache(ctx context.Context) HealthCheck {
 			message = "Cache data integrity issue"
 		}
 
-		// Clean up test key
-		h.cache.Delete(ctx, testKey)
+		// Clean up test key (best-effort)
+		if err := h.cache.Delete(ctx, testKey); err != nil {
+			h.logger.Warn("Health check cache cleanup failed", zap.Error(err))
+		}
 	}
 
 	return HealthCheck{

@@ -232,6 +232,7 @@ func isValidTicker(ticker string) bool {
 	}
 
 	for _, char := range ticker {
+		// nolint:staticcheck // readability preferred over De Morgan simplification
 		if !((char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9')) {
 			return false
 		}

@@ -119,7 +119,7 @@ func (r *MarketDataRepository) GetBatch(ctx context.Context, tickers []string) (
 	if err != nil {
 		return nil, fmt.Errorf("failed to query batch market data: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	result := make(map[string]*entities.MarketData)
 	for rows.Next() {

@@ -278,7 +278,7 @@ func TestConfigFile_LoadFromJSON(t *testing.T) {
 	// Create temporary config file
 	tmpFile, err := os.CreateTemp("", "benchmark_config_*.json")
 	require.NoError(t, err)
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 
 	testConfig := BenchmarkConfig{
 		BaseURL: "http://localhost:8080",
@@ -307,7 +307,7 @@ func TestConfigFile_LoadFromJSON(t *testing.T) {
 
 	_, err = tmpFile.Write(configData)
 	require.NoError(t, err)
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	// Test loading config from file
 	loadedConfig, err := LoadBenchmarkConfig(tmpFile.Name())

@@ -381,7 +381,7 @@ func (g *Gateway) calculateVariance(x []float64) float64 {
 	mean := g.calculateMean(x)
 	sum := 0.0
 	for _, val := range x {
-		sum += math.Pow(val-mean, 2)
+		sum += math.Pow(val-mean, 2) // nolint:staticcheck
 	}
 
 	return sum / float64(len(x)-1)

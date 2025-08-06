@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -19,9 +20,16 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
+	"github.com/midas/dcf-valuation-api/internal/api"
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/config"
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/di"
+	"github.com/midas/dcf-valuation-api/internal/services/auth"
+	"github.com/midas/dcf-valuation-api/internal/services/metrics"
+	"github.com/midas/dcf-valuation-api/internal/services/ratelimit"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation"
+	"go.uber.org/zap"
 )
 
 // TestContainer represents the test environment with containers and dependencies
@@ -32,11 +40,18 @@ type TestContainer struct {
 	App              *fxtest.App
 	Router           *gin.Engine
 	FairValueHandler *handlers.FairValueHandler
+	AuthService      *auth.Service
 	cleanup          func()
 }
 
 // SetupTestEnvironment creates a complete test environment with real infrastructure
 func SetupTestEnvironment(t *testing.T) *TestContainer {
+	// Skip Docker-based integration tests on Windows runners where rootless Docker is unsupported
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping Docker-based integration tests on Windows environment")
+		return nil
+	}
+
 	ctx := context.Background()
 
 	// Step 1: Start Redis container for real integration testing
@@ -47,7 +62,13 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 
 	// Step 3: Declare variables first
 	var fairValueHandler *handlers.FairValueHandler
+	var authService *auth.Service
 	var database *sqlx.DB
+	var valuationService *valuation.Service
+	var rateLimiter *ratelimit.RateLimiter
+	var healthHandler *handlers.HealthHandler
+	var metricsService *metrics.Service
+	var logger *zap.Logger
 
 	// Step 4: Create DI container with real services
 	app := fxtest.New(t,
@@ -57,12 +78,13 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 		// Include all real services via DI module
 		di.CoreModule,
 		di.ServiceModule,
+		di.HandlerModule,
 
-		// Provide handlers
+		// Provide additional handlers if not already included by DI modules
 		fx.Provide(handlers.NewFairValueHandler),
 
 		// Extract handlers and database for testing
-		fx.Populate(&fairValueHandler, &database),
+		fx.Populate(&fairValueHandler, &authService, &database, &valuationService, &rateLimiter, &healthHandler, &metricsService, &logger),
 	)
 
 	// Step 5: Start the DI container
@@ -72,23 +94,9 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 	SetupDatabase(t, database)
 	SeedTestData(t, database)
 
-	// Step 6: Create Gin router with real middleware
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
-
-	// TODO: Add real middleware (auth, metrics, rate limiting)
-	// For now, create basic routes for testing
-	v1 := router.Group("/api/v1")
-
-	// Handle empty ticker case for proper validation error (matching server.go)
-	v1.GET("/fair-value/", func(c *gin.Context) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "ticker parameter is required",
-			"code":  "INVALID_TICKER",
-		})
-	})
-	v1.GET("/fair-value/:ticker", fairValueHandler.GetFairValue)
-	v1.POST("/fair-value/bulk", fairValueHandler.GetBulkFairValue)
+	// Step 7: Create the real API server to use genuine middleware & routes
+	server := api.NewServer(cfg, logger, valuationService, authService, rateLimiter, healthHandler, metricsService)
+	router := server.Engine()
 
 	// Step 6: Setup cleanup function
 	cleanup := func() {
@@ -107,6 +115,7 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 		App:              app,
 		Router:           router,
 		FairValueHandler: fairValueHandler,
+		AuthService:      authService,
 		cleanup:          cleanup,
 	}
 }
@@ -116,6 +125,11 @@ func (tc *TestContainer) Cleanup() {
 	if tc.cleanup != nil {
 		tc.cleanup()
 	}
+}
+
+// NewTestAPIKey creates a test API key with specified permissions
+func (tc *TestContainer) NewTestAPIKey(ctx context.Context, userID string, permissions []entities.Permission) (*entities.APIKey, error) {
+	return tc.AuthService.CreateKey(ctx, userID, permissions)
 }
 
 // setupRedisContainer starts a Redis container for testing
@@ -187,6 +201,16 @@ func createTestConfig(redisURL string) *config.Config {
 			MinQualityScore:     50.0,
 			HighQualityScore:    80.0,
 		},
+
+		SEC: config.SECConfig{
+			BaseURL:          "https://data.sec.gov/api/xbrl",
+			TickerMappingURL: "https://www.sec.gov/files/company_tickers.json",
+			UserAgent:        "DCF-Valuation-API-Test/1.0 (email@example.com)",
+			RateLimit:        1, // Respect SEC rate limits
+			RequestTimeout:   30 * time.Second,
+			MaxRetries:       3,
+			RetryBackoffBase: 1 * time.Second,
+		},
 	}
 }
 
@@ -206,6 +230,40 @@ func SetupDatabase(t *testing.T, db *sqlx.DB) {
 	require.NoError(t, err, "Failed to execute schema")
 
 	t.Log("Database schema setup completed")
+
+	// --- NEW: create minimal auth tables required by middleware ---
+	authSQL := `
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id TEXT PRIMARY KEY,
+            key_hash TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            permissions TEXT NOT NULL,
+            rate_limit INTEGER DEFAULT 1000,
+            expires_at TIMESTAMP,
+            is_active BOOLEAN DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS api_key_usage (
+            id TEXT PRIMARY KEY,
+            api_key_id TEXT NOT NULL,
+            endpoint TEXT,
+            timestamp TIMESTAMP,
+            response_status INTEGER,
+            response_time_ms INTEGER,
+            user_agent TEXT,
+            ip_address TEXT
+        );`
+
+	_, err = db.Exec(authSQL)
+	require.NoError(t, err, "failed to create auth tables")
+
+	// quick sanity
+	var count int
+	err = db.Get(&count, "SELECT count(name) FROM sqlite_master WHERE type='table' AND name='api_keys'")
+	require.NoError(t, err)
+	require.Equal(t, 1, count, "api_keys table should exist")
 }
 
 // Remove ALL data processing functions and implement proper mock server
@@ -247,7 +305,7 @@ func SetupMockSECServer(t *testing.T) *httptest.Server {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			// Provide basic ticker mapping for AAPL
-			w.Write([]byte(`{"0": {"cik_str": "320193", "ticker": "AAPL", "title": "Apple Inc."}}`))
+			_, _ = w.Write([]byte(`{"0": {"cik_str": "320193", "ticker": "AAPL", "title": "Apple Inc."}}`))
 			return
 		}
 
@@ -256,14 +314,14 @@ func SetupMockSECServer(t *testing.T) *httptest.Server {
 			t.Logf("✅ Serving Apple SEC data for: %s", r.URL.Path)
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write(appleJSON)
+			_, _ = w.Write(appleJSON)
 			return
 		}
 
 		// For other CIKs, return 404 (will trigger real SEC API calls)
 		t.Logf("❌ Mock SEC Server: CIK not found for: %s", r.URL.Path)
 		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error": "CIK not found"}`))
+		_, _ = w.Write([]byte(`{"error": "CIK not found"}`))
 	}))
 
 	return server
@@ -271,6 +329,11 @@ func SetupMockSECServer(t *testing.T) *httptest.Server {
 
 // SetupTestEnvironmentWithMockSEC creates test environment with mock SEC server
 func SetupTestEnvironmentWithMockSEC(t *testing.T, mockSECURL string) *TestContainer {
+	if runtime.GOOS == "windows" {
+		t.Skip("Skipping Docker-based integration tests on Windows environment")
+		return nil
+	}
+
 	ctx := context.Background()
 
 	// Step 1: Start Redis container for real integration testing

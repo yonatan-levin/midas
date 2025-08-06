@@ -95,6 +95,7 @@ func TestProcessRestructuringChargesAdjustment(t *testing.T) {
 			// Set up test data with estimated restructuring charges
 			if tt.data.Revenue > 0 {
 				// Simulate restructuring charges based on test scenario
+				// nolint:staticcheck // explicit case easier to read here
 				if tt.name == "significant_restructuring_charges" {
 					// 3% of revenue
 					tt.data.RestructuringCharges = tt.data.Revenue * 0.03

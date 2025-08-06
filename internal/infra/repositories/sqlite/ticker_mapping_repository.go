@@ -118,7 +118,7 @@ func (r *TickerMappingRepository) BulkStore(ctx context.Context, mappings map[st
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Prepare statement for efficiency
 	stmt, err := tx.PreparexContext(ctx, `
@@ -130,7 +130,7 @@ func (r *TickerMappingRepository) BulkStore(ctx context.Context, mappings map[st
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
 	}
-	defer stmt.Close()
+	defer func() { _ = stmt.Close() }()
 
 	// Execute bulk insert
 	count := 0
@@ -170,7 +170,7 @@ func (r *TickerMappingRepository) GetAllMappings(ctx context.Context) (map[strin
 		r.logger.Error("Failed to query all mappings", zap.Error(err))
 		return nil, fmt.Errorf("failed to query all mappings: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	mappings := make(map[string]string)
 	for rows.Next() {

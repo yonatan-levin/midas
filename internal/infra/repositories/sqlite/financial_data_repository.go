@@ -162,7 +162,7 @@ func (r *FinancialDataRepository) GetHistorical(ctx context.Context, ticker stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to query historical data: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	historicalData := &entities.HistoricalFinancialData{
 		Ticker: ticker,

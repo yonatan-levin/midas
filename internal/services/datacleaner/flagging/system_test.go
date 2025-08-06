@@ -790,7 +790,7 @@ func TestFlaggingSystem_RiskAnalyzerNilHandling(t *testing.T) {
 	})
 }
 
-// Helper function to create data that achieves a target score
+// nolint:unused
 func createCustomScoreData(targetScore float64) *entities.FinancialData {
 	// Start with clean data and add issues to reach target score
 	if targetScore >= 95.0 {

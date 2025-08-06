@@ -35,7 +35,7 @@ func testLoadBasicRules(t *testing.T) {
 	// Create a temporary rules file
 	rulesData := createTestRulesJSON()
 	tempFile := createTempFile(t, "rules.json", rulesData)
-	defer os.Remove(tempFile)
+	defer func() { _ = os.Remove(tempFile) }()
 
 	// Create engine and load rules
 	engine := NewRuleEngine()
@@ -66,8 +66,8 @@ func testLoadIndustryRules(t *testing.T) {
 	rulesFile := createTempFile(t, "rules.json", rulesData)
 	industryFile := createTempFile(t, "tech.json", industryData)
 	defer func() {
-		os.Remove(rulesFile)
-		os.Remove(industryFile)
+		_ = os.Remove(rulesFile)
+		_ = os.Remove(industryFile)
 	}()
 
 	engine := NewRuleEngine()
@@ -95,7 +95,7 @@ func testValidateRules(t *testing.T) {
 	// Test valid rules
 	validRulesData := createTestRulesJSON()
 	validFile := createTempFile(t, "valid_rules.json", validRulesData)
-	defer os.Remove(validFile)
+	defer func() { _ = os.Remove(validFile) }()
 
 	engine := NewRuleEngine()
 	err := engine.LoadRules(validFile)
@@ -107,7 +107,7 @@ func testValidateRules(t *testing.T) {
 	// Test invalid rules (circular dependencies)
 	invalidRulesData := createInvalidRulesJSON()
 	invalidFile := createTempFile(t, "invalid_rules.json", invalidRulesData)
-	defer os.Remove(invalidFile)
+	defer func() { _ = os.Remove(invalidFile) }()
 
 	invalidEngine := NewRuleEngine()
 	err = invalidEngine.LoadRules(invalidFile)
@@ -121,7 +121,7 @@ func testValidateRules(t *testing.T) {
 func testGetRulesByCategory(t *testing.T) {
 	rulesData := createTestRulesJSON()
 	tempFile := createTempFile(t, "rules.json", rulesData)
-	defer os.Remove(tempFile)
+	defer func() { _ = os.Remove(tempFile) }()
 
 	engine := NewRuleEngine()
 	err := engine.LoadRules(tempFile)
@@ -144,7 +144,7 @@ func testGetRulesByCategory(t *testing.T) {
 func testGetRuleByID(t *testing.T) {
 	rulesData := createTestRulesJSON()
 	tempFile := createTempFile(t, "rules.json", rulesData)
-	defer os.Remove(tempFile)
+	defer func() { _ = os.Remove(tempFile) }()
 
 	engine := NewRuleEngine()
 	err := engine.LoadRules(tempFile)
@@ -166,14 +166,14 @@ func testSchemaValidation(t *testing.T) {
 	// Create test schema file
 	schemaData := createTestSchemaJSON()
 	schemaFile := createTempFile(t, "schema.json", schemaData)
-	defer os.Remove(schemaFile)
+	defer func() { _ = os.Remove(schemaFile) }()
 
 	loader := NewRuleLoader()
 
 	// Test valid rules against schema
 	validRulesData := createTestRulesJSON()
 	validFile := createTempFile(t, "valid.json", validRulesData)
-	defer os.Remove(validFile)
+	defer func() { _ = os.Remove(validFile) }()
 
 	rules, err := loader.LoadFromFile(validFile)
 	require.NoError(t, err)
@@ -184,7 +184,7 @@ func testSchemaValidation(t *testing.T) {
 	// Test invalid rules against schema
 	invalidSchemaData := createInvalidSchemaRulesJSON()
 	invalidFile := createTempFile(t, "invalid.json", invalidSchemaData)
-	defer os.Remove(invalidFile)
+	defer func() { _ = os.Remove(invalidFile) }()
 
 	invalidRules, err := loader.LoadFromFile(invalidFile)
 	require.NoError(t, err)
@@ -208,7 +208,7 @@ func testRuleErrors(t *testing.T) {
 	// Test malformed JSON
 	malformedData := `{"invalid": json}`
 	malformedFile := createTempFile(t, "malformed.json", malformedData)
-	defer os.Remove(malformedFile)
+	defer func() { _ = os.Remove(malformedFile) }()
 
 	err = engine.LoadRules(malformedFile)
 	assert.Error(t, err)
@@ -218,7 +218,7 @@ func testIndustryOverrides(t *testing.T) {
 	// Load base rules
 	rulesData := createTestRulesJSON()
 	rulesFile := createTempFile(t, "rules.json", rulesData)
-	defer os.Remove(rulesFile)
+	defer func() { _ = os.Remove(rulesFile) }()
 
 	engine := NewRuleEngine()
 	err := engine.LoadRules(rulesFile)
@@ -232,7 +232,7 @@ func testIndustryOverrides(t *testing.T) {
 	// Load industry rules with overrides
 	industryData := createTestIndustryJSON()
 	industryFile := createTempFile(t, "tech.json", industryData)
-	defer os.Remove(industryFile)
+	defer func() { _ = os.Remove(industryFile) }()
 
 	err = engine.LoadIndustryRules(industryFile)
 	require.NoError(t, err)
@@ -451,7 +451,7 @@ func TestRuleEngine_EdgeCases(t *testing.T) {
 	t.Run("concurrent_access", func(t *testing.T) {
 		rulesData := createTestRulesJSON()
 		tempFile := createTempFile(t, "concurrent_rules.json", rulesData)
-		defer os.Remove(tempFile)
+		defer func() { _ = os.Remove(tempFile) }()
 
 		engine := NewRuleEngine()
 		err := engine.LoadRules(tempFile)
@@ -483,7 +483,7 @@ func TestRuleEngine_EdgeCases(t *testing.T) {
 		// Test validation with malformed rules - loader validates during load
 		invalidRuleData := createInvalidRuleFieldsJSON()
 		invalidFile := createTempFile(t, "invalid_fields.json", invalidRuleData)
-		defer os.Remove(invalidFile)
+		defer func() { _ = os.Remove(invalidFile) }()
 
 		err := engine.LoadRules(invalidFile)
 		assert.Error(t, err) // Should fail during loading due to validation
@@ -493,7 +493,7 @@ func TestRuleEngine_EdgeCases(t *testing.T) {
 	t.Run("industry_rules_edge_cases", func(t *testing.T) {
 		rulesData := createTestRulesJSON()
 		rulesFile := createTempFile(t, "base_rules.json", rulesData)
-		defer os.Remove(rulesFile)
+		defer func() { _ = os.Remove(rulesFile) }()
 
 		engine := NewRuleEngine()
 		err := engine.LoadRules(rulesFile)
@@ -512,7 +512,7 @@ func TestRuleEngine_EdgeCases(t *testing.T) {
 		// Test with missing dependencies - this should pass loading but fail validation
 		missingDepData := createMissingDependencyJSON()
 		missingDepFile := createTempFile(t, "missing_dep.json", missingDepData)
-		defer os.Remove(missingDepFile)
+		defer func() { _ = os.Remove(missingDepFile) }()
 
 		engine := NewRuleEngine()
 		err := engine.LoadRules(missingDepFile)
@@ -527,7 +527,7 @@ func TestRuleEngine_EdgeCases(t *testing.T) {
 		// Test with invalid threshold values - should pass loading but fail validation
 		invalidThresholdData := createInvalidThresholdJSON()
 		invalidFile := createTempFile(t, "invalid_threshold.json", invalidThresholdData)
-		defer os.Remove(invalidFile)
+		defer func() { _ = os.Remove(invalidFile) }()
 
 		engine := NewRuleEngine()
 		err := engine.LoadRules(invalidFile)
@@ -542,7 +542,7 @@ func TestRuleEngine_EdgeCases(t *testing.T) {
 func TestRuleEngine_GetRulesByCategory_Comprehensive(t *testing.T) {
 	rulesData := createTestRulesJSON()
 	tempFile := createTempFile(t, "category_rules.json", rulesData)
-	defer os.Remove(tempFile)
+	defer func() { _ = os.Remove(tempFile) }()
 
 	engine := NewRuleEngine()
 	err := engine.LoadRules(tempFile)

@@ -65,7 +65,7 @@ func TestYFinanceClient_GetQuote_Success(t *testing.T) {
 		assert.Equal(t, "AAPL", r.URL.Query().Get("symbols"))
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockResponse)
+		_ = json.NewEncoder(w).Encode(mockResponse)
 	}))
 	defer server.Close()
 
@@ -103,7 +103,7 @@ func TestYFinanceClient_GetQuote_NoResults(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockResponse)
+		_ = json.NewEncoder(w).Encode(mockResponse)
 	}))
 	defer server.Close()
 
@@ -148,7 +148,7 @@ func TestYFinanceClient_GetBatchQuotes_Success(t *testing.T) {
 		assert.Equal(t, "AAPL,MSFT", r.URL.Query().Get("symbols"))
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockResponse)
+		_ = json.NewEncoder(w).Encode(mockResponse)
 	}))
 	defer server.Close()
 
@@ -219,7 +219,7 @@ func TestYFinanceClient_HealthCheck_Success(t *testing.T) {
 		assert.Contains(t, r.URL.Query().Get("symbols"), "AAPL")
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockResponse)
+		_ = json.NewEncoder(w).Encode(mockResponse)
 	}))
 	defer server.Close()
 
@@ -251,7 +251,7 @@ func TestYFinanceClient_HealthCheck_Failure(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(mockResponse)
+		_ = json.NewEncoder(w).Encode(mockResponse)
 	}))
 	defer server.Close()
 

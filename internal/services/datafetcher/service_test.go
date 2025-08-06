@@ -38,6 +38,43 @@ func (m *mockSECGateway) HealthCheck(ctx context.Context) error {
 	return nil // Mock always healthy for tests
 }
 
+func (m *mockSECGateway) GetTickerCIKMapping(ctx context.Context) (map[string]string, error) {
+	// If a predefined error is configured, propagate it (used by error-aggregation tests)
+	if m.err != nil {
+		return nil, m.err
+	}
+
+	// Provide a mapping that covers the most common unit-tests tickers so that
+	// coordinator logic can resolve a CIK without failing. The values do not
+	// need to be the real SEC CIKs – only stable placeholders.
+	mapping := map[string]string{
+		"AAPL":         "320193",
+		"MSFT":         "789019",
+		"TSLA":         "1318605",
+		"COORD_TEST":   "1234567890",
+		"PARTIAL_FAIL": "PARTIAL_FAIL", // value intentionally mirrors ticker for simplicity
+		"CANCELLED":    "CANCELLED",
+		"MODE_TEST":    "MODE_TEST",
+		"DEFAULT_TEST": "DEFAULT_TEST",
+		"ERROR_TEST":   "ERROR_TEST",
+	}
+
+	// If the mock has companyFacts with a distinct CIK we attempt to add a
+	// reverse mapping assuming the caller will supply ticker of that facts.
+	if m.companyFacts != nil && m.companyFacts.CIK != "" {
+		// Attempt a heuristic: use the first 10 chars of CIK as ticker key if
+		// no match exists. This keeps mapping deterministic for the tests that
+		// set an explicit CIK like "1234567890" but expect their custom ticker
+		// (e.g. COORD_TEST) to resolve via explicit entry above.
+		// We skip adding if key already exists to avoid overwriting.
+		if _, exists := mapping[m.companyFacts.CIK]; !exists {
+			mapping[m.companyFacts.CIK] = m.companyFacts.CIK
+		}
+	}
+
+	return mapping, nil
+}
+
 type mockMarketDataGateway struct {
 	marketData *entities.MarketData
 	err        error

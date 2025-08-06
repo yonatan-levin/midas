@@ -222,9 +222,8 @@ func (s *Service) GetUsageStats(ctx context.Context, keyID string, since time.Ti
 func (s *Service) generateKey() (string, error) {
 	// Generate 32 random bytes
 	bytes := make([]byte, 32)
-	_, err := rand.Read(bytes)
-	if err != nil {
-		return "", fmt.Errorf("failed to generate random bytes: %w", err)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
 	}
 
 	// Encode as hex and add prefix
@@ -241,7 +240,10 @@ func (s *Service) hashKey(key string) string {
 // generateID creates a unique identifier
 func (s *Service) generateID() string {
 	bytes := make([]byte, 16)
-	rand.Read(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		s.logger.Error("Failed to generate ID", zap.Error(err))
+		return "" // Return empty string on error
+	}
 	return hex.EncodeToString(bytes)
 }
 

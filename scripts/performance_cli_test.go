@@ -71,7 +71,7 @@ func TestCLIPerformanceAnalyzer_ResultsProcessing(t *testing.T) {
 	resultsFile := "testdata/cli-test-results.json"
 	err := SaveMultipleResults(testResults, resultsFile)
 	require.NoError(t, err, "Should save test results")
-	defer os.Remove(resultsFile)
+	defer func() { _ = os.Remove(resultsFile) }()
 
 	// Test loading results
 	loadedResults, err := analyzer.LoadResults(resultsFile)
@@ -191,7 +191,7 @@ func TestCLIPerformanceAnalyzer_ErrorHandling(t *testing.T) {
 	invalidFile := "testdata/invalid-results.json"
 	err = os.WriteFile(invalidFile, []byte(`{"invalid": json}`), 0644)
 	require.NoError(t, err)
-	defer os.Remove(invalidFile)
+	defer func() { _ = os.Remove(invalidFile) }()
 
 	_, err = analyzer.LoadResults(invalidFile)
 	assert.Error(t, err, "Should handle invalid JSON")

@@ -306,7 +306,7 @@ func (r *AuthRepository) GetActiveKeys(ctx context.Context) ([]*entities.APIKey,
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active keys: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var keys []*entities.APIKey
 

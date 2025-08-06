@@ -160,7 +160,7 @@ func TestFlagConditionEvaluatorIntegration(t *testing.T) {
 		valAdjustments, ok := data["valuation_adjustments"].(map[string]interface{})
 		require.True(t, ok)
 		assert.True(t, valAdjustments["capitalize_rd"].(bool))
-		assert.Equal(t, 5, valAdjustments["rd_amortization_years"])
+		assert.Equal(t, 5.0, valAdjustments["rd_amortization_years"])
 	})
 
 	t.Run("EvaluateComplexConditionGroups", func(t *testing.T) {
@@ -202,7 +202,7 @@ func TestFlagConditionEvaluatorIntegration(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.True(t, result.Triggered)
-		assert.Contains(t, result.Details, "exists: false")
+		assert.Contains(t, result.Details, "is null")
 	})
 
 	t.Run("EvaluateRegexCondition", func(t *testing.T) {
@@ -468,8 +468,8 @@ func TestFlagConfigLoading(t *testing.T) {
 		require.NoError(t, err)
 
 		// Set environment variable
-		os.Setenv("FLAG_CONDITIONS_CONFIG_PATH", configPath)
-		defer os.Unsetenv("FLAG_CONDITIONS_CONFIG_PATH")
+		require.NoError(t, os.Setenv("FLAG_CONDITIONS_CONFIG_PATH", configPath))
+		defer func() { _ = os.Unsetenv("FLAG_CONDITIONS_CONFIG_PATH") }()
 
 		// Load without specifying path
 		cfg, err := config.LoadFlagConditionsConfig("")

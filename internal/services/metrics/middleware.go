@@ -59,6 +59,7 @@ func normalizeEndpoint(fullPath string) string {
 	}
 
 	// Common endpoint normalizations for our API
+	// nolint:staticcheck // if-else chain deliberate for route matching
 	switch {
 	case fullPath == "/":
 		return "root"

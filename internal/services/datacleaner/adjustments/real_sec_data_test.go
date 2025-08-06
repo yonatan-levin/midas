@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io/ioutil" //nolint:staticcheck // test uses ioutil for simplicity
 	"strings"
 	"testing"
 	"time"
