@@ -492,7 +492,8 @@ func (rg *ReportGenerator) generateRecommendations(report *entities.CleaningRepo
 	criticalCount := 0
 	highCount := 0
 	for _, stageResult := range result.StageResults {
-		for _, flag := range stageResult.Flags { // nolint:staticcheck explicit chain preferred
+		// nolint:staticcheck // explicit chain preferred for readability
+		for _, flag := range stageResult.Flags {
 			if flag.Severity == entities.FlagSeverityCritical {
 				criticalCount++
 			} else if flag.Severity == entities.FlagSeverityHigh {

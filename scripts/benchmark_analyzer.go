@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -249,7 +250,35 @@ func (ba *BenchmarkAnalyzer) AnalyzeTrend(results []BenchmarkResult) *TrendAnaly
 		errorRateTrendPerDay = 1.0 / days // Significant increase from 0
 	}
 
-	// Determine overall direction
+	// Initialize counters and helpers before evaluation
+	degradingCount := 0
+	improvingCount := 0
+	direction := "STABLE"
+	var insights []string
+
+	// Count degradations/improvements based on metric trends
+	weeklyThreshold := 0.10 / 7 // ~1.4% per day
+
+	if latencyTrendPerDay > weeklyThreshold {
+		degradingCount++
+	} else if latencyTrendPerDay < -weeklyThreshold {
+		improvingCount++
+	}
+
+	if throughputTrendPerDay > weeklyThreshold {
+		improvingCount++
+	} else if throughputTrendPerDay < -weeklyThreshold {
+		degradingCount++
+	}
+
+	if math.Abs(errorRateTrendPerDay) > weeklyThreshold {
+		if errorRateTrendPerDay > 0 {
+			degradingCount++
+		} else {
+			improvingCount++
+		}
+	}
+
 	// nolint:staticcheck // explicit condition chain preferred
 	if degradingCount > improvingCount {
 		direction = "DEGRADING"

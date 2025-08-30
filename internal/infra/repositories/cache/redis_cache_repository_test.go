@@ -5,32 +5,30 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// setupTestRedisClient creates an in-memory Redis client for testing
-func setupTestRedisClient(t *testing.T) *redis.Client {
-	// Use Redis database 15 for testing to avoid conflicts
+// setupTestRedisClient creates an in-memory Redis client for testing using miniredis
+func setupTestRedisClient(t *testing.T) (*redis.Client, *miniredis.Miniredis, func()) {
+	// Create an in-memory Redis server
+	mr, err := miniredis.Run()
+	require.NoError(t, err, "Failed to start miniredis")
+
+	// Create Redis client connected to miniredis
 	client := redis.NewClient(&redis.Options{
-		Addr:     "localhost:6379",
-		Password: "",
-		DB:       15, // Use test database
+		Addr: mr.Addr(),
 	})
 
-	// Check if Redis is available
-	ctx := context.Background()
-	_, err := client.Ping(ctx).Result()
-	if err != nil {
-		t.Skipf("Redis not available for testing: %v", err)
+	// Cleanup function to close the server
+	cleanup := func() {
+		_ = client.Close()
+		mr.Close()
 	}
 
-	// Clear test database
-	err = client.FlushDB(ctx).Err()
-	require.NoError(t, err)
-
-	return client
+	return client, mr, cleanup
 }
 
 type TestStruct struct {
@@ -39,8 +37,8 @@ type TestStruct struct {
 }
 
 func TestRedisCacheRepository_Set_Get(t *testing.T) {
-	client := setupTestRedisClient(t)
-	defer func() { _ = client.Close() }()
+	client, mr, cleanup := setupTestRedisClient(t)
+	defer cleanup()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -84,8 +82,8 @@ func TestRedisCacheRepository_Set_Get(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, value, result)
 
-		// Wait for expiration
-		time.Sleep(150 * time.Millisecond)
+		// Advance time in miniredis to trigger expiration
+		mr.FastForward(150 * time.Millisecond)
 
 		// Should not exist after expiration
 		err = repo.Get(ctx, key, &result)
@@ -102,8 +100,8 @@ func TestRedisCacheRepository_Set_Get(t *testing.T) {
 }
 
 func TestRedisCacheRepository_Delete(t *testing.T) {
-	client := setupTestRedisClient(t)
-	defer func() { _ = client.Close() }()
+	client, _, cleanup := setupTestRedisClient(t)
+	defer cleanup()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -137,8 +135,8 @@ func TestRedisCacheRepository_Delete(t *testing.T) {
 }
 
 func TestRedisCacheRepository_Exists(t *testing.T) {
-	client := setupTestRedisClient(t)
-	defer func() { _ = client.Close() }()
+	client, _, cleanup := setupTestRedisClient(t)
+	defer cleanup()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -165,8 +163,8 @@ func TestRedisCacheRepository_Exists(t *testing.T) {
 }
 
 func TestRedisCacheRepository_SetNX(t *testing.T) {
-	client := setupTestRedisClient(t)
-	defer func() { _ = client.Close() }()
+	client, _, cleanup := setupTestRedisClient(t)
+	defer cleanup()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -209,8 +207,8 @@ func TestRedisCacheRepository_SetNX(t *testing.T) {
 }
 
 func TestRedisCacheRepository_GetKeys(t *testing.T) {
-	client := setupTestRedisClient(t)
-	defer func() { _ = client.Close() }()
+	client, _, cleanup := setupTestRedisClient(t)
+	defer cleanup()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -252,8 +250,8 @@ func TestRedisCacheRepository_GetKeys(t *testing.T) {
 }
 
 func TestRedisCacheRepository_DeletePattern(t *testing.T) {
-	client := setupTestRedisClient(t)
-	defer func() { _ = client.Close() }()
+	client, _, cleanup := setupTestRedisClient(t)
+	defer cleanup()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()
@@ -294,8 +292,8 @@ func TestRedisCacheRepository_DeletePattern(t *testing.T) {
 }
 
 func TestRedisCacheRepository_Integration(t *testing.T) {
-	client := setupTestRedisClient(t)
-	defer func() { _ = client.Close() }()
+	client, _, cleanup := setupTestRedisClient(t)
+	defer cleanup()
 
 	repo := NewRedisCacheRepository(client)
 	ctx := context.Background()

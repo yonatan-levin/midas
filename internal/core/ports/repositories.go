@@ -103,6 +103,39 @@ type TickerMappingRepository interface {
 	LoadFromSEC(ctx context.Context) error
 }
 
+// WatchlistRepository defines the interface for scheduler watchlist management
+type WatchlistRepository interface {
+	// GetActiveWatchlist retrieves all active tickers from the watchlist, optionally filtered by priority
+	GetActiveWatchlist(ctx context.Context, filter *entities.WatchlistFilter) ([]*entities.WatchlistEntry, error)
+
+	// GetAll retrieves all watchlist entries with optional filtering
+	GetAll(ctx context.Context, filter *entities.WatchlistFilter) ([]*entities.WatchlistEntry, error)
+
+	// GetByTicker retrieves a watchlist entry by ticker symbol
+	GetByTicker(ctx context.Context, ticker string) (*entities.WatchlistEntry, error)
+
+	// Add adds a new ticker to the watchlist
+	Add(ctx context.Context, entry *entities.WatchlistEntry) error
+
+	// Update updates an existing watchlist entry
+	Update(ctx context.Context, ticker string, updates *entities.UpdateWatchlistEntryRequest) error
+
+	// Remove removes a ticker from the watchlist
+	Remove(ctx context.Context, ticker string) error
+
+	// RecordSuccess updates the last fetched time and resets failure count
+	RecordSuccess(ctx context.Context, ticker string, fetchedAt time.Time) error
+
+	// RecordFailure increments the failure count and optionally disables the entry
+	RecordFailure(ctx context.Context, ticker string) error
+
+	// GetStats retrieves statistics about the watchlist
+	GetStats(ctx context.Context) (*entities.WatchlistStats, error)
+
+	// BulkUpdateFailures updates failure counts for multiple tickers (for batch operations)
+	BulkUpdateFailures(ctx context.Context, failures map[string]bool) error
+}
+
 // MetricsService defines the interface for metrics collection and reporting
 type MetricsService interface {
 	// HTTP Metrics

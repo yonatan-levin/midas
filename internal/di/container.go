@@ -10,6 +10,9 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	// Ensure sqlite drivers are registered in all build modes (including distroless containers)
+	_ "github.com/mattn/go-sqlite3"
+
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
@@ -21,10 +24,13 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/infra/resilience"
 	"github.com/midas/dcf-valuation-api/internal/services/auth"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
+	aiSvc "github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
 	"github.com/midas/dcf-valuation-api/internal/services/ratelimit"
+	"github.com/midas/dcf-valuation-api/internal/services/scheduler"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
+	"github.com/midas/dcf-valuation-api/internal/services/watchlist"
 )
 
 // RateLimiterCacheAdapter adapts ports.CacheRepository to ratelimit.CacheStore
@@ -102,6 +108,7 @@ var CoreModule = fx.Options(
 	fx.Provide(fx.Annotate(NewTickerMappingRepository, fx.As(new(ports.TickerMappingRepository)))),
 	fx.Provide(fx.Annotate(NewCacheRepository, fx.As(new(ports.CacheRepository)))),
 	fx.Provide(fx.Annotate(NewAuthRepository, fx.As(new(auth.Repository)))),
+	fx.Provide(fx.Annotate(NewWatchlistRepository, fx.As(new(ports.WatchlistRepository)))),
 
 	// Gateways
 	fx.Provide(fx.Annotate(NewSECGateway, fx.As(new(ports.SECGateway)))),
@@ -115,19 +122,28 @@ var ServiceModule = fx.Options(
 	fx.Provide(NewAuthService),
 	fx.Provide(NewDataCleanerService),
 
-	// Data fetcher service (NEW)
+	// Data fetcher service
 	fx.Provide(NewDataFetcher),
-	
+
+	// Watchlist service for scheduler
+	fx.Provide(NewWatchlistService),
+
+	// Optional AI service provider (config-gated)
+	fx.Provide(NewAIService),
+
 	// Metrics Service - concrete type
 	fx.Provide(NewMetricsService), // returns *metrics.Service
-	
+
 	// Bind concrete to interface without constructing anything new
 	fx.Provide(
 		func(s *metrics.Service) ports.MetricsService { return s },
 	),
-	
+
 	fx.Provide(NewValuationService),
 	fx.Provide(NewRateLimiterService),
+
+	// Scheduler service (disabled by default, uses watchlist)
+	fx.Provide(NewSchedulerService),
 )
 
 // HandlerModule contains HTTP handlers
@@ -223,8 +239,14 @@ func NewLogger(cfg *config.Config) (*zap.Logger, error) {
 // mapDatabaseDriver maps configuration driver names to actual registered driver names
 func mapDatabaseDriver(configDriver string) string {
 	switch configDriver {
+	case "sqlite3":
+		return "sqlite3"
+	case "moderncsqlite":
+		// Backward compatibility: route modernc to sqlite3 now that we standardize on mattn
+		return "sqlite3"
 	case "sqlite":
-		return "sqlite3" // SQLite driver registers as "sqlite3"
+		// Backward compatibility: map legacy logical name to sqlite3
+		return "sqlite3"
 	default:
 		return configDriver // postgres, etc. remain unchanged
 	}
@@ -234,7 +256,7 @@ func mapDatabaseDriver(configDriver string) string {
 func NewDatabase(cfg *config.Config, logger *zap.Logger) (*sqlx.DB, error) {
 	var dsn string
 
-	if cfg.Database.Driver == "sqlite" {
+	if cfg.Database.Driver == "sqlite3" || cfg.Database.Driver == "sqlite" {
 		dsn = cfg.Database.SQLitePath
 	} else {
 		dsn = cfg.Database.PostgresURL
@@ -448,8 +470,8 @@ func NewRateLimiterService(cache ports.CacheRepository, logger *zap.Logger) *rat
 	return limiter
 }
 
-func NewDataCleanerService(cfg *config.Config, logger *zap.Logger) (datacleaner.DataCleanerService, error) {
-	return datacleaner.NewDataCleanerService(cfg)
+func NewDataCleanerService(cfg *config.Config, logger *zap.Logger, aiSvc aiSvc.AIService) (datacleaner.DataCleanerService, error) {
+	return datacleaner.NewDataCleanerService(cfg, aiSvc)
 }
 
 func NewValuationService(
@@ -459,7 +481,7 @@ func NewValuationService(
 	cache ports.CacheRepository,
 	dataCleaner datacleaner.DataCleanerService,
 	dataFetcher *datafetcher.DataFetcher,
-	metricsService ports.MetricsService,
+	metricsService *metrics.Service,
 	cfg *config.Config,
 	logger *zap.Logger,
 ) *valuation.Service {
@@ -474,6 +496,58 @@ func NewValuationService(
 		cfg,
 		logger,
 	)
+}
+
+// NewAIService creates the AI service based on configuration with logger injection.
+func NewAIService(cfg *config.Config, logger *zap.Logger) aiSvc.AIService {
+	return aiSvc.BuildAIServiceWithLogger(&cfg.DataCleaner, logger)
+}
+
+// NewWatchlistRepository creates a new watchlist repository
+func NewWatchlistRepository(db *sqlx.DB) ports.WatchlistRepository {
+	return sqlite.NewWatchlistRepository(db.DB)
+}
+
+// NewWatchlistService creates a new watchlist service
+func NewWatchlistService(repo ports.WatchlistRepository, logger *zap.Logger) *watchlist.Service {
+	return watchlist.NewService(repo, logger)
+}
+
+// NewSchedulerService provides a scheduler configured from app config. It is disabled by default
+// and starts only when scheduler.enabled=true in configuration.
+type SchedulerParams struct {
+	fx.In
+	Lifecycle    fx.Lifecycle
+	Logger       *zap.Logger
+	Fetcher      *datafetcher.DataFetcher
+	WatchlistSvc *watchlist.Service
+	Cfg          *config.Config
+}
+
+func NewSchedulerService(p SchedulerParams) *scheduler.Service {
+	// Create watchlist-based ingestion job
+	ingestionJob := datafetcher.NewIngestionJob(
+		p.Fetcher,      // BulkFetcher
+		p.WatchlistSvc, // WatchlistProvider
+		p.WatchlistSvc, // FetchResultRecorder (same service implements both)
+		p.Logger,
+	)
+
+	// Scheduler configuration from app config
+	sched := scheduler.New(scheduler.Config{
+		Enabled:        p.Cfg.Scheduler.Enabled,
+		Interval:       p.Cfg.Scheduler.Interval,
+		MaxConcurrency: p.Cfg.Scheduler.MaxConcurrency,
+	}, p.Logger, ingestionJob)
+
+	p.Lifecycle.Append(fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			// Start scheduler if enabled
+			sched.Start(ctx)
+			return nil
+		},
+	})
+	return sched
 }
 
 // NewDataFetcher creates a new DataFetcher service
@@ -502,7 +576,7 @@ func NewHealthHandler(
 	secGateway ports.SECGateway,
 	marketGateway ports.MarketDataGateway,
 	macroGateway ports.MacroDataGateway,
-	metricsService ports.MetricsService,
+	metricsService *metrics.Service,
 ) *handlers.HealthHandler {
 	return handlers.NewHealthHandler(
 		logger,

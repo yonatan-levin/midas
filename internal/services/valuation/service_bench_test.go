@@ -1,26 +1,314 @@
 package valuation
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"go.uber.org/zap"
+
+	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
+
+// Note: Mock implementations are reused from service_test.go to avoid duplication
 
 // Simplified benchmark tests for valuation service performance
 
 func BenchmarkService_CalculateValuation_SingleTicker(b *testing.B) {
-	// Skip this benchmark for now as it requires full mock setup
-	// TODO: Implement proper benchmark when service is fully integrated
-	b.Skip("Requires complete service integration - will be enabled in future phase")
+	// Create mock dependencies
+	financialRepo := &MockFinancialDataRepository{}
+	marketRepo := &MockMarketDataRepository{}
+	macroRepo := &MockMacroDataRepository{}
+	cache := &MockCacheRepository{}
+	mockMetrics := &MockMetricsService{}
+	mockDataCleaner := &MockDataCleanerService{}
+
+	// Create logger
+	logger := zap.NewNop()
+
+	// Create configuration
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                  1 * time.Hour,
+			SlowRequestThreshold:      500 * time.Millisecond,
+			DataFetchTimeout:          30 * time.Second,
+			EnableConcurrentDataFetch: false, // Sequential for consistency
+		},
+	}
+
+	// Create service
+	service := NewService(financialRepo, marketRepo, macroRepo, cache, mockDataCleaner, nil, mockMetrics, cfg, logger)
+
+	// Setup test data
+	ctx := context.Background()
+	ticker := "AAPL"
+
+	// Create realistic test data (using the same proven working data from service_test.go)
+	historicalData := &entities.HistoricalFinancialData{
+		Ticker: ticker,
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:                    ticker,
+				FilingPeriod:              "2023FY",
+				FilingDate:                time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now(),
+				OperatingIncome:           123450000000,
+				NormalizedOperatingIncome: 120000000000,
+				Revenue:                   383930000000,
+				InterestExpense:           3490000000,
+				TaxRate:                   0.21,
+				TotalAssets:               381190000000,
+				TangibleAssets:            350000000000,
+				InterestBearingDebt:       110000000000,
+				SharesOutstanding:         15744231000,
+				HasNormalizedData:         true,
+			},
+			"2022FY": {
+				Ticker:                    ticker,
+				FilingPeriod:              "2022FY",
+				FilingDate:                time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+				OperatingIncome:           119440000000,
+				NormalizedOperatingIncome: 116000000000,
+				Revenue:                   365817000000,
+				InterestExpense:           2930000000,
+				TaxRate:                   0.19,
+				TotalAssets:               352755000000,
+				TangibleAssets:            320000000000,
+				InterestBearingDebt:       108000000000,
+				SharesOutstanding:         15943425000,
+				HasNormalizedData:         true,
+			},
+			"2021FY": {
+				Ticker:                    ticker,
+				FilingPeriod:              "2021FY",
+				FilingDate:                time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-2 * 365 * 24 * time.Hour),
+				OperatingIncome:           108949000000,
+				NormalizedOperatingIncome: 105000000000,
+				Revenue:                   365817000000,
+				InterestExpense:           2650000000,
+				TaxRate:                   0.18,
+				TotalAssets:               323888000000,
+				TangibleAssets:            290000000000,
+				InterestBearingDebt:       98000000000,
+				SharesOutstanding:         16426786000,
+				HasNormalizedData:         true,
+			},
+		},
+	}
+
+	marketData := &entities.MarketData{
+		Ticker:            ticker,
+		AsOf:              time.Now(),
+		SharePrice:        180.50,
+		MarketCap:         2840000000000,
+		SharesOutstanding: 15744231000,
+		Beta:              1.25,
+		Beta3Y:            1.20,
+		AverageVolume:     75000000,
+		Source:            "yfinance",
+		DataQuality:       "good",
+	}
+
+	macroData := &entities.MacroData{
+		AsOf:               time.Now(),
+		RiskFreeRate:       0.045, // 4.5%
+		RiskFreeRate3Month: 0.043, // 4.3%
+		MarketRiskPremium:  0.06,  // 6%
+		InflationRate:      0.032, // 3.2%
+		Source:             "fred",
+	}
+
+	cleaningResult := &entities.CleaningResult{
+		Success:      true,
+		QualityScore: 85.0,
+		CleanedData:  historicalData.Data["2023FY"],
+		Flags:        []entities.Flag{},
+		Adjustments:  []entities.Adjustment{},
+	}
+
+	// Setup mock expectations (using assert.AnError for cache miss)
+	cache.On("Get", ctx, "valuation:"+ticker, mock.AnythingOfType("*entities.ValuationResult")).Return(assert.AnError).Maybe()
+	financialRepo.On("GetHistorical", ctx, ticker, 10).Return(historicalData, nil).Maybe()
+	marketRepo.On("GetLatest", ctx, ticker).Return(marketData, nil).Maybe()
+	macroRepo.On("GetLatest", ctx).Return(macroData, nil).Maybe()
+	mockDataCleaner.On("CleanFinancialData", ctx, mock.AnythingOfType("*entities.FinancialData")).Return(cleaningResult, nil).Maybe()
+	cache.On("Set", ctx, "valuation:"+ticker, mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil).Maybe()
+	// Handle both success and error cases for metrics
+	mockMetrics.On("RecordValuationRequest", ticker, "single", "success", mock.AnythingOfType("time.Duration")).Return().Maybe()
+	mockMetrics.On("RecordValuationRequest", ticker, "single", "error", mock.AnythingOfType("time.Duration")).Return().Maybe()
+	mockMetrics.On("RecordValuationError", ticker, mock.AnythingOfType("string")).Return().Maybe()
+	mockMetrics.On("IncDCFCalculations").Return().Maybe()
+	mockMetrics.On("IncWACCCalculations").Return().Maybe()
+	mockMetrics.On("SetAverageWACC", mock.AnythingOfType("float64")).Return().Maybe()
+	mockMetrics.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return().Maybe()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		result, err := service.CalculateValuation(ctx, ticker)
+		if err != nil {
+			b.Fatalf("Unexpected error in iteration %d: %v", i, err)
+		}
+		if result == nil {
+			b.Fatalf("Expected result in iteration %d, got nil", i)
+		}
+	}
 }
 
 func BenchmarkService_CalculateValuation_Parallel(b *testing.B) {
-	// Skip this benchmark for now as it requires full mock setup
-	// TODO: Implement proper parallel benchmark when service is fully integrated
-	b.Skip("Requires complete service integration - will be enabled in future phase")
+	// This benchmark compares sequential vs concurrent data fetching
+	b.Run("Sequential", func(b *testing.B) {
+		benchmarkValuationService(b, false)
+	})
+
+	b.Run("Concurrent", func(b *testing.B) {
+		benchmarkValuationService(b, true)
+	})
+}
+
+func benchmarkValuationService(b *testing.B, enableConcurrent bool) {
+	// Create mock dependencies with realistic delays
+	financialRepo := &MockFinancialDataRepository{}
+	marketRepo := &MockMarketDataRepository{}
+	macroRepo := &MockMacroDataRepository{}
+	cache := &MockCacheRepository{}
+	mockMetrics := &MockMetricsService{}
+	mockDataCleaner := &MockDataCleanerService{}
+
+	logger := zap.NewNop()
+
+	// Create configuration
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                  1 * time.Hour,
+			SlowRequestThreshold:      500 * time.Millisecond,
+			DataFetchTimeout:          30 * time.Second,
+			EnableConcurrentDataFetch: enableConcurrent,
+		},
+	}
+
+	service := NewService(financialRepo, marketRepo, macroRepo, cache, mockDataCleaner, nil, mockMetrics, cfg, logger)
+	ctx := context.Background()
+	ticker := "AAPL"
+
+	// Setup test data (using the same proven working data)
+	historicalData := &entities.HistoricalFinancialData{
+		Ticker: ticker,
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:                    ticker,
+				FilingPeriod:              "2023FY",
+				FilingDate:                time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now(),
+				OperatingIncome:           123450000000,
+				NormalizedOperatingIncome: 120000000000,
+				Revenue:                   383930000000,
+				InterestExpense:           3490000000,
+				TaxRate:                   0.21,
+				TotalAssets:               381190000000,
+				TangibleAssets:            350000000000,
+				InterestBearingDebt:       110000000000,
+				SharesOutstanding:         15744231000,
+				HasNormalizedData:         true,
+			},
+			"2022FY": {
+				Ticker:                    ticker,
+				FilingPeriod:              "2022FY",
+				FilingDate:                time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+				OperatingIncome:           119440000000,
+				NormalizedOperatingIncome: 116000000000,
+				Revenue:                   365817000000,
+				InterestExpense:           2930000000,
+				TaxRate:                   0.19,
+				TotalAssets:               352755000000,
+				TangibleAssets:            320000000000,
+				InterestBearingDebt:       108000000000,
+				SharesOutstanding:         15943425000,
+				HasNormalizedData:         true,
+			},
+			"2021FY": {
+				Ticker:                    ticker,
+				FilingPeriod:              "2021FY",
+				FilingDate:                time.Date(2022, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-2 * 365 * 24 * time.Hour),
+				OperatingIncome:           108949000000,
+				NormalizedOperatingIncome: 105000000000,
+				Revenue:                   365817000000,
+				InterestExpense:           2650000000,
+				TaxRate:                   0.18,
+				TotalAssets:               323888000000,
+				TangibleAssets:            290000000000,
+				InterestBearingDebt:       98000000000,
+				SharesOutstanding:         16426786000,
+				HasNormalizedData:         true,
+			},
+		},
+	}
+
+	marketData := &entities.MarketData{
+		Ticker:            ticker,
+		AsOf:              time.Now(),
+		SharePrice:        180.50,
+		MarketCap:         2840000000000,
+		SharesOutstanding: 15744231000,
+		Beta:              1.25,
+		Beta3Y:            1.20,
+		AverageVolume:     75000000,
+		Source:            "yfinance",
+		DataQuality:       "good",
+	}
+
+	macroData := &entities.MacroData{
+		AsOf:               time.Now(),
+		RiskFreeRate:       0.045, // 4.5%
+		RiskFreeRate3Month: 0.043, // 4.3%
+		MarketRiskPremium:  0.06,  // 6%
+		InflationRate:      0.032, // 3.2%
+		Source:             "fred",
+	}
+
+	cleaningResult := &entities.CleaningResult{
+		Success:      true,
+		QualityScore: 85.0,
+		CleanedData:  historicalData.Data["2023FY"],
+		Flags:        []entities.Flag{},
+		Adjustments:  []entities.Adjustment{},
+	}
+
+	// Setup mocks with appropriate call counts for benchmark iterations
+	cache.On("Get", ctx, "valuation:"+ticker, mock.AnythingOfType("*entities.ValuationResult")).Return(assert.AnError).Maybe()
+	financialRepo.On("GetHistorical", ctx, ticker, 10).Return(historicalData, nil).Maybe()
+	marketRepo.On("GetLatest", ctx, ticker).Return(marketData, nil).Maybe()
+	macroRepo.On("GetLatest", ctx).Return(macroData, nil).Maybe()
+	mockDataCleaner.On("CleanFinancialData", ctx, mock.AnythingOfType("*entities.FinancialData")).Return(cleaningResult, nil).Maybe()
+	cache.On("Set", ctx, "valuation:"+ticker, mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil).Maybe()
+	mockMetrics.On("RecordValuationRequest", ticker, "single", "success", mock.AnythingOfType("time.Duration")).Return().Maybe()
+	mockMetrics.On("IncDCFCalculations").Return().Maybe()
+	mockMetrics.On("IncWACCCalculations").Return().Maybe()
+	mockMetrics.On("SetAverageWACC", mock.AnythingOfType("float64")).Return().Maybe()
+	mockMetrics.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return().Maybe()
+
+	b.ResetTimer()
+	b.ReportAllocs()
+
+	for i := 0; i < b.N; i++ {
+		result, err := service.CalculateValuation(ctx, ticker)
+		if err != nil {
+			b.Fatalf("Unexpected error: %v", err)
+		}
+		if result == nil {
+			b.Fatal("Expected result, got nil")
+		}
+	}
 }
 
 func BenchmarkFinancialDataCreation(b *testing.B) {
@@ -154,4 +442,3 @@ func createTestFinancialData(ticker string) *entities.FinancialData {
 		HasNormalizedData:         true,
 	}
 }
- 

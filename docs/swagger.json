@@ -1,0 +1,337 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "description": "DCF (Discounted Cash Flow) Valuation API provides intrinsic value calculations for publicly traded companies.\nThe API computes Net Tangible Asset Value and DCF Fair Value per share using SEC filings and market data.",
+        "title": "DCF Valuation API",
+        "termsOfService": "https://midas.dev/terms",
+        "contact": {
+            "name": "API Support",
+            "url": "https://midas.dev/support",
+            "email": "support@midas.dev"
+        },
+        "license": {
+            "name": "Apache 2.0",
+            "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
+        },
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/api/v1",
+    "paths": {
+        "/fair-value/bulk": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Calculate intrinsic fair values for multiple stocks in a single request",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fair-value"
+                ],
+                "summary": "Get fair values for multiple stocks",
+                "parameters": [
+                    {
+                        "description": "Bulk fair value request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.BulkFairValueRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.BulkFairValueResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid request format",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid API key",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Insufficient permissions",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limit exceeded",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/fair-value/{ticker}": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Calculate intrinsic fair value for a stock using DCF and net tangible assets",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fair-value"
+                ],
+                "summary": "Get fair value for a stock",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stock ticker symbol (e.g., AAPL)",
+                        "name": "ticker",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "maximum": 3,
+                        "minimum": 0,
+                        "type": "number",
+                        "description": "Override beta for WACC calculation",
+                        "name": "override_beta",
+                        "in": "query"
+                    },
+                    {
+                        "maximum": 0.2,
+                        "minimum": 0,
+                        "type": "number",
+                        "description": "Override risk-free rate",
+                        "name": "override_rf",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.FairValueResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid ticker or parameters",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid API key",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Insufficient permissions",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Ticker not found",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limit exceeded",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "handlers.BulkFairValueRequest": {
+            "description": "Bulk fair value calculation request for multiple tickers",
+            "type": "object",
+            "required": [
+                "tickers"
+            ],
+            "properties": {
+                "override_beta": {
+                    "description": "Optional beta override",
+                    "type": "number",
+                    "example": 1.2
+                },
+                "override_rf": {
+                    "description": "Optional risk-free rate override",
+                    "type": "number",
+                    "example": 0.045
+                },
+                "tickers": {
+                    "description": "Stock ticker symbols (max 10)",
+                    "type": "array",
+                    "maxItems": 10,
+                    "minItems": 1,
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "[\"AAPL\"",
+                        "\"MSFT\"",
+                        "\"GOOGL\"]"
+                    ]
+                }
+            }
+        },
+        "handlers.BulkFairValueResponse": {
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.FairValueResponse"
+                    }
+                },
+                "summary": {
+                    "$ref": "#/definitions/handlers.BulkSummary"
+                }
+            }
+        },
+        "handlers.BulkSummary": {
+            "type": "object",
+            "properties": {
+                "failed": {
+                    "type": "integer"
+                },
+                "successful": {
+                    "type": "integer"
+                },
+                "total_requested": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.ErrorResponse": {
+            "description": "Standard error response following RFC 7807 Problem Details",
+            "type": "object",
+            "properties": {
+                "context": {
+                    "description": "Additional context information",
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "detail": {
+                    "description": "Human-readable explanation",
+                    "type": "string",
+                    "example": "Invalid ticker format"
+                },
+                "instance": {
+                    "description": "URI reference to specific occurrence",
+                    "type": "string",
+                    "example": "/api/v1/fair-value/INVALID"
+                },
+                "status": {
+                    "description": "HTTP status code",
+                    "type": "integer",
+                    "example": 400
+                },
+                "title": {
+                    "description": "Human-readable title",
+                    "type": "string",
+                    "example": "Bad Request"
+                },
+                "type": {
+                    "description": "Problem type URI",
+                    "type": "string",
+                    "example": "https://problems.midas.dev/INVALID_TICKER"
+                }
+            }
+        },
+        "handlers.FairValueResponse": {
+            "description": "Fair value calculation response with intrinsic valuation metrics",
+            "type": "object",
+            "properties": {
+                "as_of": {
+                    "description": "Timestamp of calculation",
+                    "type": "string",
+                    "example": "2025-08-13T22:15:34.402652598Z"
+                },
+                "data_quality_grade": {
+                    "description": "Data quality grade (A-F)",
+                    "type": "string",
+                    "example": "B"
+                },
+                "data_quality_score": {
+                    "description": "Data quality score (0-100)",
+                    "type": "number",
+                    "example": 85.5
+                },
+                "dcf_value_per_share": {
+                    "description": "Discounted cash flow fair value per share",
+                    "type": "number",
+                    "example": 156.42
+                },
+                "growth_rate": {
+                    "description": "Expected growth rate (5-year CAGR)",
+                    "type": "number",
+                    "example": 0.045
+                },
+                "tangible_value_per_share": {
+                    "description": "Net tangible book value per share",
+                    "type": "number",
+                    "example": 24.73
+                },
+                "ticker": {
+                    "description": "Stock ticker symbol",
+                    "type": "string",
+                    "example": "AAPL"
+                },
+                "wacc": {
+                    "description": "Weighted Average Cost of Capital",
+                    "type": "number",
+                    "example": 0.092
+                }
+            }
+        }
+    },
+    "securityDefinitions": {
+        "ApiKeyAuth": {
+            "description": "API key required for authentication. Include this in the X-API-Key header.",
+            "type": "apiKey",
+            "name": "X-API-Key",
+            "in": "header"
+        }
+    },
+    "externalDocs": {
+        "description": "OpenAPI Specification",
+        "url": "/docs/openapi.yaml"
+    }
+}

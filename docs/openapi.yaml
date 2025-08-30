@@ -1,0 +1,216 @@
+openapi: 3.0.3
+info:
+  title: Midas DCF Valuation API
+  version: 0.1.0
+  description: |
+    REST API exposing intrinsic value metrics per ticker.
+    - Net Tangible Asset Value per share
+    - DCF Fair Value per share (5-year projection, WACC-discounted)
+servers:
+  - url: http://localhost:8080
+    description: Local development
+security:
+  - ApiKeyAuth: []
+paths:
+  /api/v1/fair-value/{ticker}:
+    get:
+      summary: Get fair value for a ticker
+      tags: [valuation]
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 5
+        - name: override_beta
+          in: query
+          required: false
+          schema:
+            type: number
+            format: float
+        - name: override_rf
+          in: query
+          required: false
+          schema:
+            type: number
+            format: float
+      responses:
+        '200':
+          description: Fair value metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FairValueResponse'
+        '400':
+          description: Invalid ticker or request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Ticker not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: Insufficient data for valuation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/fair-value/bulk:
+    post:
+      summary: Get fair value for multiple tickers
+      tags: [valuation]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkFairValueRequest'
+      responses:
+        '200':
+          description: Bulk fair value results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkFairValueResponse'
+        '400':
+          description: Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/v1/health/detailed:
+    get:
+      summary: Detailed health check
+      tags: [health]
+      responses:
+        '200': { description: Healthy }
+        '206': { description: Degraded }
+        '503': { description: Unhealthy }
+        '401': { description: Authentication required }
+  /api/v1/metrics:
+    get:
+      summary: Application and business metrics
+      tags: [metrics]
+      responses:
+        '200': { description: Metrics JSON }
+        '401': { description: Authentication required }
+  /api/v1/auth/keys:
+    post:
+      summary: Create API key (admin)
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, permissions]
+              properties:
+                user_id:
+                  type: string
+                permissions:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201': { description: Created }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Insufficient permissions }
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    FairValueResponse:
+      type: object
+      properties:
+        ticker:
+          type: string
+        wacc:
+          type: number
+          format: float
+        growth_rate:
+          type: number
+          format: float
+        tangible_value_per_share:
+          type: number
+          format: float
+        dcf_value_per_share:
+          type: number
+          format: float
+        as_of:
+          type: string
+          format: date-time
+        data_quality_score:
+          type: number
+          format: float
+        data_quality_grade:
+          type: string
+    BulkFairValueRequest:
+      type: object
+      required: [tickers]
+      properties:
+        tickers:
+          type: array
+          minItems: 1
+          maxItems: 10
+          items:
+            type: string
+        override_beta:
+          type: number
+          format: float
+        override_rf:
+          type: number
+          format: float
+    BulkSummary:
+      type: object
+      properties:
+        total_requested:
+          type: integer
+        successful:
+          type: integer
+        failed:
+          type: integer
+    BulkFairValueResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/FairValueResponse'
+        summary:
+          $ref: '#/components/schemas/BulkSummary'
+    ErrorResponse:
+      type: object
+      properties:
+        type: { type: string }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        context:
+          type: object
+          additionalProperties: true
+
+

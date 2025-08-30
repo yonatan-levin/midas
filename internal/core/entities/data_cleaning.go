@@ -207,6 +207,9 @@ type CleaningResult struct {
 	IndustryCode     string `json:"industry_code"`
 	IndustrySpecific bool   `json:"industry_specific"` // Whether industry rules were applied
 
+	// AI analysis metadata (Phase 3)
+	AIMetadata map[string]string `json:"ai_metadata,omitempty"` // AI service metadata and confidence scores
+
 	// Error information
 	Errors   []string `json:"errors,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
@@ -220,6 +223,10 @@ type CleaningContext struct {
 	EnableIndustry   bool
 	EnableCaching    bool
 	QualityThreshold float64
+
+	// AI-powered analysis support (Phase 3)
+	FootnoteText string            `json:"footnote_text,omitempty"` // Free-form footnotes for AI analysis
+	AIMetadata   map[string]string `json:"ai_metadata,omitempty"`   // AI service metadata and confidence scores
 }
 
 // CompanySize enum for company size classification

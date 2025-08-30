@@ -1,0 +1,50 @@
+name: Contract Fuzzing
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+
+jobs:
+  schemathesis:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Schemathesis
+        run: pip install --upgrade pip schemathesis
+
+      - name: Prepare database (schema + migrations)
+        run: |
+          go run ./cmd/migrate -db ./data/midas_ci.db
+
+      - name: Start server
+        run: |
+          export ENABLE_SWAGGER=true
+          export SERVER_PORT=8080
+          export DATABASE_TYPE=sqlite
+          export DATABASE_PATH=./data/midas_ci.db
+          nohup bash -c 'go run ./cmd/server' >/tmp/server.log 2>&1 &
+
+      - name: Wait for health
+        run: |
+          for i in {1..30}; do curl -sf http://localhost:8080/health && exit 0; sleep 1; done; echo 'Server not healthy' >&2; cat /tmp/server.log; exit 1
+
+      - name: Run Schemathesis (with demo key)
+        env:
+          DEMO_KEY: dcf_demo_3a4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334455667788
+        run: |
+          python -m schemathesis.cli run http://localhost:8080/docs/openapi.yaml --header "X-API-Key: $DEMO_KEY" --checks all
+
+

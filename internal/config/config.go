@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -17,6 +18,7 @@ type Config struct {
 	LogLevel      string `mapstructure:"log_level"`
 	Port          string `mapstructure:"port"`
 	EnableSwagger bool   `mapstructure:"enable_swagger"`
+	EnablePprof   bool   `mapstructure:"enable_pprof"`
 
 	// Component configurations
 	Server      ServerConfig      `mapstructure:"server"`
@@ -27,6 +29,7 @@ type Config struct {
 	Macro       MacroConfig       `mapstructure:"macro"`
 	Valuation   ValuationConfig   `mapstructure:"valuation"`
 	DataCleaner DataCleanerConfig `mapstructure:"datacleaner"`
+	Scheduler   SchedulerConfig   `mapstructure:"scheduler"`
 }
 
 // ServerConfig holds HTTP server configuration
@@ -39,7 +42,7 @@ type ServerConfig struct {
 
 // DatabaseConfig holds database connection settings
 type DatabaseConfig struct {
-	Driver      string `mapstructure:"driver"` // sqlite or postgres
+	Driver      string `mapstructure:"driver"` // sqlite3 or postgres
 	SQLitePath  string `mapstructure:"sqlite_path"`
 	PostgresURL string `mapstructure:"postgres_url"`
 	MaxOpenConn int    `mapstructure:"max_open_conn"`
@@ -114,12 +117,22 @@ type ValuationConfig struct {
 	SlowRequestThreshold time.Duration `mapstructure:"slow_request_threshold"` // Threshold for logging slow requests
 	DataFetchTimeout     time.Duration `mapstructure:"data_fetch_timeout"`     // Timeout for slow data fetch warnings
 
+	// Performance optimizations
+	EnableConcurrentDataFetch bool `mapstructure:"enable_concurrent_data_fetch"` // Enable concurrent market/macro data fetching
+
 	// DCF calculation specific settings
 	DCFProjectionYears    int     `mapstructure:"dcf_projection_years"`    // Number of explicit forecast years
 	DCFMaxGrowthRate      float64 `mapstructure:"dcf_max_growth_rate"`     // Maximum allowed growth rate
 	DCFMinGrowthRate      float64 `mapstructure:"dcf_min_growth_rate"`     // Minimum allowed growth rate
 	DCFIterationTolerance float64 `mapstructure:"dcf_iteration_tolerance"` // Tolerance for implied growth calculations
 	DCFMaxIterations      int     `mapstructure:"dcf_max_iterations"`      // Max iterations for implied growth calculations
+}
+
+// SchedulerConfig holds scheduler configuration
+type SchedulerConfig struct {
+	Enabled        bool          `mapstructure:"enabled"`         // Enable/disable scheduler service
+	Interval       time.Duration `mapstructure:"interval"`        // Interval between scheduler runs
+	MaxConcurrency int           `mapstructure:"max_concurrency"` // Maximum concurrent jobs
 }
 
 // DataCleanerConfig holds data cleaning configuration
@@ -169,7 +182,8 @@ func Load() (*Config, error) {
 	// Set default values
 	setDefaults()
 
-	// Enable environment variable support
+	// Enable environment variable support (map nested keys like database.driver -> DATABASE_DRIVER)
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 
 	// Try to read config file (optional)
@@ -200,6 +214,7 @@ func setDefaults() {
 	viper.SetDefault("environment", "development")
 	viper.SetDefault("log_level", "debug")
 	viper.SetDefault("enable_swagger", false)
+	viper.SetDefault("enable_pprof", false)
 
 	// Server defaults
 	viper.SetDefault("server.port", "8080")
@@ -208,7 +223,7 @@ func setDefaults() {
 	viper.SetDefault("server.idle_timeout", "120s")
 
 	// Database defaults
-	viper.SetDefault("database.driver", "sqlite")
+	viper.SetDefault("database.driver", "sqlite3")
 	viper.SetDefault("database.sqlite_path", "./data/midas.db")
 	viper.SetDefault("database.max_open_conn", 25)
 	viper.SetDefault("database.max_idle_conn", 10)
@@ -286,6 +301,11 @@ func setDefaults() {
 	viper.SetDefault("datacleaner.enable_audit_trail", true) // Enable full audit trail
 	viper.SetDefault("datacleaner.log_adjustments", true)    // Log all adjustments
 	viper.SetDefault("datacleaner.log_flags", true)          // Log all flags
+
+	// Scheduler defaults
+	viper.SetDefault("scheduler.enabled", false)     // Disabled by default
+	viper.SetDefault("scheduler.interval", "24h")    // Run daily by default
+	viper.SetDefault("scheduler.max_concurrency", 2) // Maximum 2 concurrent jobs
 }
 
 // validate performs basic validation on the configuration
@@ -294,8 +314,8 @@ func validate(config *Config) error {
 		return fmt.Errorf("server port cannot be empty")
 	}
 
-	if config.Database.Driver != "sqlite" && config.Database.Driver != "postgres" {
-		return fmt.Errorf("database driver must be 'sqlite' or 'postgres'")
+	if config.Database.Driver != "sqlite3" && config.Database.Driver != "postgres" {
+		return fmt.Errorf("database driver must be 'sqlite3' or 'postgres'")
 	}
 
 	if config.Database.Driver == "postgres" && config.Database.PostgresURL == "" {

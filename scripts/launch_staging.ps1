@@ -52,7 +52,15 @@ Write-Host "Starting services..." -ForegroundColor $Yellow
 # Stop any existing containers
 docker-compose -f $COMPOSE_FILE down 2>$null
 
-# Start services
+# Start services (fail fast if API port 8080 is in use)
+try {
+    $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Parse('127.0.0.1'),8080)
+    $listener.Start(); $listener.Stop()
+} catch {
+    Write-Host "Port 8080 is busy. Please stop the existing service or set PORT to a free port." -ForegroundColor $Red
+    exit 1
+}
+
 docker-compose -f $COMPOSE_FILE up -d
 
 # Wait for services to be ready
@@ -100,12 +108,18 @@ if (-not (Test-Path "./data")) {
 
 # Start the application
 Write-Host ""
-Write-Host "Starting DCF Valuation API..." -ForegroundColor $Yellow
-Start-Process -FilePath "./bin/dcf-api" -NoNewWindow -PassThru | Out-Null
+Write-Host "Starting DCF Valuation API (containerized)..." -ForegroundColor $Yellow
 
-# Wait for API to be ready
-Start-Sleep -Seconds 3
-Test-ServiceHealth "DCF API" 8080
+# The compose service exposes port 8080 already; do not start a second local binary to avoid bind errors
+# Instead, wait for the containerized API to be healthy
+for ($i=0; $i -lt 60; $i++) {
+    try {
+        Invoke-RestMethod -Uri "http://localhost:8080/health" -Method Get -TimeoutSec 2 | Out-Null
+        Write-Host "✓ DCF API is ready" -ForegroundColor $Green
+        break
+    } catch { Start-Sleep -Seconds 1 }
+}
+if ($i -ge 60) { Write-Host "✗ DCF API failed to become ready" -ForegroundColor $Red; exit 1 }
 
 # Test health endpoint
 Write-Host ""
@@ -127,10 +141,10 @@ Write-Host "API URL: http://localhost:8080"
 Write-Host "API Docs: http://localhost:8080/swagger/index.html"
 Write-Host "Metrics: http://localhost:9090/metrics"
 Write-Host ""
-Write-Host "Demo API Key: demo-key-phase-2.5-mvp"
+Write-Host "Demo API Key: dcf_demo_3a4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334455667788"
 Write-Host ""
 Write-Host "Example requests:"
-Write-Host "  Invoke-RestMethod -Uri 'http://localhost:8080/api/v1/fair-value/AAPL' -Headers @{'Authorization'='Bearer demo-key-phase-2.5-mvp'}"
+Write-Host "  Invoke-RestMethod -Uri 'http://localhost:8080/api/v1/fair-value/AAPL' -Headers @{'X-API-Key'='dcf_demo_3a4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334455667788'}"
 Write-Host ""
 Write-Host "To stop the services, run: .\scripts\stop_staging.ps1"
 Write-Host "" 

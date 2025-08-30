@@ -174,7 +174,7 @@ func (ic *IndustryClassifier) loadDefaultConfigurations() {
 			DeferredTaxThreshold:      0.05,  // 5% of total assets
 			OperatingLeaseRate:        0.055, // 5.5% discount rate
 			PensionFundingThreshold:   0.80,  // 80% funding threshold
-			ContingentLiabilityRate:   0.60,  // 60% probability weighting
+			ContingentLiabilityRate:   0.40,  // 40% probability weighting (conservative for tech)
 			RestructuringThreshold:    0.02,  // 2% of revenue
 			StockCompThreshold:        0.08,  // 8% of revenue (high for tech)
 			LitigationThreshold:       0.01,  // 1% of revenue

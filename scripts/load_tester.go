@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,6 +35,7 @@ type LoadTestResult struct {
 	AverageLatency    time.Duration `json:"average_latency"`
 	MinLatency        time.Duration `json:"min_latency"`
 	MaxLatency        time.Duration `json:"max_latency"`
+	P95Latency        time.Duration `json:"p95_latency"`
 	RequestsPerSecond float64       `json:"requests_per_second"`
 	ErrorRate         float64       `json:"error_rate"`
 	TestDuration      time.Duration `json:"test_duration"`
@@ -103,6 +105,8 @@ func runLoadTest(config *LoadTestConfig) *LoadTestResult {
 	// Channels for coordinating workers
 	requestChan := make(chan RequestTask, config.Concurrency*2)
 	resultChan := make(chan RequestMetric, config.Concurrency*2)
+	// Collect latencies for percentile calculation (bounded memory via sampling)
+	latencySamples := make([]int64, 0, 100000)
 
 	// Metrics tracking
 	var (
@@ -153,6 +157,11 @@ func runLoadTest(config *LoadTestConfig) *LoadTestResult {
 				if latencyNanos <= currentMax || atomic.CompareAndSwapInt64(&maxLatency, currentMax, latencyNanos) {
 					break
 				}
+			}
+
+			// Append latency sample (best-effort; skip if capacity reached)
+			if len(latencySamples) < cap(latencySamples) {
+				latencySamples = append(latencySamples, latencyNanos)
 			}
 		}
 		collectorDone <- true
@@ -206,6 +215,21 @@ done:
 		avgLatency = time.Duration(atomic.LoadInt64(&totalLatency) / totalReqs)
 	}
 
+	// Compute p95 from collected samples
+	p95 := time.Duration(0)
+	if len(latencySamples) > 0 {
+		// simple nth-element via sort
+		sort.Slice(latencySamples, func(i, j int) bool { return latencySamples[i] < latencySamples[j] })
+		idx := int(float64(len(latencySamples))*0.95) - 1
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(latencySamples) {
+			idx = len(latencySamples) - 1
+		}
+		p95 = time.Duration(latencySamples[idx])
+	}
+
 	result := &LoadTestResult{
 		TotalRequests:     totalReqs,
 		SuccessfulReqs:    successReqs,
@@ -213,6 +237,7 @@ done:
 		AverageLatency:    avgLatency,
 		MinLatency:        time.Duration(atomic.LoadInt64(&minLatency)),
 		MaxLatency:        time.Duration(atomic.LoadInt64(&maxLatency)),
+		P95Latency:        p95,
 		RequestsPerSecond: float64(totalReqs) / testDuration.Seconds(),
 		ErrorRate:         float64(failReqs) / float64(totalReqs) * 100,
 		TestDuration:      testDuration,

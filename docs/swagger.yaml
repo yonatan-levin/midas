@@ -1,0 +1,241 @@
+basePath: /api/v1
+definitions:
+  handlers.BulkFairValueRequest:
+    description: Bulk fair value calculation request for multiple tickers
+    properties:
+      override_beta:
+        description: Optional beta override
+        example: 1.2
+        type: number
+      override_rf:
+        description: Optional risk-free rate override
+        example: 0.045
+        type: number
+      tickers:
+        description: Stock ticker symbols (max 10)
+        example:
+        - '["AAPL"'
+        - '"MSFT"'
+        - '"GOOGL"]'
+        items:
+          type: string
+        maxItems: 10
+        minItems: 1
+        type: array
+    required:
+    - tickers
+    type: object
+  handlers.BulkFairValueResponse:
+    properties:
+      results:
+        items:
+          $ref: '#/definitions/handlers.FairValueResponse'
+        type: array
+      summary:
+        $ref: '#/definitions/handlers.BulkSummary'
+    type: object
+  handlers.BulkSummary:
+    properties:
+      failed:
+        type: integer
+      successful:
+        type: integer
+      total_requested:
+        type: integer
+    type: object
+  handlers.ErrorResponse:
+    description: Standard error response following RFC 7807 Problem Details
+    properties:
+      context:
+        additionalProperties: true
+        description: Additional context information
+        type: object
+      detail:
+        description: Human-readable explanation
+        example: Invalid ticker format
+        type: string
+      instance:
+        description: URI reference to specific occurrence
+        example: /api/v1/fair-value/INVALID
+        type: string
+      status:
+        description: HTTP status code
+        example: 400
+        type: integer
+      title:
+        description: Human-readable title
+        example: Bad Request
+        type: string
+      type:
+        description: Problem type URI
+        example: https://problems.midas.dev/INVALID_TICKER
+        type: string
+    type: object
+  handlers.FairValueResponse:
+    description: Fair value calculation response with intrinsic valuation metrics
+    properties:
+      as_of:
+        description: Timestamp of calculation
+        example: "2025-08-13T22:15:34.402652598Z"
+        type: string
+      data_quality_grade:
+        description: Data quality grade (A-F)
+        example: B
+        type: string
+      data_quality_score:
+        description: Data quality score (0-100)
+        example: 85.5
+        type: number
+      dcf_value_per_share:
+        description: Discounted cash flow fair value per share
+        example: 156.42
+        type: number
+      growth_rate:
+        description: Expected growth rate (5-year CAGR)
+        example: 0.045
+        type: number
+      tangible_value_per_share:
+        description: Net tangible book value per share
+        example: 24.73
+        type: number
+      ticker:
+        description: Stock ticker symbol
+        example: AAPL
+        type: string
+      wacc:
+        description: Weighted Average Cost of Capital
+        example: 0.092
+        type: number
+    type: object
+externalDocs:
+  description: OpenAPI Specification
+  url: /docs/openapi.yaml
+host: localhost:8080
+info:
+  contact:
+    email: support@midas.dev
+    name: API Support
+    url: https://midas.dev/support
+  description: |-
+    DCF (Discounted Cash Flow) Valuation API provides intrinsic value calculations for publicly traded companies.
+    The API computes Net Tangible Asset Value and DCF Fair Value per share using SEC filings and market data.
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: https://midas.dev/terms
+  title: DCF Valuation API
+  version: "1.0"
+paths:
+  /fair-value/{ticker}:
+    get:
+      consumes:
+      - application/json
+      description: Calculate intrinsic fair value for a stock using DCF and net tangible
+        assets
+      parameters:
+      - description: Stock ticker symbol (e.g., AAPL)
+        in: path
+        name: ticker
+        required: true
+        type: string
+      - description: Override beta for WACC calculation
+        in: query
+        maximum: 3
+        minimum: 0
+        name: override_beta
+        type: number
+      - description: Override risk-free rate
+        in: query
+        maximum: 0.2
+        minimum: 0
+        name: override_rf
+        type: number
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.FairValueResponse'
+        "400":
+          description: Invalid ticker or parameters
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Missing or invalid API key
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Insufficient permissions
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "404":
+          description: Ticker not found
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "429":
+          description: Rate limit exceeded
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      summary: Get fair value for a stock
+      tags:
+      - fair-value
+  /fair-value/bulk:
+    post:
+      consumes:
+      - application/json
+      description: Calculate intrinsic fair values for multiple stocks in a single
+        request
+      parameters:
+      - description: Bulk fair value request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.BulkFairValueRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/handlers.BulkFairValueResponse'
+        "400":
+          description: Invalid request format
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "401":
+          description: Missing or invalid API key
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "403":
+          description: Insufficient permissions
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "429":
+          description: Rate limit exceeded
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/handlers.ErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      summary: Get fair values for multiple stocks
+      tags:
+      - fair-value
+securityDefinitions:
+  ApiKeyAuth:
+    description: API key required for authentication. Include this in the X-API-Key
+      header.
+    in: header
+    name: X-API-Key
+    type: apiKey
+swagger: "2.0"

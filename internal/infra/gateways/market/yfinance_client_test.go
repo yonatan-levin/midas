@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -289,7 +290,7 @@ func TestYFinanceClient_HealthCheck_APIError(t *testing.T) {
 	err := client.HealthCheck(ctx)
 
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Yahoo Finance API returned status 500")
+	assert.Contains(t, strings.ToLower(err.Error()), "yahoo finance api returned status 500")
 }
 
 func TestYFinanceClient_HealthCheck_Timeout(t *testing.T) {

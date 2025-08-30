@@ -197,7 +197,8 @@ packer_cache/
 local/
 dev/
 development/
-
+docs/integration/
+docs/old_integration_docs/
 # Production builds
 # (already covered above: build/, dist/, bin/)
 
@@ -285,4 +286,5 @@ coverage
 *_coverage
 coverage.out
 *.coverage
-
+*cover*
+.hypothesis

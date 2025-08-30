@@ -14,11 +14,37 @@ import (
 
 	// Import SQLite driver
 	_ "github.com/mattn/go-sqlite3"
-
 	"github.com/midas/dcf-valuation-api/internal/api"
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/di"
+	// Import generated docs (will be created after swag init)
+	// TODO: Enable after fixing module dependencies in container
+	// _ "github.com/midas/dcf-valuation-api/docs"
 )
+
+// @title           DCF Valuation API
+// @version         1.0
+// @description     DCF (Discounted Cash Flow) Valuation API provides intrinsic value calculations for publicly traded companies.
+// @description     The API computes Net Tangible Asset Value and DCF Fair Value per share using SEC filings and market data.
+// @termsOfService  https://midas.dev/terms
+
+// @contact.name   API Support
+// @contact.url    https://midas.dev/support
+// @contact.email  support@midas.dev
+
+// @license.name  Apache 2.0
+// @license.url   http://www.apache.org/licenses/LICENSE-2.0.html
+
+// @host      localhost:8080
+// @BasePath  /api/v1
+
+// @securityDefinitions.apikey ApiKeyAuth
+// @in header
+// @name X-API-Key
+// @description API key required for authentication. Include this in the X-API-Key header.
+
+// @externalDocs.description  OpenAPI Specification
+// @externalDocs.url          /docs/openapi.yaml
 
 func main() {
 	// Initialize configuration

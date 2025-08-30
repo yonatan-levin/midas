@@ -18,10 +18,12 @@ services:
       - LOG_LEVEL=debug
       - PORT=8080
       - GIN_MODE=debug
-      
+      - ENABLE_SWAGGER=true
+      - ENABLE_PPROF=true
       # Database settings
-      - DATABASE_DRIVER=sqlite
+      - DATABASE_DRIVER=sqlite3
       - DATABASE_SQLITE_PATH=/app/data/dcf.db
+      - RUN_MIGRATIONS=true
       - DATABASE_MAX_OPEN_CONN=25
       - DATABASE_MAX_IDLE_CONN=5
       
@@ -58,6 +60,8 @@ services:
       - dcf_logs:/app/logs
       # Configuration (for development - mount local config)
       - ./config:/app/config:ro
+      - ./docs:/app/docs:ro
+      - ./migrations:/app/migrations:ro
     depends_on:
       - redis
     networks:

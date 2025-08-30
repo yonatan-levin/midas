@@ -445,3 +445,33 @@ CREATE TRIGGER IF NOT EXISTS update_api_keys_updated_at
 BEGIN
     UPDATE api_keys SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
 END;
+
+-- Scheduler watchlist table for managing which tickers to fetch during nightly ingestion
+CREATE TABLE IF NOT EXISTS scheduler_watchlist (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker VARCHAR(10) NOT NULL UNIQUE,
+    is_active BOOLEAN NOT NULL DEFAULT 1,
+    priority INTEGER NOT NULL DEFAULT 1, -- 1=high, 2=medium, 3=low
+    added_reason VARCHAR(255), -- Why this ticker was added (e.g., "user_request", "auto_discovery")
+    last_fetched_at TIMESTAMP NULL, -- When was this ticker last successfully fetched
+    fetch_failures INTEGER NOT NULL DEFAULT 0, -- Count of consecutive failures
+    max_failures INTEGER NOT NULL DEFAULT 5, -- Auto-disable after this many failures
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (ticker) REFERENCES companies(ticker) ON DELETE CASCADE
+);
+
+-- Indexes for scheduler watchlist
+CREATE INDEX IF NOT EXISTS idx_scheduler_watchlist_active ON scheduler_watchlist(is_active);
+CREATE INDEX IF NOT EXISTS idx_scheduler_watchlist_priority ON scheduler_watchlist(priority);
+CREATE INDEX IF NOT EXISTS idx_scheduler_watchlist_last_fetched ON scheduler_watchlist(last_fetched_at);
+CREATE INDEX IF NOT EXISTS idx_scheduler_watchlist_failures ON scheduler_watchlist(fetch_failures);
+
+-- Trigger to update scheduler_watchlist updated_at timestamp
+CREATE TRIGGER IF NOT EXISTS update_scheduler_watchlist_updated_at 
+    AFTER UPDATE ON scheduler_watchlist
+    FOR EACH ROW
+BEGIN
+    UPDATE scheduler_watchlist SET updated_at = CURRENT_TIMESTAMP WHERE id = NEW.id;
+END;

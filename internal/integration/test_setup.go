@@ -2,12 +2,12 @@ package integration
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +16,6 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
@@ -24,6 +23,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/di"
 	"github.com/midas/dcf-valuation-api/internal/services/auth"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
@@ -41,23 +41,31 @@ type TestContainer struct {
 	Router           *gin.Engine
 	FairValueHandler *handlers.FairValueHandler
 	AuthService      *auth.Service
+	WatchlistRepo    ports.WatchlistRepository
+	Logger           *zap.Logger
+	Database         *sqlx.DB
 	cleanup          func()
 }
 
 // SetupTestEnvironment creates a complete test environment with real infrastructure
 func SetupTestEnvironment(t *testing.T) *TestContainer {
-	// Skip Docker-based integration tests on Windows runners where rootless Docker is unsupported
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping Docker-based integration tests on Windows environment")
-		return nil
-	}
-
 	ctx := context.Background()
 
-	// Step 1: Start Redis container for real integration testing
-	redisContainer, redisURL := setupRedisContainer(t, ctx)
+	var (
+		redisContainer testcontainers.Container
+		redisURL       string
+	)
 
-	// Step 2: Create test configuration with real Redis and in-memory SQLite
+	// Fallback to in-memory cache on Windows or when NO_DOCKER=1
+	if runtime.GOOS == "windows" || os.Getenv("NO_DOCKER") == "1" {
+		// Use an invalid Redis URL to force memory cache fallback in DI
+		redisURL = "redis://127.0.0.1:0"
+	} else {
+		// Start Redis container for non-Windows environments
+		redisContainer, redisURL = setupRedisContainer(t, ctx)
+	}
+
+	// Step 2: Create test configuration with Redis URL (or invalid URL to trigger memory cache)
 	cfg := createTestConfig(redisURL)
 
 	// Step 3: Declare variables first
@@ -69,6 +77,7 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 	var healthHandler *handlers.HealthHandler
 	var metricsService *metrics.Service
 	var logger *zap.Logger
+	var watchlistRepo ports.WatchlistRepository
 
 	// Step 4: Create DI container with real services
 	app := fxtest.New(t,
@@ -84,7 +93,7 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 		fx.Provide(handlers.NewFairValueHandler),
 
 		// Extract handlers and database for testing
-		fx.Populate(&fairValueHandler, &authService, &database, &valuationService, &rateLimiter, &healthHandler, &metricsService, &logger),
+		fx.Populate(&fairValueHandler, &authService, &database, &valuationService, &rateLimiter, &healthHandler, &metricsService, &logger, &watchlistRepo),
 	)
 
 	// Step 5: Start the DI container
@@ -98,7 +107,7 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 	server := api.NewServer(cfg, logger, valuationService, authService, rateLimiter, healthHandler, metricsService)
 	router := server.Engine()
 
-	// Step 6: Setup cleanup function
+	// Step 8: Setup cleanup function
 	cleanup := func() {
 		if app != nil {
 			app.RequireStop()
@@ -116,6 +125,9 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 		Router:           router,
 		FairValueHandler: fairValueHandler,
 		AuthService:      authService,
+		WatchlistRepo:    watchlistRepo,
+		Logger:           logger,
+		Database:         database,
 		cleanup:          cleanup,
 	}
 }
@@ -133,50 +145,28 @@ func (tc *TestContainer) NewTestAPIKey(ctx context.Context, userID string, permi
 }
 
 // setupRedisContainer starts a Redis container for testing
-func setupRedisContainer(t *testing.T, ctx context.Context) (testcontainers.Container, string) {
-	// Create Redis container request
-	req := testcontainers.ContainerRequest{
-		Image:        "redis:7-alpine",
-		ExposedPorts: []string{"6379/tcp"},
-		WaitingFor:   wait.ForLog("Ready to accept connections"),
-		Cmd:          []string{"redis-server", "--appendonly", "yes"},
-	}
-
-	// Start the container
-	redisContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	require.NoError(t, err, "Failed to start Redis container")
-
-	// Get the mapped port
-	mappedPort, err := redisContainer.MappedPort(ctx, "6379")
-	require.NoError(t, err, "Failed to get Redis mapped port")
-
-	// Get the host
-	host, err := redisContainer.Host(ctx)
-	require.NoError(t, err, "Failed to get Redis host")
-
-	redisURL := fmt.Sprintf("redis://%s:%s", host, mappedPort.Port())
-
-	// TODO: Add health check to ensure Redis is ready
-	// For now, add a small delay
-	time.Sleep(2 * time.Second)
-
-	return redisContainer, redisURL
-}
+// setupRedisContainer is implemented in platform-specific files.
 
 // createTestConfig creates a configuration optimized for integration testing
 func createTestConfig(redisURL string) *config.Config {
+	// Check environment variable for swagger setting
+	enableSwagger := false
+	if swaggerEnv := os.Getenv("ENABLE_SWAGGER"); swaggerEnv != "" {
+		if parsed, err := strconv.ParseBool(swaggerEnv); err == nil {
+			enableSwagger = parsed
+		}
+	}
+
 	return &config.Config{
-		Port:     "0", // Let system assign port for testing
-		LogLevel: "debug",
+		Port:          "0", // Let system assign port for testing
+		LogLevel:      "debug",
+		EnableSwagger: enableSwagger, // Respect environment variable
 
 		Database: config.DatabaseConfig{
-			Driver:      "sqlite",
+			Driver:      "sqlite3",
 			SQLitePath:  ":memory:", // In-memory database for fast tests
-			MaxOpenConn: 5,
-			MaxIdleConn: 2,
+			MaxOpenConn: 1,          // Single connection for SQLite :memory: to avoid separate DB per conn
+			MaxIdleConn: 1,
 		},
 
 		Cache: config.CacheConfig{
@@ -285,7 +275,68 @@ func SeedTestData(t *testing.T, db *sqlx.DB) {
 		require.NoError(t, err, "Failed to insert company %s", company.ticker)
 	}
 
-	t.Log("✅ Basic test data seeded - financial data will be processed by real service pipeline")
+	// Seed minimal macro data to avoid external dependency
+	now := time.Now().UTC()
+	_, err := db.Exec(`
+		INSERT INTO macro_data (as_of, risk_free_rate, risk_free_rate_3m, market_risk_premium, inflation_rate, source, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`, now, 0.04, 0.04, 0.05, 0.02, "seed")
+	require.NoError(t, err, "Failed to seed macro data")
+
+	// Seed minimal market and financial data for each company
+	for _, ticker := range []string{"AAPL", "MSFT", "GOOGL"} {
+		// Market data
+		_, err = db.Exec(`
+			INSERT INTO market_data (ticker, as_of_date, share_price, market_cap, shares_outstanding, beta, beta_3_year, average_volume, source, data_quality, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		`, ticker, now, 150.0, 2.0e12, 1.5e10, 1.2, 1.1, 1.0e7, "seed", "high")
+		require.NoError(t, err, "Failed to seed market data for %s", ticker)
+
+		// Financial data (three recent periods to satisfy minimum data requirement)
+		periods := []struct {
+			period     string
+			filingDate time.Time
+			rev        float64
+			oi         float64
+		}{
+			{"2021FY", now.AddDate(-3, 0, 0), 2.5e11, 7.5e9},
+			{"2022FY", now.AddDate(-2, 0, 0), 2.8e11, 8.5e9},
+			{"2023FY", now.AddDate(-1, 0, 0), 3.0e11, 1.0e10},
+		}
+		for _, p := range periods {
+			_, err = db.Exec(`
+				INSERT INTO financial_data (
+					ticker, cik, filing_period, filing_date, as_of_date,
+					operating_income, normalized_operating_income, revenue,
+					interest_expense, tax_rate,
+					total_assets, tangible_assets, goodwill, other_intangibles,
+					total_debt, interest_bearing_debt,
+					inventory, inventory_turnover, dead_inventory_writedown,
+					shares_outstanding, diluted_shares_outstanding,
+					has_normalized_data, missing_fields, created_at, updated_at
+				) VALUES (
+					?, ?, ?, ?, ?,
+					?, ?, ?,
+					?, ?,
+					?, ?, ?, ?,
+					?, ?,
+					?, ?, ?,
+					?, ?,
+					?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+				)
+			`, ticker, "", p.period, p.filingDate, now,
+				p.oi, p.oi, p.rev,
+				1.0e9, 0.21,
+				5.0e11, 4.5e11, 0.0, 0.0,
+				2.0e10, 2.0e10,
+				5.0e10, 5.0, 0.0,
+				1.5e10, 1.5e10,
+				1, "[]")
+			require.NoError(t, err, "Failed to seed financial data for %s %s", ticker, p.period)
+		}
+	}
+
+	t.Log("✅ Basic test data seeded - financial/market/macro data present for AAPL/MSFT/GOOGL")
 }
 
 // MockSECServer creates an HTTP mock server that returns real Apple SEC data
@@ -329,65 +380,52 @@ func SetupMockSECServer(t *testing.T) *httptest.Server {
 
 // SetupTestEnvironmentWithMockSEC creates test environment with mock SEC server
 func SetupTestEnvironmentWithMockSEC(t *testing.T, mockSECURL string) *TestContainer {
-	if runtime.GOOS == "windows" {
-		t.Skip("Skipping Docker-based integration tests on Windows environment")
-		return nil
-	}
-
 	ctx := context.Background()
 
-	// Step 1: Start Redis container for real integration testing
-	redisContainer, redisURL := setupRedisContainer(t, ctx)
-
-	// Step 2: Create test configuration with real Redis and mock SEC URL
-	cfg := createTestConfigWithMockSEC(redisURL, mockSECURL)
-
-	// Step 3: Declare variables first
-	var fairValueHandler *handlers.FairValueHandler
-	var database *sqlx.DB
-
-	// Step 4: Create DI container with real services
-	app := fxtest.New(t,
-		// Provide test configuration with mock SEC URL
-		fx.Provide(func() *config.Config { return cfg }),
-
-		// Include all real services via DI module
-		di.CoreModule,
-		di.ServiceModule,
-
-		// Provide handlers
-		fx.Provide(handlers.NewFairValueHandler),
-
-		// Extract handlers and database for testing
-		fx.Populate(&fairValueHandler, &database),
+	var (
+		redisContainer testcontainers.Container
+		redisURL       string
 	)
 
-	// Step 5: Start the DI container
+	// Fallback to in-memory cache on Windows or when NO_DOCKER=1
+	if runtime.GOOS == "windows" || os.Getenv("NO_DOCKER") == "1" {
+		redisURL = "redis://127.0.0.1:0"
+	} else {
+		redisContainer, redisURL = setupRedisContainer(t, ctx)
+	}
+
+	// Create test configuration with mock SEC URL
+	cfg := createTestConfigWithMockSEC(redisURL, mockSECURL)
+
+	// Declare variables
+	var fairValueHandler *handlers.FairValueHandler
+	var authService *auth.Service
+	var database *sqlx.DB
+	var valuationService *valuation.Service
+	var rateLimiter *ratelimit.RateLimiter
+	var healthHandler *handlers.HealthHandler
+	var metricsService *metrics.Service
+	var logger *zap.Logger
+
+	// DI container
+	app := fxtest.New(t,
+		fx.Provide(func() *config.Config { return cfg }),
+		di.CoreModule,
+		di.ServiceModule,
+		di.HandlerModule,
+		fx.Provide(handlers.NewFairValueHandler),
+		fx.Populate(&fairValueHandler, &authService, &database, &valuationService, &rateLimiter, &healthHandler, &metricsService, &logger),
+	)
+
 	app.RequireStart()
 
-	// Step 6: Setup database schema and test data
 	SetupDatabase(t, database)
 	SeedTestData(t, database)
 
-	// Step 7: Create Gin router with real middleware
-	gin.SetMode(gin.TestMode)
-	router := gin.New()
+	// Use the real API server with full middleware
+	server := api.NewServer(cfg, logger, valuationService, authService, rateLimiter, healthHandler, metricsService)
+	router := server.Engine()
 
-	// TODO: Add real middleware (auth, metrics, rate limiting)
-	// For now, create basic routes for testing
-	v1 := router.Group("/api/v1")
-
-	// Handle empty ticker case for proper validation error (matching server.go)
-	v1.GET("/fair-value/", func(c *gin.Context) {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "ticker parameter is required",
-			"code":  "INVALID_TICKER",
-		})
-	})
-	v1.GET("/fair-value/:ticker", fairValueHandler.GetFairValue)
-	v1.POST("/fair-value/bulk", fairValueHandler.GetBulkFairValue)
-
-	// Step 8: Setup cleanup function
 	cleanup := func() {
 		if app != nil {
 			app.RequireStop()
@@ -404,6 +442,7 @@ func SetupTestEnvironmentWithMockSEC(t *testing.T, mockSECURL string) *TestConta
 		App:              app,
 		Router:           router,
 		FairValueHandler: fairValueHandler,
+		AuthService:      authService,
 		cleanup:          cleanup,
 	}
 }
@@ -419,6 +458,13 @@ func createTestConfigWithMockSEC(redisURL, mockSECURL string) *config.Config {
 	cfg.SEC.RateLimit = 100 // High limit for tests
 	cfg.SEC.RequestTimeout = 30 * time.Second
 	cfg.SEC.MaxRetries = 1 // Fast failure in tests
+
+	// Disable external market calls for deterministic tests
+	cfg.Market.YFinance.Enabled = false
+	// Provide manual macro values for determinism
+	cfg.Macro.FREDEnabled = false
+	cfg.Macro.ManualRiskFreeRate = 0.04
+	cfg.Macro.ManualMarketRiskPremium = 0.05
 
 	return cfg
 }

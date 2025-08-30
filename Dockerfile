@@ -27,6 +27,13 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
     -o dcf-api \
     cmd/server/main.go
 
+# Build migrate helper
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -ldflags="-w -s" \
+    -a -installsuffix cgo \
+    -o dcf-migrate \
+    cmd/migrate/main.go
+
 # Stage 2: Runtime stage
 FROM alpine:3.19
 
@@ -45,9 +52,17 @@ WORKDIR /app
 
 # Copy binary from builder stage
 COPY --from=builder /app/dcf-api .
+COPY --from=builder /app/dcf-migrate .
 
-# Copy configuration files
-COPY --from=builder /app/config ./config
+# Copy configuration files and assets
+COPY ./config ./config
+COPY ./docs ./docs
+COPY ./migrations ./migrations
+COPY ./internal/infra/database/schema.sql ./internal/infra/database/schema.sql
+
+# Add entrypoint script for optional migrations on start
+COPY ./docker-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Create necessary directories
 RUN mkdir -p /app/data /app/logs \
@@ -68,5 +83,6 @@ ENV GIN_MODE=release
 ENV LOG_LEVEL=info
 ENV PORT=8080
 
-# Run the application
+# Run the application via entrypoint (runs migrations when enabled)
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["./dcf-api"] 

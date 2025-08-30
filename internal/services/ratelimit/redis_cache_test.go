@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,7 +80,7 @@ func TestRedisCacheStore_BasicOperations(t *testing.T) {
 	t.Run("health_check_error", func(t *testing.T) {
 		err := store.HealthCheck(ctx)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "Redis health check failed")
+		assert.Contains(t, strings.ToLower(err.Error()), "redis health check failed")
 	})
 }
 

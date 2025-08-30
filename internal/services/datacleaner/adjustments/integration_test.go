@@ -1,6 +1,7 @@
 package adjustments
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,7 +9,47 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
 )
+
+// mockAIServiceIntegration implements the ai.AIService interface for testing
+type mockAIServiceIntegration struct{}
+
+func (m *mockAIServiceIntegration) AnalyzeFootnote(ctx context.Context, request *ai.FootnoteAnalysisRequest) (*ai.FootnoteAnalysisResponse, error) {
+	return &ai.FootnoteAnalysisResponse{
+		RequestID:    "integration-test-request-id",
+		Ticker:       request.Ticker,
+		AnalysisType: request.AnalysisType,
+		Confidence:   0.8,
+		ExtractedData: map[string]interface{}{
+			"contingent_liability_estimate": ai.ContingentLiabilityEstimate{
+				ProbabilityPercent: 30.0, // Conservative default
+				ConfidenceLevel:    0.8,
+			},
+		},
+		Recommendations: []string{"Mock analysis for integration testing"},
+	}, nil
+}
+
+func (m *mockAIServiceIntegration) BatchAnalyzeFootnotes(ctx context.Context, requests []*ai.FootnoteAnalysisRequest) ([]*ai.FootnoteAnalysisResponse, error) {
+	var responses []*ai.FootnoteAnalysisResponse
+	for _, req := range requests {
+		resp, err := m.AnalyzeFootnote(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		responses = append(responses, resp)
+	}
+	return responses, nil
+}
+
+func (m *mockAIServiceIntegration) GetAnalysisCapabilities() []ai.FootnoteAnalysisType {
+	return []ai.FootnoteAnalysisType{ai.ContingentLiabilityAnalysis}
+}
+
+func (m *mockAIServiceIntegration) HealthCheck(ctx context.Context) error {
+	return nil
+}
 
 // TestCompleteDataCleaningPipeline tests the complete Category A + B integration
 func TestCompleteDataCleaningPipeline(t *testing.T) {
@@ -84,7 +125,7 @@ func TestCompleteDataCleaningPipeline(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Test both asset and liability adjusters working together
 			assetAdjuster := NewAssetAdjuster()
-			liabilityAdjuster := NewLiabilityAdjuster()
+			liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 
 			// Apply asset adjustments first (Category A)
 			assetResult := assetAdjuster.CalculateNetTangibleAssets(tt.data, tt.context)
@@ -190,7 +231,7 @@ func TestRealWorldScenarios(t *testing.T) {
 
 			// Create adjusters
 			assetAdjuster := NewAssetAdjuster()
-			liabilityAdjuster := NewLiabilityAdjuster()
+			liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 
 			// Create comprehensive rule set
 			rules := createComprehensiveRuleSet()
@@ -296,7 +337,7 @@ func TestIndustrySpecificAdjustments(t *testing.T) {
 
 			// Apply industry-specific adjustments
 			assetAdjuster := NewAssetAdjuster()
-			liabilityAdjuster := NewLiabilityAdjuster()
+			liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 
 			rules := createComprehensiveRuleSet()
 			assetRules := filterRulesByCategory(rules, entities.AssetQuality)
@@ -377,7 +418,7 @@ func TestPerformanceBenchmarks(t *testing.T) {
 			}
 
 			assetAdjuster := NewAssetAdjuster()
-			liabilityAdjuster := NewLiabilityAdjuster()
+			liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 			rules := createComprehensiveRuleSet()
 
 			var totalTime time.Duration
@@ -469,7 +510,7 @@ func TestErrorHandlingScenarios(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assetAdjuster := NewAssetAdjuster()
-			liabilityAdjuster := NewLiabilityAdjuster()
+			liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 			rules := createComprehensiveRuleSet()
 
 			// Capture any panics/crashes
@@ -513,7 +554,7 @@ func TestAuditTrailCompleteness(t *testing.T) {
 	}
 
 	assetAdjuster := NewAssetAdjuster()
-	liabilityAdjuster := NewLiabilityAdjuster()
+	liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 	rules := createComprehensiveRuleSet()
 
 	// Apply complete adjustment pipeline
@@ -591,7 +632,7 @@ func TestRealSECDataIntegration(t *testing.T) {
 	}
 
 	assetAdjuster := NewAssetAdjuster()
-	liabilityAdjuster := NewLiabilityAdjuster()
+	liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 	rules := createComprehensiveRuleSet()
 
 	t.Run("Apple Financial Data Processing", func(t *testing.T) {

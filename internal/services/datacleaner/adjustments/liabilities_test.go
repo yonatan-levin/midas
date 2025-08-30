@@ -1,6 +1,7 @@
 package adjustments
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -8,10 +9,50 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
 )
 
+// mockAIService implements the ai.AIService interface for testing
+type mockAIService struct{}
+
+func (m *mockAIService) AnalyzeFootnote(ctx context.Context, request *ai.FootnoteAnalysisRequest) (*ai.FootnoteAnalysisResponse, error) {
+	return &ai.FootnoteAnalysisResponse{
+		RequestID:    "test-request-id",
+		Ticker:       request.Ticker,
+		AnalysisType: request.AnalysisType,
+		Confidence:   0.8,
+		ExtractedData: map[string]interface{}{
+			"contingent_liability_estimate": ai.ContingentLiabilityEstimate{
+				ProbabilityPercent: 30.0, // Conservative default
+				ConfidenceLevel:    0.8,
+			},
+		},
+		Recommendations: []string{"Mock analysis for testing"},
+	}, nil
+}
+
+func (m *mockAIService) BatchAnalyzeFootnotes(ctx context.Context, requests []*ai.FootnoteAnalysisRequest) ([]*ai.FootnoteAnalysisResponse, error) {
+	var responses []*ai.FootnoteAnalysisResponse
+	for _, req := range requests {
+		resp, err := m.AnalyzeFootnote(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		responses = append(responses, resp)
+	}
+	return responses, nil
+}
+
+func (m *mockAIService) GetAnalysisCapabilities() []ai.FootnoteAnalysisType {
+	return []ai.FootnoteAnalysisType{ai.ContingentLiabilityAnalysis}
+}
+
+func (m *mockAIService) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
 func TestLiabilityAdjuster_ProcessOperatingLeaseAdjustment(t *testing.T) {
-	adjuster := NewLiabilityAdjuster()
+	adjuster := NewLiabilityAdjuster(&mockAIService{}, nil)
 
 	tests := []struct {
 		name           string
@@ -123,7 +164,7 @@ func TestLiabilityAdjuster_ProcessOperatingLeaseAdjustment(t *testing.T) {
 }
 
 func TestLiabilityAdjuster_ProcessPensionAdjustment(t *testing.T) {
-	adjuster := NewLiabilityAdjuster()
+	adjuster := NewLiabilityAdjuster(&mockAIService{}, nil)
 
 	tests := []struct {
 		name           string
@@ -216,7 +257,7 @@ func TestLiabilityAdjuster_ProcessPensionAdjustment(t *testing.T) {
 }
 
 func TestLiabilityAdjuster_ProcessContingentLiabilityAdjustment(t *testing.T) {
-	adjuster := NewLiabilityAdjuster()
+	adjuster := NewLiabilityAdjuster(&mockAIService{}, nil)
 
 	tests := []struct {
 		name           string
@@ -307,7 +348,7 @@ func TestLiabilityAdjuster_ProcessContingentLiabilityAdjustment(t *testing.T) {
 }
 
 func TestLiabilityAdjuster_ProcessLiabilityAdjustments(t *testing.T) {
-	adjuster := NewLiabilityAdjuster()
+	adjuster := NewLiabilityAdjuster(&mockAIService{}, nil)
 
 	// Comprehensive test with multiple liability types
 	data := &entities.FinancialData{
@@ -372,7 +413,7 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments(t *testing.T) {
 }
 
 func TestLiabilityAdjuster_IndustryThresholds(t *testing.T) {
-	adjuster := NewLiabilityAdjuster()
+	adjuster := NewLiabilityAdjuster(&mockAIService{}, nil)
 
 	tests := []struct {
 		name         string

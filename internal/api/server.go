@@ -4,11 +4,15 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	_ "net/http/pprof"
+	"os"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
@@ -19,6 +23,8 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/ratelimit"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
 )
+
+// (No embedded spec; serving from filesystem path when available)
 
 // Server represents the HTTP server
 type Server struct {
@@ -148,6 +154,12 @@ func (s *Server) setupMiddleware() {
 
 // setupRoutes configures all routes for the application
 func (s *Server) setupRoutes() {
+	// Temporary startup config echo for debugging
+	s.logger.Info("Startup config",
+		zap.Bool("enable_swagger", s.config.EnableSwagger),
+		zap.String("db_driver", s.config.Database.Driver),
+		zap.String("db_sqlite_path", s.config.Database.SQLitePath),
+	)
 	// Health check endpoints (no authentication required)
 	s.engine.GET("/health", s.healthCheck)
 	s.engine.GET("/ready", s.readinessCheck)
@@ -155,6 +167,13 @@ func (s *Server) setupRoutes() {
 
 	// Prometheus metrics endpoint (no authentication required for monitoring)
 	s.engine.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// Optional pprof endpoints for performance profiling (dev/staging only)
+	if s.config.EnablePprof {
+		// Use stdlib pprof handler mounting via http.DefaultServeMux
+		// Expose under /debug/pprof/* for standard tooling
+		s.engine.GET("/debug/pprof/*any", gin.WrapH(http.DefaultServeMux))
+	}
 
 	// API v1 routes
 	v1 := s.engine.Group("/api/v1")
@@ -194,10 +213,33 @@ func (s *Server) setupRoutes() {
 		metricsGroup.GET("", s.healthHandler.GetMetrics) // Changed to use s.healthHandler
 	}
 
-	// Documentation endpoints (if Swagger is enabled)
+	// Documentation endpoints (if Swagger/OpenAPI is enabled)
 	if s.config.EnableSwagger {
-		// TODO: Add Swagger/OpenAPI documentation endpoints
-		s.logger.Info("Swagger documentation will be available at /docs")
+		// Serve the static OpenAPI spec for external tools (e.g., Schemathesis)
+		// In containers, the file exists at /app/docs; in local dev at ./docs
+		if _, err := os.Stat("docs/openapi.yaml"); err == nil {
+			s.engine.StaticFile("/docs/openapi.yaml", "docs/openapi.yaml")
+		} else if _, err := os.Stat("/app/docs/openapi.yaml"); err == nil {
+			s.engine.StaticFile("/docs/openapi.yaml", "/app/docs/openapi.yaml")
+		} else {
+			s.logger.Warn("OpenAPI spec not available; /docs/openapi.yaml will 404")
+		}
+
+		// Serve generated Swagger JSON for Swagger UI
+		if _, err := os.Stat("docs/swagger.json"); err == nil {
+			s.engine.StaticFile("/docs/swagger.json", "docs/swagger.json")
+		} else if _, err := os.Stat("/app/docs/swagger.json"); err == nil {
+			s.engine.StaticFile("/docs/swagger.json", "/app/docs/swagger.json")
+		} else {
+			s.logger.Warn("Swagger JSON not available; /docs/swagger.json will 404")
+		}
+
+		// Swagger UI using gin-swagger middleware with custom URL
+		url := ginSwagger.URL("/docs/swagger.json") // Point to our custom endpoint
+		s.engine.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
+		s.engine.GET("/swagger", func(c *gin.Context) { c.Redirect(http.StatusFound, "/swagger/index.html") })
+
+		s.logger.Info("Swagger UI available at /swagger/index.html")
 	}
 
 	// ----- NEW AUTH ROUTES -----
@@ -325,7 +367,13 @@ func (s *Server) securityHeadersMiddleware() gin.HandlerFunc {
 		c.Header("X-Frame-Options", "DENY")
 		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-		c.Header("Content-Security-Policy", "default-src 'self'")
+
+		// Allow Swagger UI resources from CDN
+		if c.Request.URL.Path == "/swagger/index.html" || c.Request.URL.Path == "/swagger/*any" {
+			c.Header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data:; font-src 'self' https://unpkg.com")
+		} else {
+			c.Header("Content-Security-Policy", "default-src 'self'")
+		}
 		c.Next()
 	}
 }
@@ -489,14 +537,17 @@ func (s *Server) permissionsToStrings(permissions []entities.Permission) []strin
 
 // respondWithError sends a standardized error response
 func (s *Server) respondWithError(c *gin.Context, statusCode int, errorCode, message string) {
+	// RFC 7807 Problem Details with project-specific extension field "code"
+	c.Header("Content-Type", "application/problem+json")
 	c.JSON(statusCode, gin.H{
-		"error": gin.H{
-			"code":    errorCode,
-			"message": message,
-			"type":    "authentication_error",
-		},
+		"type":     "https://problems.midas.dev/" + errorCode,
+		"title":    http.StatusText(statusCode),
+		"status":   statusCode,
+		"detail":   message,
+		"instance": c.Request.URL.Path,
+		// Extensions allowed by RFC7807
+		"code":      errorCode,
 		"timestamp": time.Now().UTC(),
-		"path":      c.Request.URL.Path,
 		"method":    c.Request.Method,
 	})
 	c.Abort()

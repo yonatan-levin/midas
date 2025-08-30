@@ -10,7 +10,47 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
 )
+
+// mockAIServiceDataCleaner implements the ai.AIService interface for datacleaner testing
+type mockAIServiceDataCleaner struct{}
+
+func (m *mockAIServiceDataCleaner) AnalyzeFootnote(ctx context.Context, request *ai.FootnoteAnalysisRequest) (*ai.FootnoteAnalysisResponse, error) {
+	return &ai.FootnoteAnalysisResponse{
+		RequestID:    "datacleaner-test-request-id",
+		Ticker:       request.Ticker,
+		AnalysisType: request.AnalysisType,
+		Confidence:   0.8,
+		ExtractedData: map[string]interface{}{
+			"contingent_liability_estimate": ai.ContingentLiabilityEstimate{
+				ProbabilityPercent: 30.0, // Conservative default
+				ConfidenceLevel:    0.8,
+			},
+		},
+		Recommendations: []string{"Mock analysis for datacleaner testing"},
+	}, nil
+}
+
+func (m *mockAIServiceDataCleaner) BatchAnalyzeFootnotes(ctx context.Context, requests []*ai.FootnoteAnalysisRequest) ([]*ai.FootnoteAnalysisResponse, error) {
+	var responses []*ai.FootnoteAnalysisResponse
+	for _, req := range requests {
+		resp, err := m.AnalyzeFootnote(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		responses = append(responses, resp)
+	}
+	return responses, nil
+}
+
+func (m *mockAIServiceDataCleaner) GetAnalysisCapabilities() []ai.FootnoteAnalysisType {
+	return []ai.FootnoteAnalysisType{ai.ContingentLiabilityAnalysis}
+}
+
+func (m *mockAIServiceDataCleaner) HealthCheck(ctx context.Context) error {
+	return nil
+}
 
 // TestDataCleanerService tests the main data cleaning service functionality
 func TestDataCleanerService(t *testing.T) {
@@ -41,7 +81,7 @@ func testBasicCleaning(t *testing.T) {
 	ctx := context.Background()
 
 	// Create service
-	service, err := NewDataCleanerService(cfg)
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
 	require.NoError(t, err, "Should create service without error")
 
 	// Create test financial data with known cleaning issues
@@ -77,7 +117,7 @@ func testIndustryCleaning(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg)
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
 	require.NoError(t, err)
 
 	// Test technology industry cleaning
@@ -119,7 +159,7 @@ func testQualityScoring(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg)
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
 	require.NoError(t, err)
 
 	// Test high-quality data
@@ -143,7 +183,7 @@ func testRiskFlagging(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg)
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
 	require.NoError(t, err)
 
 	// Create data with various risk factors
@@ -175,7 +215,7 @@ func testAuditTrail(t *testing.T) {
 	cfg.DataCleaner.EnableAuditTrail = true
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg)
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
 	require.NoError(t, err)
 
 	data := createTestFinancialDataWithIssues()
@@ -203,7 +243,7 @@ func testErrorHandling(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg)
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
 	require.NoError(t, err)
 
 	// Test with nil data
@@ -236,7 +276,7 @@ func testCaching(t *testing.T) {
 	cfg.DataCleaner.EnableCaching = true
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg)
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
 	require.NoError(t, err)
 
 	data := createTestFinancialDataWithIssues()
@@ -264,7 +304,7 @@ func testConcurrentCleaning(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg)
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
 	require.NoError(t, err)
 
 	// Test concurrent cleaning of different companies

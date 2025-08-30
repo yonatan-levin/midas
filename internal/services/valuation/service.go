@@ -68,7 +68,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*entit
 		return &cachedResult, nil
 	}
 
-	// Fetch financial data - first try repository, then DataFetcher if not found
+	// Try to fetch financial data first
 	historicalData, err := s.financialRepo.GetHistorical(ctx, ticker, 10) // Get up to 10 periods
 	if err != nil || len(historicalData.Data) == 0 {
 		s.logger.Info("No historical data in repository, fetching via DataFetcher", zap.String("ticker", ticker))
@@ -99,16 +99,67 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*entit
 			zap.Int("periods", len(historicalData.Data)))
 	}
 
-	// Fetch market data
-	marketData, err := s.marketRepo.GetLatest(ctx, ticker)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch market data: %w", err)
-	}
+	// OPTIMIZATION: Conditionally fetch market and macro data concurrently
+	var marketData *entities.MarketData
+	var macroData *entities.MacroData
 
-	// Fetch macro data
-	macroData, err := s.macroRepo.GetLatest(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch macro data: %w", err)
+	if s.config.Valuation.EnableConcurrentDataFetch {
+		// Concurrent approach for better performance
+		type fetchResult struct {
+			marketData *entities.MarketData
+			macroData  *entities.MacroData
+			marketErr  error
+			macroErr   error
+		}
+
+		resultChan := make(chan fetchResult, 1)
+
+		go func() {
+			var result fetchResult
+
+			// Use separate goroutines for truly parallel execution
+			marketChan := make(chan struct{})
+			macroChan := make(chan struct{})
+
+			go func() {
+				defer close(marketChan)
+				result.marketData, result.marketErr = s.marketRepo.GetLatest(ctx, ticker)
+			}()
+
+			go func() {
+				defer close(macroChan)
+				result.macroData, result.macroErr = s.macroRepo.GetLatest(ctx)
+			}()
+
+			// Wait for both to complete
+			<-marketChan
+			<-macroChan
+
+			resultChan <- result
+		}()
+
+		result := <-resultChan
+		marketData = result.marketData
+		macroData = result.macroData
+
+		if result.marketErr != nil {
+			return nil, fmt.Errorf("failed to fetch market data: %w", result.marketErr)
+		}
+		if result.macroErr != nil {
+			return nil, fmt.Errorf("failed to fetch macro data: %w", result.macroErr)
+		}
+	} else {
+		// Sequential approach (default) for test compatibility
+		var err error
+		marketData, err = s.marketRepo.GetLatest(ctx, ticker)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch market data: %w", err)
+		}
+
+		macroData, err = s.macroRepo.GetLatest(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch macro data: %w", err)
+		}
 	}
 
 	// Apply data cleaning if service is available

@@ -1,0 +1,12 @@
+{
+  "total_requests": 1199,
+  "successful_requests": 1199,
+  "failed_requests": 0,
+  "average_latency": 1674177,
+  "min_latency": 510300,
+  "max_latency": 19255800,
+  "p95_latency": 2701800,
+  "requests_per_second": 19.98317659861821,
+  "error_rate": 0,
+  "test_duration": 60000470600
+}

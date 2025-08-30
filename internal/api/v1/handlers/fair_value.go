@@ -26,22 +26,24 @@ func NewFairValueHandler(valuationService *valuation.Service, logger *zap.Logger
 }
 
 // FairValueResponse represents the response structure for fair value requests
+// @Description Fair value calculation response with intrinsic valuation metrics
 type FairValueResponse struct {
-	Ticker                string  `json:"ticker"`
-	WACC                  float64 `json:"wacc"`
-	GrowthRate            float64 `json:"growth_rate"`
-	TangibleValuePerShare float64 `json:"tangible_value_per_share"`
-	DCFValuePerShare      float64 `json:"dcf_value_per_share"`
-	AsOf                  string  `json:"as_of"`
-	DataQualityScore      float64 `json:"data_quality_score,omitempty"`
-	DataQualityGrade      string  `json:"data_quality_grade,omitempty"`
+	Ticker                string  `json:"ticker" example:"AAPL"`                          // Stock ticker symbol
+	WACC                  float64 `json:"wacc" example:"0.092"`                           // Weighted Average Cost of Capital
+	GrowthRate            float64 `json:"growth_rate" example:"0.045"`                    // Expected growth rate (5-year CAGR)
+	TangibleValuePerShare float64 `json:"tangible_value_per_share" example:"24.73"`       // Net tangible book value per share
+	DCFValuePerShare      float64 `json:"dcf_value_per_share" example:"156.42"`           // Discounted cash flow fair value per share
+	AsOf                  string  `json:"as_of" example:"2025-08-13T22:15:34.402652598Z"` // Timestamp of calculation
+	DataQualityScore      float64 `json:"data_quality_score,omitempty" example:"85.5"`    // Data quality score (0-100)
+	DataQualityGrade      string  `json:"data_quality_grade,omitempty" example:"B"`       // Data quality grade (A-F)
 }
 
 // BulkFairValueRequest represents the request structure for bulk fair value requests
+// @Description Bulk fair value calculation request for multiple tickers
 type BulkFairValueRequest struct {
-	Tickers          []string `json:"tickers" binding:"required,min=1,max=10"`
-	OverrideBeta     *float64 `json:"override_beta,omitempty"`
-	OverrideRiskFree *float64 `json:"override_rf,omitempty"`
+	Tickers          []string `json:"tickers" binding:"required,min=1,max=10" example:"[\"AAPL\",\"MSFT\",\"GOOGL\"]"` // Stock ticker symbols (max 10)
+	OverrideBeta     *float64 `json:"override_beta,omitempty" example:"1.2"`                                           // Optional beta override
+	OverrideRiskFree *float64 `json:"override_rf,omitempty" example:"0.045"`                                           // Optional risk-free rate override
 }
 
 // BulkFairValueResponse represents the response for bulk requests
@@ -57,17 +59,35 @@ type BulkSummary struct {
 	Failed         int `json:"failed"`
 }
 
-// ErrorResponse represents an RFC 7807 compliant error response
+// ErrorResponse represents an error response structure
+// @Description Standard error response following RFC 7807 Problem Details
 type ErrorResponse struct {
-	Type     string                 `json:"type"`
-	Title    string                 `json:"title"`
-	Status   int                    `json:"status"`
-	Detail   string                 `json:"detail"`
-	Instance string                 `json:"instance"`
-	Context  map[string]interface{} `json:"context,omitempty"`
+	Type     string                 `json:"type" example:"https://problems.midas.dev/INVALID_TICKER"` // Problem type URI
+	Title    string                 `json:"title" example:"Bad Request"`                              // Human-readable title
+	Status   int                    `json:"status" example:"400"`                                     // HTTP status code
+	Detail   string                 `json:"detail" example:"Invalid ticker format"`                   // Human-readable explanation
+	Instance string                 `json:"instance" example:"/api/v1/fair-value/INVALID"`            // URI reference to specific occurrence
+	Context  map[string]interface{} `json:"context,omitempty"`                                        // Additional context information
 }
 
-// GetFairValue handles GET /api/v1/fair-value/:ticker
+// GetFairValue handles GET /api/v1/fair-value/:ticker requests
+// @Summary      Get fair value for a stock
+// @Description  Calculate intrinsic fair value for a stock using DCF and net tangible assets
+// @Tags         fair-value
+// @Accept       json
+// @Produce      json
+// @Security     ApiKeyAuth
+// @Param        ticker         path     string   true  "Stock ticker symbol (e.g., AAPL)"
+// @Param        override_beta  query    number   false "Override beta for WACC calculation" minimum(0) maximum(3)
+// @Param        override_rf    query    number   false "Override risk-free rate" minimum(0) maximum(0.2)
+// @Success      200  {object}  FairValueResponse
+// @Failure      400  {object}  ErrorResponse "Invalid ticker or parameters"
+// @Failure      401  {object}  ErrorResponse "Missing or invalid API key"
+// @Failure      403  {object}  ErrorResponse "Insufficient permissions"
+// @Failure      404  {object}  ErrorResponse "Ticker not found"
+// @Failure      429  {object}  ErrorResponse "Rate limit exceeded"
+// @Failure      500  {object}  ErrorResponse "Internal server error"
+// @Router       /fair-value/{ticker} [get]
 func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 	ticker := strings.ToUpper(c.Param("ticker"))
 
@@ -136,7 +156,21 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-// GetBulkFairValue handles POST /api/v1/fair-value/bulk
+// GetBulkFairValue handles POST /api/v1/fair-value/bulk requests
+// @Summary      Get fair values for multiple stocks
+// @Description  Calculate intrinsic fair values for multiple stocks in a single request
+// @Tags         fair-value
+// @Accept       json
+// @Produce      json
+// @Security     ApiKeyAuth
+// @Param        request  body     BulkFairValueRequest  true  "Bulk fair value request"
+// @Success      200  {object}  BulkFairValueResponse
+// @Failure      400  {object}  ErrorResponse "Invalid request format"
+// @Failure      401  {object}  ErrorResponse "Missing or invalid API key"
+// @Failure      403  {object}  ErrorResponse "Insufficient permissions"
+// @Failure      429  {object}  ErrorResponse "Rate limit exceeded"
+// @Failure      500  {object}  ErrorResponse "Internal server error"
+// @Router       /fair-value/bulk [post]
 func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 	var request BulkFairValueRequest
 

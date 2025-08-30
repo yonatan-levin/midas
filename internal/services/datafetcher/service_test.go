@@ -3,6 +3,7 @@ package datafetcher
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -158,40 +159,53 @@ type mockCacheRepository struct {
 	data      map[string]interface{}
 	err       error
 	callCount int
+	mu        sync.Mutex
 }
 
 func (m *mockCacheRepository) Get(ctx context.Context, key string, dest interface{}) error {
+	m.mu.Lock()
 	m.callCount++
+	m.mu.Unlock()
 	if m.err != nil {
 		return m.err
 	}
-	if val, exists := m.data[key]; exists {
+	m.mu.Lock()
+	_, exists := m.data[key]
+	m.mu.Unlock()
+	if exists {
 		// Simple mock - just return success for cache hit
-		_ = val
 		return nil
 	}
 	return errors.New("cache miss")
 }
 
 func (m *mockCacheRepository) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+	m.mu.Lock()
 	if m.data == nil {
 		m.data = make(map[string]interface{})
 	}
 	m.data[key] = value
+	m.mu.Unlock()
 	return m.err
 }
 
 func (m *mockCacheRepository) Delete(ctx context.Context, key string) error {
+	m.mu.Lock()
 	delete(m.data, key)
+	m.mu.Unlock()
 	return m.err
 }
 
 func (m *mockCacheRepository) Exists(ctx context.Context, key string) (bool, error) {
+	m.mu.Lock()
 	_, exists := m.data[key]
+	m.mu.Unlock()
 	return exists, m.err
 }
 
 func (m *mockCacheRepository) SetNX(ctx context.Context, key string, value interface{}, ttl time.Duration) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, exists := m.data[key]; exists {
 		return false, m.err
 	}
@@ -200,18 +214,22 @@ func (m *mockCacheRepository) SetNX(ctx context.Context, key string, value inter
 }
 
 func (m *mockCacheRepository) GetKeys(ctx context.Context, pattern string) ([]string, error) {
+	m.mu.Lock()
 	keys := make([]string, 0, len(m.data))
 	for key := range m.data {
 		keys = append(keys, key)
 	}
+	m.mu.Unlock()
 	return keys, m.err
 }
 
 func (m *mockCacheRepository) DeletePattern(ctx context.Context, pattern string) error {
 	// Simple mock - delete all keys for testing
+	m.mu.Lock()
 	for key := range m.data {
 		delete(m.data, key)
 	}
+	m.mu.Unlock()
 	return m.err
 }
 

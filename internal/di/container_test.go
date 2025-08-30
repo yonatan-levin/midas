@@ -187,7 +187,7 @@ func TestContainerBuilds(t *testing.T) {
 				return &config.Config{
 					LogLevel: "debug",
 					Database: config.DatabaseConfig{
-						Driver:     "sqlite",
+						Driver:     "sqlite3",
 						SQLitePath: ":memory:",
 					},
 					Cache: config.CacheConfig{
@@ -211,7 +211,7 @@ func TestValuationService_DICreation(t *testing.T) {
 				return &config.Config{
 					LogLevel: "debug",
 					Database: config.DatabaseConfig{
-						Driver:     "sqlite",
+						Driver:     "sqlite3",
 						SQLitePath: ":memory:",
 					},
 					Cache: config.CacheConfig{
@@ -247,7 +247,7 @@ func TestValuationService_DICreationWithFakeMetrics(t *testing.T) {
 			func() *config.Config {
 				return &config.Config{
 					Database: config.DatabaseConfig{
-						Driver:      "sqlite",
+						Driver:      "sqlite3",
 						SQLitePath:  ":memory:",
 						MaxOpenConn: 5,
 						MaxIdleConn: 2,
@@ -295,7 +295,7 @@ func TestAllInterfaceMappings(t *testing.T) {
 				return &config.Config{
 					LogLevel: "debug",
 					Database: config.DatabaseConfig{
-						Driver:     "sqlite",
+						Driver:     "sqlite3",
 						SQLitePath: ":memory:",
 					},
 					Cache: config.CacheConfig{

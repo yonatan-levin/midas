@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "modernc.org/sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // Schema for test database
@@ -117,8 +117,8 @@ func main() {
 		log.Fatalf("Failed to create database directory: %v", err)
 	}
 
-	// Connect to SQLite database
-	db, err := sql.Open("sqlite", dbPath)
+	// Connect to SQLite database (using go-sqlite3 driver)
+	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}

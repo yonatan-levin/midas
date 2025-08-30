@@ -78,14 +78,7 @@ func TestAPIRoutesWiring(t *testing.T) {
 			expectedStatus: []int{http.StatusUnauthorized},
 			description:    "Fair value endpoint should require authentication",
 		},
-		{
-			name:           "Fair Value Endpoint With Auth",
-			method:         "GET",
-			path:           "/api/v1/fair-value/AAPL",
-			requiresAuth:   true,
-			expectedStatus: []int{http.StatusOK, http.StatusInternalServerError, http.StatusBadRequest},
-			description:    "Fair value endpoint should work with valid API key",
-		},
+		// Removed the 'Fair Value Endpoint With Auth' success-path to avoid duplication with e2e_live_test.go
 		{
 			name:           "Detailed Health Check Auth Required",
 			method:         "GET",

@@ -16,7 +16,47 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/infra/gateways/sec"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
 )
+
+// mockAIServiceRealData implements the ai.AIService interface for real data testing
+type mockAIServiceRealData struct{}
+
+func (m *mockAIServiceRealData) AnalyzeFootnote(ctx context.Context, request *ai.FootnoteAnalysisRequest) (*ai.FootnoteAnalysisResponse, error) {
+	return &ai.FootnoteAnalysisResponse{
+		RequestID:    "real-data-test-request-id",
+		Ticker:       request.Ticker,
+		AnalysisType: request.AnalysisType,
+		Confidence:   0.8,
+		ExtractedData: map[string]interface{}{
+			"contingent_liability_estimate": ai.ContingentLiabilityEstimate{
+				ProbabilityPercent: 30.0, // Conservative default
+				ConfidenceLevel:    0.8,
+			},
+		},
+		Recommendations: []string{"Mock analysis for real data testing"},
+	}, nil
+}
+
+func (m *mockAIServiceRealData) BatchAnalyzeFootnotes(ctx context.Context, requests []*ai.FootnoteAnalysisRequest) ([]*ai.FootnoteAnalysisResponse, error) {
+	var responses []*ai.FootnoteAnalysisResponse
+	for _, req := range requests {
+		resp, err := m.AnalyzeFootnote(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		responses = append(responses, resp)
+	}
+	return responses, nil
+}
+
+func (m *mockAIServiceRealData) GetAnalysisCapabilities() []ai.FootnoteAnalysisType {
+	return []ai.FootnoteAnalysisType{ai.ContingentLiabilityAnalysis}
+}
+
+func (m *mockAIServiceRealData) HealthCheck(ctx context.Context) error {
+	return nil
+}
 
 // TestRealAppleSECDataIntegration validates the complete data cleaning pipeline using
 // actual Apple SEC filing data from testdata/ and that the data cleaning pipeline works end-to-end with real data.
@@ -143,7 +183,7 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 		require.NotNil(t, financialData)
 
 		// Initialize liability adjuster
-		liabilityAdjuster := NewLiabilityAdjuster()
+		liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceRealData{}, nil)
 		context := &entities.CleaningContext{
 			IndustryCode:     "45",             // Technology
 			CompanySize:      entities.MegaCap, // Apple is mega-cap
@@ -193,7 +233,7 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 
 		// Initialize adjusters
 		assetAdjuster := NewAssetAdjuster()
-		liabilityAdjuster := NewLiabilityAdjuster()
+		liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceRealData{}, nil)
 		context := createTestCleaningContext("real_apple_performance_test")
 
 		// Measure complete pipeline performance

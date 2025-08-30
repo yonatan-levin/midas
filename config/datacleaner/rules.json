@@ -152,7 +152,7 @@
       "xbrl_tags": ["ContingentLiabilities", "EnvironmentalLiabilities", "LitigationLiabilities"],
       "adjustment": "flag",
       "threshold": {
-        "percentage_of_revenue": 0.05
+        "percentage_of_revenue": 0.02
       },
       "industry": ["all"],
       "severity": "critical",

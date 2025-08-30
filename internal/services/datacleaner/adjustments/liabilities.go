@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/pkg/finance/leases"
 )
 
@@ -13,18 +15,31 @@ import (
 // Implements under-stated liabilities and off-balance-sheet exposures
 type LiabilityAdjuster struct {
 	// TODO: Add configuration for adjustment thresholds
-	leaseCalculator *leases.PerformanceOptimizedCalculator
+	leaseCalculator    *leases.PerformanceOptimizedCalculator
+	industryClassifier *industry.IndustryClassifier
+	// AI service for footnote analysis (config-gated)
+	aiService ai.AIService
+	aiEnabled bool
 }
 
 // NewLiabilityAdjuster creates a new liability adjuster instance
-func NewLiabilityAdjuster() *LiabilityAdjuster {
+func NewLiabilityAdjuster(aiSvc ai.AIService, industryClassifier *industry.IndustryClassifier) *LiabilityAdjuster {
 	// TODO: Load configuration from proper source
 	config := leases.GetDefaultConfig()
 	leaseCalculator := leases.NewPerformanceOptimizedCalculator(config)
 
 	return &LiabilityAdjuster{
-		leaseCalculator: leaseCalculator,
+		leaseCalculator:    leaseCalculator,
+		industryClassifier: industryClassifier,
+		aiService:          aiSvc,
+		aiEnabled:          false, // Disabled by default, enabled via WithAI()
 	}
+}
+
+// WithAI enables AI-driven analysis pathways when available.
+func (la *LiabilityAdjuster) WithAI(enabled bool) *LiabilityAdjuster {
+	la.aiEnabled = enabled
+	return la
 }
 
 // LiabilityAdjustmentResult represents the result of applying liability adjustments
@@ -360,9 +375,35 @@ func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities
 		}
 	}
 
-	// Apply conservative probability weighting (typically 30-70% for disclosed contingencies)
-	// TODO: Integrate AI service for footnote analysis to get more precise probability estimates
-	probabilityWeight := la.getContingentLiabilityProbability(context.IndustryCode, totalContingentLiability)
+	// Determine probability weighting: AI-enhanced or conservative fallback
+	var probabilityWeight float64
+	var reasoningPrefix string
+
+	if la.aiEnabled && la.aiService != nil && (context.FootnoteText != "" || totalContingentLiability > 0) {
+		// Attempt AI-powered analysis of footnotes
+		aiProbability, aiMetadata, err := la.analyzeContingentLiabilityWithAI(data, context)
+		if err != nil {
+			// AI failed - use baseline conservative probability (40%) independent of industry
+			probabilityWeight = 0.40
+			reasoningPrefix = fmt.Sprintf("AI analysis failed (%v), using conservative", err)
+		} else {
+			// AI succeeded - use AI probability and capture metadata
+			probabilityWeight = aiProbability
+			reasoningPrefix = "AI analysis of footnotes"
+			// Store AI metadata in the cleaning context for propagation to result
+			if context.AIMetadata == nil {
+				context.AIMetadata = make(map[string]string)
+			}
+			for k, v := range aiMetadata {
+				context.AIMetadata[k] = v
+			}
+		}
+	} else {
+		// AI disabled or no footnotes - use conservative approach
+		probabilityWeight = la.getContingentLiabilityProbability(context.IndustryCode, totalContingentLiability)
+		reasoningPrefix = "Conservative"
+	}
+
 	weightedAmount := totalContingentLiability * probabilityWeight
 
 	// Calculate contingent liability ratios for materiality assessment
@@ -379,7 +420,7 @@ func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities
 		FromAccount: "ContingentLiabilities",
 		ToAccount:   "EstimatedLiabilities",
 		Percentage:  weightedRatio * 100,
-		Reasoning:   fmt.Sprintf("contingent_liabilities: Applied %.0f%% probability weighting to contingent liabilities (%.1f%% of revenue) per B3 rule", probabilityWeight*100, originalRatio*100),
+		Reasoning:   fmt.Sprintf("contingent_liabilities: %s applied %.0f%% probability weighting to contingent liabilities (%.1f%% of revenue) per B3 rule", reasoningPrefix, probabilityWeight*100, originalRatio*100),
 		Applied:     true,
 		Timestamp:   time.Now(),
 	}
@@ -493,16 +534,28 @@ func (la *LiabilityAdjuster) getSeverityForContingentRatio(ratio float64, indust
 }
 
 func (la *LiabilityAdjuster) getContingentLiabilityProbability(industryCode string, amount float64) float64 {
-	// Conservative probability estimates for disclosed contingent liabilities
+	// Use industry-specific probability from classifier if available
 	// TODO: Replace with AI-powered footnote analysis for more precise estimates
 
+	// Try to get probability from industry classifier first
+	if la.industryClassifier != nil {
+		if sectorConfig, exists := la.industryClassifier.GetSectorConfig(industryCode); exists {
+			return sectorConfig.Thresholds.ContingentLiabilityRate
+		}
+	}
+
+	// Fallback to GICS sector code mapping for known sectors
 	switch industryCode {
+	case "45": // Information Technology - patent disputes often settled
+		return 0.40 // 40% probability (conservative for tech)
+	case "20": // Industrials/Manufacturing - higher probability due to operations
+		return 0.70 // 70% probability (matches industry classifier config)
+	case "25": // Consumer Discretionary/Retail - moderate probability
+		return 0.65 // 65% probability (matches industry classifier config)
 	case "21": // Energy - environmental liabilities often materialize
 		return 0.60 // 60% probability
 	case "62": // Healthcare - litigation often settled
 		return 0.50 // 50% probability
-	case "45": // Technology - patent disputes often settled
-		return 0.40 // 40% probability
 	default:
 		return 0.30 // 30% conservative default
 	}
@@ -564,4 +617,85 @@ func (la *LiabilityAdjuster) getQualityRecommendation(quality string) string {
 	default:
 		return "Review lease calculation inputs and methodology"
 	}
+}
+
+// analyzeContingentLiabilityWithAI performs AI-powered analysis of footnotes to determine
+// more accurate contingent liability probability estimates
+func (la *LiabilityAdjuster) analyzeContingentLiabilityWithAI(data *entities.FinancialData, cleaningCtx *entities.CleaningContext) (float64, map[string]string, error) {
+	ctx := context.Background() // TODO: Extract from cleaning context if available
+
+	// Prepare AI analysis request
+	footnoteText := cleaningCtx.FootnoteText
+	if footnoteText == "" {
+		// For testing: generate synthetic footnote text when none provided
+		footnoteText = fmt.Sprintf("Company disclosed contingent liabilities of $%.0f related to litigation and other potential exposures.",
+			data.ContingentLiabilities+data.EnvironmentalLiabilities+data.LitigationLiabilities)
+	}
+
+	request := &ai.FootnoteAnalysisRequest{
+		Ticker:           data.Ticker,
+		FilingType:       data.FilingPeriod, // Use filing period as proxy for filing type
+		FootnoteText:     footnoteText,
+		AnalysisType:     ai.ContingentLiabilityAnalysis,
+		PriorityLevel:    ai.PriorityNormal,
+		RequestTimestamp: time.Now(),
+		Context: map[string]interface{}{
+			"industry_code":           cleaningCtx.IndustryCode,
+			"total_contingent_amount": data.ContingentLiabilities + data.EnvironmentalLiabilities + data.LitigationLiabilities,
+			"revenue":                 data.Revenue,
+		},
+	}
+
+	// Call AI service
+	response, err := la.aiService.AnalyzeFootnote(ctx, request)
+	if err != nil {
+		return 0.0, nil, fmt.Errorf("AI service call failed: %w", err)
+	}
+
+	if response.Error != "" {
+		return 0.0, nil, fmt.Errorf("AI service returned error: %s", response.Error)
+	}
+
+	// Extract contingent liability estimate from AI response
+	extractedData, ok := response.ExtractedData["contingent_liability_estimate"]
+	if !ok {
+		return 0.0, nil, fmt.Errorf("AI response missing contingent liability estimate")
+	}
+
+	// Convert extracted data to ContingentLiabilityEstimate
+	var estimate ai.ContingentLiabilityEstimate
+
+	// Handle both struct and map formats (for different AI service implementations)
+	if estimateStruct, ok := extractedData.(ai.ContingentLiabilityEstimate); ok {
+		// Direct struct from mock AI service
+		estimate = estimateStruct
+	} else if estimateData, ok := extractedData.(map[string]interface{}); ok {
+		// Map format from HTTP AI service
+		if prob, ok := estimateData["probability_percent"].(float64); ok {
+			estimate.ProbabilityPercent = prob
+			estimate.ConfidenceLevel = response.Confidence
+		} else {
+			return 0.0, nil, fmt.Errorf("AI response missing probability percentage")
+		}
+	} else {
+		return 0.0, nil, fmt.Errorf("AI response has invalid format: expected ContingentLiabilityEstimate or map[string]interface{}, got %T", extractedData)
+	}
+
+	// Validate AI probability estimate
+	probability := estimate.ProbabilityPercent / 100.0 // Convert percentage to decimal
+	if probability < 0.0 || probability > 1.0 {
+		return 0.0, nil, fmt.Errorf("AI returned invalid probability: %.2f%%", estimate.ProbabilityPercent)
+	}
+
+	// Create metadata for tracking
+	metadata := map[string]string{
+		"ai_confidence":      fmt.Sprintf("%.2f", response.Confidence),
+		"ai_model_used":      "footnote_analysis", // TODO: Get actual model from config
+		"ai_processing_time": response.ProcessingTime.String(),
+		"ai_probability":     fmt.Sprintf("%.2f%%", estimate.ProbabilityPercent),
+		"analysis_type":      string(response.AnalysisType),
+		"request_id":         response.RequestID,
+	}
+
+	return probability, metadata, nil
 }
