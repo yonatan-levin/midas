@@ -162,6 +162,14 @@ public
 # Temporary folders
 temp/
 
+# Claude Code / Cursor IDE temp files
+.claude/worktrees/
+.claude/hooks/.session-edits.json
+.claude/hooks/.rules-loaded
+.claude/ralph-loop.local.md
+.claude/settings.local.json
+.cursor/hooks/.session-edits.json
+
 # Database files
 *.db
 *.sqlite
