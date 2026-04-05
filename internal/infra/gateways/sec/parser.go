@@ -3,7 +3,6 @@ package sec
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -127,51 +126,33 @@ func (p *Parser) NormalizeFinancialData(ctx context.Context, data *entities.Fina
 	return &normalized, nil
 }
 
-// extractFiscalPeriods extracts data organized by fiscal periods
-// Updated to handle nested SEC Company Facts API structure
+// extractFiscalPeriods extracts data organized by fiscal periods from the nested
+// SEC Company Facts structure: taxonomy -> concept -> factGroup -> units -> facts.
 func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]map[string]float64, error) {
 	periods := make(map[string]map[string]float64)
 
 	// Iterate through taxonomy namespaces (e.g., "dei", "us-gaap")
-	for taxonomyNamespace, taxonomyGroup := range facts.Facts {
+	for taxonomy, concepts := range facts.Facts {
+		p.logger.Debug("Processing taxonomy",
+			zap.String("taxonomy", taxonomy),
+			zap.Int("concept_count", len(concepts)))
 
-		// TODO: Handle the real nested structure where concepts are inside taxonomy namespaces
-		// For now, check if this is the old flat structure or new nested structure
-		if taxonomyGroup.Units != nil {
-			// Old flat structure: "us-gaap:Revenues" -> factGroup
-			conceptName := taxonomyNamespace
-			if colonIndex := strings.LastIndex(taxonomyNamespace, ":"); colonIndex >= 0 {
-				conceptName = taxonomyNamespace[colonIndex+1:]
-			}
-
-			// Look for USD values (most common)
-			if usdUnits, exists := taxonomyGroup.Units["USD"]; exists {
+		// Iterate through concepts within this taxonomy (e.g., "Assets", "Revenues")
+		for conceptName, factGroup := range concepts {
+			// Look for USD values (most common for financial data)
+			if usdUnits, exists := factGroup.Units["USD"]; exists {
 				p.processFacts(periods, conceptName, usdUnits)
 			}
 
 			// Also check for shares units for share count data
-			if sharesUnits, exists := taxonomyGroup.Units["shares"]; exists {
+			if sharesUnits, exists := factGroup.Units["shares"]; exists {
 				p.processFacts(periods, conceptName, sharesUnits)
-			}
-		} else {
-			// New nested structure: taxonomy -> concepts -> units
-			// For now, try to parse any available nested data using reflection
-			p.logger.Debug("Attempting nested taxonomy structure parsing",
-				zap.String("taxonomy", taxonomyNamespace))
-
-			// Try to handle nested structure by checking if taxonomyGroup is a map
-			if nestedFactsFound := p.tryParseNestedFacts(periods, taxonomyNamespace, taxonomyGroup); nestedFactsFound {
-				p.logger.Debug("Successfully parsed nested facts",
-					zap.String("taxonomy", taxonomyNamespace))
-			} else {
-				p.logger.Debug("No nested facts found in taxonomy",
-					zap.String("taxonomy", taxonomyNamespace))
 			}
 		}
 	}
 
 	if len(periods) == 0 {
-		return nil, fmt.Errorf("no financial periods extracted - data structure may be nested and not yet supported")
+		return nil, fmt.Errorf("no financial periods extracted from SEC data")
 	}
 
 	return periods, nil
@@ -360,23 +341,6 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	}
 
 	return financialData, nil
-}
-
-// tryParseNestedFacts attempts to parse nested fact structures using interface{} type assertion
-func (p *Parser) tryParseNestedFacts(periods map[string]map[string]float64, taxonomyNamespace string, taxonomyGroup ports.SECFactGroup) bool {
-	// For nested structures, we need to use JSON unmarshaling to access the nested data
-	// This is a simplified approach that tries to extract common GAAP concepts
-
-	// Since we can't directly access nested structures with the current type definition,
-	// we'll implement a basic fallback that looks for commonly needed fields
-	// In a real implementation, we'd need to modify the SECFactGroup structure
-
-	// Log the attempt and return false for now, indicating we tried but couldn't parse
-	p.logger.Debug("Nested structure parsing attempted but not fully implemented",
-		zap.String("taxonomy", taxonomyNamespace),
-		zap.String("note", "Full nested parsing requires schema updates"))
-
-	return false
 }
 
 // findValue finds a value by trying multiple possible field names

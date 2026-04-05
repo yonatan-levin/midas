@@ -1,0 +1,6 @@
+# Session tracking files (generated at runtime)
+.session-edits.json
+.rules-loaded
+
+# Log files
+*.log

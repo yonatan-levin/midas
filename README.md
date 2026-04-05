@@ -2,28 +2,29 @@
 
 > Professional-grade REST API for equity valuation using Discounted Cash Flow analysis and real-time financial data
 
-[![Go Version](https://img.shields.io/badge/Go-1.22%2B-blue.svg)](https://golang.org)
+[![Go Version](https://img.shields.io/badge/Go-1.23%2B-blue.svg)](https://golang.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## 🎯 Overview
+## Overview
 
 Midas provides institutional-quality equity valuation through a simple REST API. It combines SEC financial data, market prices, and macroeconomic indicators to calculate intrinsic value using industry best practices.
 
 ### Key Capabilities
 
-- **📊 Intrinsic Valuation** - Net tangible asset value and DCF fair value per share
-- **🔄 Real-time Data Integration** - SEC EDGAR, Yahoo Finance, and Federal Reserve data
-- **🧹 Financial Data Normalization** - Removes accounting distortions and adjusts for one-time items
-- **🏭 Industry-Specific Analysis** - Tailored adjustments for technology, finance, healthcare, and more
-- **⚡ Production Ready** - Built-in caching, rate limiting, and monitoring
-- **🔐 Enterprise Security** - API key authentication and request throttling
+- **Intrinsic Valuation** - Net tangible asset value and DCF fair value per share
+- **Real-time Data Integration** - SEC EDGAR, Yahoo Finance, Finzive, and FRED data
+- **Financial Data Normalization** - Removes accounting distortions and adjusts for one-time items via configurable pipeline
+- **Industry-Specific Analysis** - Tailored adjustments for technology, finance, healthcare, retail, and more
+- **Production Ready** - Caching (Redis + in-memory fallback), rate limiting, API key auth, Prometheus metrics
+- **Enterprise Security** - Permission-based API key authentication, security headers, request throttling
+- **Background Scheduler** - Optional automated data ingestion via DB-driven watchlist
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
-- Go 1.22 or higher
-- Docker & Docker Compose
+- Go 1.23 or higher (CGO enabled for SQLite)
+- Docker & Docker Compose (optional, for Redis and containerized deployment)
 - Git
 
 ### Installation
@@ -33,20 +34,23 @@ Midas provides institutional-quality equity valuation through a simple REST API.
 git clone https://github.com/your-org/midas.git
 cd midas
 
-# Launch the staging environment (single command)
+# Option 1: Launch staging environment (single command)
 ./scripts/launch_staging.sh  # Linux/macOS
-# OR
 .\scripts\launch_staging.ps1  # Windows PowerShell
+
+# Option 2: Run locally without Docker
+go run ./cmd/migrate -db ./data/midas.db   # Apply schema + seed demo data
+go run cmd/server/main.go                   # Start the API server
 ```
 
 The launch script automatically:
-- ✅ Creates configuration from template
-- ✅ Starts Redis cache
-- ✅ Builds and starts the API server
-- ✅ Verifies health status
-- ✅ Displays connection details
+- Creates configuration from template
+- Starts Redis cache (via Docker Compose)
+- Builds and starts the API server
+- Verifies health status
+- Displays connection details
 
-## 📖 Usage
+## Usage
 
 ### Authentication
 
@@ -56,41 +60,71 @@ All protected endpoints require an API key via the `X-API-Key` header:
 X-API-Key: your-api-key-here
 ```
 
-### 30-Second Demo (Windows)
+### 30-Second Demo
 
 1) Apply schema and migrations (includes a demo API key and demo AAPL data):
 
-```powershell
+```bash
 go run ./cmd/migrate -db ./data/midas.db
 ```
 
-2) Run local validation (starts server, runs contract fuzz via Schemathesis, then calls fair value):
+2) Start the server:
 
-```powershell
-./scripts/contract_fuzz.ps1 -DemoKey 'dcf_demo_3a4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334455667788' -ApiBase 'http://localhost:8080' -DbPath './data/midas.db' -InstallSchemathesis
+```bash
+go run cmd/server/main.go
 ```
 
-3) Or just curl with the seeded key (after server is running):
+3) Call the API with the seeded demo key:
+
+```bash
+# Linux/macOS
+curl -H "X-API-Key: dcf_demo_3a4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334455667788" \
+  http://localhost:8080/api/v1/fair-value/AAPL
+
+# Windows PowerShell
+Invoke-RestMethod -Method GET -Uri http://localhost:8080/api/v1/fair-value/AAPL `
+  -Headers @{ 'X-API-Key'='dcf_demo_3a4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334455667788' } | ConvertTo-Json -Depth 6
+```
+
+4) (Optional) Run contract fuzz testing:
 
 ```powershell
-Invoke-RestMethod -Method GET -Uri http://localhost:8080/api/v1/fair-value/AAPL -Headers @{ 'X-API-Key'='dcf_demo_3a4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334455667788' } | ConvertTo-Json -Depth 6
+./scripts/contract_fuzz.ps1 -DemoKey '<key>' -ApiBase 'http://localhost:8080' -DbPath './data/midas.db' -InstallSchemathesis
 ```
 
 ### API Endpoints
 
-#### Get Fair Value for Single Ticker
+#### Public Endpoints (No Auth)
 
-```bash
-GET /api/v1/fair-value/{ticker}
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Basic health check |
+| GET | `/ready` | Readiness probe (DB, cache, APIs) |
+| GET | `/version` | Version and build info |
+| GET | `/metrics` | Prometheus metrics |
 
-**Example Request:**
-```bash
-curl -H "X-API-Key: your-api-key-here" \
-  http://localhost:8080/api/v1/fair-value/AAPL
-```
+#### Protected Endpoints (API Key Required)
 
-**Example Response:**
+| Method | Path | Permission | Description |
+|--------|------|------------|-------------|
+| GET | `/api/v1/fair-value/{ticker}` | `read:fair_value` | Fair value for single ticker |
+| POST | `/api/v1/fair-value/bulk` | `read:fair_value` | Fair value for multiple tickers (max 10) |
+| GET | `/api/v1/health/detailed` | `read:health` | Detailed component health |
+| GET | `/api/v1/metrics` | `read:metrics` | Application and business metrics (JSON) |
+| POST | `/api/v1/auth/keys` | `manage:keys` | Create new API key |
+
+#### Optional Endpoints
+
+| Method | Path | Condition | Description |
+|--------|------|-----------|-------------|
+| GET | `/swagger/*` | `ENABLE_SWAGGER=true` | Swagger UI |
+| GET | `/docs/openapi.yaml` | `ENABLE_SWAGGER=true` | OpenAPI spec |
+| GET | `/debug/pprof/*` | `ENABLE_PPROF=true` | Go pprof profiling |
+
+### Example Request & Response
+
+**GET /api/v1/fair-value/AAPL**
+
 ```json
 {
   "ticker": "AAPL",
@@ -98,29 +132,20 @@ curl -H "X-API-Key: your-api-key-here" \
   "growth_rate": 0.033,
   "tangible_value_per_share": 3.47,
   "dcf_value_per_share": 167.23,
-  "as_of": "2024-01-31T10:30:00Z",
+  "as_of": "2025-01-31T10:30:00Z",
   "data_quality_score": 0.92,
   "data_quality_grade": "A"
 }
 ```
 
-#### Bulk Valuation Request
+**POST /api/v1/fair-value/bulk**
 
-```bash
-POST /api/v1/fair-value/bulk
+Request:
+```json
+{ "tickers": ["AAPL", "MSFT", "GOOGL"] }
 ```
 
-**Example Request:**
-```bash
-curl -X POST -H "X-API-Key: your-api-key-here" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tickers": ["AAPL", "MSFT", "GOOGL"]
-  }' \
-  http://localhost:8080/api/v1/fair-value/bulk
-```
-
-**Example Response:**
+Response:
 ```json
 {
   "results": [
@@ -131,27 +156,22 @@ curl -X POST -H "X-API-Key: your-api-key-here" \
 }
 ```
 
-#### Health Check
-
-```bash
-GET /health
-```
-
-Returns service health status:
-
-```json
-{ "status": "ok", "service": "dcf-valuation-api", "timestamp": "..." }
-```
-```
-
 ### Understanding the Valuation Results
 
 #### Key Metrics Explained
 
 - **DCF Fair Value per Share**: Intrinsic value based on 5-year discounted cash flow projection
 - **Net Tangible Asset Value per Share**: Book value excluding intangibles, adjusted for market conditions
-- **Margin of Safety**: Percentage difference between fair value and current price (negative = overvalued)
+- **WACC**: Weighted Average Cost of Capital used as the discount rate
+- **Growth Rate**: Terminal growth rate applied beyond the explicit forecast period
 - **Quality Score**: 0-1 score indicating data reliability and adjustment transparency
+- **Quality Grade**: Letter grade (A/B/C/D/F) derived from the quality score
+
+#### Query Parameter Overrides
+
+Both fair-value endpoints accept optional overrides:
+- `override_beta` (float) - Override the calculated beta for WACC computation
+- `override_rf` (float) - Override the risk-free rate
 
 #### Industry-Specific Adjustments
 
@@ -162,11 +182,13 @@ The API automatically applies industry-specific normalizations:
 - **Healthcare**: Drug development costs, regulatory milestone adjustments
 - **Retail**: Inventory valuation, lease obligation adjustments
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment & Config
 
-You can configure via `config/config.yaml` or environment variables (Viper). Minimal example `config/config.yaml`:
+Configuration uses Viper with this priority: config file > environment variables > defaults.
+
+Create `config/config.yaml` or set environment variables:
 
 ```yaml
 port: "8080"
@@ -174,220 +196,116 @@ environment: "development"
 log_level: "debug"
 
 database:
-  driver: "sqlite3"
+  driver: "sqlite3"              # sqlite3 or postgres
   sqlite_path: "./data/midas.db"
 
 cache:
-  redis_url: "redis://localhost:6379" # falls back to in-memory if unavailable
+  redis_url: "redis://localhost:6379"  # falls back to in-memory if unavailable
 
 sec:
   user_agent: "YourCompany you@example.com"
 ```
 
+Environment variable mapping: `database.driver` -> `DATABASE_DRIVER`, `cache.redis_url` -> `CACHE_REDIS_URL`, etc.
+
 ### Database Setup
 
-Initialize the schema once per environment:
-
-- SQLite (default):
-
 ```bash
-mkdir -p ./data
+# Option 1: Use the migrate command (recommended - handles schema + demo data)
+go run ./cmd/migrate -db ./data/midas.db
+
+# Option 2: Apply schema manually
+# SQLite
 sqlite3 ./data/midas.db < internal/infra/database/schema.sql
-```
 
-- Postgres (if `database.driver: postgres`):
-
-```bash
+# PostgreSQL
 psql "$DATABASE_URL" -f internal/infra/database/schema.sql
 ```
 
 ### Cache Configuration
 
-Midas uses intelligent caching to optimize performance:
+Midas uses two-tier caching (Redis primary, in-memory fallback):
 
-- **Financial Data**: 24-hour TTL (quarterly reports)
-- **Market Data**: 15-minute TTL (prices, volume)
-- **Macro Data**: 7-day TTL (interest rates)
-
-### AI Integration Configuration
-
-Midas supports optional AI-enhanced footnote analysis for improved financial data quality:
-
-#### Environment Variables
-
-```bash
-# AI Integration Settings
-DATACLEANER_ENABLE_AI_INTEGRATION=false    # Enable/disable AI features (default: false)
-DATACLEANER_AI_SERVICE_URL=""              # External AI service endpoint
-DATACLEANER_AI_SERVICE_TIMEOUT=5           # Request timeout in seconds (default: 5)
-DATACLEANER_AI_API_KEY=""                  # API key for external AI service (optional)
-```
-
-#### Usage
-
-When enabled, AI analysis is applied to:
-- **Contingent Liabilities**: Enhanced probability estimation from legal footnotes
-- **Pension Obligations**: Improved discount rate and assumption analysis  
-- **Operating Leases**: Better present value calculations
-- **Restructuring Charges**: One-time vs. recurring nature identification
-
-**Benefits:**
-- More accurate probability-weighted liability estimates
-- Improved earnings normalization through better one-time item detection
-- Enhanced valuation accuracy for companies with complex footnote disclosures
-
-**Graceful Degradation:**
-- AI failures automatically fall back to conservative industry-standard estimates
-- No service interruption when AI is unavailable
-- Comprehensive logging and monitoring for AI service health
-
-**Security & Privacy:**
-- Only non-sensitive metadata is logged (ticker, analysis type, timing)
-- Footnote text is never stored in logs
-- AI service calls respect strict timeouts to prevent blocking
-
-#### Example Configuration
-
-```bash
-# Development setup with mock AI service
-DATACLEANER_ENABLE_AI_INTEGRATION=true
-DATACLEANER_AI_SERVICE_URL=mock://test
-DATACLEANER_AI_SERVICE_TIMEOUT=5
-
-# Production setup with external AI service
-DATACLEANER_ENABLE_AI_INTEGRATION=true  
-DATACLEANER_AI_SERVICE_URL=https://your-ai-service.com/analyze
-DATACLEANER_AI_API_KEY=your-ai-api-key-here
-DATACLEANER_AI_SERVICE_TIMEOUT=10
-```
+| Data Type | TTL | Rationale |
+|-----------|-----|-----------|
+| SEC Filings | 48h | Quarterly reports change infrequently |
+| Market Data | 15m | Prices update throughout trading day |
+| Macro Data | 4h | Treasury rates change slowly |
+| Valuation Results | 1h | Recompute when underlying data changes |
+| Cleaning Results | 6h | Normalization is CPU-intensive |
 
 ### Scheduler Configuration
 
-Midas includes an optional background scheduler for automated data ingestion. The scheduler is **disabled by default** and uses a **DB-driven watchlist approach** for maximum flexibility.
-
-#### Environment Variables
+Optional background scheduler for automated data ingestion. **Disabled by default**.
 
 ```bash
-# Scheduler Settings
-SCHEDULER_ENABLED=false           # Enable/disable scheduler (default: false)
-SCHEDULER_INTERVAL=24h           # Run interval (default: 24h for daily)
-SCHEDULER_MAX_CONCURRENCY=2      # Max concurrent jobs (default: 2)
+SCHEDULER_ENABLED=false           # Enable/disable scheduler
+SCHEDULER_INTERVAL=24h           # Run interval
+SCHEDULER_MAX_CONCURRENCY=2      # Max concurrent jobs
 ```
 
-#### How It Works
-
-1. **DB-Driven Watchlist**: Add tickers to the `scheduler_watchlist` table to enable automatic fetching
-2. **No-Op When Empty**: If the watchlist is empty, the scheduler performs no work
-3. **Failure Tracking**: Automatically tracks fetch successes/failures per ticker
-4. **Configurable Priorities**: Support for different priority levels and retry policies
-
-#### Managing the Watchlist
+Uses a DB-driven watchlist approach:
 
 ```sql
 -- Add tickers to watch
-INSERT INTO scheduler_watchlist (ticker, is_active, priority) 
+INSERT INTO scheduler_watchlist (ticker, is_active, priority)
 VALUES ('AAPL', true, 1), ('MSFT', true, 1), ('GOOGL', true, 2);
-
--- Enable/disable a ticker
-UPDATE scheduler_watchlist SET is_active = false WHERE ticker = 'AAPL';
-
--- Remove a ticker from the watchlist
-DELETE FROM scheduler_watchlist WHERE ticker = 'AAPL';
 
 -- View watchlist status
 SELECT * FROM scheduler_watchlist ORDER BY priority, ticker;
 ```
 
-#### Production Usage
+### AI Integration (Optional)
+
+Optional AI-enhanced footnote analysis. **Disabled by default**.
 
 ```bash
-# Enable scheduler for production
-SCHEDULER_ENABLED=true
-SCHEDULER_INTERVAL=24h           # Daily ingestion at startup time
-SCHEDULER_MAX_CONCURRENCY=5      # Higher concurrency for production
-
-# Monitor scheduler logs
-docker logs midas-api | grep "scheduler"
-```
-
-#### Benefits
-
-- **Automated Data Freshness**: Keep financial data up-to-date without manual intervention
-- **Flexible Ticker Management**: Add/remove tickers without restarting the service
-- **Robust Error Handling**: Automatic retry logic with failure tracking
-- **Production Ready**: Clean shutdown, graceful failure handling, comprehensive logging
-
-### 🔄 Feature Rollback Instructions
-
-If you need to disable AI integration or the scheduler after enabling them, follow these steps:
-
-#### Rolling Back AI Integration
-
-```bash
-# 1. Disable AI in environment/config
 DATACLEANER_ENABLE_AI_INTEGRATION=false
-
-# 2. Restart the service 
-docker-compose restart api
-# OR for local development
-# kill the process and restart with: go run cmd/server/main.go
-
-# 3. Verify AI is disabled (should show "AI integration: disabled")
-curl -H "Authorization: Bearer your-api-key" "http://localhost:8080/api/v1/health/detailed"
+DATACLEANER_AI_SERVICE_URL=""
+DATACLEANER_AI_SERVICE_TIMEOUT=5
 ```
 
-**Impact of AI Rollback:**
-- ✅ **No data loss** - All historical valuation data remains intact
-- ✅ **Graceful degradation** - System automatically falls back to conservative estimates
-- ✅ **No API changes** - All endpoints continue working normally
-- ⚠️ **Reduced accuracy** - Contingent liability and footnote analysis reverts to industry defaults
+When enabled, improves analysis of contingent liabilities, pension obligations, operating leases, and restructuring charges. Falls back to conservative industry-standard estimates when AI is unavailable.
 
-#### Rolling Back Scheduler
+### Feature Flags
 
-```bash
-# 1. Disable scheduler in environment/config
-SCHEDULER_ENABLED=false
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SCHEDULER_ENABLED` | `false` | Background data ingestion scheduler |
+| `DATACLEANER_ENABLE_AI_INTEGRATION` | `false` | AI-powered footnote analysis |
+| `ENABLE_SWAGGER` | `false` | Swagger UI (auto-enabled in development) |
+| `ENABLE_PPROF` | `false` | pprof profiling endpoints |
 
-# 2. Restart the service
-docker-compose restart api
+## Architecture
 
-# 3. Optionally clear the watchlist (if desired)
-# Connect to your database and run:
-# DELETE FROM scheduler_watchlist;
+Midas uses **Clean Architecture** (Hexagonal / Ports & Adapters) with `uber/fx` dependency injection.
 
-# 4. Verify scheduler is disabled in logs
-docker logs midas-api | grep "scheduler.*disabled"
+```
+API Consumers → Gin HTTP Layer → Handlers → Valuation Service
+                                              ├── DataFetcher (SEC + Market + Macro)
+                                              ├── DataCleaner (normalization pipeline)
+                                              └── Financial Calcs (WACC + DCF)
 ```
 
-**Impact of Scheduler Rollback:**
-- ✅ **No service interruption** - API continues serving requests normally
-- ✅ **Manual data freshness** - You can still fetch data via API calls or manual processes
-- ⚠️ **No automated updates** - Data won't be automatically refreshed
-- 💡 **Watchlist preserved** - Tickers remain in database for easy re-enabling
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system architecture documentation.
+See [CONTRACTS.md](CONTRACTS.md) for API contracts and service interface definitions.
+See [TESTING.md](TESTING.md) for testing strategy, conventions, and guidelines.
 
-#### Emergency Rollback (Full Reset)
+### Tech Stack
 
-If you encounter issues and need to completely reset both features:
+| Component | Technology |
+|-----------|-----------|
+| Language | Go 1.23+ |
+| HTTP Framework | Gin |
+| DI | uber/fx |
+| Database | SQLite3 / PostgreSQL (sqlx) |
+| Cache | Redis + in-memory fallback |
+| Config | Viper |
+| Logging | Zap (structured JSON) |
+| Metrics | Prometheus |
+| Testing | testify + gopter (property-based) |
 
-```bash
-# 1. Stop the service
-docker-compose down
-
-# 2. Create clean environment config
-cp config.env.example config.env
-# Edit config.env to ensure both features are disabled:
-# DATACLEANER_ENABLE_AI_INTEGRATION=false
-# SCHEDULER_ENABLED=false
-
-# 3. Restart with clean state
-docker-compose up -d
-
-# 4. Verify both features are disabled
-curl "http://localhost:8080/health" # Should return 200 OK
-curl -H "Authorization: Bearer your-key" "http://localhost:8080/api/v1/health/detailed"
-```
-
-## 🔧 Operations
+## Operations
 
 ### Starting the Service
 
@@ -405,33 +323,49 @@ docker-compose -f docker-compose.prod.yml up -d
 ### Stopping the Service
 
 ```bash
-./scripts/stop_staging.sh  # Linux/macOS
-# OR
-.\scripts\stop_staging.ps1  # Windows
+./scripts/stop_staging.sh       # Linux/macOS
+.\scripts\stop_staging.ps1      # Windows
+# Or: docker-compose down
 ```
 
 ### Monitoring
 
-- **Metrics**: Prometheus endpoint at `/metrics`
-- **Health**: Health check at `/health`
+- **Prometheus Metrics**: `/metrics` (unauthenticated)
+- **Health Check**: `/health` (liveness), `/ready` (readiness)
+- **Detailed Health**: `/api/v1/health/detailed` (authenticated, returns 200/206/503)
 - **Logs**: Structured JSON logging to stdout
 
-## End-to-End Example
+### Performance Targets
 
-1) Start the server (any option above), ensure it listens on `:8080`.
-2) Create a dev API key in SQLite:
+| Metric | Target |
+|--------|--------|
+| p95 latency | < 300ms at 20 RPS |
+| Error rate | < 1% |
+| Throughput | >= 20 RPS sustained |
+| Container size | ~53.5MB |
+
+## Testing
 
 ```bash
-sqlite3 ./data/midas.db "INSERT INTO api_keys (key_hash, user_id, permissions, rate_limit, is_active) VALUES ('<sha256_of_dcf_dev_key_123>', 'local-dev', '[\"read:fair_value\",\"read:health\",\"read:metrics\"]', 1000, 1);"
+# All tests
+go test ./...
+
+# With coverage
+go test -cover ./...
+
+# Integration tests
+go test ./internal/integration/...
+
+# Contract fuzz testing (requires Schemathesis)
+schemathesis run http://localhost:8080/docs/openapi.yaml --header "X-API-Key: <key>" --checks all
+
+# Load testing
+go run ./scripts/load_tester.go -url http://localhost:8080 -key <API_KEY> -concurrency 20 -duration 60s -rps 20
 ```
 
-3) Call the API:
+See [TESTING.md](TESTING.md) for the full testing strategy.
 
-```bash
-curl -H "X-API-Key: dcf_dev_key_123" http://localhost:8080/api/v1/fair-value/AAPL
-```
-
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
 
@@ -440,31 +374,36 @@ curl -H "X-API-Key: dcf_dev_key_123" http://localhost:8080/api/v1/fair-value/AAP
 - Solution: Enable Redis caching or reduce request rate
 
 **"Market data unavailable"**
-- Yahoo Finance may be temporarily down
-- Solution: Cached data will be used if available
+- Yahoo Finance may be temporarily down; Finzive is used as fallback
+- Cached data will be used if available
 
 **"Invalid financial data"**
 - Company may have unusual reporting structure
-- Check the quality_score in response for details
+- Check the `data_quality_score` and `data_quality_grade` in the response
+
+**Redis connection failed**
+- Not fatal: Midas automatically falls back to in-memory cache
+- Check logs for "Redis connection failed, will use memory cache"
+
+**CGO errors**
+- SQLite requires `CGO_ENABLED=1`
+- On Windows: ensure GCC is available (e.g., via MSYS2 or TDM-GCC)
 
 ### Debug Mode
 
-Enable detailed logging:
-
-```env
-LOG_LEVEL=debug
-DEBUG_MODE=true
+```bash
+LOG_LEVEL=debug ENABLE_PPROF=true go run cmd/server/main.go
 ```
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🤝 Support
+## Support
 
 - **Issues**: [GitHub Issues](https://github.com/your-org/midas/issues)
- - Swagger/OpenAPI docs are optional and disabled by default. When enabled, they will be available at `/docs`.
+- Swagger/OpenAPI docs are available at `/swagger/index.html` when enabled
 
 ---
 
-Built with ❤️ by the Midas Team
+Built with care by the Midas Team

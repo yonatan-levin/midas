@@ -1,0 +1,183 @@
+# CLAUDE.md - Midas DCF Valuation API
+
+This file provides guidance for AI assistants (Claude, etc.) working on this codebase.
+
+## Project Overview
+
+**Midas** is a production-grade REST API for equity valuation using Discounted Cash Flow (DCF) analysis. It fetches real-time financial data from SEC EDGAR, market prices from Yahoo Finance/Finzive, and macroeconomic indicators from FRED, then normalizes, cleans, and uses that data to calculate intrinsic value per share.
+
+- **Module**: `github.com/midas/dcf-valuation-api`
+- **Go Version**: 1.23+ (toolchain 1.24.4)
+- **Current Version**: v0.9.0-rc1 (MVP)
+
+## Build & Run Commands
+
+```bash
+# Build
+go build ./cmd/server
+
+# Run locally
+go run cmd/server/main.go
+
+# Run tests (all)
+go test ./...
+
+# Run tests with coverage
+go test -cover ./...
+
+# Run a specific package's tests
+go test ./internal/services/valuation/...
+
+# Run integration tests only
+go test ./internal/integration/...
+
+# Apply database schema + migrations + demo data
+go run ./cmd/migrate -db ./data/midas.db
+
+# Seed a demo API key
+go run ./cmd/seed-demo-key -db ./data/midas.db
+
+# Hash an API key (utility)
+go run ./cmd/hash-key -key <your-key>
+
+# Docker
+docker-compose up -d              # Development
+docker-compose -f docker-compose.prod.yml up -d  # Production
+
+# Launch staging (scripts)
+./scripts/launch_staging.sh       # Linux/macOS
+.\scripts\launch_staging.ps1      # Windows
+
+# Contract fuzz testing
+./scripts/contract_fuzz.ps1 -DemoKey '<key>' -ApiBase 'http://localhost:8080' -DbPath './data/midas.db'
+
+# Load testing
+go run ./scripts/load_tester.go -url http://localhost:8080 -key <API_KEY> -type single -concurrency 20 -duration 60s -rps 20
+```
+
+## Architecture
+
+Clean Architecture (Hexagonal / Ports & Adapters) with dependency injection via `uber/fx`.
+
+```
+cmd/                    # Entry points (server, migrate, seed-demo-key, hash-key, apply-schema)
+internal/
+  api/                  # HTTP layer (Gin router, middleware, handlers)
+    v1/handlers/        # Request handlers (fair_value, health, auth, performance)
+  config/               # Viper-based configuration loading + XBRL/industry/flag configs
+  core/                 # Domain layer (no external dependencies)
+    entities/           # Domain models (FinancialData, MarketData, MacroData, etc.)
+    ports/              # Interface definitions (gateways, repositories, services)
+  di/                   # Dependency injection container (fx modules)
+  infra/                # Infrastructure adapters
+    database/           # SQL schema
+    gateways/           # External API clients
+      sec/              # SEC EDGAR API client
+      market/           # Yahoo Finance + Finzive market data
+      macro/            # FRED macro data
+    repositories/       # Data persistence
+      sqlite/           # SQLite repository implementations
+      cache/            # Redis + in-memory cache implementations
+    resilience/         # Circuit breaker, retry policies
+  services/             # Business logic services
+    auth/               # API key authentication
+    datacleaner/        # Financial data normalization pipeline
+      adjustments/      # Asset, liability, earnings adjusters
+      ai/               # AI-powered footnote analysis (optional)
+      flagging/         # Risk flag detection
+      industry/         # Industry classification
+    datafetcher/        # Multi-source data coordination
+    metrics/            # Prometheus metrics collection
+    ratelimit/          # Rate limiting
+    scheduler/          # Background job scheduler
+    valuation/          # DCF + WACC calculation engine
+    watchlist/          # Scheduler watchlist management
+    alerting/           # Alert configuration
+  integration/          # Integration tests
+pkg/
+  finance/              # Shared financial calculation libraries
+    dcf/                # DCF calculation
+    growth/             # Growth rate estimation
+    wacc/               # WACC calculation
+    leases/             # Lease estimation
+config/                 # Configuration files (YAML, JSON)
+  datacleaner/          # Rules, industry codes, XBRL tag mappings, flag conditions
+  alerting/             # Alert rules and notification channels
+docs/                   # Documentation (OpenAPI spec, integration plans)
+scripts/                # Build, deploy, and test scripts
+data/                   # SQLite database files (gitignored)
+```
+
+## Key Conventions
+
+### Code Style
+- **No globals** - All state managed through DI container
+- **Interface-first** - All external dependencies defined as interfaces in `internal/core/ports/`
+- **Structured logging** - Use `go.uber.org/zap` exclusively, never `log` or `fmt.Println`
+- **Error wrapping** - Use `fmt.Errorf("context: %w", err)` for error chains
+- **Context propagation** - All service/repository methods accept `context.Context` as first parameter
+- **RFC 7807** - Error responses follow Problem Details format
+
+### Testing
+- **TDD mandatory** - Write tests before implementation
+- **Table-driven tests** - Use `[]struct{name string; ...}` pattern for test cases
+- **Coverage target** - >= 90% for critical finance modules, >= 80% overall
+- **Property-based testing** - Use `gopter` for financial calculation correctness
+- **Test naming** - `TestServiceName_MethodName_Scenario`
+- **Mocks** - Use `testify/mock` for interface mocking
+- **Integration tests** - Located in `internal/integration/`, use `testcontainers-go` where needed
+
+### Configuration
+- Viper-based: reads from `config/config.yaml`, then env vars (e.g., `DATABASE_DRIVER`)
+- Env var mapping: nested keys use `_` separator (`database.driver` -> `DATABASE_DRIVER`)
+- Secrets: never committed; use env vars or vault references
+- Feature flags: `SCHEDULER_ENABLED`, `DATACLEANER_ENABLE_AI_INTEGRATION`, `ENABLE_SWAGGER`, `ENABLE_PPROF`
+
+### API Design
+- All protected endpoints require `X-API-Key` header
+- Permission-based access control (`read:fair_value`, `read:health`, `read:metrics`, `manage:keys`, `admin`)
+- Rate limiting on all endpoints (API key-based or IP-based fallback)
+- Security headers on all responses (HSTS, CSP, X-Frame-Options)
+
+### Database
+- SQLite3 (default) or PostgreSQL
+- Schema in `internal/infra/database/schema.sql`
+- Migrations via `cmd/migrate`
+- Repository pattern for all data access
+
+## Important Files
+
+| File | Purpose |
+|------|---------|
+| `cmd/server/main.go` | Application entry point |
+| `internal/di/container.go` | DI container wiring |
+| `internal/api/server.go` | HTTP server, routes, middleware |
+| `internal/config/config.go` | Configuration structs and loading |
+| `internal/core/ports/gateways.go` | External service interfaces |
+| `internal/core/ports/repositories.go` | Data storage interfaces |
+| `internal/services/valuation/service.go` | DCF valuation orchestration |
+| `internal/services/valuation/errors.go` | Sentinel errors (ErrTickerNotFound, ErrInsufficientData) |
+| `internal/services/valuation/options.go` | ValuationOptions (override beta/risk-free rate) |
+| `internal/services/datafetcher/coordinator.go` | Multi-source data fetching |
+| `internal/services/datacleaner/service.go` | Financial data normalization |
+| `internal/infra/gateways/market/yfinance_auth.go` | Yahoo Finance cookie+crumb auth manager |
+| `internal/infra/database/schema.sql` | Database schema |
+| `docs/openapi.yaml` | OpenAPI 3.0 specification |
+| `config.env.example` | Environment variable template |
+
+## External Data Sources
+
+| Source | Purpose | Rate Limit |
+|--------|---------|------------|
+| SEC EDGAR (`data.sec.gov`) | Company financial filings (10-K, 10-Q) | 10 req/sec |
+| Yahoo Finance (`query2.finance.yahoo.com`) | Market prices, beta, volume | Cookie+crumb auth, 3 retries |
+| Finzive | Fallback market/financial data | Scraper (be polite) |
+| FRED (`api.stlouisfed.org`) | Treasury rates, macro indicators | Requires API key |
+
+## Common Gotchas
+
+- Redis is **optional** - the app falls back to in-memory cache if Redis is unavailable
+- Windows tests skip some E2E tests (gated by `E2E_LIVE=1`)
+- SEC API requires a valid `User-Agent` header with contact email
+- SQLite driver is `github.com/mattn/go-sqlite3` (requires CGO)
+- The `config.env.example` file is blocked by a pre-read hook; get config info from `internal/config/config.go` defaults instead

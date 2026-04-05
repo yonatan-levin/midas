@@ -1,0 +1,6 @@
+# Session tracking files (generated at runtime)
+.session-edits.json
+.ralph-iteration
+
+# Log files
+*.log

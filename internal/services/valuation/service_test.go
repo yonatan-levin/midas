@@ -453,7 +453,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		mockMetrics.On("IncDCFCalculations").Return()
 		mockMetrics.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
 
-		result, err := service.CalculateValuation(ctx, "AAPL")
+		result, err := service.CalculateValuation(ctx, "AAPL", nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -511,7 +511,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		// Setup metrics expectation for cache hit
 		freshMetrics.On("RecordValuationRequest", "AAPL", "single", "cache_hit", mock.AnythingOfType("time.Duration")).Return()
 
-		result, err := freshService.CalculateValuation(ctx, "AAPL")
+		result, err := freshService.CalculateValuation(ctx, "AAPL", nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -548,7 +548,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		freshCache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 		freshFinancialRepo.On("GetHistorical", ctx, "AAPL", 10).Return((*entities.HistoricalFinancialData)(nil), errors.New("no data found"))
 
-		result, err := freshService.CalculateValuation(ctx, "AAPL")
+		result, err := freshService.CalculateValuation(ctx, "AAPL", nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -571,7 +571,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
 		marketRepo.On("GetLatest", ctx, "AAPL").Return((*entities.MarketData)(nil), errors.New("no market data"))
 
-		result, err := service.CalculateValuation(ctx, "AAPL")
+		result, err := service.CalculateValuation(ctx, "AAPL", nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -594,7 +594,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		marketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
 		macroRepo.On("GetLatest", ctx).Return((*entities.MacroData)(nil), errors.New("no macro data"))
 
-		result, err := service.CalculateValuation(ctx, "AAPL")
+		result, err := service.CalculateValuation(ctx, "AAPL", nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -605,6 +605,180 @@ func TestService_CalculateValuation(t *testing.T) {
 		macroRepo.AssertExpectations(t)
 		cache.AssertExpectations(t)
 	})
+}
+
+// TestService_CalculateValuation_NilDataCleaner verifies that the valuation pipeline
+// succeeds when the DataCleaner service is not configured (nil). The code should
+// skip cleaning and use original data.
+func TestService_CalculateValuation_NilDataCleaner(t *testing.T) {
+	ctx := context.Background()
+	historicalData, marketData, macroData := createTestData()
+
+	// Create fresh mocks for isolation
+	freshFinancialRepo := &MockFinancialDataRepository{}
+	freshMarketRepo := &MockMarketDataRepository{}
+	freshMacroRepo := &MockMacroDataRepository{}
+	freshCache := &MockCacheRepository{}
+	freshMetrics := &MockMetricsService{}
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:             1 * time.Hour,
+			SlowRequestThreshold: 500 * time.Millisecond,
+			DataFetchTimeout:     30 * time.Second,
+		},
+	}
+
+	// Create service with nil dataCleaner — this is the path we want to cover
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, nil, nil, freshMetrics, cfg, logger)
+
+	// Setup expectations: cache miss, then successful data retrieval
+	freshCache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	freshFinancialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
+	freshMarketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
+	freshMacroRepo.On("GetLatest", ctx).Return(macroData, nil)
+	freshCache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
+
+	// Setup metrics expectations
+	freshMetrics.On("RecordValuationRequest", "AAPL", "single", "success", mock.AnythingOfType("time.Duration")).Return()
+	freshMetrics.On("IncWACCCalculations").Return()
+	freshMetrics.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	freshMetrics.On("IncDCFCalculations").Return()
+	freshMetrics.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	result, err := service.CalculateValuation(ctx, "AAPL", nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "AAPL", result.Ticker)
+	assert.Greater(t, result.DCFValuePerShare, 0.0)
+	// DataQualityScore should be zero default since no cleaning was applied
+	assert.Equal(t, 0.0, result.DataQualityScore)
+
+	freshFinancialRepo.AssertExpectations(t)
+	freshMarketRepo.AssertExpectations(t)
+	freshMacroRepo.AssertExpectations(t)
+	freshCache.AssertExpectations(t)
+}
+
+// TestService_CalculateValuation_DataCleanerError verifies that when the DataCleaner
+// returns an error, the valuation pipeline falls back to using the original (uncleaned)
+// data and still produces a valid result.
+func TestService_CalculateValuation_DataCleanerError(t *testing.T) {
+	ctx := context.Background()
+	historicalData, marketData, macroData := createTestData()
+
+	// Create fresh mocks for isolation
+	freshFinancialRepo := &MockFinancialDataRepository{}
+	freshMarketRepo := &MockMarketDataRepository{}
+	freshMacroRepo := &MockMacroDataRepository{}
+	freshCache := &MockCacheRepository{}
+	freshDataCleaner := &MockDataCleanerService{}
+	freshMetrics := &MockMetricsService{}
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:             1 * time.Hour,
+			SlowRequestThreshold: 500 * time.Millisecond,
+			DataFetchTimeout:     30 * time.Second,
+		},
+	}
+
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger)
+
+	// DataCleaner returns an error — the service should log a warning and continue with original data
+	freshDataCleaner.On("CleanFinancialData", ctx, mock.AnythingOfType("*entities.FinancialData")).
+		Return((*entities.CleaningResult)(nil), errors.New("cleaning service unavailable"))
+
+	// Setup expectations: cache miss, then successful data retrieval
+	freshCache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	freshFinancialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
+	freshMarketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
+	freshMacroRepo.On("GetLatest", ctx).Return(macroData, nil)
+	freshCache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
+
+	// Metrics expectations for a successful valuation
+	freshMetrics.On("RecordValuationRequest", "AAPL", "single", "success", mock.AnythingOfType("time.Duration")).Return()
+	freshMetrics.On("IncWACCCalculations").Return()
+	freshMetrics.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	freshMetrics.On("IncDCFCalculations").Return()
+	freshMetrics.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	result, err := service.CalculateValuation(ctx, "AAPL", nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "AAPL", result.Ticker)
+	assert.Greater(t, result.DCFValuePerShare, 0.0)
+	// DataQualityScore should be zero since cleaning failed and cleaningResult is nil
+	assert.Equal(t, 0.0, result.DataQualityScore)
+
+	freshDataCleaner.AssertExpectations(t)
+	freshCache.AssertExpectations(t)
+}
+
+// TestService_CalculateValuation_CacheSetFailure verifies that when caching the
+// result fails, the valuation still returns the successfully computed result.
+// The cache failure is a non-critical error that is only logged as a warning.
+func TestService_CalculateValuation_CacheSetFailure(t *testing.T) {
+	ctx := context.Background()
+	historicalData, marketData, macroData := createTestData()
+
+	// Create fresh mocks for isolation
+	freshFinancialRepo := &MockFinancialDataRepository{}
+	freshMarketRepo := &MockMarketDataRepository{}
+	freshMacroRepo := &MockMacroDataRepository{}
+	freshCache := &MockCacheRepository{}
+	freshDataCleaner := &MockDataCleanerService{}
+	freshMetrics := &MockMetricsService{}
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:             1 * time.Hour,
+			SlowRequestThreshold: 500 * time.Millisecond,
+			DataFetchTimeout:     30 * time.Second,
+		},
+	}
+
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger)
+
+	// DataCleaner succeeds normally
+	cleaningResult := &entities.CleaningResult{
+		Success:      true,
+		QualityScore: 90.0,
+		CleanedData:  historicalData.Data["2023FY"],
+		Flags:        []entities.Flag{},
+		Adjustments:  []entities.Adjustment{},
+	}
+	freshDataCleaner.On("CleanFinancialData", ctx, mock.AnythingOfType("*entities.FinancialData")).Return(cleaningResult, nil)
+
+	// Cache miss on read, then cache Set returns an error (e.g., Redis unavailable)
+	freshCache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	freshFinancialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
+	freshMarketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
+	freshMacroRepo.On("GetLatest", ctx).Return(macroData, nil)
+	freshCache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).
+		Return(errors.New("redis connection refused"))
+
+	// Metrics expectations: valuation still succeeds despite cache failure
+	freshMetrics.On("RecordValuationRequest", "AAPL", "single", "success", mock.AnythingOfType("time.Duration")).Return()
+	freshMetrics.On("IncWACCCalculations").Return()
+	freshMetrics.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	freshMetrics.On("IncDCFCalculations").Return()
+	freshMetrics.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	result, err := service.CalculateValuation(ctx, "AAPL", nil)
+
+	// The valuation should still succeed even though cache storage failed
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "AAPL", result.Ticker)
+	assert.Greater(t, result.DCFValuePerShare, 0.0)
+	// Cleaning was applied successfully
+	assert.Equal(t, 90.0, result.DataQualityScore)
+
+	freshCache.AssertExpectations(t)
+	freshDataCleaner.AssertExpectations(t)
 }
 
 func TestService_performValuation(t *testing.T) {
@@ -634,7 +808,7 @@ func TestService_performValuation(t *testing.T) {
 	historicalData, marketData, macroData := createTestData()
 
 	t.Run("successful valuation with good data", func(t *testing.T) {
-		result, err := service.performValuation(historicalData, marketData, macroData)
+		result, err := service.performValuation(historicalData, marketData, macroData, nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -648,20 +822,37 @@ func TestService_performValuation(t *testing.T) {
 		assert.Equal(t, "1.0", result.CalculationVersion)
 	})
 
-	t.Run("insufficient historical data", func(t *testing.T) {
-		// Create data with only 1 period (insufficient)
-		insufficientData := &entities.HistoricalFinancialData{
+	t.Run("single period uses default growth rate", func(t *testing.T) {
+		// With only 1 period, growth rate can't be calculated from history
+		// so performValuation should use the conservative default (DefaultTerminalGrowthCap)
+		singlePeriodData := &entities.HistoricalFinancialData{
 			Ticker: "AAPL",
 			Data: map[string]*entities.FinancialData{
 				"2023FY": historicalData.Data["2023FY"], // Only one period
 			},
 		}
 
-		result, err := service.performValuation(insufficientData, marketData, macroData)
+		result, err := service.performValuation(singlePeriodData, marketData, macroData, nil)
+
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Greater(t, result.DCFValuePerShare, 0.0)
+		// Growth rate comes from DefaultTerminalGrowthCap (0 in test config = most conservative)
+		assert.GreaterOrEqual(t, result.GrowthRate, 0.0)
+	})
+
+	t.Run("insufficient historical data with empty periods", func(t *testing.T) {
+		// Zero periods should still fail
+		emptyData := &entities.HistoricalFinancialData{
+			Ticker: "AAPL",
+			Data:   map[string]*entities.FinancialData{},
+		}
+
+		result, err := service.performValuation(emptyData, marketData, macroData, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "insufficient financial data")
+		assert.ErrorIs(t, err, ErrInsufficientData)
 	})
 
 	t.Run("incomplete market data", func(t *testing.T) {
@@ -672,7 +863,7 @@ func TestService_performValuation(t *testing.T) {
 			SharePrice: 0, // Missing price
 		}
 
-		result, err := service.performValuation(historicalData, incompleteMarketData, macroData)
+		result, err := service.performValuation(historicalData, incompleteMarketData, macroData, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -686,7 +877,7 @@ func TestService_performValuation(t *testing.T) {
 			RiskFreeRate: 0, // Missing risk-free rate
 		}
 
-		result, err := service.performValuation(historicalData, marketData, incompleteMacroData)
+		result, err := service.performValuation(historicalData, marketData, incompleteMacroData, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -722,6 +913,64 @@ func TestService_calculateTangibleValuePerShare(t *testing.T) {
 		// Expected: 350B / 15.744B shares = ~22.23
 		expected := 350000000000 / 15744231000
 		assert.InDelta(t, expected, tangibleValue, 1.0) // Use larger delta for floating point precision
+	})
+
+	t.Run("zero market shares falls back to financial shares", func(t *testing.T) {
+		// Market data has zero shares, so the function should fall back to financial shares
+		financial := &entities.FinancialData{
+			TangibleAssets:    350000000000, // $350B
+			SharesOutstanding: 1000000000,   // 1B shares from financial data
+		}
+		zeroSharesMarket := &entities.MarketData{
+			Ticker:            "AAPL",
+			AsOf:              time.Now(),
+			SharePrice:        180.50,
+			SharesOutstanding: 0, // Zero shares in market data triggers fallback
+		}
+
+		tangibleValue := service.calculateTangibleValuePerShare(financial, zeroSharesMarket)
+
+		// Expected: 350B / 1B shares = 350
+		expected := 350000000000.0 / 1000000000.0
+		assert.InDelta(t, expected, tangibleValue, 0.001)
+	})
+
+	t.Run("zero shares everywhere returns zero", func(t *testing.T) {
+		// Both market and financial data have zero shares, should return 0
+		financial := &entities.FinancialData{
+			TangibleAssets:    350000000000,
+			SharesOutstanding: 0,
+		}
+		zeroSharesMarket := &entities.MarketData{
+			Ticker:            "AAPL",
+			AsOf:              time.Now(),
+			SharePrice:        180.50,
+			SharesOutstanding: 0,
+		}
+
+		tangibleValue := service.calculateTangibleValuePerShare(financial, zeroSharesMarket)
+
+		assert.Equal(t, 0.0, tangibleValue)
+	})
+
+	t.Run("negative market shares falls back to financial shares", func(t *testing.T) {
+		// Negative shares in market data should trigger fallback to financial shares
+		financial := &entities.FinancialData{
+			TangibleAssets:    100000000000, // $100B
+			SharesOutstanding: 500000000,    // 500M shares
+		}
+		negativeSharesMarket := &entities.MarketData{
+			Ticker:            "AAPL",
+			AsOf:              time.Now(),
+			SharePrice:        180.50,
+			SharesOutstanding: -1, // Negative triggers fallback
+		}
+
+		tangibleValue := service.calculateTangibleValuePerShare(financial, negativeSharesMarket)
+
+		// Expected: 100B / 500M shares = 200
+		expected := 100000000000.0 / 500000000.0
+		assert.InDelta(t, expected, tangibleValue, 0.001)
 	})
 }
 
@@ -794,6 +1043,96 @@ func TestService_calculateDataFreshnessScore(t *testing.T) {
 		score := service.calculateDataFreshnessScore(financial, market, macro)
 
 		assert.LessOrEqual(t, score, 60) // Should be lower score for stale data
+	})
+
+	t.Run("medium age financial data deducts 15 points", func(t *testing.T) {
+		// Financial data between 30 and 90 days old hits the else-if branch (-15 penalty)
+		financial := &entities.FinancialData{
+			AsOf: time.Now().Add(-45 * 24 * time.Hour), // 45 days old (between 30 and 90 days)
+		}
+		market := &entities.MarketData{
+			AsOf: time.Now(), // Fresh market data (no penalty)
+		}
+		macro := &entities.MacroData{
+			AsOf: time.Now(), // Fresh macro data (no penalty)
+		}
+
+		score := service.calculateDataFreshnessScore(financial, market, macro)
+
+		// Expected: 100 - 15 (financial 30-90 days) = 85
+		assert.Equal(t, 85, score)
+	})
+
+	t.Run("very stale market data deducts 20 points", func(t *testing.T) {
+		// Market data older than 7 days hits the first if branch (-20 penalty)
+		financial := &entities.FinancialData{
+			AsOf: time.Now(), // Fresh financial data (no penalty)
+		}
+		market := &entities.MarketData{
+			AsOf: time.Now().Add(-10 * 24 * time.Hour), // 10 days old (> 7 days)
+		}
+		macro := &entities.MacroData{
+			AsOf: time.Now(), // Fresh macro data (no penalty)
+		}
+
+		score := service.calculateDataFreshnessScore(financial, market, macro)
+
+		// Expected: 100 - 20 (market > 7 days) = 80
+		assert.Equal(t, 80, score)
+	})
+
+	t.Run("medium age macro data deducts 10 points", func(t *testing.T) {
+		// Macro data between 7 and 30 days old hits the else-if branch (-10 penalty)
+		financial := &entities.FinancialData{
+			AsOf: time.Now(), // Fresh financial data (no penalty)
+		}
+		market := &entities.MarketData{
+			AsOf: time.Now(), // Fresh market data (no penalty)
+		}
+		macro := &entities.MacroData{
+			AsOf: time.Now().Add(-14 * 24 * time.Hour), // 14 days old (between 7 and 30 days)
+		}
+
+		score := service.calculateDataFreshnessScore(financial, market, macro)
+
+		// Expected: 100 - 10 (macro 7-30 days) = 90
+		assert.Equal(t, 90, score)
+	})
+
+	t.Run("very stale macro data deducts 20 points", func(t *testing.T) {
+		// Macro data older than 30 days hits the first if branch (-20 penalty)
+		financial := &entities.FinancialData{
+			AsOf: time.Now(), // Fresh financial data (no penalty)
+		}
+		market := &entities.MarketData{
+			AsOf: time.Now(), // Fresh market data (no penalty)
+		}
+		macro := &entities.MacroData{
+			AsOf: time.Now().Add(-60 * 24 * time.Hour), // 60 days old (> 30 days)
+		}
+
+		score := service.calculateDataFreshnessScore(financial, market, macro)
+
+		// Expected: 100 - 20 (macro > 30 days) = 80
+		assert.Equal(t, 80, score)
+	})
+
+	t.Run("all data sources maximally stale", func(t *testing.T) {
+		// All data sources hit their maximum penalty branches
+		financial := &entities.FinancialData{
+			AsOf: time.Now().Add(-365 * 24 * time.Hour), // 1 year old (> 90 days, -30)
+		}
+		market := &entities.MarketData{
+			AsOf: time.Now().Add(-30 * 24 * time.Hour), // 30 days old (> 7 days, -20)
+		}
+		macro := &entities.MacroData{
+			AsOf: time.Now().Add(-90 * 24 * time.Hour), // 90 days old (> 30 days, -20)
+		}
+
+		score := service.calculateDataFreshnessScore(financial, market, macro)
+
+		// Expected: 100 - 30 (financial) - 20 (market) - 20 (macro) = 30
+		assert.Equal(t, 30, score)
 	})
 }
 
@@ -959,7 +1298,7 @@ func TestValuationService_MetricsInstrumentation(t *testing.T) {
 	initialSuccessfulValuations := metricsService.GetSuccessfulValuations()
 
 	// Execute valuation
-	result, err := service.CalculateValuation(ctx, ticker)
+	result, err := service.CalculateValuation(ctx, ticker, nil)
 
 	// Verify calculation succeeded
 	require.NoError(t, err)
@@ -1095,4 +1434,166 @@ func TestNewValuationService_WithFakeMetrics(t *testing.T) {
 	// Verify service was created successfully
 	require.NotNil(t, svc, "Service should not be nil")
 	assert.NotNil(t, svc.metricsService, "Fake metrics service should be injected")
+}
+
+// TestService_CalculateValuation_OverrideBeta verifies that providing an override beta
+// through ValuationOptions produces a different WACC than the default data-source beta.
+// BUG-005: override_beta and override_rf were dead code — this test proves they work.
+func TestService_CalculateValuation_OverrideBeta(t *testing.T) {
+	historicalData, marketData, macroData := createTestData()
+
+	// Create service with metrics expectations for two performValuation calls
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:             1 * time.Hour,
+			SlowRequestThreshold: 500 * time.Millisecond,
+			DataFetchTimeout:     30 * time.Second,
+		},
+	}
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+
+	// Low beta (0.5) should produce a lower WACC
+	lowBeta := 0.5
+	resultLow, err := service.performValuation(historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &lowBeta})
+	require.NoError(t, err)
+
+	// High beta (2.0) should produce a higher WACC
+	highBeta := 2.0
+	resultHigh, err := service.performValuation(historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &highBeta})
+	require.NoError(t, err)
+
+	// Assert that different betas produce different WACCs
+	assert.NotEqual(t, resultLow.WACC, resultHigh.WACC,
+		"override_beta=0.5 and override_beta=2.0 must produce different WACC values")
+	assert.Less(t, resultLow.WACC, resultHigh.WACC,
+		"lower beta should produce lower WACC")
+}
+
+// TestService_CalculateValuation_OverrideRiskFree verifies that providing an override
+// risk-free rate through ValuationOptions changes the resulting WACC.
+func TestService_CalculateValuation_OverrideRiskFree(t *testing.T) {
+	historicalData, marketData, macroData := createTestData()
+
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:             1 * time.Hour,
+			SlowRequestThreshold: 500 * time.Millisecond,
+			DataFetchTimeout:     30 * time.Second,
+		},
+	}
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+
+	// Low risk-free rate (1%) should produce a lower WACC
+	lowRF := 0.01
+	resultLow, err := service.performValuation(historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &lowRF})
+	require.NoError(t, err)
+
+	// High risk-free rate (8%) should produce a higher WACC
+	highRF := 0.08
+	resultHigh, err := service.performValuation(historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &highRF})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, resultLow.WACC, resultHigh.WACC,
+		"override_rf=0.01 and override_rf=0.08 must produce different WACC values")
+	assert.Less(t, resultLow.WACC, resultHigh.WACC,
+		"lower risk-free rate should produce lower WACC")
+}
+
+// TestService_CalculateValuation_NilOptsDefaultBehavior verifies that passing nil opts
+// produces the same result as before the BUG-005 fix (no regression).
+func TestService_CalculateValuation_NilOptsDefaultBehavior(t *testing.T) {
+	historicalData, marketData, macroData := createTestData()
+
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:             1 * time.Hour,
+			SlowRequestThreshold: 500 * time.Millisecond,
+			DataFetchTimeout:     30 * time.Second,
+		},
+	}
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+
+	// Two calls with nil opts should produce identical WACCs
+	result1, err := service.performValuation(historicalData, marketData, macroData, nil)
+	require.NoError(t, err)
+
+	result2, err := service.performValuation(historicalData, marketData, macroData, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, result1.WACC, result2.WACC, "nil opts should produce deterministic WACC")
+}
+
+// TestService_CalculateValuation_TickerNotFoundSentinel verifies that a non-existent
+// ticker returns an error wrapping ErrTickerNotFound (BUG-006).
+func TestService_CalculateValuation_TickerNotFoundSentinel(t *testing.T) {
+	ctx := context.Background()
+
+	freshFinancialRepo := &MockFinancialDataRepository{}
+	freshCache := &MockCacheRepository{}
+	freshMetrics := &MockMetricsService{}
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:             1 * time.Hour,
+			SlowRequestThreshold: 500 * time.Millisecond,
+			DataFetchTimeout:     30 * time.Second,
+		},
+	}
+
+	// Service with nil DataFetcher — simulates missing data path
+	service := NewService(freshFinancialRepo, nil, nil, freshCache, nil, nil, freshMetrics, cfg, zap.NewNop())
+
+	// Cache miss, then repo returns no data
+	freshCache.On("Get", ctx, "valuation:XYZA1", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	freshFinancialRepo.On("GetHistorical", ctx, "XYZA1", 10).Return((*entities.HistoricalFinancialData)(nil), errors.New("no data"))
+
+	result, err := service.CalculateValuation(ctx, "XYZA1", nil)
+
+	assert.Nil(t, result)
+	assert.Error(t, err)
+	// The key assertion: the error wraps ErrTickerNotFound so handlers can use errors.Is()
+	assert.ErrorIs(t, err, ErrTickerNotFound, "non-existent ticker must return ErrTickerNotFound sentinel")
+}
+
+// TestService_performValuation_InsufficientDataSentinel verifies that insufficient
+// data errors wrap ErrInsufficientData (BUG-006).
+func TestService_performValuation_InsufficientDataSentinel(t *testing.T) {
+	metricsService := &MockMetricsService{}
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:             1 * time.Hour,
+			SlowRequestThreshold: 500 * time.Millisecond,
+			DataFetchTimeout:     30 * time.Second,
+		},
+	}
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+
+	_, marketData, macroData := createTestData()
+
+	// Empty historical data should produce ErrInsufficientData
+	emptyData := &entities.HistoricalFinancialData{
+		Ticker: "AAPL",
+		Data:   map[string]*entities.FinancialData{},
+	}
+
+	_, err := service.performValuation(emptyData, marketData, macroData, nil)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrInsufficientData, "empty data must return ErrInsufficientData sentinel")
 }

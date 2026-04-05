@@ -80,8 +80,11 @@ type MarketConfig struct {
 type YFinanceConfig struct {
 	Enabled        bool          `mapstructure:"enabled"`
 	BaseURL        string        `mapstructure:"base_url"`
+	CookieURL      string        `mapstructure:"cookie_url"`
+	CrumbURL       string        `mapstructure:"crumb_url"`
 	RequestTimeout time.Duration `mapstructure:"request_timeout"`
 	MaxRetries     int           `mapstructure:"max_retries"`
+	AuthTTL        time.Duration `mapstructure:"auth_ttl"`
 }
 
 // FinziveConfig holds Finzive scraper configuration
@@ -247,9 +250,12 @@ func setDefaults() {
 
 	// Market data defaults
 	viper.SetDefault("market.yfinance.enabled", true)
-	viper.SetDefault("market.yfinance.base_url", "https://query1.finance.yahoo.com")
+	viper.SetDefault("market.yfinance.base_url", "https://query2.finance.yahoo.com")
+	viper.SetDefault("market.yfinance.cookie_url", "https://fc.yahoo.com")
+	viper.SetDefault("market.yfinance.crumb_url", "https://query2.finance.yahoo.com/v1/test/getcrumb")
 	viper.SetDefault("market.yfinance.request_timeout", "30s")
 	viper.SetDefault("market.yfinance.max_retries", 3)
+	viper.SetDefault("market.yfinance.auth_ttl", "6h")
 
 	viper.SetDefault("market.finzive.enabled", true)
 	viper.SetDefault("market.finzive.base_url", "https://finzive.com")

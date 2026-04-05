@@ -1,0 +1,230 @@
+{
+  "info": {
+    "name": "Midas DCF Valuation API",
+    "description": "REST API for equity valuation using Discounted Cash Flow (DCF) analysis.\n\nComputes intrinsic value per share from SEC filings, Yahoo Finance market data, and FRED macro indicators.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "midas-dcf-api"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      {
+        "key": "key",
+        "value": "X-API-Key",
+        "type": "string"
+      },
+      {
+        "key": "value",
+        "value": "{{api_key}}",
+        "type": "string"
+      },
+      {
+        "key": "in",
+        "value": "header",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "api_key",
+      "value": "dcf_demo_3a4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334455667788",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "description": "Health check and readiness endpoints (no auth required)",
+      "item": [
+        {
+          "name": "Liveness Probe",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Basic liveness check. Returns 200 if the service is running."
+          }
+        },
+        {
+          "name": "Readiness Probe",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/ready",
+              "host": ["{{base_url}}"],
+              "path": ["ready"]
+            },
+            "description": "Readiness check. Verifies database, cache, and external API connectivity."
+          }
+        },
+        {
+          "name": "Version Info",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/version",
+              "host": ["{{base_url}}"],
+              "path": ["version"]
+            },
+            "description": "Returns application version, environment, build time, and git commit."
+          }
+        },
+        {
+          "name": "Detailed Health (Authenticated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/health/detailed",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "health", "detailed"]
+            },
+            "description": "Detailed component health check. Returns 200 (healthy), 206 (degraded), or 503 (unhealthy). Requires `read:health` permission."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Fair Value",
+      "description": "DCF valuation endpoints. Requires `read:fair_value` permission.",
+      "item": [
+        {
+          "name": "Get Fair Value (Single Ticker)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/fair-value/AAPL",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "fair-value", "AAPL"]
+            },
+            "description": "Calculate intrinsic fair value for a single stock using DCF and net tangible assets.\n\nReturns WACC, growth rate, tangible value per share, DCF value per share, and data quality metrics."
+          }
+        },
+        {
+          "name": "Get Fair Value (with Overrides)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/fair-value/MSFT?override_beta=1.1&override_rf=0.045",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "fair-value", "MSFT"],
+              "query": [
+                {
+                  "key": "override_beta",
+                  "value": "1.1",
+                  "description": "Override beta for WACC calculation (0-3)"
+                },
+                {
+                  "key": "override_rf",
+                  "value": "0.045",
+                  "description": "Override risk-free rate (0-0.2)"
+                }
+              ]
+            },
+            "description": "Calculate fair value with custom beta and risk-free rate overrides."
+          }
+        },
+        {
+          "name": "Bulk Fair Value",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tickers\": [\"AAPL\", \"MSFT\", \"GOOGL\"],\n  \"override_beta\": null,\n  \"override_rf\": null\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/fair-value/bulk",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "fair-value", "bulk"]
+            },
+            "description": "Calculate fair values for multiple stocks (max 10) in a single request.\n\nReturns individual results plus a summary with success/failure counts."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Metrics",
+      "description": "Application and business metrics endpoints.",
+      "item": [
+        {
+          "name": "Prometheus Metrics",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/metrics",
+              "host": ["{{base_url}}"],
+              "path": ["metrics"]
+            },
+            "description": "Prometheus-format metrics for monitoring systems. No authentication required."
+          }
+        },
+        {
+          "name": "Application Metrics (Authenticated)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/metrics",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "metrics"]
+            },
+            "description": "Application and business metrics in JSON format. Requires `read:metrics` permission."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "description": "API key management. Requires `manage:keys` permission.",
+      "item": [
+        {
+          "name": "Create API Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"service-account-1\",\n  \"permissions\": [\"read:fair_value\", \"read:health\"]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/keys",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "auth", "keys"]
+            },
+            "description": "Create a new API key. Returns the raw key (only visible once). Requires `manage:keys` permission.\n\nAvailable permissions: `read:fair_value`, `read:health`, `read:metrics`, `manage:keys`, `admin`."
+          }
+        }
+      ]
+    }
+  ]
+}

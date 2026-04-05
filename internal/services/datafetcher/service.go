@@ -28,13 +28,12 @@ type DataFetcher struct {
 
 // DataFetcherConfig holds configuration for the data fetcher
 type DataFetcherConfig struct {
-	EnableCaching        bool          `json:"enable_caching"`
-	CacheTTL             time.Duration `json:"cache_ttl"`
 	ConcurrentFetching   bool          `json:"concurrent_fetching"`
 	MaxRetries           int           `json:"max_retries"`
 	TimeoutDuration      time.Duration `json:"timeout_duration"`
 	ValidateCompleteness bool          `json:"validate_completeness"`
 	RequiredFields       []string      `json:"required_fields"`
+	TickerMappingTTL     time.Duration `json:"ticker_mapping_ttl"`
 }
 
 // NewDataFetcher creates a new DataFetcher instance
@@ -45,17 +44,16 @@ func NewDataFetcher(
 	cacheRepo ports.CacheRepository,
 ) *DataFetcher {
 	config := &DataFetcherConfig{
-		EnableCaching:        true,
-		CacheTTL:             24 * time.Hour,
 		ConcurrentFetching:   true,
 		MaxRetries:           3,
 		TimeoutDuration:      30 * time.Second,
-		ValidateCompleteness: false, // Disable field validation for simpler testing
+		ValidateCompleteness: false,
 		RequiredFields:       []string{"TotalAssets", "Revenue", "OperatingIncome"},
+		TickerMappingTTL:     24 * time.Hour,
 	}
 
 	validator := NewDataValidator(config)
-	coordinator := NewDataCoordinator(config, secGateway, marketGateway, macroGateway)
+	coordinator := NewDataCoordinator(config, secGateway, marketGateway, macroGateway, cacheRepo)
 
 	return &DataFetcher{
 		secGateway:    secGateway,
@@ -87,30 +85,9 @@ func (df *DataFetcher) Fetch(ctx context.Context, request *entities.FetchRequest
 		m.TotalRequests++
 	})
 
-	// Check cache first if enabled
-	if df.config.EnableCaching {
-		if cachedResult := df.checkCache(ctx, request); cachedResult != nil {
-			result := &entities.FetchResult{
-				Ticker:         request.Ticker,
-				Success:        true,
-				FinancialData:  cachedResult.FinancialData,
-				MarketData:     cachedResult.MarketData,
-				MacroData:      cachedResult.MacroData,
-				SourceMetadata: cachedResult.SourceMetadata,
-				FetchDuration:  time.Since(start),
-				CacheStatus:    entities.CacheHit,
-			}
-
-			df.updateMetrics(func(m *entities.DataFetcherMetrics) {
-				m.CacheHits++
-				m.SuccessfulFetches++
-			})
-
-			return result, nil
-		}
-	}
-
-	// Proceed with fresh data fetch
+	// Always fetch fresh data from external sources.
+	// Caching is handled at the valuation layer (1h TTL) and per-data-type layers
+	// (SEC filings 48h, market data 15m, macro data 4h) — not here.
 	result := &entities.FetchResult{
 		Ticker:         request.Ticker,
 		SourceMetadata: make(map[entities.DataSource]entities.SourceInfo),
@@ -134,6 +111,7 @@ func (df *DataFetcher) Fetch(ctx context.Context, request *entities.FetchRequest
 
 	// Populate result from coordination
 	result.FinancialData = coordResult.FinancialData
+	result.HistoricalData = coordResult.HistoricalData
 	result.MarketData = coordResult.MarketData
 	result.MacroData = coordResult.MacroData
 	result.SourceMetadata = coordResult.SourceMetadata
@@ -152,11 +130,6 @@ func (df *DataFetcher) Fetch(ctx context.Context, request *entities.FetchRequest
 		} else {
 			result.QualityReport = qualityReport
 		}
-	}
-
-	// Cache result if successful and caching is enabled
-	if result.Success && df.config.EnableCaching {
-		df.cacheResult(ctx, request, result)
 	}
 
 	// Update metrics
@@ -294,47 +267,6 @@ func (df *DataFetcher) GetHealth(ctx context.Context) map[string]interface{} {
 	}
 
 	return health
-}
-
-// checkCache attempts to retrieve cached data
-func (df *DataFetcher) checkCache(ctx context.Context, request *entities.FetchRequest) *entities.CachedDataResult {
-	cacheKey := df.generateCacheKey(request.Ticker)
-
-	var cachedData entities.CachedDataResult
-	if err := df.cacheRepo.Get(ctx, cacheKey, &cachedData); err == nil {
-		// Check if cached data is still fresh
-		if time.Since(cachedData.CachedAt) < df.config.CacheTTL {
-			return &cachedData
-		}
-	}
-
-	return nil
-}
-
-// cacheResult stores the fetch result in cache
-func (df *DataFetcher) cacheResult(ctx context.Context, request *entities.FetchRequest, result *entities.FetchResult) {
-	if !result.Success || result.FinancialData == nil {
-		return
-	}
-
-	cachedData := entities.CachedDataResult{
-		FinancialData:  result.FinancialData,
-		MarketData:     result.MarketData,
-		MacroData:      result.MacroData,
-		SourceMetadata: result.SourceMetadata,
-		CachedAt:       time.Now(),
-	}
-
-	cacheKey := df.generateCacheKey(request.Ticker)
-	if err := df.cacheRepo.Set(ctx, cacheKey, cachedData, df.config.CacheTTL); err != nil {
-		// Log error but don't fail the request
-		fmt.Printf("Failed to cache result for %s: %v\n", request.Ticker, err)
-	}
-}
-
-// generateCacheKey creates a cache key for the request
-func (df *DataFetcher) generateCacheKey(ticker string) string {
-	return fmt.Sprintf("datafetcher:comprehensive:%s", ticker)
 }
 
 // assessDataSufficiency determines if we have enough data for a successful result

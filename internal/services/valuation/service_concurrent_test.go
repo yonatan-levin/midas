@@ -148,7 +148,7 @@ func TestService_ConcurrentDataFetch(t *testing.T) {
 
 	// Measure execution time
 	start := time.Now()
-	result, err := service.CalculateValuation(ctx, "AAPL")
+	result, err := service.CalculateValuation(ctx, "AAPL", nil)
 	executionTime := time.Since(start)
 
 	// Verify results
@@ -315,7 +315,7 @@ func benchmarkServiceWithConfig(b *testing.B, enableConcurrent bool) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_, err := service.CalculateValuation(ctx, "AAPL")
+		_, err := service.CalculateValuation(ctx, "AAPL", nil)
 		if err != nil {
 			b.Fatalf("Unexpected error: %v", err)
 		}

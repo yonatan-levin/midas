@@ -153,7 +153,7 @@ func BenchmarkService_CalculateValuation_SingleTicker(b *testing.B) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		result, err := service.CalculateValuation(ctx, ticker)
+		result, err := service.CalculateValuation(ctx, ticker, nil)
 		if err != nil {
 			b.Fatalf("Unexpected error in iteration %d: %v", i, err)
 		}
@@ -301,7 +301,7 @@ func benchmarkValuationService(b *testing.B, enableConcurrent bool) {
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		result, err := service.CalculateValuation(ctx, ticker)
+		result, err := service.CalculateValuation(ctx, ticker, nil)
 		if err != nil {
 			b.Fatalf("Unexpected error: %v", err)
 		}

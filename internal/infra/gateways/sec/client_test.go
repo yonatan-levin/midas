@@ -16,6 +16,53 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 )
 
+// Test that GetTickerCIKMapping correctly parses numeric cik_str and returns uppercase tickers
+func TestGetTickerCIKMapping_ParsesNumericCIK(t *testing.T) {
+	// Prepare a fake SEC mapping JSON (object keyed by numeric strings)
+	sample := map[string]map[string]interface{}{
+		"0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
+		"1": {"cik_str": 1309251, "ticker": "MALG", "title": "MICROALLIANCE GROUP INC."},
+		"2": {"cik_str": 98677, "ticker": "TR", "title": "TOOTSIE ROLL INDUSTRIES INC"},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sample)
+	}))
+	defer srv.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          "",
+		TickerMappingURL: srv.URL,
+		UserAgent:        "midas-test/1.0",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: 100 * time.Millisecond,
+	}
+
+	logger := zap.NewNop()
+	client := NewClient(cfg, logger)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	mapping, err := client.GetTickerCIKMapping(ctx)
+	if err != nil {
+		t.Fatalf("GetTickerCIKMapping returned error: %v", err)
+	}
+
+	if got := mapping["AAPL"]; got != "320193" {
+		t.Fatalf("expected AAPL to map to 320193, got %q", got)
+	}
+	if got := mapping["MALG"]; got != "1309251" {
+		t.Fatalf("expected MALG to map to 1309251, got %q", got)
+	}
+	if got := mapping["TR"]; got != "98677" {
+		t.Fatalf("expected TR to map to 98677, got %q", got)
+	}
+}
+
 func TestNewClient(t *testing.T) {
 	cfg := &config.SECConfig{
 		BaseURL:          "https://data.sec.gov/api/xbrl",
@@ -37,25 +84,27 @@ func TestNewClient(t *testing.T) {
 }
 
 func TestClient_GetCompanyFacts_Success(t *testing.T) {
-	// Mock SEC API response
+	// Mock SEC API response with nested taxonomy -> concept structure
 	mockResponse := &ports.SECCompanyFacts{
 		CIK:        "320193",
 		EntityName: "Apple Inc.",
-		Facts: map[string]ports.SECFactGroup{
-			"us-gaap:Revenues": {
-				Label:       "Revenues",
-				Description: "Revenue from operations",
-				Units: map[string][]ports.SECFact{
-					"USD": {
-						{
-							End:   "2023-09-30",
-							Val:   383285000000,
-							Accn:  "0000320193-23-000106",
-							Fy:    2023,
-							Fp:    "FY",
-							Form:  "10-K",
-							Filed: "2023-11-03",
-							Frame: "CY2023Q3I",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"us-gaap": {
+				"Revenues": {
+					Label:       "Revenues",
+					Description: "Revenue from operations",
+					Units: map[string][]ports.SECFact{
+						"USD": {
+							{
+								End:   "2023-09-30",
+								Val:   383285000000,
+								Accn:  "0000320193-23-000106",
+								Fy:    2023,
+								Fp:    "FY",
+								Form:  "10-K",
+								Filed: "2023-11-03",
+								Frame: "CY2023Q3I",
+							},
 						},
 					},
 				},
@@ -66,7 +115,7 @@ func TestClient_GetCompanyFacts_Success(t *testing.T) {
 	// Create test server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Validate request
-		assert.Equal(t, "/companyfacts/CIK0000320193.json", r.URL.Path)
+		assert.Equal(t, "/api/xbrl/companyfacts/CIK0000320193.json", r.URL.Path)
 		assert.Equal(t, "Test User Agent", r.Header.Get("User-Agent"))
 		assert.Equal(t, "application/json", r.Header.Get("Accept"))
 
@@ -99,7 +148,8 @@ func TestClient_GetCompanyFacts_Success(t *testing.T) {
 	assert.Equal(t, "320193", facts.CIK.String())
 	assert.Equal(t, "Apple Inc.", facts.EntityName)
 	assert.Len(t, facts.Facts, 1)
-	assert.Contains(t, facts.Facts, "us-gaap:Revenues")
+	assert.Contains(t, facts.Facts, "us-gaap")
+	assert.Contains(t, facts.Facts["us-gaap"], "Revenues")
 }
 
 func TestClient_GetCompanyFacts_NotFound(t *testing.T) {
@@ -122,7 +172,7 @@ func TestClient_GetCompanyFacts_NotFound(t *testing.T) {
 	client := NewClient(cfg, logger)
 
 	ctx := context.Background()
-	facts, err := client.GetCompanyFacts(ctx, "invalid")
+	facts, err := client.GetCompanyFacts(ctx, "0000000001")
 
 	assert.Error(t, err)
 	assert.Nil(t, facts)
@@ -149,7 +199,7 @@ func TestClient_GetCompanyFacts_RateLimit(t *testing.T) {
 	client := NewClient(cfg, logger)
 
 	ctx := context.Background()
-	facts, err := client.GetCompanyFacts(ctx, "test")
+	facts, err := client.GetCompanyFacts(ctx, "0000320193")
 
 	assert.Error(t, err)
 	assert.Nil(t, facts)
@@ -161,18 +211,20 @@ func TestClient_GetCompanyFacts_WithRetry(t *testing.T) {
 	mockResponse := &ports.SECCompanyFacts{
 		CIK:        "320193",
 		EntityName: "Apple Inc.",
-		Facts: map[string]ports.SECFactGroup{
-			"us-gaap:Revenues": {
-				Label:       "Revenues",
-				Description: "Revenue from operations",
-				Units: map[string][]ports.SECFact{
-					"USD": {
-						{
-							End:   "2023-09-30",
-							Val:   383285000000,
-							Fy:    2023,
-							Fp:    "FY",
-							Filed: "2023-11-03",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"us-gaap": {
+				"Revenues": {
+					Label:       "Revenues",
+					Description: "Revenue from operations",
+					Units: map[string][]ports.SECFact{
+						"USD": {
+							{
+								End:   "2023-09-30",
+								Val:   383285000000,
+								Fy:    2023,
+								Fp:    "FY",
+								Filed: "2023-11-03",
+							},
 						},
 					},
 				},
@@ -329,12 +381,14 @@ func TestClient_RateLimiting(t *testing.T) {
 		mockResponse := &ports.SECCompanyFacts{
 			CIK:        "320193",
 			EntityName: "Apple Inc.",
-			Facts: map[string]ports.SECFactGroup{
-				"us-gaap:Revenues": {
-					Label:       "Revenues",
-					Description: "Revenue from operations",
-					Units: map[string][]ports.SECFact{
-						"USD": {{End: "2023-09-30", Val: 383285000000, Fy: 2023, Fp: "FY", Filed: "2023-11-03"}},
+			Facts: map[string]map[string]ports.SECFactGroup{
+				"us-gaap": {
+					"Revenues": {
+						Label:       "Revenues",
+						Description: "Revenue from operations",
+						Units: map[string][]ports.SECFact{
+							"USD": {{End: "2023-09-30", Val: 383285000000, Fy: 2023, Fp: "FY", Filed: "2023-11-03"}},
+						},
 					},
 				},
 			},
@@ -381,12 +435,14 @@ func TestClient_ContextCancellation(t *testing.T) {
 		mockResponse := &ports.SECCompanyFacts{
 			CIK:        "320193",
 			EntityName: "Apple Inc.",
-			Facts: map[string]ports.SECFactGroup{
-				"us-gaap:Revenues": {
-					Label:       "Revenues",
-					Description: "Revenue from operations",
-					Units: map[string][]ports.SECFact{
-						"USD": {{End: "2023-09-30", Val: 383285000000, Fy: 2023, Fp: "FY", Filed: "2023-11-03"}},
+			Facts: map[string]map[string]ports.SECFactGroup{
+				"us-gaap": {
+					"Revenues": {
+						Label:       "Revenues",
+						Description: "Revenue from operations",
+						Units: map[string][]ports.SECFact{
+							"USD": {{End: "2023-09-30", Val: 383285000000, Fy: 2023, Fp: "FY", Filed: "2023-11-03"}},
+						},
 					},
 				},
 			},

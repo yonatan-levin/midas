@@ -37,6 +37,7 @@ type FetchResult struct {
 	Ticker         string                    `json:"ticker"`
 	Success        bool                      `json:"success"`
 	FinancialData  *FinancialData            `json:"financial_data"`
+	HistoricalData *HistoricalFinancialData  `json:"historical_data,omitempty"` // Multi-period SEC data from full parser
 	MarketData     *MarketData               `json:"market_data"`
 	MacroData      *MacroData                `json:"macro_data"`
 	QualityReport  *DataQualityReport        `json:"quality_report"`
@@ -65,15 +66,6 @@ type FetchError struct {
 	Code    string     `json:"code,omitempty"`
 }
 
-// CachedDataResult represents cached fetch result data
-type CachedDataResult struct {
-	FinancialData  *FinancialData            `json:"financial_data"`
-	MarketData     *MarketData               `json:"market_data"`
-	MacroData      *MacroData                `json:"macro_data"`
-	SourceMetadata map[DataSource]SourceInfo `json:"source_metadata"`
-	CachedAt       time.Time                 `json:"cached_at"`
-}
-
 // DataFetcherMetrics holds operational metrics
 type DataFetcherMetrics struct {
 	TotalRequests   int64                        `json:"total_requests"`
@@ -94,6 +86,7 @@ type DataFetcherMetrics struct {
 // CoordinationResult represents the result of coordinated data fetching
 type CoordinationResult struct {
 	FinancialData  *FinancialData            `json:"financial_data"`
+	HistoricalData *HistoricalFinancialData  `json:"historical_data,omitempty"`
 	MarketData     *MarketData               `json:"market_data"`
 	MacroData      *MacroData                `json:"macro_data"`
 	SourceMetadata map[DataSource]SourceInfo `json:"source_metadata"`

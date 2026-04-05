@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -18,10 +21,11 @@ import (
 
 // Client implements the SEC gateway interface
 type Client struct {
-	httpClient  *http.Client
-	config      *config.SECConfig
-	logger      *zap.Logger
-	rateLimiter *rate.Limiter
+	httpClient     *http.Client
+	config         *config.SECConfig
+	logger         *zap.Logger
+	rateLimiter    *rate.Limiter
+	normalizedBase *url.URL
 }
 
 // NewClient creates a new SEC API client
@@ -39,12 +43,60 @@ func NewClient(cfg *config.SECConfig, logger *zap.Logger) *Client {
 		},
 	}
 
-	return &Client{
-		httpClient:  httpClient,
-		config:      cfg,
-		logger:      logger.Named("sec-client"),
-		rateLimiter: limiter,
+	// Normalize base URL once
+	base, _ := url.Parse(cfg.BaseURL)
+	if base == nil {
+		base = &url.URL{Scheme: "https", Host: "data.sec.gov"}
 	}
+
+	return &Client{
+		httpClient:     httpClient,
+		config:         cfg,
+		logger:         logger.Named("sec-client"),
+		rateLimiter:    limiter,
+		normalizedBase: base,
+	}
+}
+
+// secXBRLURL builds a fully-qualified URL ensuring /api/xbrl prefix.
+func (c *Client) secXBRLURL(segments ...string) (string, error) {
+	base := *c.normalizedBase // shallow copy
+	path := base.Path
+	trim := func(p string) string {
+		if p == "" || p == "/" {
+			return ""
+		}
+		return strings.TrimSuffix(p, "/")
+	}
+	path = trim(path)
+	if !strings.HasSuffix(path, "/api/xbrl") {
+		if path == "" {
+			path = "/api/xbrl"
+		} else if strings.HasSuffix(path, "/api") {
+			path = path + "/xbrl"
+		} else if strings.Contains(path, "/api/xbrl") {
+			// leave as-is
+		} else {
+			path = path + "/api/xbrl"
+		}
+	}
+	joined, err := url.JoinPath(base.Scheme+"://"+base.Host+path, segments...)
+	if err != nil {
+		return "", err
+	}
+	return joined, nil
+}
+
+// formatCIK converts input to zero-padded 10-digit with CIK prefix.
+func formatCIK(cik string) (string, error) {
+	if cik == "" {
+		return "", fmt.Errorf("CIK cannot be empty")
+	}
+	n, err := strconv.Atoi(cik)
+	if err != nil {
+		return "", fmt.Errorf("invalid CIK: %s", cik)
+	}
+	return fmt.Sprintf("CIK%010d", n), nil
 }
 
 // GetCompanyFacts retrieves company facts from SEC API
@@ -55,19 +107,26 @@ func (c *Client) GetCompanyFacts(ctx context.Context, cik string) (*ports.SECCom
 	}
 
 	// Format CIK with leading zeros (SEC requires 10 digits)
-	formattedCIK := fmt.Sprintf("CIK%010s", cik)
-	url := fmt.Sprintf("%s/companyfacts/%s.json", c.config.BaseURL, formattedCIK)
+	formattedCIK, errFmt := formatCIK(cik)
+	if errFmt != nil {
+		return nil, errFmt
+	}
+
+	urlStr, errURL := c.secXBRLURL("companyfacts", formattedCIK+".json")
+	if errURL != nil {
+		return nil, errURL
+	}
 
 	c.logger.Debug("Fetching company facts",
 		zap.String("cik", cik),
-		zap.String("url", url))
+		zap.String("url", urlStr))
 
 	var facts *ports.SECCompanyFacts
 	var err error
 
 	// Implement retry logic
 	for attempt := 0; attempt < c.config.MaxRetries; attempt++ {
-		facts, err = c.makeRequest(ctx, url)
+		facts, err = c.makeRequest(ctx, urlStr)
 		if err == nil {
 			break
 		}
@@ -97,10 +156,16 @@ func (c *Client) GetCompanyFacts(ctx context.Context, cik string) (*ports.SECCom
 		return nil, fmt.Errorf("failed to fetch company facts for CIK %s: %w", cik, err)
 	}
 
+	// Count total concepts across all taxonomies for accurate logging
+	totalConcepts := 0
+	for _, concepts := range facts.Facts {
+		totalConcepts += len(concepts)
+	}
 	c.logger.Info("Successfully fetched company facts",
 		zap.String("cik", cik),
 		zap.String("entity_name", facts.EntityName),
-		zap.Int("fact_count", len(facts.Facts)))
+		zap.Int("taxonomy_count", len(facts.Facts)),
+		zap.Int("concept_count", totalConcepts))
 
 	return facts, nil
 }
@@ -113,20 +178,26 @@ func (c *Client) GetCompanyConcepts(ctx context.Context, cik string, tag string)
 	}
 
 	// Format CIK with leading zeros (SEC requires 10 digits)
-	formattedCIK := fmt.Sprintf("CIK%010s", cik)
-	url := fmt.Sprintf("%s/companyconcept/%s/us-gaap/%s.json", c.config.BaseURL, formattedCIK, tag)
+	formattedCIK, errFmt := formatCIK(cik)
+	if errFmt != nil {
+		return nil, errFmt
+	}
+	urlStr, errURL := c.secXBRLURL("companyconcept", formattedCIK, "us-gaap", tag+".json")
+	if errURL != nil {
+		return nil, errURL
+	}
 
 	c.logger.Debug("Fetching company concepts",
 		zap.String("cik", cik),
 		zap.String("tag", tag),
-		zap.String("url", url))
+		zap.String("url", urlStr))
 
 	var conceptResponse *entities.ConceptResponse
 	var err error
 
 	// Implement retry logic
 	for attempt := 0; attempt < c.config.MaxRetries; attempt++ {
-		conceptResponse, err = c.makeConceptRequest(ctx, url)
+		conceptResponse, err = c.makeConceptRequest(ctx, urlStr)
 		if err == nil {
 			break
 		}
@@ -358,22 +429,41 @@ func (c *Client) makeTickerMappingRequest(ctx context.Context, url string) (map[
 		return nil, fmt.Errorf("SEC API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse the ticker mapping JSON
-	var rawMapping map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&rawMapping); err != nil {
+	// Parse the ticker mapping JSON (top-level object keyed by numeric strings).
+	// UseNumber avoids float rounding for large integers.
+	decoder := json.NewDecoder(resp.Body)
+	decoder.UseNumber()
+	var rawMapping map[string]map[string]interface{}
+	if err := decoder.Decode(&rawMapping); err != nil {
 		return nil, fmt.Errorf("failed to decode ticker mapping: %w", err)
 	}
 
-	// Convert to ticker -> CIK mapping
+	// Convert to ticker -> CIK mapping (uppercase tickers, CIK as string without padding)
 	mapping := make(map[string]string)
 	for _, entry := range rawMapping {
-		if entryMap, ok := entry.(map[string]interface{}); ok {
-			if ticker, ok := entryMap["ticker"].(string); ok {
-				if cikFloat, ok := entryMap["cik_str"].(string); ok {
-					mapping[ticker] = cikFloat
-				}
-			}
+		// ticker
+		var ticker string
+		if v, ok := entry["ticker"].(string); ok {
+			ticker = v
 		}
+		if ticker == "" {
+			continue
+		}
+
+		// cik_str can be json.Number, string, or number
+		var cik string
+		if num, ok := entry["cik_str"].(json.Number); ok {
+			cik = num.String()
+		} else if s, ok := entry["cik_str"].(string); ok {
+			cik = s
+		} else if f, ok := entry["cik_str"].(float64); ok {
+			cik = strconv.FormatInt(int64(f), 10)
+		}
+		if cik == "" {
+			continue
+		}
+
+		mapping[strings.ToUpper(ticker)] = cik
 	}
 
 	return mapping, nil

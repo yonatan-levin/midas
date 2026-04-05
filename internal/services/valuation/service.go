@@ -13,6 +13,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	"github.com/midas/dcf-valuation-api/pkg/finance/dcf"
+	"github.com/midas/dcf-valuation-api/pkg/finance/growth"
 	"github.com/midas/dcf-valuation-api/pkg/finance/wacc"
 )
 
@@ -54,110 +55,87 @@ func NewService(
 	}
 }
 
-// CalculateValuation performs a complete DCF valuation for a ticker
-func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*entities.ValuationResult, error) {
+// CalculateValuation performs a complete DCF valuation for a ticker.
+// opts may be nil; when provided, overrides (e.g., beta, risk-free rate)
+// replace the corresponding values fetched from data sources.
+func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *ValuationOptions) (*entities.ValuationResult, error) {
 	start := time.Now()
 	s.logger.Info("Starting valuation calculation", zap.String("ticker", ticker))
 
-	// Check cache first
+	// Skip cache for requests with overrides — they represent ad-hoc user queries
+	// that should not pollute (or be served from) the default-parameter cache.
+	hasOverrides := opts != nil && (opts.OverrideBeta != nil || opts.OverrideRiskFree != nil)
 	cacheKey := fmt.Sprintf("valuation:%s", ticker)
-	var cachedResult entities.ValuationResult
-	if err := s.cache.Get(ctx, cacheKey, &cachedResult); err == nil {
-		s.logger.Info("Returning cached valuation", zap.String("ticker", ticker))
-		s.metricsService.RecordValuationRequest(ticker, "single", "cache_hit", time.Since(start))
-		return &cachedResult, nil
+
+	if !hasOverrides {
+		var cachedResult entities.ValuationResult
+		if err := s.cache.Get(ctx, cacheKey, &cachedResult); err == nil {
+			s.logger.Info("Returning cached valuation", zap.String("ticker", ticker))
+			s.metricsService.RecordValuationRequest(ticker, "single", "cache_hit", time.Since(start))
+			return &cachedResult, nil
+		}
 	}
 
-	// Try to fetch financial data first
-	historicalData, err := s.financialRepo.GetHistorical(ctx, ticker, 10) // Get up to 10 periods
+	// Try to load data from repositories first (for previously fetched/seeded tickers)
+	historicalData, err := s.financialRepo.GetHistorical(ctx, ticker, 10)
+
+	var marketData *entities.MarketData
+	var macroData *entities.MacroData
+
 	if err != nil || len(historicalData.Data) == 0 {
+		// No data in repository — use DataFetcher to retrieve from external APIs
 		s.logger.Info("No historical data in repository, fetching via DataFetcher", zap.String("ticker", ticker))
 
-		// Check if DataFetcher is configured before attempting to use it
 		if s.dataFetcher == nil {
-			return nil, fmt.Errorf("no historical data found for ticker %s and data fetcher not configured", ticker)
+			return nil, fmt.Errorf("%w: no historical data and data fetcher not configured for %s", ErrTickerNotFound, ticker)
 		}
 
-		// Use DataFetcher to fetch and store data
-		fetchRequest := &entities.FetchRequest{
-			Ticker: ticker,
-		}
-
-		_, fetchErr := s.dataFetcher.Fetch(ctx, fetchRequest)
+		fetchResult, fetchErr := s.dataFetcher.Fetch(ctx, &entities.FetchRequest{Ticker: ticker})
 		if fetchErr != nil {
 			return nil, fmt.Errorf("failed to fetch data via DataFetcher: %w", fetchErr)
 		}
 
-		// DataFetcher should have populated the database, try repository again
-		historicalData, err = s.financialRepo.GetHistorical(ctx, ticker, 10)
-		if err != nil || len(historicalData.Data) == 0 {
-			return nil, fmt.Errorf("failed to fetch financial data: no historical data found for ticker %s", ticker)
+		// Use multi-period historical data if available (from full SEC parser)
+		if fetchResult.HistoricalData != nil && len(fetchResult.HistoricalData.Data) > 0 {
+			historicalData = fetchResult.HistoricalData
+		} else if fetchResult.FinancialData != nil {
+			// Fallback: wrap single FinancialData into HistoricalFinancialData
+			periodKey := fetchResult.FinancialData.FilingPeriod
+			if periodKey == "" || (len(periodKey) < 2 || periodKey[len(periodKey)-2:] != "FY") {
+				periodKey = fmt.Sprintf("%dFY", time.Now().Year())
+				fetchResult.FinancialData.FilingPeriod = periodKey
+			}
+			historicalData = &entities.HistoricalFinancialData{
+				Ticker: ticker,
+				Data:   map[string]*entities.FinancialData{periodKey: fetchResult.FinancialData},
+			}
+		} else {
+			return nil, fmt.Errorf("%w: DataFetcher returned no financial data for %s", ErrTickerNotFound, ticker)
 		}
+
+		// Use market and macro data from FetchResult if available
+		marketData = fetchResult.MarketData
+		macroData = fetchResult.MacroData
 
 		s.logger.Info("Successfully fetched data via DataFetcher",
 			zap.String("ticker", ticker),
-			zap.Int("periods", len(historicalData.Data)))
+			zap.Int("periods", len(historicalData.Data)),
+			zap.Bool("has_market_data", marketData != nil),
+			zap.Bool("has_macro_data", macroData != nil))
 	}
 
-	// OPTIMIZATION: Conditionally fetch market and macro data concurrently
-	var marketData *entities.MarketData
-	var macroData *entities.MacroData
-
-	if s.config.Valuation.EnableConcurrentDataFetch {
-		// Concurrent approach for better performance
-		type fetchResult struct {
-			marketData *entities.MarketData
-			macroData  *entities.MacroData
-			marketErr  error
-			macroErr   error
-		}
-
-		resultChan := make(chan fetchResult, 1)
-
-		go func() {
-			var result fetchResult
-
-			// Use separate goroutines for truly parallel execution
-			marketChan := make(chan struct{})
-			macroChan := make(chan struct{})
-
-			go func() {
-				defer close(marketChan)
-				result.marketData, result.marketErr = s.marketRepo.GetLatest(ctx, ticker)
-			}()
-
-			go func() {
-				defer close(macroChan)
-				result.macroData, result.macroErr = s.macroRepo.GetLatest(ctx)
-			}()
-
-			// Wait for both to complete
-			<-marketChan
-			<-macroChan
-
-			resultChan <- result
-		}()
-
-		result := <-resultChan
-		marketData = result.marketData
-		macroData = result.macroData
-
-		if result.marketErr != nil {
-			return nil, fmt.Errorf("failed to fetch market data: %w", result.marketErr)
-		}
-		if result.macroErr != nil {
-			return nil, fmt.Errorf("failed to fetch macro data: %w", result.macroErr)
-		}
-	} else {
-		// Sequential approach (default) for test compatibility
-		var err error
+	// Fill in market and macro data from repositories if not already set by DataFetcher
+	if marketData == nil {
 		marketData, err = s.marketRepo.GetLatest(ctx, ticker)
 		if err != nil {
+			s.logger.Warn("Failed to fetch market data from repository", zap.Error(err), zap.String("ticker", ticker))
 			return nil, fmt.Errorf("failed to fetch market data: %w", err)
 		}
-
+	}
+	if macroData == nil {
 		macroData, err = s.macroRepo.GetLatest(ctx)
 		if err != nil {
+			s.logger.Warn("Failed to fetch macro data from repository", zap.Error(err), zap.String("ticker", ticker))
 			return nil, fmt.Errorf("failed to fetch macro data: %w", err)
 		}
 	}
@@ -185,8 +163,8 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*entit
 		s.logger.Info("DataCleaner service not available, using original data", zap.String("ticker", ticker))
 	}
 
-	// Calculate valuation using potentially cleaned data
-	result, err := s.performValuation(historicalData, marketData, macroData)
+	// Calculate valuation using potentially cleaned data, applying any user overrides
+	result, err := s.performValuation(historicalData, marketData, macroData, opts)
 	if err != nil {
 		s.metricsService.RecordValuationRequest(ticker, "single", "error", time.Since(start))
 		s.metricsService.RecordValuationError(ticker, "calculation_failed")
@@ -202,9 +180,11 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*entit
 		// Note: CleaningReport would need the full report structure to be implemented
 	}
 
-	// Cache the result for configurable TTL
-	if err := s.cache.Set(ctx, cacheKey, result, s.config.Valuation.CacheTTL); err != nil {
-		s.logger.Warn("Failed to cache valuation result", zap.Error(err))
+	// Only cache default (no-override) results to avoid cache poisoning
+	if !hasOverrides {
+		if err := s.cache.Set(ctx, cacheKey, result, s.config.Valuation.CacheTTL); err != nil {
+			s.logger.Warn("Failed to cache valuation result", zap.Error(err))
+		}
 	}
 
 	// Record successful valuation metrics
@@ -214,46 +194,67 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string) (*entit
 	return result, nil
 }
 
-// performValuation executes the valuation calculation logic
+// performValuation executes the valuation calculation logic.
+// opts may be nil; when provided, its fields override data-source values in the WACC calculation.
 func (s *Service) performValuation(
 	historicalData *entities.HistoricalFinancialData,
 	marketData *entities.MarketData,
 	macroData *entities.MacroData,
+	opts *ValuationOptions,
 ) (*entities.ValuationResult, error) {
 
-	// Validate minimum data requirements
-	if !historicalData.HasMinimumData(3) {
-		return nil, fmt.Errorf("insufficient financial data: need at least 3 years")
+	// Validate minimum data requirements — need at least 1 annual period with revenue or OI
+	if !historicalData.HasMinimumData(1) {
+		return nil, fmt.Errorf("%w: need at least 1 year of financial data", ErrInsufficientData)
 	}
 
 	if !marketData.IsComplete() {
-		return nil, fmt.Errorf("incomplete market data")
+		return nil, fmt.Errorf("%w: incomplete market data", ErrInsufficientData)
 	}
 
 	if !macroData.IsComplete() {
-		return nil, fmt.Errorf("incomplete macro data")
+		return nil, fmt.Errorf("%w: incomplete macro data", ErrInsufficientData)
 	}
 
-	// Calculate growth rate from historical data
+	// Calculate growth rate from historical data.
+	// With < 2 years of data, growth rate calculation will fail — use a conservative default.
 	growthResult, err := historicalData.CalculateAverageGrowthRate(5)
 	if err != nil {
-		return nil, fmt.Errorf("failed to calculate growth rate: %w", err)
+		// Not enough history for growth calculation — use a conservative default rate
+		growthResult = &growth.CalculationResult{
+			GrowthRate:  s.config.Valuation.DefaultTerminalGrowthCap, // Use terminal growth cap as conservative estimate
+			Method:      "default",
+			DataQuality: "low",
+			IsReliable:  false,
+		}
 	}
 
 	// Get the latest financial data for asset calculations
 	latestFinancialData, latestPeriod := historicalData.GetLatestPeriod()
 	if latestFinancialData == nil {
-		return nil, fmt.Errorf("no latest financial data available")
+		return nil, fmt.Errorf("%w: no latest financial data available", ErrInsufficientData)
 	}
 
 	// Calculate tangible value per share
 	tangibleValuePerShare := s.calculateTangibleValuePerShare(latestFinancialData, marketData)
 
+	// Determine beta and risk-free rate, applying user overrides when provided
+	beta := marketData.GetEffectiveBeta()
+	riskFreeRate := macroData.GetEffectiveRiskFreeRate()
+	if opts != nil {
+		if opts.OverrideBeta != nil {
+			beta = *opts.OverrideBeta
+		}
+		if opts.OverrideRiskFree != nil {
+			riskFreeRate = *opts.OverrideRiskFree
+		}
+	}
+
 	// Calculate WACC
 	waccInputs := wacc.Inputs{
-		RiskFreeRate:        macroData.GetEffectiveRiskFreeRate(),
+		RiskFreeRate:        riskFreeRate,
 		MarketRiskPremium:   macroData.MarketRiskPremium,
-		Beta:                marketData.GetEffectiveBeta(),
+		Beta:                beta,
 		MarketValueOfEquity: marketData.CalculateMarketValue(),
 		MarketValueOfDebt:   latestFinancialData.InterestBearingDebt,
 		InterestExpense:     latestFinancialData.InterestExpense,
@@ -298,7 +299,7 @@ func (s *Service) performValuation(
 	}
 
 	if sharesOutstanding <= 0 {
-		return nil, fmt.Errorf("shares outstanding not available")
+		return nil, fmt.Errorf("%w: shares outstanding not available", ErrInsufficientData)
 	}
 
 	dcfValuePerShare := dcfResult.EnterpriseValue / sharesOutstanding

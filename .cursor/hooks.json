@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "hooks": {
+    "beforeReadFile": [
+      {
+        "command": "node .cursor\\hooks\\before-read.js"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "node .cursor\\hooks\\after-edit.js"
+      }
+    ],
+    "stop": [
+      {
+        "command": "node .cursor\\hooks\\on-stop.js"
+      }
+    ]
+  }
+}

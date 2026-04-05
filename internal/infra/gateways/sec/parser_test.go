@@ -25,61 +25,63 @@ func TestParser_ParseFinancialData_Success(t *testing.T) {
 	logger := zap.NewNop()
 	parser := NewParser(logger)
 
-	// Create mock SEC company facts
+	// Create mock SEC company facts with nested taxonomy -> concept structure
 	facts := &ports.SECCompanyFacts{
 		CIK:        "0000320193",
 		EntityName: "Apple Inc.",
-		Facts: map[string]ports.SECFactGroup{
-			"us-gaap:Revenues": {
-				Label:       "Revenues",
-				Description: "Revenue from operations",
-				Units: map[string][]ports.SECFact{
-					"USD": {
-						{
-							End:   "2023-09-30",
-							Val:   383285000000,
-							Accn:  "0000320193-23-000106",
-							Fy:    2023,
-							Fp:    "FY",
-							Form:  "10-K",
-							Filed: "2023-11-03",
-							Frame: "CY2023Q3I",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"us-gaap": {
+				"Revenues": {
+					Label:       "Revenues",
+					Description: "Revenue from operations",
+					Units: map[string][]ports.SECFact{
+						"USD": {
+							{
+								End:   "2023-09-30",
+								Val:   383285000000,
+								Accn:  "0000320193-23-000106",
+								Fy:    2023,
+								Fp:    "FY",
+								Form:  "10-K",
+								Filed: "2023-11-03",
+								Frame: "CY2023Q3I",
+							},
 						},
 					},
 				},
-			},
-			"us-gaap:OperatingIncomeLoss": {
-				Label:       "Operating Income Loss",
-				Description: "Operating income or loss",
-				Units: map[string][]ports.SECFact{
-					"USD": {
-						{
-							End:   "2023-09-30",
-							Val:   114301000000,
-							Accn:  "0000320193-23-000106",
-							Fy:    2023,
-							Fp:    "FY",
-							Form:  "10-K",
-							Filed: "2023-11-03",
-							Frame: "CY2023Q3I",
+				"OperatingIncomeLoss": {
+					Label:       "Operating Income Loss",
+					Description: "Operating income or loss",
+					Units: map[string][]ports.SECFact{
+						"USD": {
+							{
+								End:   "2023-09-30",
+								Val:   114301000000,
+								Accn:  "0000320193-23-000106",
+								Fy:    2023,
+								Fp:    "FY",
+								Form:  "10-K",
+								Filed: "2023-11-03",
+								Frame: "CY2023Q3I",
+							},
 						},
 					},
 				},
-			},
-			"us-gaap:Assets": {
-				Label:       "Assets",
-				Description: "Total assets",
-				Units: map[string][]ports.SECFact{
-					"USD": {
-						{
-							End:   "2023-09-30",
-							Val:   352755000000,
-							Accn:  "0000320193-23-000106",
-							Fy:    2023,
-							Fp:    "FY",
-							Form:  "10-K",
-							Filed: "2023-11-03",
-							Frame: "CY2023Q3I",
+				"Assets": {
+					Label:       "Assets",
+					Description: "Total assets",
+					Units: map[string][]ports.SECFact{
+						"USD": {
+							{
+								End:   "2023-09-30",
+								Val:   352755000000,
+								Accn:  "0000320193-23-000106",
+								Fy:    2023,
+								Fp:    "FY",
+								Form:  "10-K",
+								Filed: "2023-11-03",
+								Frame: "CY2023Q3I",
+							},
 						},
 					},
 				},
@@ -122,25 +124,27 @@ func TestParser_ParseFinancialData_NoValidData(t *testing.T) {
 	logger := zap.NewNop()
 	parser := NewParser(logger)
 
-	// Create facts with no valid financial data
+	// Create facts with no valid financial data (no recognized taxonomy/concept)
 	facts := &ports.SECCompanyFacts{
 		CIK:        "0000320193",
 		EntityName: "Apple Inc.",
-		Facts: map[string]ports.SECFactGroup{
-			"invalid-concept": {
-				Label:       "Invalid",
-				Description: "Invalid concept",
-				Units: map[string][]ports.SECFact{
-					"USD": {
-						{
-							End:   "2023-09-30",
-							Val:   100,
-							Accn:  "0000320193-23-000106",
-							Fy:    2023,
-							Fp:    "FY",
-							Form:  "10-K",
-							Filed: "2023-11-03",
-							Frame: "CY2023Q3I",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"other": {
+				"invalid-concept": {
+					Label:       "Invalid",
+					Description: "Invalid concept",
+					Units: map[string][]ports.SECFact{
+						"USD": {
+							{
+								End:   "2023-09-30",
+								Val:   100,
+								Accn:  "0000320193-23-000106",
+								Fy:    2023,
+								Fp:    "FY",
+								Form:  "10-K",
+								Filed: "2023-11-03",
+								Frame: "CY2023Q3I",
+							},
 						},
 					},
 				},
@@ -283,29 +287,31 @@ func TestParser_ExtractFiscalPeriods(t *testing.T) {
 	logger := zap.NewNop()
 	parser := NewParser(logger)
 
-	// Create facts with multiple periods
+	// Create facts with multiple periods using nested taxonomy -> concept structure
 	facts := &ports.SECCompanyFacts{
 		CIK:        "0000320193",
 		EntityName: "Apple Inc.",
-		Facts: map[string]ports.SECFactGroup{
-			"us-gaap:Revenues": {
-				Label:       "Revenues",
-				Description: "Revenue from operations",
-				Units: map[string][]ports.SECFact{
-					"USD": {
-						{
-							End:   "2023-09-30",
-							Val:   383285000000,
-							Fy:    2023,
-							Fp:    "FY",
-							Filed: "2023-11-03",
-						},
-						{
-							End:   "2023-06-30",
-							Val:   81797000000,
-							Fy:    2023,
-							Fp:    "Q3",
-							Filed: "2023-08-03",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"us-gaap": {
+				"Revenues": {
+					Label:       "Revenues",
+					Description: "Revenue from operations",
+					Units: map[string][]ports.SECFact{
+						"USD": {
+							{
+								End:   "2023-09-30",
+								Val:   383285000000,
+								Fy:    2023,
+								Fp:    "FY",
+								Filed: "2023-11-03",
+							},
+							{
+								End:   "2023-06-30",
+								Val:   81797000000,
+								Fy:    2023,
+								Fp:    "Q3",
+								Filed: "2023-08-03",
+							},
 						},
 					},
 				},

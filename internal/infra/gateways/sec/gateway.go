@@ -37,25 +37,55 @@ func (g *Gateway) GetCompanyFacts(ctx context.Context, cik string) (*entities.Co
 		return nil, err
 	}
 
+	// Count total concepts across all taxonomies
+	totalConcepts := 0
+	for _, concepts := range facts.Facts {
+		totalConcepts += len(concepts)
+	}
+
 	// Convert ports.SECCompanyFacts to entities.CompanyFactsResponse
 	return &entities.CompanyFactsResponse{
 		CIK:         facts.CIK.String(),
 		EntityName:  facts.EntityName,
 		Facts:       convertFactsToMap(facts.Facts),
-		FactsCount:  len(facts.Facts),
+		FactsCount:  totalConcepts,
 		LastUpdated: facts.FilingDate,
 	}, nil
 }
 
-// convertFactsToMap converts SEC facts to generic interface map
-func convertFactsToMap(facts map[string]ports.SECFactGroup) map[string]interface{} {
+// convertFactsToMap converts nested SEC facts to a generic interface map that
+// is fully traversable via type assertions (all slices are []interface{}, not []SECFact).
+func convertFactsToMap(facts map[string]map[string]ports.SECFactGroup) map[string]interface{} {
 	result := make(map[string]interface{})
-	for key, group := range facts {
-		result[key] = map[string]interface{}{
-			"label":       group.Label,
-			"description": group.Description,
-			"units":       group.Units,
+	for taxonomy, concepts := range facts {
+		taxonomyMap := make(map[string]interface{})
+		for conceptName, group := range concepts {
+			// Convert units to interface-based types so downstream type assertions work.
+			// Go does not allow []SECFact → []interface{} covariant conversion.
+			unitsMap := make(map[string]interface{})
+			for unitType, secFacts := range group.Units {
+				factSlice := make([]interface{}, len(secFacts))
+				for i, f := range secFacts {
+					factSlice[i] = map[string]interface{}{
+						"val":   f.Val,
+						"end":   f.End,
+						"fy":    float64(f.Fy),
+						"fp":    f.Fp,
+						"filed": f.Filed,
+						"accn":  f.Accn,
+						"form":  f.Form,
+						"frame": f.Frame,
+					}
+				}
+				unitsMap[unitType] = factSlice
+			}
+			taxonomyMap[conceptName] = map[string]interface{}{
+				"label":       group.Label,
+				"description": group.Description,
+				"units":       unitsMap,
+			}
 		}
+		result[taxonomy] = taxonomyMap
 	}
 	return result
 }

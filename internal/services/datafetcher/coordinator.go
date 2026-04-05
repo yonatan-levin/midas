@@ -16,6 +16,7 @@ type DataCoordinator struct {
 	secGateway    ports.SECGateway
 	marketGateway ports.MarketDataGateway
 	macroGateway  ports.MacroDataGateway
+	cacheRepo     ports.CacheRepository
 }
 
 // NewDataCoordinator creates a new DataCoordinator instance
@@ -24,12 +25,14 @@ func NewDataCoordinator(
 	secGateway ports.SECGateway,
 	marketGateway ports.MarketDataGateway,
 	macroGateway ports.MacroDataGateway,
+	cacheRepo ports.CacheRepository,
 ) *DataCoordinator {
 	return &DataCoordinator{
 		config:        config,
 		secGateway:    secGateway,
 		marketGateway: marketGateway,
 		macroGateway:  macroGateway,
+		cacheRepo:     cacheRepo,
 	}
 }
 
@@ -112,12 +115,13 @@ func (dc *DataCoordinator) coordinateSequential(ctx context.Context, request *en
 
 // sourceResult holds the result from fetching a single source
 type sourceResult struct {
-	source        entities.DataSource
-	financialData *entities.FinancialData
-	marketData    *entities.MarketData
-	macroData     *entities.MacroData
-	metadata      entities.SourceInfo
-	err           error
+	source         entities.DataSource
+	financialData  *entities.FinancialData
+	historicalData *entities.HistoricalFinancialData
+	marketData     *entities.MarketData
+	macroData      *entities.MacroData
+	metadata       entities.SourceInfo
+	err            error
 }
 
 // fetchFromSource fetches data from a specific source
@@ -134,7 +138,12 @@ func (dc *DataCoordinator) fetchFromSource(ctx context.Context, request *entitie
 
 	switch source {
 	case entities.SECSource:
-		result.financialData, result.err = dc.fetchSECData(ctx, request.Ticker, request.CIK)
+		result.historicalData, result.err = dc.fetchSECData(ctx, request.Ticker, request.CIK)
+		if result.historicalData != nil {
+			// Also set single-period financialData for backward compatibility
+			latest, _ := result.historicalData.GetLatestPeriod()
+			result.financialData = latest
+		}
 	case entities.MarketSource:
 		result.marketData, result.err = dc.fetchMarketData(ctx, request.Ticker)
 	case entities.MacroSource:
@@ -169,6 +178,9 @@ func (dc *DataCoordinator) mergeSourceResult(result *entities.CoordinationResult
 	if srcResult.financialData != nil {
 		result.FinancialData = srcResult.financialData
 	}
+	if srcResult.historicalData != nil {
+		result.HistoricalData = srcResult.historicalData
+	}
 	if srcResult.marketData != nil {
 		result.MarketData = srcResult.marketData
 	}
@@ -186,87 +198,55 @@ func (dc *DataCoordinator) mergeSourceResult(result *entities.CoordinationResult
 	}
 }
 
-// fetchSECData fetches financial data from SEC source
-func (dc *DataCoordinator) fetchSECData(ctx context.Context, ticker, cik string) (*entities.FinancialData, error) {
-	// Use CIK if provided, otherwise lookup CIK from ticker
+// fetchSECData fetches and parses multi-period financial data from SEC using the full parser.
+// Returns HistoricalFinancialData with all available FY periods and normalized fields.
+func (dc *DataCoordinator) fetchSECData(ctx context.Context, ticker, cik string) (*entities.HistoricalFinancialData, error) {
+	// Resolve ticker → CIK if not provided
 	identifier := cik
 	if identifier == "" {
-		// Need to convert ticker to CIK first
-		tickerMapping, err := dc.secGateway.GetTickerCIKMapping(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get ticker-CIK mapping: %w", err)
+		// Try cache first
+		cacheKey := "sec:ticker_cik_mapping"
+		if dc.cacheRepo != nil {
+			var cached map[string]string
+			if err := dc.cacheRepo.Get(ctx, cacheKey, &cached); err == nil {
+				if cikCached, ok := cached[ticker]; ok && cikCached != "" {
+					identifier = cikCached
+				}
+			}
 		}
 
-		actualCIK, found := tickerMapping[ticker]
-		if !found {
-			// Fallback: assume ticker string itself is a valid CIK for test environments
-			actualCIK = ticker
+		// If not found in cache, fetch synchronously; then cache asynchronously
+		if identifier == "" {
+			tickerMapping, err := dc.secGateway.GetTickerCIKMapping(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get ticker-CIK mapping: %w", err)
+			}
+			if cikNow, ok := tickerMapping[ticker]; ok {
+				identifier = cikNow
+			} else {
+				return nil, fmt.Errorf("ticker %s not found in SEC ticker-CIK mapping", ticker)
+			}
+			if dc.cacheRepo != nil {
+				go func(m map[string]string) {
+					cctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					_ = dc.cacheRepo.Set(cctx, cacheKey, m, dc.config.TickerMappingTTL)
+				}(tickerMapping)
+			}
 		}
-		identifier = actualCIK
 	}
 
-	companyFacts, err := dc.secGateway.GetCompanyFacts(ctx, identifier)
+	// Use the gateway's full parser path — extracts multi-year data with all concept fallbacks
+	historical, err := dc.secGateway.GetFinancialDataForTicker(ctx, ticker, identifier)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch SEC data: %w", err)
+		return nil, fmt.Errorf("failed to fetch SEC financial data: %w", err)
 	}
 
-	// Check if companyFacts is nil (can happen on context cancellation)
-	if companyFacts == nil {
-		return nil, fmt.Errorf("received nil company facts for ticker %s", ticker)
+	if historical == nil || len(historical.Data) == 0 {
+		return nil, fmt.Errorf("no financial data found for ticker %s (CIK: %s)", ticker, identifier)
 	}
 
-	// Convert SEC facts to FinancialData
-	// This is a simplified conversion - in production, you'd use the parser
-	financialData := &entities.FinancialData{
-		Ticker: ticker,
-		CIK:    companyFacts.CIK,
-		AsOf:   time.Now(),
-	}
-
-	// Extract basic financial metrics from facts
-	if companyFacts.Facts != nil {
-		if assets, ok := companyFacts.Facts["Assets"]; ok {
-			if assetsMap, ok := assets.(map[string]interface{}); ok {
-				if units, ok := assetsMap["units"]; ok {
-					if unitsMap, ok := units.(map[string]interface{}); ok {
-						if usdData, ok := unitsMap["USD"]; ok {
-							if usdArray, ok := usdData.([]interface{}); ok && len(usdArray) > 0 {
-								if latestData, ok := usdArray[0].(map[string]interface{}); ok {
-									if val, ok := latestData["val"]; ok {
-										if valFloat, ok := val.(float64); ok {
-											financialData.TotalAssets = valFloat
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-
-		if revenues, ok := companyFacts.Facts["Revenues"]; ok {
-			if revenuesMap, ok := revenues.(map[string]interface{}); ok {
-				if units, ok := revenuesMap["units"]; ok {
-					if unitsMap, ok := units.(map[string]interface{}); ok {
-						if usdData, ok := unitsMap["USD"]; ok {
-							if usdArray, ok := usdData.([]interface{}); ok && len(usdArray) > 0 {
-								if latestData, ok := usdArray[0].(map[string]interface{}); ok {
-									if val, ok := latestData["val"]; ok {
-										if valFloat, ok := val.(float64); ok {
-											financialData.Revenue = valFloat
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return financialData, nil
+	return historical, nil
 }
 
 // fetchMarketData fetches market data from market source
@@ -299,6 +279,61 @@ func (dc *DataCoordinator) fetchMacroData(ctx context.Context) (*entities.MacroD
 	}
 
 	return macroData, nil
+}
+
+// extractLatestUSDValue navigates the nested Facts structure to find the latest USD value
+// for a given taxonomy and concept. The structure is:
+//
+//	facts[taxonomy] -> map[concept] -> {units: {USD: [{val: float64, ...}]}}
+//
+// Returns 0 if the path doesn't exist or no value is found.
+func extractLatestUSDValue(facts map[string]interface{}, taxonomy, concept string) float64 {
+	taxonomyData, ok := facts[taxonomy]
+	if !ok {
+		return 0
+	}
+	taxonomyMap, ok := taxonomyData.(map[string]interface{})
+	if !ok {
+		return 0
+	}
+	conceptData, ok := taxonomyMap[concept]
+	if !ok {
+		return 0
+	}
+	conceptMap, ok := conceptData.(map[string]interface{})
+	if !ok {
+		return 0
+	}
+	unitsData, ok := conceptMap["units"]
+	if !ok {
+		return 0
+	}
+	unitsMap, ok := unitsData.(map[string]interface{})
+	if !ok {
+		return 0
+	}
+	usdData, ok := unitsMap["USD"]
+	if !ok {
+		return 0
+	}
+	usdArray, ok := usdData.([]interface{})
+	if !ok || len(usdArray) == 0 {
+		return 0
+	}
+	// Take the last entry (most recent)
+	latestEntry, ok := usdArray[len(usdArray)-1].(map[string]interface{})
+	if !ok {
+		return 0
+	}
+	val, ok := latestEntry["val"]
+	if !ok {
+		return 0
+	}
+	valFloat, ok := val.(float64)
+	if !ok {
+		return 0
+	}
+	return valFloat
 }
 
 // GetCoordinationMetrics returns coordination metrics

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -46,10 +47,20 @@ type BulkFairValueRequest struct {
 	OverrideRiskFree *float64 `json:"override_rf,omitempty" example:"0.045"`                                           // Optional risk-free rate override
 }
 
-// BulkFairValueResponse represents the response for bulk requests
+// BulkFailure describes why a single ticker failed during bulk valuation.
+type BulkFailure struct {
+	Ticker    string `json:"ticker"`
+	ErrorCode string `json:"error_code"`
+	Message   string `json:"message"`
+}
+
+// BulkFairValueResponse represents the response for bulk requests.
+// When both successes and failures exist, the HTTP status is 207 Multi-Status.
+// When all tickers fail, the HTTP status is 422 Unprocessable Entity.
 type BulkFairValueResponse struct {
-	Results []FairValueResponse `json:"results"`
-	Summary BulkSummary         `json:"summary"`
+	Results  []FairValueResponse `json:"results"`
+	Failures []BulkFailure       `json:"failures,omitempty"`
+	Summary  BulkSummary         `json:"summary"`
 }
 
 // BulkSummary provides summary statistics for bulk requests
@@ -109,20 +120,29 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		zap.Float64p("override_beta", overrideBeta),
 		zap.Float64p("override_rf", overrideRF))
 
+	// Build valuation options from query parameter overrides
+	var opts *valuation.ValuationOptions
+	if overrideBeta != nil || overrideRF != nil {
+		opts = &valuation.ValuationOptions{
+			OverrideBeta:     overrideBeta,
+			OverrideRiskFree: overrideRF,
+		}
+	}
+
 	// Calculate valuation
-	result, err := h.valuationService.CalculateValuation(c.Request.Context(), ticker)
+	result, err := h.valuationService.CalculateValuation(c.Request.Context(), ticker, opts)
 	if err != nil {
 		h.logger.Error("Valuation calculation failed",
 			zap.String("ticker", ticker),
 			zap.Error(err))
 
-		// Determine appropriate error response based on error type
-		if strings.Contains(err.Error(), "not found") {
+		// Classify error using sentinel types for reliable matching
+		if errors.Is(err, valuation.ErrTickerNotFound) {
 			h.sendError(c, http.StatusNotFound, "TICKER_NOT_FOUND",
 				"Ticker not found",
 				"The specified ticker could not be found in our database",
 				map[string]interface{}{"ticker": ticker})
-		} else if strings.Contains(err.Error(), "insufficient data") {
+		} else if errors.Is(err, valuation.ErrInsufficientData) {
 			h.sendError(c, http.StatusUnprocessableEntity, "INSUFFICIENT_DATA",
 				"Insufficient data for valuation",
 				"Not enough financial data available to perform reliable valuation",
@@ -187,6 +207,7 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		zap.Strings("tickers", request.Tickers))
 
 	results := make([]FairValueResponse, 0, len(request.Tickers))
+	failures := make([]BulkFailure, 0)
 	successful := 0
 	failed := 0
 
@@ -194,18 +215,37 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 	for _, ticker := range request.Tickers {
 		ticker = strings.ToUpper(ticker)
 
+		// Validate ticker format
 		if !isValidTicker(ticker) {
 			h.logger.Warn("Skipping invalid ticker in bulk request", zap.String("ticker", ticker))
+			failures = append(failures, BulkFailure{
+				Ticker:    ticker,
+				ErrorCode: "INVALID_TICKER",
+				Message:   "Invalid ticker format: must be 1-5 alphanumeric characters",
+			})
 			failed++
 			continue
 		}
 
+		// Build valuation options from bulk request overrides
+		var opts *valuation.ValuationOptions
+		if request.OverrideBeta != nil || request.OverrideRiskFree != nil {
+			opts = &valuation.ValuationOptions{
+				OverrideBeta:     request.OverrideBeta,
+				OverrideRiskFree: request.OverrideRiskFree,
+			}
+		}
+
 		// Calculate valuation for this ticker
-		result, err := h.valuationService.CalculateValuation(c.Request.Context(), ticker)
+		result, err := h.valuationService.CalculateValuation(c.Request.Context(), ticker, opts)
 		if err != nil {
 			h.logger.Warn("Valuation failed for ticker in bulk request",
 				zap.String("ticker", ticker),
 				zap.Error(err))
+
+			// Classify the error using sentinel types for per-ticker failure detail
+			failure := classifyBulkError(ticker, err)
+			failures = append(failures, failure)
 			failed++
 			continue
 		}
@@ -226,9 +266,10 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		successful++
 	}
 
-	// Create bulk response
+	// Create bulk response with failure details
 	bulkResponse := BulkFairValueResponse{
-		Results: results,
+		Results:  results,
+		Failures: failures,
 		Summary: BulkSummary{
 			TotalRequested: len(request.Tickers),
 			Successful:     successful,
@@ -240,7 +281,43 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		zap.Int("successful", successful),
 		zap.Int("failed", failed))
 
-	c.JSON(http.StatusOK, bulkResponse)
+	// Choose HTTP status based on outcome:
+	// - 200 OK: all tickers succeeded
+	// - 207 Multi-Status: partial success (some succeeded, some failed)
+	// - 422 Unprocessable Entity: all tickers failed
+	switch {
+	case failed == 0:
+		c.JSON(http.StatusOK, bulkResponse)
+	case successful == 0:
+		c.JSON(http.StatusUnprocessableEntity, bulkResponse)
+	default:
+		c.JSON(http.StatusMultiStatus, bulkResponse)
+	}
+}
+
+// classifyBulkError maps a valuation service error to a BulkFailure with
+// an appropriate error code and human-readable message.
+func classifyBulkError(ticker string, err error) BulkFailure {
+	switch {
+	case errors.Is(err, valuation.ErrTickerNotFound):
+		return BulkFailure{
+			Ticker:    ticker,
+			ErrorCode: "TICKER_NOT_FOUND",
+			Message:   "Ticker not found in any data source",
+		}
+	case errors.Is(err, valuation.ErrInsufficientData):
+		return BulkFailure{
+			Ticker:    ticker,
+			ErrorCode: "INSUFFICIENT_DATA",
+			Message:   "Not enough financial data for reliable valuation",
+		}
+	default:
+		return BulkFailure{
+			Ticker:    ticker,
+			ErrorCode: "CALCULATION_ERROR",
+			Message:   "Valuation calculation failed",
+		}
+	}
 }
 
 // Helper functions

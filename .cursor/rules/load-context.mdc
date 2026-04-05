@@ -1,0 +1,363 @@
+---
+alwaysApply: true
+---
+# Load Context Skill (Smart Router)
+
+When invoked with `@load-context {path}`, intelligently detect the type of path and load all relevant documentation and context.
+
+## Purpose
+
+Universal context loader that handles any path in the codebase - services, packages, infrastructure, testing, and more. Automatically detects the category and loads appropriate documentation.
+
+## Supported Paths
+
+### Services (Shorthand or Full Path)
+
+| Input | Resolves To | Description |
+|-------|-------------|-------------|
+| `api` or `services/api` | `services/api/` | NestJS API Gateway |
+| `ai` or `services/ai` | `services/ai/` | Python AI Service (FastAPI + gRPC + LangGraph) |
+| `auth` or `services/auth` | `services/auth/` | Authentication microservice |
+| `chat` or `services/chat` | `services/chat/` | Chat/RAG Service (NestJS + gRPC client) |
+| `worker` or `services/worker` | `services/worker/` | Background Worker Service (being decommissioned) |
+| `frontend` or `services/frontend` | `services/frontend/` | React + Vite + TanStack Frontend |
+
+### Packages
+
+| Input | Resolves To | Description |
+|-------|-------------|-------------|
+| `shared-domain` or `packages/shared-domain` | `packages/shared-domain/` | Shared domain models |
+| `shared-infrastructure` or `packages/shared-infrastructure` | `packages/shared-infrastructure/` | Shared infrastructure utilities |
+| `jwt-validation` or `packages/jwt-validation` | `packages/jwt-validation/` | JWT validation library |
+| `outbox` or `packages/outbox` | `packages/outbox/` | Outbox pattern for event sourcing |
+
+### Infrastructure
+
+| Input | Resolves To | Description |
+|-------|-------------|-------------|
+| `k8s` or `deploy/k8s` | `deploy/k8s/` | Kubernetes manifests (base + overlays) |
+| `ecs` or `deploy/ecs` | `deploy/ecs/` | AWS ECS Terraform (under `terraform/`) |
+| `monitoring` | `monitoring/` | Prometheus, Grafana, AlertManager, Blackbox |
+| `nats` | `nats/` | NATS configuration + TLS certs |
+| `nginx` | `nginx/` | Nginx reverse proxy configuration |
+| `docker` or `compose` | Root `compose*.yml` files | Docker Compose stack configuration |
+
+### Testing & Scripts
+
+| Input | Resolves To | Description |
+|-------|-------------|-------------|
+| `k6` or `load-testing` | `k6/` | K6 load testing (scenarios + monitoring) |
+| `scripts` | `scripts/` | Utility scripts (setup, CI, security, git hooks) |
+| `test` or `tests` | `test/` | Root integration, infrastructure, and security tests |
+| `security` | `security/` | Security tools (ZAP) |
+| `postman` | `postman/` | Postman API collection |
+
+### Documentation
+
+| Input | Resolves To | Description |
+|-------|-------------|-------------|
+| `docs` | `docs/` | Project documentation (refactoring, bugs, features, migration) |
+
+## Automatic Actions
+
+### Step 1: Detect Category
+
+Analyze the input path and determine category:
+
+```
+Input -> Category Detection:
++-- services/* or shorthand (api, ai, auth, etc.) -> SERVICE
++-- packages/* or shorthand -> PACKAGE
++-- deploy/k8s/* or k8s -> KUBERNETES
++-- deploy/ecs/* or ecs -> TERRAFORM
++-- monitoring/* -> MONITORING
++-- nats/* -> NATS
++-- nginx/* -> NGINX
++-- docker or compose -> DOCKER
++-- k6/* or load-testing -> LOAD_TESTING
++-- scripts/* -> SCRIPTS
++-- test/* -> TESTS
++-- security/* -> SECURITY
++-- postman/* -> POSTMAN
++-- docs/* -> DOCS
++-- (file path) -> SINGLE_FILE
+```
+
+### Step 2: Memory-Aware Context
+
+Before loading docs, check memory:
+1. `user-memory-search_nodes` for "{path} patterns"
+2. `user-memory-search_nodes` for "recent {path} issues"
+3. Include learnings in context
+
+### Step 3: Load Documentation Based on Category
+
+#### For SERVICE category (Node.js services):
+Read using Read tool:
+- `services/{service}/CLAUDE.md` - Quick reference
+- `services/{service}/ARCHITECTURE.md` - Technical architecture
+- `services/{service}/CONTRACTS.md` - API contracts, DTOs
+- `services/{service}/TESTING.md` - Test strategy
+- List `services/{service}/src/modules/` structure
+
+#### For SERVICE category (AI Service — Python):
+Read using Read tool:
+- `services/ai/CLAUDE.md` - Quick reference (Poetry commands, Python conventions)
+- `services/ai/ARCHITECTURE.md` - Technical architecture (FastAPI + gRPC + LangGraph)
+- `services/ai/CONTRACTS.md` - gRPC proto contracts, tool schemas
+- `services/ai/TESTING.md` - Pytest strategy, coverage requirements
+- List `services/ai/src/` structure (application, domain, infrastructure layers)
+- Check `services/ai/pyproject.toml` for dependencies
+
+#### For PACKAGE category:
+Read using Read tool:
+- `packages/{package}/README.md` - Package documentation
+- `packages/{package}/package.json` - Dependencies and scripts
+- `packages/{package}/src/index.ts` - Public API exports
+- List `packages/{package}/src/` structure
+
+#### For KUBERNETES category:
+Read using Read tool:
+- `deploy/k8s/base/*.yaml` - Base manifests (api, auth, chat, worker deployments + services, configmap, secret)
+- `deploy/k8s/overlays/dev/` - Development patches
+- Root `ARCHITECTURE.md` (deployment section)
+
+#### For TERRAFORM category:
+Read using Read tool:
+- `deploy/ecs/terraform/*.tf` - Terraform configurations (main, alarms, variables, outputs, providers)
+- `deploy/ecs/terraform/*.example` - Example variables
+- Root `ARCHITECTURE.md` (deployment section)
+
+#### For MONITORING category:
+Read using Read tool:
+- `monitoring/README.md` - Overview
+- `monitoring/prometheus/prometheus.yml` - Metrics config
+- `monitoring/prometheus/alerts/*.yml` - Alert rules
+- `monitoring/grafana/dashboards/*.json` - Dashboard definitions
+- `monitoring/grafana/provisioning/` - Grafana provisioning
+- `monitoring/alertmanager/alertmanager.yml` - Alert routing and notification config
+- `monitoring/blackbox/` - Endpoint health monitoring
+- `monitoring/scripts/` - Custom monitoring scripts
+
+#### For NATS category:
+Read using Read tool:
+- `nats/nats-secure.conf` - NATS configuration
+- `nats/nats-secure.env.example` - Environment variables
+- `nats/certs/` - TLS certificate directory
+- Root `ARCHITECTURE.md` (messaging section)
+
+#### For NGINX category:
+Read using Read tool:
+- `nginx/nginx.conf` - Reverse proxy configuration
+- Root `ARCHITECTURE.md` (networking section)
+
+#### For DOCKER category:
+Read using Read tool:
+- `compose.yml` - Main service stack
+- `compose.override.yml` - Local development overrides
+- `compose.debug.yml` - Debug mode configuration
+- `compose.monitoring.yml` - Monitoring stack (Prometheus, Grafana, AlertManager)
+- `services/ai/docker-compose.ai.yml` - AI Service standalone compose
+
+#### For LOAD_TESTING category:
+Read using Read tool:
+- `k6/README.md` or `k6/load-test-simple.js` - Entry point
+- `k6/scenarios/*.js` - Test scenarios (rest-chat, ws-chat, content-gen, etc.)
+- `k6/lib/*.js` - Auth and utility helpers
+- `k6/run-load-test.ps1` / `k6/run-load-test.sh` - Run scripts
+- `k6/monitor-system.ps1` / `k6/monitor-system.sh` - System monitoring during tests
+
+#### For SCRIPTS category:
+List all scripts in `scripts/` and describe their purpose based on filename.
+Key categories:
+- **Setup**: `local-setup.sh/.ps1`, `verify-dev-setup.ps1`
+- **CI**: `run-local-ci.sh/.ps1`, `aggregate-tests.ts`
+- **Security**: `run-security-tests.sh/.ps1`
+- **Git Hooks**: `install-git-hooks.ps1`, `toggle-git-hooks.ps1`, `git-hooks/`
+- **Infrastructure**: `validate-compose-config.sh/.ps1`, `detect-config-drift.ps1`
+- **JWT**: `generate-jwt-keys.ts`
+
+#### For TESTS category:
+Read using Read tool:
+- `test/infrastructure/` - Infrastructure tests (migration utils, Terraform health checks)
+- `test/integration/` - Integration test utilities
+- `test/security/` - NATS security integration E2E tests
+- Root `TESTING.md` - Test strategy
+
+#### For SECURITY category:
+Read using Read tool:
+- `security/zap/*.conf` - ZAP configuration
+- `.gitleaks.toml` - Secret scanning config
+- Root `TESTING.md` (security section)
+
+#### For POSTMAN category:
+Read using Read tool:
+- `postman/muppet-api.postman_collection.json` - API collection
+
+#### For DOCS category:
+List all documentation files in `docs/` and summarize topics.
+Key subdirectories:
+- `docs/refactoring/` - AI platform refactoring spec and status
+- `docs/bugs/` - Bug reports (BUG-001 through BUG-010)
+- `docs/implementation/` - Issue implementation details
+- `docs/features/` - Feature architecture docs
+- `docs/migration/` - Migration guides
+- `docs/api/` - OpenAPI spec (openapi.json, openapi.yaml)
+- `docs/development/` - Project features overview
+- `docs/architecture/` - Service mesh evaluation
+- `docs/schema/` - Database schema documentation
+- `docs/security/` - Security-specific documentation
+
+#### For SINGLE_FILE category:
+Read the specific file and provide context about its role in the codebase.
+
+### Step 4: Store in Memory
+
+Use `user-memory-create_entities` to store:
+- Path loaded
+- Category detected
+- Key patterns discovered
+- Available commands/scripts
+
+## Required Output Format
+
+```
+## Context Loaded: {path}
+
+### Category: {SERVICE | PACKAGE | KUBERNETES | TERRAFORM | MONITORING | NATS | NGINX | DOCKER | LOAD_TESTING | SCRIPTS | TESTS | SECURITY | POSTMAN | DOCS | SINGLE_FILE}
+
+### Overview
+{brief description based on loaded documentation}
+
+### Key Information
+{category-specific information}
+
+### Structure
+{path}/
++-- {relevant files/folders}
++-- ...
+
+### Available Commands
+{relevant commands for this context}
+
+### Related Memories
+{any relevant past context from memory}
+
+### Context Stored in Memory
+```
+
+## Composability
+
+This skill can be chained with:
+- `@preflight` - run before this for full task context
+- `@tdd-setup {feature} {service}` - after loading service context
+- `@research {topic}` - if unknowns were identified
+- `@debug-session` - after loading service context for debugging
+- `@docs-update` - after making changes to update documentation
+
+## Example Usage
+
+### Load AI Service Context (Python)
+```
+User: @load-context ai
+
+AI: [Detects: SERVICE category, Python variant]
+    [Reads services/ai/CLAUDE.md, ARCHITECTURE.md, CONTRACTS.md, TESTING.md]
+    [Lists src/ structure (application, domain, infrastructure)]
+    [Checks pyproject.toml for dependencies]
+    [Stores in memory]
+    [Outputs context summary]
+```
+
+### Load Service Context (Node.js)
+```
+User: @load-context api
+
+AI: [Detects: SERVICE category, Node.js variant]
+    [Reads services/api/CLAUDE.md, ARCHITECTURE.md, CONTRACTS.md, TESTING.md]
+    [Lists module structure]
+    [Stores in memory]
+    [Outputs context summary]
+```
+
+### Load Package Context
+```
+User: @load-context shared-domain
+
+AI: [Detects: PACKAGE category]
+    [Reads packages/shared-domain/README.md, package.json, src/index.ts]
+    [Lists exports]
+    [Stores in memory]
+    [Outputs context summary]
+```
+
+### Load Docker Context
+```
+User: @load-context docker
+
+AI: [Detects: DOCKER category]
+    [Reads compose.yml, compose.override.yml, compose.monitoring.yml]
+    [Lists service definitions]
+    [Stores in memory]
+    [Outputs context summary]
+```
+
+### Load Monitoring Context
+```
+User: @load-context monitoring
+
+AI: [Detects: MONITORING category]
+    [Reads monitoring/prometheus/prometheus.yml]
+    [Reads alert rules]
+    [Reads alertmanager/alertmanager.yml]
+    [Lists dashboards and blackbox config]
+    [Stores in memory]
+    [Outputs context summary]
+```
+
+### Load Specific File Context
+```
+User: @load-context services/api/src/modules/widget/widget.service.ts
+
+AI: [Detects: SINGLE_FILE category]
+    [Reads the file]
+    [Identifies related files (controller, dto, test)]
+    [Provides context about the file's role]
+    [Stores in memory]
+```
+
+## Error Handling
+
+If a path doesn't exist or documentation is missing:
+- Note it in the output
+- Suggest creating documentation via `@docs-update` skill
+- Continue with available files
+- For unknown paths, list available options
+
+## Shorthand Reference
+
+Quick reference for common shortcuts:
+
+| Shorthand | Full Path |
+|-----------|-----------|
+| `api` | `services/api` |
+| `ai` | `services/ai` |
+| `auth` | `services/auth` |
+| `chat` | `services/chat` |
+| `worker` | `services/worker` |
+| `frontend` | `services/frontend` |
+| `shared-domain` | `packages/shared-domain` |
+| `shared-infrastructure` | `packages/shared-infrastructure` |
+| `jwt-validation` | `packages/jwt-validation` |
+| `outbox` | `packages/outbox` |
+| `k8s` | `deploy/k8s` |
+| `ecs` | `deploy/ecs` |
+| `monitoring` | `monitoring` |
+| `nats` | `nats` |
+| `nginx` | `nginx` |
+| `docker` / `compose` | Root compose*.yml |
+| `k6` | `k6` |
+| `scripts` | `scripts` |
+| `postman` | `postman` |
+| `docs` | `docs` |
+| `security` | `security` |

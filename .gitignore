@@ -56,8 +56,7 @@ testdata/**/Fuzz*/minimization/
 *.swo
 *~
 .vs/
-.cursor/
-.cursor/rules/
+
 *.suo
 *.ntvs*
 *.njsproj
@@ -197,8 +196,6 @@ packer_cache/
 local/
 dev/
 development/
-docs/integration/
-docs/old_integration_docs/
 # Production builds
 # (already covered above: build/, dist/, bin/)
 
@@ -279,8 +276,7 @@ cython_debug/
 # Project specific
 # Add any project-specific files or directories here
 #testdata/*
-.cursor/rules/generalspecdoc.mdc
-.claude/
+
 # Coverage reports
 coverage
 *_coverage

@@ -1,0 +1,210 @@
+---
+name: scaffold-module
+description: Create a new NestJS module following Clean Architecture patterns. Generates folder structure, base files, and test setup for a new feature module.
+globs:
+  - "services/api/**"
+  - "services/auth/**"
+  - "services/chat/**"
+  - "services/worker/**"
+---
+
+# Scaffold Module Skill
+
+When invoked with `@scaffold-module {module-name} {service}`, create a complete module structure following Clean Architecture patterns.
+
+## Purpose
+
+Quickly bootstrap new feature modules with consistent structure, reducing boilerplate and ensuring architectural compliance.
+
+## Prerequisites
+
+Before scaffolding:
+1. Verify the service exists
+2. Check ARCHITECTURE.md for service-specific patterns
+3. Review existing modules for consistency
+
+## Module Structure to Create
+
+```
+services/{service}/src/modules/{module-name}/
+├── {module-name}.module.ts          # NestJS module definition
+├── application/                      # Application layer
+│   ├── {module-name}.service.ts     # Business logic service
+│   └── use-cases/                   # Optional: specific use cases
+├── domain/                          # Domain layer
+│   ├── entities/
+│   │   └── {module-name}.entity.ts  # Domain entity
+│   ├── interfaces/
+│   │   └── {module-name}.repository.interface.ts
+│   └── value-objects/               # Optional: value objects
+├── infrastructure/                  # Infrastructure layer
+│   └── {module-name}.repository.ts  # Repository implementation
+├── presentation/                    # Presentation layer
+│   └── {module-name}.controller.ts  # REST controller
+└── dto/                             # Data transfer objects
+    ├── create-{module-name}.dto.ts
+    ├── update-{module-name}.dto.ts
+    └── {module-name}-response.dto.ts
+```
+
+## File Templates
+
+### Module File (`{module-name}.module.ts`)
+
+```typescript
+import { Module } from '@nestjs/common';
+import { {ModuleName}Controller } from './presentation/{module-name}.controller';
+import { {ModuleName}Service } from './application/{module-name}.service';
+import { {ModuleName}Repository } from './infrastructure/{module-name}.repository';
+
+/**
+ * {ModuleName} Module
+ * 
+ * Handles {description of module purpose}
+ * 
+ * @module {ModuleName}Module
+ */
+@Module({
+  imports: [],
+  controllers: [{ModuleName}Controller],
+  providers: [
+    {ModuleName}Service,
+    {ModuleName}Repository,
+  ],
+  exports: [{ModuleName}Service],
+})
+export class {ModuleName}Module {}
+```
+
+### Service File (`application/{module-name}.service.ts`)
+
+```typescript
+import { Injectable, Logger } from '@nestjs/common';
+import { {ModuleName}Repository } from '../infrastructure/{module-name}.repository';
+
+/**
+ * {ModuleName} Service
+ * 
+ * Business logic for {module purpose}
+ */
+@Injectable()
+export class {ModuleName}Service {
+  private readonly logger = new Logger({ModuleName}Service.name);
+
+  constructor(
+    private readonly repository: {ModuleName}Repository,
+  ) {}
+
+  // TODO: Implement service methods
+}
+```
+
+### Controller File (`presentation/{module-name}.controller.ts`)
+
+```typescript
+import { Controller, Get, Post, Body, Param, Put, Delete } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
+import { {ModuleName}Service } from '../application/{module-name}.service';
+import { Create{ModuleName}Dto } from '../dto/create-{module-name}.dto';
+import { Update{ModuleName}Dto } from '../dto/update-{module-name}.dto';
+
+/**
+ * {ModuleName} Controller
+ * 
+ * REST API endpoints for {module purpose}
+ */
+@ApiTags('{module-name}')
+@Controller('{module-name}')
+export class {ModuleName}Controller {
+  constructor(private readonly service: {ModuleName}Service) {}
+
+  // TODO: Implement controller endpoints
+}
+```
+
+## Test Files to Create
+
+```
+services/{service}/test/{module-name}.e2e-spec.ts
+```
+
+### E2E Test Template
+
+```typescript
+import { Test, TestingModule } from '@nestjs/testing';
+import { INestApplication } from '@nestjs/common';
+import * as request from 'supertest';
+import { AppModule } from '../src/app.module';
+
+describe('{ModuleName} (e2e)', () => {
+  let app: INestApplication;
+
+  beforeEach(async () => {
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+
+    app = moduleFixture.createNestApplication();
+    await app.init();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  // TODO: Add E2E test cases
+  describe('GET /{module-name}', () => {
+    it('should return list of {module-name}s', () => {
+      return request(app.getHttpServer())
+        .get('/{module-name}')
+        .expect(200);
+    });
+  });
+});
+```
+
+## Post-Scaffold Actions
+
+1. **Register module** in `app.module.ts`
+2. **Update ARCHITECTURE.md** with new module documentation
+3. **Update CONTRACTS.md** with API endpoints
+4. **Run linter** to check for issues
+
+## Required Output Format
+
+```
+## Module Scaffolded: {module-name} in {service}
+
+### Created Files
+- [x] {module-name}.module.ts
+- [x] application/{module-name}.service.ts
+- [x] domain/entities/{module-name}.entity.ts
+- [x] infrastructure/{module-name}.repository.ts
+- [x] presentation/{module-name}.controller.ts
+- [x] dto/create-{module-name}.dto.ts
+- [x] dto/update-{module-name}.dto.ts
+- [x] test/{module-name}.e2e-spec.ts
+
+### Next Steps
+1. Register {ModuleName}Module in app.module.ts
+2. Define entity properties in {module-name}.entity.ts
+3. Implement DTO validation with class-validator
+4. Add service methods
+5. Implement controller endpoints
+6. Write E2E tests
+
+### Update Documentation
+Run `@docs-update` to update ARCHITECTURE.md and CONTRACTS.md
+```
+
+## Example Usage
+
+```
+User: @scaffold-module user-preferences api
+
+AI: [Verifies services/api/ exists]
+    [Creates module structure]
+    [Creates all template files]
+    [Creates E2E test file]
+    [Outputs summary]
+```

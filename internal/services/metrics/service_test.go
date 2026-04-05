@@ -1,9 +1,12 @@
 package metrics
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -190,4 +193,109 @@ func BenchmarkUpdateSystemMetrics(b *testing.B) {
 		service.UpdateSystemMetrics()
 	}
 }
- 
+
+// TestService_GetterFunctions_ZeroState verifies all getter functions return
+// sensible defaults when no requests have been recorded yet. This covers the
+// zero-division guard branches in GetAverageResponseTime and GetErrorRate.
+func TestService_GetterFunctions_ZeroState(t *testing.T) {
+	logger := zap.NewNop()
+	registry := prometheus.NewRegistry()
+	service := NewServiceWithRegistry(logger, registry)
+
+	assert.Equal(t, int64(0), service.GetTotalRequests(), "no requests recorded yet")
+	assert.Equal(t, 0, service.GetActiveConnections(), "no active connections yet")
+	assert.Equal(t, 0.0, service.GetAverageResponseTime(), "zero requests means zero avg response time")
+	assert.Equal(t, 0.0, service.GetErrorRate(), "zero requests means zero error rate")
+	assert.Equal(t, 0.0, service.GetCacheHitRate(), "no cache hit rate set yet")
+	assert.Equal(t, int64(0), service.GetTotalValuations(), "no valuations recorded yet")
+	assert.Equal(t, int64(0), service.GetSuccessfulValuations(), "no successful valuations yet")
+	assert.Equal(t, int64(0), service.GetFailedValuations(), "no failed valuations yet")
+	assert.Equal(t, 0.0, service.GetAverageWACC(), "no WACC set yet")
+	assert.Equal(t, 0.0, service.GetAverageGrowthRate(), "no growth rate set yet")
+	assert.Equal(t, int64(0), service.GetUniqueTickersServed(), "no tickers served yet")
+}
+
+// TestService_GetterFunctions_AfterRecording verifies all getter functions return
+// correct computed values after recording HTTP requests, valuations, and cache state.
+// This covers the non-zero branches of GetAverageResponseTime and GetErrorRate.
+func TestService_GetterFunctions_AfterRecording(t *testing.T) {
+	logger := zap.NewNop()
+	registry := prometheus.NewRegistry()
+	service := NewServiceWithRegistry(logger, registry)
+
+	// Record 3 HTTP requests: 2 successful (200), 1 error (500).
+	// Each with 100ms duration so totalResponseTime = 300ms.
+	service.RecordHTTPRequest("GET", "/api/v1/fair-value/AAPL", 200, 100*time.Millisecond, 512)
+	service.RecordHTTPRequest("GET", "/api/v1/fair-value/MSFT", 200, 100*time.Millisecond, 256)
+	service.RecordHTTPRequest("GET", "/api/v1/fair-value/GOOG", 500, 100*time.Millisecond, 128)
+
+	// Record valuations: 2 successful for different tickers, 1 failed.
+	service.RecordValuationRequest("AAPL", "single", "success", 50*time.Millisecond)
+	service.RecordValuationRequest("MSFT", "single", "success", 60*time.Millisecond)
+	service.RecordValuationRequest("GOOG", "single", "error", 70*time.Millisecond)
+
+	// Set cache hit rate via the setter that updates internal state.
+	service.SetCacheHitRatio("memory", 0.75)
+
+	// Verify HTTP-based getters
+	assert.Equal(t, int64(3), service.GetTotalRequests())
+	assert.Equal(t, 0, service.GetActiveConnections(), "no in-flight tracking via RecordHTTPRequest")
+
+	// Average response time: each request is 100ms = 100.0ms in state.
+	// Total = 300ms, count = 3, average = 100ms.
+	expectedAvgResponseTime := 100.0 // milliseconds
+	assert.InDelta(t, expectedAvgResponseTime, service.GetAverageResponseTime(), 0.01)
+
+	// Error rate: 1 error out of 3 total requests = 0.333...
+	expectedErrorRate := 1.0 / 3.0
+	assert.InDelta(t, expectedErrorRate, service.GetErrorRate(), 0.01)
+
+	// Cache hit rate should reflect the last SetCacheHitRatio call
+	assert.InDelta(t, 0.75, service.GetCacheHitRate(), 0.001)
+
+	// Valuation getters: 3 total, 2 success, 1 error
+	assert.Equal(t, int64(3), service.GetTotalValuations())
+	assert.Equal(t, int64(2), service.GetSuccessfulValuations())
+	assert.Equal(t, int64(1), service.GetFailedValuations())
+
+	// WACC and growth rate remain at default because we did not set them via state.
+	// The state.averageWACC is only updated externally; the SetAverageWACC method
+	// only updates the Prometheus gauge, not the internal state.
+	assert.Equal(t, 0.0, service.GetAverageWACC())
+	assert.Equal(t, 0.0, service.GetAverageGrowthRate())
+
+	// Unique tickers: AAPL, MSFT, GOOG = 3 unique tickers from RecordValuationRequest.
+	assert.Equal(t, int64(3), service.GetUniqueTickersServed())
+}
+
+// TestHTTPMetricsMiddleware_RecordsMetrics verifies the Gin middleware records
+// HTTP request metrics and returns the correct response from the downstream handler.
+func TestHTTPMetricsMiddleware_RecordsMetrics(t *testing.T) {
+	logger := zap.NewNop()
+	registry := prometheus.NewRegistry()
+	service := NewServiceWithRegistry(logger, registry)
+
+	// Set gin to test mode to suppress debug output
+	gin.SetMode(gin.TestMode)
+
+	router := gin.New()
+	router.Use(HTTPMetricsMiddleware(service, logger))
+
+	// Register a simple test handler
+	router.GET("/api/v1/fair-value/:ticker", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ticker": c.Param("ticker")})
+	})
+
+	// Perform a test HTTP request
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/fair-value/AAPL", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	// Verify the handler responded correctly
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Verify the middleware updated internal metrics state
+	assert.Equal(t, int64(1), service.GetTotalRequests(), "middleware should have recorded 1 request")
+	assert.True(t, service.GetAverageResponseTime() >= 0, "response time should be non-negative")
+	assert.Equal(t, 0.0, service.GetErrorRate(), "200 response should not count as an error")
+}

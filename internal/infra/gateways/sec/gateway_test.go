@@ -42,25 +42,27 @@ func TestNewGateway(t *testing.T) {
 }
 
 func TestGateway_GetCompanyFacts(t *testing.T) {
-	// Mock successful SEC response
+	// Mock successful SEC response with nested taxonomy -> concept structure
 	mockCompanyFacts := &ports.SECCompanyFacts{
 		CIK:        "320193",
 		EntityName: "Apple Inc.",
-		Facts: map[string]ports.SECFactGroup{
-			"us-gaap:Revenues": {
-				Label:       "Revenues",
-				Description: "Revenue from operations",
-				Units: map[string][]ports.SECFact{
-					"USD": {
-						{
-							End:   "2023-09-30",
-							Val:   383285000000,
-							Accn:  "0000320193-23-000106",
-							Fy:    2023,
-							Fp:    "FY",
-							Form:  "10-K",
-							Filed: "2023-11-03",
-							Frame: "CY2023Q3I",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"us-gaap": {
+				"Revenues": {
+					Label:       "Revenues",
+					Description: "Revenue from operations",
+					Units: map[string][]ports.SECFact{
+						"USD": {
+							{
+								End:   "2023-09-30",
+								Val:   383285000000,
+								Accn:  "0000320193-23-000106",
+								Fy:    2023,
+								Fp:    "FY",
+								Form:  "10-K",
+								Filed: "2023-11-03",
+								Frame: "CY2023Q3I",
+							},
 						},
 					},
 				},
@@ -70,7 +72,7 @@ func TestGateway_GetCompanyFacts(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Validate request
-		assert.Equal(t, "/companyfacts/CIK0000320193.json", r.URL.Path)
+		assert.Equal(t, "/api/xbrl/companyfacts/CIK0000320193.json", r.URL.Path)
 		assert.Equal(t, "Test User Agent", r.Header.Get("User-Agent"))
 
 		w.Header().Set("Content-Type", "application/json")
@@ -137,7 +139,7 @@ func TestGateway_GetCompanyConcepts(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Validate request
-		assert.Equal(t, "/companyconcept/CIK0000320193/us-gaap/Revenues.json", r.URL.Path)
+		assert.Equal(t, "/api/xbrl/companyconcept/CIK0000320193/us-gaap/Revenues.json", r.URL.Path)
 		assert.Equal(t, "Test User Agent", r.Header.Get("User-Agent"))
 
 		w.Header().Set("Content-Type", "application/json")

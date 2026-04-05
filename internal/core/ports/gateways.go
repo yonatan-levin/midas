@@ -13,6 +13,7 @@ type SECGateway interface {
 	GetCompanyFacts(ctx context.Context, cik string) (*entities.CompanyFactsResponse, error)
 	GetCompanyConcepts(ctx context.Context, cik string, tag string) (*entities.ConceptResponse, error)
 	GetTickerCIKMapping(ctx context.Context) (map[string]string, error)
+	GetFinancialDataForTicker(ctx context.Context, ticker, cik string) (*entities.HistoricalFinancialData, error)
 	HealthCheck(ctx context.Context) error
 }
 
@@ -45,12 +46,17 @@ type RetryPolicy interface {
 	WithBackoff(strategy string) RetryPolicy
 }
 
-// SECCompanyFacts represents the structure of SEC Company Facts API response
+// SECCompanyFacts represents the structure of SEC Company Facts API response.
+// The SEC EDGAR CompanyFacts API returns a nested structure:
+//
+//	facts -> taxonomy ("us-gaap", "dei") -> concept ("Assets", "Revenues") -> SECFactGroup
+//
+// See: https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json
 type SECCompanyFacts struct {
-	CIK        json.Number             `json:"cik"`
-	EntityName string                  `json:"entityName"`
-	Facts      map[string]SECFactGroup `json:"facts"`
-	FilingDate time.Time               `json:"-"` // Derived from facts
+	CIK        json.Number                        `json:"cik"`
+	EntityName string                             `json:"entityName"`
+	Facts      map[string]map[string]SECFactGroup `json:"facts"`
+	FilingDate time.Time                          `json:"-"` // Derived from facts
 }
 
 // SECFactGroup represents a group of facts by taxonomy

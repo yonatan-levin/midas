@@ -35,6 +35,35 @@ func (m *mockSECGateway) GetCompanyConcepts(ctx context.Context, cik string, tag
 	return nil, errors.New("not implemented")
 }
 
+func (m *mockSECGateway) GetFinancialDataForTicker(ctx context.Context, ticker, cik string) (*entities.HistoricalFinancialData, error) {
+	m.callCount++
+	// Simulate API latency for duration tracking
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(5 * time.Millisecond):
+	}
+	if m.err != nil {
+		return nil, m.err
+	}
+	// If companyFacts is configured, build a single-period HistoricalFinancialData.
+	// This keeps existing tests working without needing to restructure their data.
+	if m.companyFacts != nil {
+		fd := &entities.FinancialData{
+			Ticker:      ticker,
+			CIK:         m.companyFacts.CIK,
+			TotalAssets: 1_000_000, // Default non-zero values for test sufficiency
+			Revenue:     500_000,
+			FilingDate:  time.Now(),
+		}
+		return &entities.HistoricalFinancialData{
+			Ticker: ticker,
+			Data:   map[string]*entities.FinancialData{"FY2023": fd},
+		}, nil
+	}
+	return nil, nil
+}
+
 func (m *mockSECGateway) HealthCheck(ctx context.Context) error {
 	return nil // Mock always healthy for tests
 }
@@ -49,15 +78,26 @@ func (m *mockSECGateway) GetTickerCIKMapping(ctx context.Context) (map[string]st
 	// coordinator logic can resolve a CIK without failing. The values do not
 	// need to be the real SEC CIKs – only stable placeholders.
 	mapping := map[string]string{
-		"AAPL":         "320193",
-		"MSFT":         "789019",
-		"TSLA":         "1318605",
-		"COORD_TEST":   "1234567890",
-		"PARTIAL_FAIL": "PARTIAL_FAIL", // value intentionally mirrors ticker for simplicity
-		"CANCELLED":    "CANCELLED",
-		"MODE_TEST":    "MODE_TEST",
-		"DEFAULT_TEST": "DEFAULT_TEST",
-		"ERROR_TEST":   "ERROR_TEST",
+		"AAPL":             "320193",
+		"MSFT":             "789019",
+		"TSLA":             "1318605",
+		"GOOGL":            "1652044",
+		"COORD_TEST":       "1234567890",
+		"PARTIAL_FAIL":     "PARTIAL_FAIL",
+		"CANCELLED":        "CANCELLED",
+		"MODE_TEST":        "MODE_TEST",
+		"DEFAULT_TEST":     "DEFAULT_TEST",
+		"ERROR_TEST":       "ERROR_TEST",
+		"TEST":             "TEST",
+		"TEST_INTEGRATION": "TEST_INTEGRATION",
+		"TEST_MULTI":       "TEST_MULTI",
+		"TEST_PARTIAL":     "TEST_PARTIAL",
+		"TEST_FAIL":        "TEST_FAIL",
+		"VALIDATION_TEST":  "VALIDATION_TEST",
+		"PERF_TEST":        "PERF_TEST",
+		"METRICS_TEST":     "METRICS_TEST",
+		"NOCACHE_TEST":     "NOCACHE_TEST",
+		"COMPLETE_TEST":    "COMPLETE_TEST",
 	}
 
 	// If the mock has companyFacts with a distinct CIK we attempt to add a
@@ -246,8 +286,7 @@ func TestNewDataFetcher(t *testing.T) {
 	assert.NotNil(t, fetcher.config)
 	assert.NotNil(t, fetcher.validator)
 	assert.NotNil(t, fetcher.coordinator)
-	assert.True(t, fetcher.config.EnableCaching)
-	assert.Equal(t, 24*time.Hour, fetcher.config.CacheTTL)
+	assert.True(t, fetcher.config.ConcurrentFetching)
 }
 
 // TestDataFetcher_Fetch tests comprehensive data fetching
@@ -716,8 +755,6 @@ func TestDataFetcher_Metrics(t *testing.T) {
 // TestDataFetcher_Configuration tests custom configuration
 func TestDataFetcher_Configuration(t *testing.T) {
 	config := &DataFetcherConfig{
-		EnableCaching:        false,
-		CacheTTL:             1 * time.Hour,
 		ConcurrentFetching:   false,
 		MaxRetries:           5,
 		TimeoutDuration:      10 * time.Second,
@@ -737,7 +774,7 @@ func TestDataFetcher_Configuration(t *testing.T) {
 
 	assert.NotNil(t, fetcher)
 	assert.Equal(t, config, fetcher.config)
-	assert.False(t, fetcher.config.EnableCaching)
+	assert.False(t, fetcher.config.ConcurrentFetching)
 	assert.Equal(t, 5, fetcher.config.MaxRetries)
 	assert.Equal(t, 10*time.Second, fetcher.config.TimeoutDuration)
 }
@@ -995,4 +1032,327 @@ func TestMultiSourceFetchIntegration(t *testing.T) {
 			macroGateway.callCount = 0
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// hasRequiredFields tests
+// ---------------------------------------------------------------------------
+
+// TestDataFetcher_HasRequiredFields tests the reflection-based required field
+// check that is only invoked when ValidateCompleteness is true.
+func TestDataFetcher_HasRequiredFields(t *testing.T) {
+	tests := []struct {
+		name           string
+		requiredFields []string
+		data           *entities.FinancialData
+		expected       bool
+	}{
+		{
+			name:           "all_required_fields_present_and_nonzero",
+			requiredFields: []string{"TotalAssets", "Revenue"},
+			data: &entities.FinancialData{
+				TotalAssets: 1_000_000_000,
+				Revenue:     500_000_000,
+			},
+			expected: true,
+		},
+		{
+			name:           "missing_field_revenue_is_zero",
+			requiredFields: []string{"TotalAssets", "Revenue"},
+			data: &entities.FinancialData{
+				TotalAssets: 1_000_000_000,
+				Revenue:     0, // zero is treated as missing
+			},
+			expected: false,
+		},
+		{
+			name:           "field_name_does_not_exist_on_struct",
+			requiredFields: []string{"TotalAssets", "NonExistentField"},
+			data: &entities.FinancialData{
+				TotalAssets: 500_000,
+			},
+			expected: false,
+		},
+		{
+			name:           "no_required_fields_configured",
+			requiredFields: []string{},
+			data:           &entities.FinancialData{},
+			expected:       true,
+		},
+		{
+			name:           "operating_income_present",
+			requiredFields: []string{"OperatingIncome"},
+			data: &entities.FinancialData{
+				OperatingIncome: 120_000_000,
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fetcher := NewDataFetcher(
+				&mockSECGateway{},
+				&mockMarketDataGateway{},
+				&mockMacroDataGateway{},
+				&mockCacheRepository{},
+			)
+			// Override config to enable completeness validation with custom fields
+			fetcher.config.ValidateCompleteness = true
+			fetcher.config.RequiredFields = tt.requiredFields
+
+			got := fetcher.hasRequiredFields(tt.data)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
+// TestDataFetcher_AssessDataSufficiency_WithCompleteness exercises the
+// assessDataSufficiency path when ValidateCompleteness is enabled, which calls
+// hasRequiredFields internally.
+func TestDataFetcher_AssessDataSufficiency_WithCompleteness(t *testing.T) {
+	fetcher := NewDataFetcher(
+		&mockSECGateway{},
+		&mockMarketDataGateway{},
+		&mockMacroDataGateway{},
+		&mockCacheRepository{},
+	)
+	fetcher.config.ValidateCompleteness = true
+	fetcher.config.RequiredFields = []string{"TotalAssets", "Revenue"}
+
+	// Financial data with all required fields populated
+	resultComplete := &entities.FetchResult{
+		FinancialData: &entities.FinancialData{
+			TotalAssets: 1_000_000_000,
+			Revenue:     500_000_000,
+		},
+	}
+	assert.True(t, fetcher.assessDataSufficiency(resultComplete))
+
+	// Financial data with missing required field
+	resultIncomplete := &entities.FetchResult{
+		FinancialData: &entities.FinancialData{
+			TotalAssets: 1_000_000_000,
+			Revenue:     0,
+		},
+	}
+	assert.False(t, fetcher.assessDataSufficiency(resultIncomplete))
+}
+
+// ---------------------------------------------------------------------------
+// GetMetrics computed values test
+// ---------------------------------------------------------------------------
+
+// TestDataFetcher_GetMetrics_ComputedValues verifies that CacheHitRate,
+// AverageLatency, and ErrorRate are computed correctly after requests.
+func TestDataFetcher_GetMetrics_ComputedValues(t *testing.T) {
+	secGateway := &mockSECGateway{
+		companyFacts: &entities.CompanyFactsResponse{
+			CIK:        "METRICS_TEST",
+			EntityName: "Metrics Test",
+			Facts:      map[string]interface{}{},
+		},
+	}
+	marketGateway := &mockMarketDataGateway{
+		marketData: &entities.MarketData{SharePrice: 100.0, Beta: 1.0},
+	}
+	macroGateway := &mockMacroDataGateway{
+		macroData: &entities.MacroData{RiskFreeRate: 0.04, MarketRiskPremium: 0.05},
+	}
+	cacheRepo := &mockCacheRepository{}
+
+	fetcher := NewDataFetcher(secGateway, marketGateway, macroGateway, cacheRepo)
+	ctx := context.Background()
+
+	// Execute a few requests to populate metrics
+	for i := 0; i < 3; i++ {
+		_, _ = fetcher.Fetch(ctx, &entities.FetchRequest{
+			Ticker:          "METRICS_TEST",
+			ValidationLevel: entities.ValidationNone,
+		})
+	}
+
+	metrics := fetcher.GetMetrics()
+
+	assert.Equal(t, int64(3), metrics.TotalRequests)
+	assert.Greater(t, metrics.AverageLatency, time.Duration(0), "AverageLatency should be computed")
+	// CacheHitRate and ErrorRate should be valid ratios
+	assert.GreaterOrEqual(t, metrics.CacheHitRate, 0.0)
+	assert.LessOrEqual(t, metrics.CacheHitRate, 1.0)
+	assert.GreaterOrEqual(t, metrics.ErrorRate, 0.0)
+	assert.LessOrEqual(t, metrics.ErrorRate, 1.0)
+}
+
+// ---------------------------------------------------------------------------
+// cacheResult with nil financial data test
+// ---------------------------------------------------------------------------
+
+// NOTE: TestDataFetcher_CacheResult_* tests were removed because caching
+// was removed from DataFetcher. The fetcher always fetches fresh data now.
+
+// ---------------------------------------------------------------------------
+// GetHealth unhealthy paths tests
+// ---------------------------------------------------------------------------
+
+// mockUnhealthySECGateway simulates an SEC gateway that reports errors.
+type mockUnhealthySECGateway struct {
+	mockSECGateway
+}
+
+func (m *mockUnhealthySECGateway) GetCompanyConcepts(ctx context.Context, cik string, tag string) (*entities.ConceptResponse, error) {
+	return nil, errors.New("SEC API down")
+}
+
+// mockUnhealthyMarketGateway simulates a market gateway that reports errors.
+type mockUnhealthyMarketGateway struct {
+	mockMarketDataGateway
+}
+
+func (m *mockUnhealthyMarketGateway) GetQuote(ctx context.Context, ticker string) (*entities.MarketData, error) {
+	return nil, errors.New("market API down")
+}
+
+// mockUnhealthyMacroGateway simulates a macro gateway that reports errors.
+type mockUnhealthyMacroGateway struct {
+	mockMacroDataGateway
+}
+
+func (m *mockUnhealthyMacroGateway) GetTreasuryRates(ctx context.Context) (*entities.TreasuryRates, error) {
+	return nil, errors.New("FRED API down")
+}
+
+// mockUnhealthyCacheRepo simulates a cache repository that reports errors.
+type mockUnhealthyCacheRepo struct {
+	mockCacheRepository
+}
+
+func (m *mockUnhealthyCacheRepo) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+	return errors.New("cache write failed")
+}
+
+// TestDataFetcher_GetHealth_AllUnhealthy verifies the health check captures
+// errors from each gateway and the cache.
+func TestDataFetcher_GetHealth_AllUnhealthy(t *testing.T) {
+	fetcher := NewDataFetcher(
+		&mockUnhealthySECGateway{},
+		&mockUnhealthyMarketGateway{},
+		&mockUnhealthyMacroGateway{},
+		&mockUnhealthyCacheRepo{},
+	)
+
+	health := fetcher.GetHealth(context.Background())
+
+	assert.NotNil(t, health)
+	assert.Equal(t, 4, len(health), "should check all 4 components")
+
+	// SEC should be unhealthy
+	secHealth, ok := health["sec_gateway"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "unhealthy", secHealth["status"])
+
+	// Market should be unhealthy
+	marketHealth, ok := health["market_gateway"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "unhealthy", marketHealth["status"])
+
+	// Macro should be unhealthy
+	macroHealth, ok := health["macro_gateway"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "unhealthy", macroHealth["status"])
+
+	// Cache should be unhealthy
+	cacheHealth, ok := health["cache"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "unhealthy", cacheHealth["status"])
+}
+
+// ---------------------------------------------------------------------------
+// Fetch with caching disabled path
+// ---------------------------------------------------------------------------
+
+// TestDataFetcher_Fetch_CachingDisabled exercises the Fetch path when caching
+// is turned off, ensuring checkCache is skipped entirely.
+func TestDataFetcher_Fetch_CachingDisabled(t *testing.T) {
+	secGateway := &mockSECGateway{
+		companyFacts: &entities.CompanyFactsResponse{
+			CIK:        "NOCACHE_TEST",
+			EntityName: "No Cache Test",
+			Facts:      map[string]interface{}{},
+		},
+	}
+	marketGateway := &mockMarketDataGateway{
+		marketData: &entities.MarketData{SharePrice: 50.0, Beta: 1.0},
+	}
+	macroGateway := &mockMacroDataGateway{
+		macroData: &entities.MacroData{RiskFreeRate: 0.04, MarketRiskPremium: 0.05},
+	}
+	cacheRepo := &mockCacheRepository{}
+
+	fetcher := NewDataFetcher(secGateway, marketGateway, macroGateway, cacheRepo)
+
+	result, err := fetcher.Fetch(context.Background(), &entities.FetchRequest{
+		Ticker:          "NOCACHE_TEST",
+		ValidationLevel: entities.ValidationNone,
+	})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// CacheStatus should be miss since caching is no longer supported
+	assert.Equal(t, entities.CacheMiss, result.CacheStatus)
+}
+
+// ---------------------------------------------------------------------------
+// Fetch with ValidateCompleteness enabled end-to-end
+// ---------------------------------------------------------------------------
+
+// TestDataFetcher_Fetch_WithValidateCompleteness tests the Fetch path that
+// invokes assessDataSufficiency -> hasRequiredFields when enabled.
+func TestDataFetcher_Fetch_WithValidateCompleteness(t *testing.T) {
+	secGateway := &mockSECGateway{
+		companyFacts: &entities.CompanyFactsResponse{
+			CIK:        "COMPLETE_TEST",
+			EntityName: "Completeness Test",
+			Facts: map[string]interface{}{
+				"us-gaap": map[string]interface{}{
+					"Assets": map[string]interface{}{
+						"units": map[string]interface{}{
+							"USD": []interface{}{
+								map[string]interface{}{"val": 1000000.0},
+							},
+						},
+					},
+					"Revenues": map[string]interface{}{
+						"units": map[string]interface{}{
+							"USD": []interface{}{
+								map[string]interface{}{"val": 500000.0},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	marketGateway := &mockMarketDataGateway{
+		marketData: &entities.MarketData{SharePrice: 100.0, Beta: 1.0},
+	}
+	macroGateway := &mockMacroDataGateway{
+		macroData: &entities.MacroData{RiskFreeRate: 0.04, MarketRiskPremium: 0.05},
+	}
+	cacheRepo := &mockCacheRepository{}
+
+	fetcher := NewDataFetcher(secGateway, marketGateway, macroGateway, cacheRepo)
+	fetcher.config.ValidateCompleteness = true
+	// Only require TotalAssets which will be set from extractLatestUSDValue
+	fetcher.config.RequiredFields = []string{"TotalAssets"}
+
+	result, err := fetcher.Fetch(context.Background(), &entities.FetchRequest{
+		Ticker:          "COMPLETE_TEST",
+		CIK:             "COMPLETE_TEST",
+		ValidationLevel: entities.ValidationNone,
+	})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// Should be successful since TotalAssets is populated by extractLatestUSDValue
+	assert.True(t, result.Success, "should be successful when required fields are present")
 }

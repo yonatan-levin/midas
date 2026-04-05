@@ -186,12 +186,9 @@ func (s *Server) setupRoutes() {
 	fairValueGroup.Use(s.authMiddleware())                                    // Apply authentication to this group
 	fairValueGroup.Use(s.requirePermission(entities.PermissionReadFairValue)) // Require fair value permission
 	{
-		// Handle empty ticker case for proper validation error
+		// Handle empty ticker case — use respondWithError for RFC 7807 consistency
 		fairValueGroup.GET("/", func(c *gin.Context) {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "ticker parameter is required",
-				"code":  "INVALID_TICKER",
-			})
+			s.respondWithError(c, http.StatusBadRequest, "INVALID_TICKER", "Ticker parameter is required")
 		})
 		fairValueGroup.GET("/:ticker", fairValueHandler.GetFairValue)
 		fairValueGroup.POST("/bulk", fairValueHandler.GetBulkFairValue)
@@ -214,7 +211,12 @@ func (s *Server) setupRoutes() {
 	}
 
 	// Documentation endpoints (if Swagger/OpenAPI is enabled)
-	if s.config.EnableSwagger {
+	// Always serve Swagger/OpenAPI in development environment; otherwise honor toggle
+	serveSwagger := s.config.EnableSwagger
+	if s.config.Environment == "development" {
+		serveSwagger = true
+	}
+	if serveSwagger {
 		// Serve the static OpenAPI spec for external tools (e.g., Schemathesis)
 		// In containers, the file exists at /app/docs; in local dev at ./docs
 		if _, err := os.Stat("docs/openapi.yaml"); err == nil {

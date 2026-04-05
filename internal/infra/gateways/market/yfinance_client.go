@@ -17,10 +17,18 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 )
 
+// errUnauthorized is a sentinel used to detect 401 responses for auth refresh.
+type errUnauthorized struct {
+	msg string
+}
+
+func (e *errUnauthorized) Error() string { return e.msg }
+
 // YFinanceClient implements Yahoo Finance API client
 type YFinanceClient struct {
 	httpClient *http.Client
 	config     *config.YFinanceConfig
+	auth       *YFinanceAuth
 	logger     *zap.Logger
 	baseURL    string
 }
@@ -36,9 +44,36 @@ func NewYFinanceClient(cfg *config.YFinanceConfig, logger *zap.Logger) *YFinance
 		},
 	}
 
+	// Determine auth URLs: use config values, fall back to sensible defaults
+	cookieURL := cfg.CookieURL
+	if cookieURL == "" {
+		cookieURL = "https://fc.yahoo.com"
+	}
+	crumbURL := cfg.CrumbURL
+	if crumbURL == "" {
+		crumbURL = "https://query2.finance.yahoo.com/v1/test/getcrumb"
+	}
+	authTTL := cfg.AuthTTL
+	if authTTL <= 0 {
+		authTTL = 6 * time.Hour
+	}
+
+	// The auth manager uses its own HTTP client without the short request timeout,
+	// since auth fetches are separate from data requests.
+	authHTTPClient := &http.Client{
+		Timeout: 30 * time.Second,
+		// Do NOT follow redirects automatically — we need to capture cookies from
+		// the initial response before any redirects.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	auth := NewYFinanceAuth(authHTTPClient, cookieURL, crumbURL, authTTL, logger)
+
 	return &YFinanceClient{
 		httpClient: httpClient,
 		config:     cfg,
+		auth:       auth,
 		logger:     logger.Named("yfinance-client"),
 		baseURL:    cfg.BaseURL,
 	}
@@ -61,11 +96,19 @@ func (c *YFinanceClient) GetQuote(ctx context.Context, ticker string) (*ports.YF
 	var result *YFinanceQuoteResponse
 	var err error
 
-	// Implement retry logic
+	// Implement retry logic with auth refresh on 401
 	for attempt := 0; attempt < c.config.MaxRetries; attempt++ {
 		result, err = c.makeQuoteRequest(ctx, url)
 		if err == nil {
 			break
+		}
+
+		// If we got a 401, invalidate auth so the next attempt uses fresh credentials
+		if _, ok := err.(*errUnauthorized); ok {
+			c.logger.Warn("Got 401 from Yahoo Finance, refreshing auth",
+				zap.String("ticker", ticker),
+				zap.Int("attempt", attempt+1))
+			c.auth.Invalidate()
 		}
 
 		if attempt < c.config.MaxRetries-1 {
@@ -155,37 +198,40 @@ func (c *YFinanceClient) GetKeyStatistics(ctx context.Context, ticker string) (*
 
 	stats := &ports.YFinanceKeyStats{}
 
-	// Extract data from the response
+	// Extract data from the response.
+	// Each field is a *YFinanceValue which may be nil when Yahoo omits it,
+	// so we must nil-check the outer pointer before accessing .Raw.
 	if keyStats := result.QuoteSummary.Result[0].DefaultKeyStatistics; keyStats != nil {
-		if keyStats.Beta.Raw != nil {
+		if keyStats.Beta != nil && keyStats.Beta.Raw != nil {
 			stats.Beta = *keyStats.Beta.Raw
 		}
-		if keyStats.SharesOutstanding.Raw != nil {
+		if keyStats.SharesOutstanding != nil && keyStats.SharesOutstanding.Raw != nil {
 			stats.SharesOutstanding = *keyStats.SharesOutstanding.Raw
 		}
-		if keyStats.FloatShares.Raw != nil {
+		if keyStats.FloatShares != nil && keyStats.FloatShares.Raw != nil {
 			stats.SharesFloat = *keyStats.FloatShares.Raw
 		}
-		if keyStats.BookValue.Raw != nil {
+		if keyStats.BookValue != nil && keyStats.BookValue.Raw != nil {
 			stats.BookValue = *keyStats.BookValue.Raw
 		}
-		if keyStats.PriceToBook.Raw != nil {
+		if keyStats.PriceToBook != nil && keyStats.PriceToBook.Raw != nil {
 			stats.PriceToBook = *keyStats.PriceToBook.Raw
 		}
-		if keyStats.EnterpriseValue.Raw != nil {
+		if keyStats.EnterpriseValue != nil && keyStats.EnterpriseValue.Raw != nil {
 			stats.EnterpriseValue = *keyStats.EnterpriseValue.Raw
 		}
-		if keyStats.TotalCash.Raw != nil {
+		if keyStats.TotalCash != nil && keyStats.TotalCash.Raw != nil {
 			stats.TotalCash = *keyStats.TotalCash.Raw
 		}
-		if keyStats.TotalDebt.Raw != nil {
+		if keyStats.TotalDebt != nil && keyStats.TotalDebt.Raw != nil {
 			stats.TotalDebt = *keyStats.TotalDebt.Raw
 		}
 	}
 
 	if financialData := result.QuoteSummary.Result[0].FinancialData; financialData != nil {
-		// nolint:staticcheck // placeholder until detailed price parsing
-		if financialData.CurrentPrice.Raw != nil {
+		if financialData.CurrentPrice != nil && financialData.CurrentPrice.Raw != nil {
+			// Price data available from financial data module
+			_ = *financialData.CurrentPrice.Raw
 		}
 	}
 
@@ -254,22 +300,33 @@ func (c *YFinanceClient) GetHistoricalPrices(ctx context.Context, ticker string,
 	return prices, nil
 }
 
-// makeQuoteRequest executes a quote request
-func (c *YFinanceClient) makeQuoteRequest(ctx context.Context, url string) (*YFinanceQuoteResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+// makeQuoteRequest executes a quote request with cookie+crumb auth.
+func (c *YFinanceClient) makeQuoteRequest(ctx context.Context, reqURL string) (*YFinanceQuoteResponse, error) {
+	// Ensure we have valid auth credentials
+	if err := c.auth.EnsureAuth(ctx); err != nil {
+		return nil, fmt.Errorf("failed to authenticate with Yahoo Finance: %w", err)
+	}
+
+	// Append crumb parameter to URL
+	reqURL = c.appendCrumb(reqURL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Set headers
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Midas/1.0)")
-	req.Header.Set("Accept", "application/json")
+	c.applyAuth(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, &errUnauthorized{msg: fmt.Sprintf("yahoo finance API returned 401: %s", string(body))}
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -284,21 +341,31 @@ func (c *YFinanceClient) makeQuoteRequest(ctx context.Context, url string) (*YFi
 	return &result, nil
 }
 
-// makeKeyStatsRequest executes a key statistics request
-func (c *YFinanceClient) makeKeyStatsRequest(ctx context.Context, url string) (*YFinanceKeyStatsResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+// makeKeyStatsRequest executes a key statistics request with cookie+crumb auth.
+func (c *YFinanceClient) makeKeyStatsRequest(ctx context.Context, reqURL string) (*YFinanceKeyStatsResponse, error) {
+	if err := c.auth.EnsureAuth(ctx); err != nil {
+		return nil, fmt.Errorf("failed to authenticate with Yahoo Finance: %w", err)
+	}
+
+	reqURL = c.appendCrumb(reqURL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Midas/1.0)")
-	req.Header.Set("Accept", "application/json")
+	c.applyAuth(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, &errUnauthorized{msg: fmt.Sprintf("yahoo finance API returned 401: %s", string(body))}
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -313,21 +380,31 @@ func (c *YFinanceClient) makeKeyStatsRequest(ctx context.Context, url string) (*
 	return &result, nil
 }
 
-// makeHistoricalRequest executes a historical data request
-func (c *YFinanceClient) makeHistoricalRequest(ctx context.Context, url string) (*YFinanceHistoricalResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+// makeHistoricalRequest executes a historical data request with cookie+crumb auth.
+func (c *YFinanceClient) makeHistoricalRequest(ctx context.Context, reqURL string) (*YFinanceHistoricalResponse, error) {
+	if err := c.auth.EnsureAuth(ctx); err != nil {
+		return nil, fmt.Errorf("failed to authenticate with Yahoo Finance: %w", err)
+	}
+
+	reqURL = c.appendCrumb(reqURL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; Midas/1.0)")
-	req.Header.Set("Accept", "application/json")
+	c.applyAuth(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, &errUnauthorized{msg: fmt.Sprintf("yahoo finance API returned 401: %s", string(body))}
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -340,6 +417,27 @@ func (c *YFinanceClient) makeHistoricalRequest(ctx context.Context, url string) 
 	}
 
 	return &result, nil
+}
+
+// applyAuth sets the auth headers (cookies and User-Agent) on a request.
+func (c *YFinanceClient) applyAuth(req *http.Request) {
+	c.auth.ApplyCookies(req)
+	req.Header.Set("User-Agent", yahooUserAgent)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Referer", "https://finance.yahoo.com")
+}
+
+// appendCrumb adds the crumb query parameter to a URL.
+func (c *YFinanceClient) appendCrumb(reqURL string) string {
+	crumb := c.auth.GetCrumb()
+	if crumb == "" {
+		return reqURL
+	}
+	separator := "&"
+	if !strings.Contains(reqURL, "?") {
+		separator = "?"
+	}
+	return reqURL + separator + "crumb=" + url.QueryEscape(crumb)
 }
 
 // Response structures for Yahoo Finance API
