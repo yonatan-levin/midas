@@ -3,6 +3,7 @@ package sec
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -405,9 +406,206 @@ func TestGateway_RetryLogic(t *testing.T) {
 	})
 }
 
-// Note: Additional unit tests for Gateway methods require interface abstraction
-// of Client and Parser for proper mocking. This would be implemented in
-// future refactoring to support better testability.
-//
-// Integration tests can be added that test the full workflow with actual
-// SEC API calls, but should be marked with build tags for optional execution.
+// ---------------------------------------------------------------------------
+// Tests for Gateway wrapper methods: ParseFinancialData, NormalizeFinancialData,
+// and GetFinancialDataForTicker. These delegate to the internal parser so we
+// exercise the full gateway -> parser path.
+// ---------------------------------------------------------------------------
+
+func TestGateway_ParseFinancialData_Success(t *testing.T) {
+	cfg := createTestSECConfig("https://data.sec.gov/api/xbrl")
+	logger := zap.NewNop()
+	gateway := NewGateway(cfg, logger)
+
+	// Build a rich SECCompanyFacts payload covering multiple XBRL tags
+	facts := &ports.SECCompanyFacts{
+		CIK:        "320193",
+		EntityName: "Apple Inc.",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"us-gaap": {
+				"Revenues": makeUSDFactGroup("Revenues", 383285000000, 2023, "FY"),
+				"OperatingIncomeLoss": makeUSDFactGroup(
+					"Operating Income", 114301000000, 2023, "FY"),
+				"Assets": makeUSDFactGroup("Total Assets", 352755000000, 2023, "FY"),
+			},
+		},
+	}
+
+	ctx := context.Background()
+	historical, err := gateway.ParseFinancialData(ctx, facts)
+
+	require.NoError(t, err)
+	assert.NotNil(t, historical)
+	assert.Contains(t, historical.Data, "2023FY")
+	assert.Equal(t, 383285000000.0, historical.Data["2023FY"].Revenue)
+}
+
+func TestGateway_ParseFinancialData_NilFacts(t *testing.T) {
+	cfg := createTestSECConfig("https://data.sec.gov/api/xbrl")
+	logger := zap.NewNop()
+	gateway := NewGateway(cfg, logger)
+
+	ctx := context.Background()
+	historical, err := gateway.ParseFinancialData(ctx, nil)
+
+	assert.Error(t, err)
+	assert.Nil(t, historical)
+	assert.Contains(t, err.Error(), "facts cannot be nil")
+}
+
+func TestGateway_NormalizeFinancialData_Success(t *testing.T) {
+	cfg := createTestSECConfig("https://data.sec.gov/api/xbrl")
+	logger := zap.NewNop()
+	gateway := NewGateway(cfg, logger)
+
+	data := &entities.FinancialData{
+		Ticker:           "AAPL",
+		OperatingIncome:  100000000,
+		TotalAssets:      300000000,
+		Goodwill:         10000000,
+		OtherIntangibles: 5000000,
+		TaxRate:          0.21,
+		FilingPeriod:     "2023FY",
+		FilingDate:       time.Now(),
+		AsOf:             time.Now(),
+	}
+
+	ctx := context.Background()
+	normalized, err := gateway.NormalizeFinancialData(ctx, data)
+
+	require.NoError(t, err)
+	assert.True(t, normalized.HasNormalizedData)
+	assert.Equal(t, 285000000.0, normalized.TangibleAssets) // 300M - 10M - 5M
+}
+
+func TestGateway_NormalizeFinancialData_NilData(t *testing.T) {
+	cfg := createTestSECConfig("https://data.sec.gov/api/xbrl")
+	logger := zap.NewNop()
+	gateway := NewGateway(cfg, logger)
+
+	ctx := context.Background()
+	normalized, err := gateway.NormalizeFinancialData(ctx, nil)
+
+	assert.Error(t, err)
+	assert.Nil(t, normalized)
+	assert.Contains(t, err.Error(), "data cannot be nil")
+}
+
+func TestGateway_GetFinancialDataForTicker_Success(t *testing.T) {
+	// Build a complete SECCompanyFacts response that the mock server will return.
+	// This exercises the full gateway flow: fetch -> parse -> normalize -> set ticker.
+	mockFacts := &ports.SECCompanyFacts{
+		CIK:        "320193",
+		EntityName: "Apple Inc.",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"us-gaap": {
+				"Revenues":            makeUSDFactGroup("Revenues", 383285000000, 2023, "FY"),
+				"OperatingIncomeLoss": makeUSDFactGroup("Operating Income", 114301000000, 2023, "FY"),
+				"Assets":              makeUSDFactGroup("Total Assets", 352755000000, 2023, "FY"),
+				"Goodwill":            makeUSDFactGroup("Goodwill", 5000000000, 2023, "FY"),
+				"LongTermDebt":        makeUSDFactGroup("Long-Term Debt", 100000000000, 2023, "FY"),
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mockFacts)
+	}))
+	defer server.Close()
+
+	cfg := createTestSECConfig(server.URL)
+	cfg.MaxRetries = 1
+	cfg.RetryBackoffBase = time.Millisecond
+	logger := zap.NewNop()
+	gateway := NewGateway(cfg, logger)
+
+	ctx := context.Background()
+	historical, err := gateway.GetFinancialDataForTicker(ctx, "AAPL", "0000320193")
+
+	require.NoError(t, err)
+	assert.NotNil(t, historical)
+
+	// Verify the ticker is set on the top-level struct and on each period entry
+	assert.Equal(t, "AAPL", historical.Ticker)
+	for _, data := range historical.Data {
+		assert.Equal(t, "AAPL", data.Ticker)
+		assert.True(t, data.HasNormalizedData, "each period should be normalized")
+	}
+}
+
+func TestGateway_GetFinancialDataForTicker_FetchError(t *testing.T) {
+	// Server always returns 500 so the fetch step fails
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	cfg := createTestSECConfig(server.URL)
+	cfg.MaxRetries = 1
+	cfg.RetryBackoffBase = time.Millisecond
+	logger := zap.NewNop()
+	gateway := NewGateway(cfg, logger)
+
+	ctx := context.Background()
+	historical, err := gateway.GetFinancialDataForTicker(ctx, "AAPL", "0000320193")
+
+	assert.Error(t, err)
+	assert.Nil(t, historical)
+	assert.Contains(t, err.Error(), "failed to get company facts")
+}
+
+func TestGateway_GetFinancialDataForTicker_ParseError(t *testing.T) {
+	// Return valid JSON but with no recognized financial concepts so parsing fails
+	mockFacts := &ports.SECCompanyFacts{
+		CIK:        "320193",
+		EntityName: "Apple Inc.",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"other": {
+				"UnknownConcept": makeUSDFactGroup("Unknown", 100, 2023, "FY"),
+			},
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(mockFacts)
+	}))
+	defer server.Close()
+
+	cfg := createTestSECConfig(server.URL)
+	cfg.MaxRetries = 1
+	cfg.RetryBackoffBase = time.Millisecond
+	logger := zap.NewNop()
+	gateway := NewGateway(cfg, logger)
+
+	ctx := context.Background()
+	historical, err := gateway.GetFinancialDataForTicker(ctx, "AAPL", "0000320193")
+
+	assert.Error(t, err)
+	assert.Nil(t, historical)
+	assert.Contains(t, err.Error(), "failed to parse financial data")
+}
+
+// makeUSDFactGroup is a helper that creates a SECFactGroup with a single USD fact
+// at the given fiscal year and period. Reduces boilerplate in test data setup.
+func makeUSDFactGroup(label string, val float64, fy int, fp string) ports.SECFactGroup {
+	return ports.SECFactGroup{
+		Label:       label,
+		Description: label + " description",
+		Units: map[string][]ports.SECFact{
+			"USD": {
+				{
+					End:   "2023-09-30",
+					Val:   val,
+					Accn:  "0000320193-23-000106",
+					Fy:    fy,
+					Fp:    fp,
+					Form:  "10-K",
+					Filed: "2023-11-03",
+					Frame: fmt.Sprintf("CY%dQ3I", fy),
+				},
+			},
+		},
+	}
+}

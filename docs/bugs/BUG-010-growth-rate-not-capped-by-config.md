@@ -5,7 +5,7 @@
 | **ID** | BUG-010 |
 | **Title** | DCF growth rate exceeds configured max (50%) for companies with large revenue jumps — produces inflated valuations |
 | **Severity** | MEDIUM |
-| **Status** | Open |
+| **Status** | **RESOLVED** (Phase 1.1 — valuation engine upgrade) |
 | **Component** | Valuation Service / DCF Calculation |
 | **Reported** | 2026-04-05 |
 
@@ -81,12 +81,16 @@ Also consider penalizing the data quality score when capping is applied — it i
 
 ## Acceptance Criteria
 
-- [ ] JNJ growth rate is capped at 50% (not 64.7%)
-- [ ] JNJ DCF value is significantly lower (order of magnitude more reasonable)
-- [ ] Capping is logged as a warning with original and capped values
-- [ ] Config values `dcf_max_growth_rate` and `dcf_min_growth_rate` are respected
-- [ ] Existing tests pass (AAPL, MSFT growth rates are under 50% so unaffected)
-- [ ] New test: verify a growth rate > max is capped to max
+- [x] JNJ growth rate is capped at 50% (not 64.7%)
+- [x] JNJ DCF value is significantly lower (order of magnitude more reasonable)
+- [x] Capping is logged as a warning with original and capped values
+- [x] Config values `dcf_max_growth_rate` and `dcf_min_growth_rate` are respected
+- [x] Existing tests pass (AAPL, MSFT growth rates are under 50% so unaffected)
+- [x] New test: verify a growth rate > max is capped to max
+
+## Resolution
+
+Fixed in Phase 1.1 of the valuation engine upgrade. `growth.CapGrowthRateWithBounds()` is called in `performValuation()` using config-driven bounds. When config bounds are zero (unset), defaults to [-0.3, 0.5]. Warning logged when capping is triggered. Test: `TestService_performValuation_GrowthCapping`.
 
 ## References
 

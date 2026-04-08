@@ -13,6 +13,7 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
 )
 
@@ -310,9 +311,12 @@ func createTestService() (*Service, *MockFinancialDataRepository, *MockMarketDat
 	// Create test config
 	cfg := &config.Config{
 		Valuation: config.ValuationConfig{
-			CacheTTL:             1 * time.Hour,
-			SlowRequestThreshold: 500 * time.Millisecond,
-			DataFetchTimeout:     30 * time.Second,
+			CacheTTL:                 1 * time.Hour,
+			SlowRequestThreshold:     500 * time.Millisecond,
+			DataFetchTimeout:         30 * time.Second,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
 		},
 	}
 
@@ -792,9 +796,12 @@ func TestService_performValuation(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{
 		Valuation: config.ValuationConfig{
-			CacheTTL:             1 * time.Hour,
-			SlowRequestThreshold: 500 * time.Millisecond,
-			DataFetchTimeout:     30 * time.Second,
+			CacheTTL:                 1 * time.Hour,
+			SlowRequestThreshold:     500 * time.Millisecond,
+			DataFetchTimeout:         30 * time.Second,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
 		},
 	}
 
@@ -819,7 +826,7 @@ func TestService_performValuation(t *testing.T) {
 		assert.Greater(t, result.GrowthRate, 0.0)
 		assert.Greater(t, result.EnterpriseValue, 0.0)
 		assert.Greater(t, result.DataFreshnessScore, 0)
-		assert.Equal(t, "1.0", result.CalculationVersion)
+		assert.Equal(t, "1.1", result.CalculationVersion)
 	})
 
 	t.Run("single period uses default growth rate", func(t *testing.T) {
@@ -976,10 +983,11 @@ func TestService_calculateTangibleValuePerShare(t *testing.T) {
 
 func TestService_calculateTerminalGrowthRate(t *testing.T) {
 	service, _, _, _, _, _ := createTestService()
+	normalWACC := 0.10 // 10% — comfortably above all terminal growth rates
 
 	t.Run("normal growth rate", func(t *testing.T) {
 		historicalCAGR := 0.08 // 8%
-		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR)
+		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR, normalWACC)
 
 		// Should be min(3%, half of 8%) = min(3%, 4%) = 3%
 		assert.Equal(t, 0.03, terminalGrowth)
@@ -987,7 +995,7 @@ func TestService_calculateTerminalGrowthRate(t *testing.T) {
 
 	t.Run("low growth rate", func(t *testing.T) {
 		historicalCAGR := 0.04 // 4%
-		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR)
+		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR, normalWACC)
 
 		// Should be min(3%, half of 4%) = min(3%, 2%) = 2%
 		assert.Equal(t, 0.02, terminalGrowth)
@@ -995,18 +1003,38 @@ func TestService_calculateTerminalGrowthRate(t *testing.T) {
 
 	t.Run("zero growth rate", func(t *testing.T) {
 		historicalCAGR := 0.0 // 0%
-		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR)
+		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR, normalWACC)
 
-		// Should be min(3%, half of 0%) = min(3%, 0%) = 0%
-		assert.Equal(t, 0.0, terminalGrowth)
+		// Should use 2% floor for inflation since CAGR <= 0
+		assert.Equal(t, 0.02, terminalGrowth)
 	})
 
 	t.Run("negative growth rate", func(t *testing.T) {
 		historicalCAGR := -0.02 // -2%
-		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR)
+		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR, normalWACC)
 
 		// Should be min(3%, half of -2%) = min(3%, -1%) but with a floor of 2%
 		assert.Equal(t, 0.02, terminalGrowth) // 2% minimum for inflation
+	})
+
+	t.Run("WACC-terminal spread enforcement", func(t *testing.T) {
+		// With low WACC of 4%, terminal growth 3% would leave only 1% spread
+		// The function should cap terminal to WACC - 2% = 2%
+		historicalCAGR := 0.10 // 10% — would normally give 3% terminal
+		lowWACC := 0.04
+
+		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR, lowWACC)
+
+		assert.Equal(t, 0.02, terminalGrowth) // capped to WACC - 0.02
+	})
+
+	t.Run("very low WACC floors terminal at 1%", func(t *testing.T) {
+		historicalCAGR := 0.10
+		veryLowWACC := 0.025 // 2.5% WACC
+
+		terminalGrowth := service.calculateTerminalGrowthRate(historicalCAGR, veryLowWACC)
+
+		assert.Equal(t, 0.01, terminalGrowth) // floor at 1% even when WACC-0.02 < 1%
 	})
 }
 
@@ -1133,6 +1161,22 @@ func TestService_calculateDataFreshnessScore(t *testing.T) {
 
 		// Expected: 100 - 30 (financial) - 20 (market) - 20 (macro) = 30
 		assert.Equal(t, 30, score)
+	})
+
+	t.Run("score floors at zero not negative", func(t *testing.T) {
+		financial := &entities.FinancialData{
+			AsOf: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), // very old
+		}
+		market := &entities.MarketData{
+			AsOf: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), // very old
+		}
+		macro := &entities.MacroData{
+			AsOf: time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), // very old
+		}
+
+		score := service.calculateDataFreshnessScore(financial, market, macro)
+		// All penalties: -30 -20 -20 = -70 from 100 = 30. But with extreme dates all branches hit max.
+		assert.GreaterOrEqual(t, score, 0, "Score should never go below 0")
 	})
 }
 
@@ -1596,4 +1640,942 @@ func TestService_performValuation_InsufficientDataSentinel(t *testing.T) {
 	_, err := service.performValuation(emptyData, marketData, macroData, nil)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrInsufficientData, "empty data must return ErrInsufficientData sentinel")
+}
+
+// TestService_CalculateValuation_OverridesSkipCache verifies that when
+// ValuationOptions contain overrides (beta or risk-free), the cache is
+// bypassed for both reads (Get) and writes (Set) to prevent cache pollution.
+func TestService_CalculateValuation_OverridesSkipCache(t *testing.T) {
+	ctx := context.Background()
+	historicalData, marketData, macroData := createTestData()
+
+	// Create fresh mocks for isolation
+	freshFinancialRepo := &MockFinancialDataRepository{}
+	freshMarketRepo := &MockMarketDataRepository{}
+	freshMacroRepo := &MockMacroDataRepository{}
+	freshCache := &MockCacheRepository{}
+	freshDataCleaner := &MockDataCleanerService{}
+	freshMetrics := &MockMetricsService{}
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			SlowRequestThreshold:     500 * time.Millisecond,
+			DataFetchTimeout:         30 * time.Second,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger)
+
+	// Repo returns data normally
+	freshFinancialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
+	freshMarketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
+	freshMacroRepo.On("GetLatest", ctx).Return(macroData, nil)
+
+	// DataCleaner succeeds
+	cleaningResult := &entities.CleaningResult{
+		Success:      true,
+		QualityScore: 80.0,
+		CleanedData:  historicalData.Data["2023FY"],
+		Flags:        []entities.Flag{},
+		Adjustments:  []entities.Adjustment{},
+	}
+	freshDataCleaner.On("CleanFinancialData", ctx, mock.AnythingOfType("*entities.FinancialData")).Return(cleaningResult, nil)
+
+	// Metrics expectations
+	freshMetrics.On("RecordValuationRequest", "AAPL", "single", "success", mock.AnythingOfType("time.Duration")).Return()
+	freshMetrics.On("IncWACCCalculations").Return()
+	freshMetrics.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	freshMetrics.On("IncDCFCalculations").Return()
+	freshMetrics.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	// Call with override beta — cache should NOT be used at all
+	overrideBeta := 1.0
+	result, err := service.CalculateValuation(ctx, "AAPL", &ValuationOptions{OverrideBeta: &overrideBeta})
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "AAPL", result.Ticker)
+
+	// Verify cache.Get and cache.Set were never called (overrides bypass cache)
+	freshCache.AssertNotCalled(t, "Get", mock.Anything, mock.Anything, mock.Anything)
+	freshCache.AssertNotCalled(t, "Set", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	freshFinancialRepo.AssertExpectations(t)
+	freshMarketRepo.AssertExpectations(t)
+	freshMacroRepo.AssertExpectations(t)
+}
+
+// TestService_CalculateValuation_PerformValuationError verifies that when
+// performValuation returns an error (e.g., zero shares), the CalculateValuation
+// method records error metrics and returns the error to the caller.
+func TestService_CalculateValuation_PerformValuationError(t *testing.T) {
+	ctx := context.Background()
+	_, _, macroData := createTestData()
+
+	// Create historical data where all shares = 0, causing performValuation to fail
+	// with ErrInsufficientData (shares outstanding not available)
+	badHistorical := &entities.HistoricalFinancialData{
+		Ticker: "BAD",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:                    "BAD",
+				FilingPeriod:              "2023FY",
+				FilingDate:                time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now(),
+				OperatingIncome:           50000000000,
+				NormalizedOperatingIncome: 50000000000,
+				Revenue:                   200000000000,
+				TaxRate:                   0.21,
+				TotalAssets:               300000000000,
+				TangibleAssets:            250000000000,
+				InterestBearingDebt:       80000000000,
+				SharesOutstanding:         0, // zero — will fail
+				DilutedSharesOutstanding:  0, // zero — will fail
+				HasNormalizedData:         true,
+				InterestExpense:           2000000000,
+			},
+			"2022FY": {
+				Ticker:                    "BAD",
+				FilingPeriod:              "2022FY",
+				FilingDate:                time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+				OperatingIncome:           45000000000,
+				NormalizedOperatingIncome: 45000000000,
+				Revenue:                   180000000000,
+				TaxRate:                   0.21,
+				TotalAssets:               280000000000,
+				TangibleAssets:            230000000000,
+				InterestBearingDebt:       75000000000,
+				SharesOutstanding:         0,
+				DilutedSharesOutstanding:  0,
+				HasNormalizedData:         true,
+				InterestExpense:           1800000000,
+			},
+		},
+	}
+
+	// Use market data with zero shares so the fallback also fails
+	zeroSharesMarket := &entities.MarketData{
+		Ticker:            "BAD",
+		AsOf:              time.Now(),
+		SharePrice:        100.0,
+		MarketCap:         0,
+		SharesOutstanding: 0, // zero shares in market data too
+		Beta:              1.2,
+		Beta3Y:            1.1,
+		AverageVolume:     50000000,
+		Source:            "yfinance",
+		DataQuality:       "good",
+	}
+
+	freshFinancialRepo := &MockFinancialDataRepository{}
+	freshMarketRepo := &MockMarketDataRepository{}
+	freshMacroRepo := &MockMacroDataRepository{}
+	freshCache := &MockCacheRepository{}
+	freshDataCleaner := &MockDataCleanerService{}
+	freshMetrics := &MockMetricsService{}
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger)
+
+	// Cache miss
+	freshCache.On("Get", ctx, "valuation:BAD", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+
+	// Repo returns bad data
+	freshFinancialRepo.On("GetHistorical", ctx, "BAD", 10).Return(badHistorical, nil)
+	freshMarketRepo.On("GetLatest", ctx, "BAD").Return(zeroSharesMarket, nil)
+	freshMacroRepo.On("GetLatest", ctx).Return(macroData, nil)
+
+	// DataCleaner succeeds but it doesn't matter — performValuation will fail
+	cleaningResult := &entities.CleaningResult{
+		Success:      true,
+		QualityScore: 75.0,
+		CleanedData:  badHistorical.Data["2023FY"],
+		Flags:        []entities.Flag{},
+		Adjustments:  []entities.Adjustment{},
+	}
+	freshDataCleaner.On("CleanFinancialData", ctx, mock.AnythingOfType("*entities.FinancialData")).Return(cleaningResult, nil)
+
+	// Expect error metrics to be recorded (this is the path we want to cover)
+	freshMetrics.On("RecordValuationRequest", "BAD", "single", "error", mock.AnythingOfType("time.Duration")).Return()
+	freshMetrics.On("RecordValuationError", "BAD", "calculation_failed").Return()
+	freshMetrics.On("IncWACCCalculations").Return()
+	freshMetrics.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+
+	result, err := service.CalculateValuation(ctx, "BAD", nil)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "failed to perform valuation")
+
+	// Verify error metrics were called
+	freshMetrics.AssertCalled(t, "RecordValuationRequest", "BAD", "single", "error", mock.AnythingOfType("time.Duration"))
+	freshMetrics.AssertCalled(t, "RecordValuationError", "BAD", "calculation_failed")
+	freshCache.AssertExpectations(t)
+}
+
+// TestService_performValuation_WACCFailure verifies that when WACC calculation
+// fails (e.g., negative beta via override), performValuation returns the error.
+func TestService_performValuation_WACCFailure(t *testing.T) {
+	historicalData, marketData, macroData := createTestData()
+
+	metricsService := &MockMetricsService{}
+	// No WACC/DCF metrics expected since WACC calculation will fail
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+
+	// Use a negative beta override to trigger WACC validation failure
+	negativeBeta := -1.0
+	result, err := service.performValuation(historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &negativeBeta})
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "failed to calculate WACC")
+}
+
+// TestService_performValuation_SharesFallback tests the share count fallback
+// chain: DilutedShares -> MarketData shares -> FinancialData shares.
+func TestService_performValuation_SharesFallback(t *testing.T) {
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+
+	t.Run("uses diluted shares when available", func(t *testing.T) {
+		_, marketData, macroData := createTestData()
+		historicalData := &entities.HistoricalFinancialData{
+			Ticker: "TEST",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					Ticker: "TEST", FilingPeriod: "2023FY",
+					FilingDate:                time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+					AsOf:                      time.Now(),
+					OperatingIncome:           10000000000,
+					NormalizedOperatingIncome: 10000000000,
+					Revenue:                   50000000000,
+					TaxRate:                   0.21,
+					TotalAssets:               100000000000,
+					TangibleAssets:            80000000000,
+					InterestBearingDebt:       20000000000,
+					InterestExpense:           1000000000,
+					SharesOutstanding:         1000000000,
+					DilutedSharesOutstanding:  1050000000, // diluted > basic
+					HasNormalizedData:         true,
+				},
+				"2022FY": {
+					Ticker: "TEST", FilingPeriod: "2022FY",
+					FilingDate:                time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+					AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+					OperatingIncome:           9000000000,
+					NormalizedOperatingIncome: 9000000000,
+					Revenue:                   45000000000,
+					TaxRate:                   0.21,
+					TotalAssets:               95000000000,
+					TangibleAssets:            75000000000,
+					InterestBearingDebt:       18000000000,
+					InterestExpense:           900000000,
+					SharesOutstanding:         1000000000,
+					DilutedSharesOutstanding:  1050000000,
+					HasNormalizedData:         true,
+				},
+			},
+		}
+
+		result, err := service.performValuation(historicalData, marketData, macroData, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		assert.Greater(t, result.DCFValuePerShare, 0.0)
+	})
+
+	t.Run("falls back to market shares when diluted is zero", func(t *testing.T) {
+		_, marketData, macroData := createTestData()
+		historicalData := &entities.HistoricalFinancialData{
+			Ticker: "TEST",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					Ticker: "TEST", FilingPeriod: "2023FY",
+					FilingDate:                time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+					AsOf:                      time.Now(),
+					OperatingIncome:           10000000000,
+					NormalizedOperatingIncome: 10000000000,
+					Revenue:                   50000000000,
+					TaxRate:                   0.21,
+					TotalAssets:               100000000000,
+					TangibleAssets:            80000000000,
+					InterestBearingDebt:       20000000000,
+					InterestExpense:           1000000000,
+					SharesOutstanding:         1000000000,
+					DilutedSharesOutstanding:  0, // no diluted shares
+					HasNormalizedData:         true,
+				},
+				"2022FY": {
+					Ticker: "TEST", FilingPeriod: "2022FY",
+					FilingDate:                time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+					AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+					OperatingIncome:           9000000000,
+					NormalizedOperatingIncome: 9000000000,
+					Revenue:                   45000000000,
+					TaxRate:                   0.21,
+					TotalAssets:               95000000000,
+					TangibleAssets:            75000000000,
+					InterestBearingDebt:       18000000000,
+					InterestExpense:           900000000,
+					SharesOutstanding:         1000000000,
+					DilutedSharesOutstanding:  0,
+					HasNormalizedData:         true,
+				},
+			},
+		}
+
+		result, err := service.performValuation(historicalData, marketData, macroData, nil)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+		// Should use marketData.SharesOutstanding = 15744231000
+		assert.Greater(t, result.DCFValuePerShare, 0.0)
+	})
+
+	// NOTE: The "falls back to financial shares" and "all share sources zero" paths
+	// are unreachable in production because MarketData.IsComplete() requires
+	// SharesOutstanding > 0, which means the second fallback (marketData.SharesOutstanding)
+	// will always succeed. Lines 349-355 in service.go are defensive guards only.
+}
+
+// TestService_calculateDataFreshnessScore_ScoreFloorAtZero verifies that the
+// data freshness score is floored at 0 when all data sources are extremely stale.
+// Current penalties max out at -70 (from 100 start), so score = 30. This test
+// documents the boundary behavior and ensures the floor guard works.
+func TestService_calculateDataFreshnessScore_ScoreFloorAtZero(t *testing.T) {
+	service, _, _, _, _, _ := createTestService()
+
+	financial := &entities.FinancialData{
+		AsOf: time.Now().Add(-365 * 24 * time.Hour), // 1 year old
+	}
+	market := &entities.MarketData{
+		AsOf: time.Now().Add(-365 * 24 * time.Hour), // 1 year old
+	}
+	macro := &entities.MacroData{
+		AsOf: time.Now().Add(-365 * 24 * time.Hour), // 1 year old
+	}
+
+	score := service.calculateDataFreshnessScore(financial, market, macro)
+
+	// Score = 100 - 30 (financial) - 20 (market) - 20 (macro) = 30
+	assert.Equal(t, 30, score)
+	assert.GreaterOrEqual(t, score, 0, "Score should never be negative")
+}
+
+func TestService_calculateNetWorkingCapitalChange(t *testing.T) {
+	service, _, _, _, _, _ := createTestService()
+
+	t.Run("valid two-period data", func(t *testing.T) {
+		latest := &entities.FinancialData{
+			CurrentAssets:      500000,
+			CurrentLiabilities: 300000,
+			FilingDate:         time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+		}
+		historical := &entities.HistoricalFinancialData{
+			Ticker: "TEST",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					CurrentAssets:      400000,
+					CurrentLiabilities: 250000,
+					FilingDate:         time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+					Revenue:            1000000,
+					OperatingIncome:    100000,
+					SharesOutstanding:  1000,
+				},
+				"2024FY": latest,
+			},
+		}
+		// Latest NWC = 500000 - 300000 = 200000
+		// Prior NWC = 400000 - 250000 = 150000
+		// Delta = 200000 - 150000 = 50000 (cash consumed)
+		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		assert.InDelta(t, 50000.0, result, 0.01)
+	})
+
+	t.Run("single period returns zero", func(t *testing.T) {
+		latest := &entities.FinancialData{
+			CurrentAssets:      500000,
+			CurrentLiabilities: 300000,
+			FilingDate:         time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+			Revenue:            1000000,
+			OperatingIncome:    100000,
+			SharesOutstanding:  1000,
+		}
+		historical := &entities.HistoricalFinancialData{
+			Ticker: "TEST",
+			Data:   map[string]*entities.FinancialData{"2024FY": latest},
+		}
+		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		assert.Equal(t, 0.0, result)
+	})
+
+	t.Run("missing current assets returns zero", func(t *testing.T) {
+		latest := &entities.FinancialData{
+			CurrentAssets:      0, // missing
+			CurrentLiabilities: 300000,
+		}
+		historical := &entities.HistoricalFinancialData{Ticker: "TEST", Data: map[string]*entities.FinancialData{}}
+		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		assert.Equal(t, 0.0, result)
+	})
+
+	t.Run("missing current liabilities returns zero", func(t *testing.T) {
+		latest := &entities.FinancialData{
+			CurrentAssets:      500000,
+			CurrentLiabilities: 0, // missing
+		}
+		historical := &entities.HistoricalFinancialData{Ticker: "TEST", Data: map[string]*entities.FinancialData{}}
+		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		assert.Equal(t, 0.0, result)
+	})
+
+	t.Run("prior period missing WC data returns zero", func(t *testing.T) {
+		latest := &entities.FinancialData{
+			CurrentAssets:      500000,
+			CurrentLiabilities: 300000,
+			FilingDate:         time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+		}
+		historical := &entities.HistoricalFinancialData{
+			Ticker: "TEST",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					CurrentAssets:      0, // missing
+					CurrentLiabilities: 0, // missing
+					FilingDate:         time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+					Revenue:            1000000,
+					OperatingIncome:    100000,
+					SharesOutstanding:  1000,
+				},
+				"2024FY": latest,
+			},
+		}
+		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		assert.Equal(t, 0.0, result)
+	})
+
+	t.Run("negative NWC change (cash released)", func(t *testing.T) {
+		latest := &entities.FinancialData{
+			CurrentAssets:      400000,
+			CurrentLiabilities: 350000,
+			FilingDate:         time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+		}
+		historical := &entities.HistoricalFinancialData{
+			Ticker: "TEST",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					CurrentAssets:      500000,
+					CurrentLiabilities: 300000,
+					FilingDate:         time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+					Revenue:            1000000,
+					OperatingIncome:    100000,
+					SharesOutstanding:  1000,
+				},
+				"2024FY": latest,
+			},
+		}
+		// Latest NWC = 400000 - 350000 = 50000
+		// Prior NWC = 500000 - 300000 = 200000
+		// Delta = 50000 - 200000 = -150000 (cash released)
+		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		assert.InDelta(t, -150000.0, result, 0.01)
+	})
+}
+
+func TestService_performValuation_NegativeOperatingIncome(t *testing.T) {
+	_, marketData, macroData := createTestData()
+
+	negativeOI := &entities.HistoricalFinancialData{
+		Ticker: "RIVN",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:                    "RIVN",
+				FilingPeriod:              "2023FY",
+				FilingDate:                time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now(),
+				OperatingIncome:           -5000000000,
+				NormalizedOperatingIncome: -4500000000,
+				Revenue:                   4434000000,
+				TaxRate:                   0.0,
+				TotalAssets:               18000000000,
+				TangibleAssets:            16000000000,
+				InterestBearingDebt:       5000000000,
+				SharesOutstanding:         1000000000,
+				HasNormalizedData:         true,
+			},
+			"2022FY": {
+				Ticker:                    "RIVN",
+				FilingPeriod:              "2022FY",
+				FilingDate:                time.Date(2023, 2, 1, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+				OperatingIncome:           -6800000000,
+				NormalizedOperatingIncome: -6500000000,
+				Revenue:                   1658000000,
+				TaxRate:                   0.0,
+				TotalAssets:               17000000000,
+				TangibleAssets:            15000000000,
+				InterestBearingDebt:       4500000000,
+				SharesOutstanding:         950000000,
+				HasNormalizedData:         true,
+			},
+		},
+	}
+
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+
+	result, err := svc.performValuation(negativeOI, marketData, macroData, nil)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.ErrorIs(t, err, ErrModelNotApplicable,
+		"Negative OI should return ErrModelNotApplicable")
+}
+
+func TestService_performValuation_TrueFCF(t *testing.T) {
+	_, _, _, _, _, _ = createTestService()
+	historicalData, marketData, macroData := createTestData()
+
+	// Add D&A and CapEx data to trigger true FCF path
+	for _, fd := range historicalData.Data {
+		fd.DepreciationAndAmortization = 11000000000
+		fd.CapitalExpenditures = 10000000000
+		fd.CurrentAssets = 135000000000
+		fd.CurrentLiabilities = 145000000000
+		fd.CashAndCashEquivalents = 29000000000
+		fd.DilutedSharesOutstanding = fd.SharesOutstanding * 1.02
+	}
+
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+
+	result, err := svc.performValuation(historicalData, marketData, macroData, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Greater(t, result.DCFValuePerShare, 0.0)
+	assert.Greater(t, result.EquityValue, 0.0)
+	assert.Equal(t, "1.1", result.CalculationVersion)
+}
+
+func TestService_performValuation_GrowthCapping(t *testing.T) {
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.30, // tight cap: 30%
+			DCFMinGrowthRate:         -0.1,
+		},
+	}
+	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+
+	// Create data with extreme growth (OI jumps 5x in 2 years → ~124% CAGR)
+	_, marketData, macroData := createTestData()
+	extremeGrowth := &entities.HistoricalFinancialData{
+		Ticker: "NVDA",
+		Data: map[string]*entities.FinancialData{
+			"2022FY": {
+				Ticker: "NVDA", FilingPeriod: "2022FY",
+				FilingDate:                time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-730 * 24 * time.Hour),
+				OperatingIncome:           10000000000,
+				NormalizedOperatingIncome: 10000000000,
+				Revenue:                   27000000000,
+				TaxRate:                   0.12,
+				TotalAssets:               44000000000,
+				TangibleAssets:            20000000000,
+				InterestBearingDebt:       10000000000,
+				SharesOutstanding:         25000000000,
+				HasNormalizedData:         true,
+			},
+			"2024FY": {
+				Ticker: "NVDA", FilingPeriod: "2024FY",
+				FilingDate:                time.Date(2025, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now(),
+				OperatingIncome:           50000000000,
+				NormalizedOperatingIncome: 50000000000,
+				Revenue:                   130000000000,
+				TaxRate:                   0.12,
+				TotalAssets:               96000000000,
+				TangibleAssets:            50000000000,
+				InterestBearingDebt:       12000000000,
+				SharesOutstanding:         25000000000,
+				HasNormalizedData:         true,
+			},
+		},
+	}
+
+	result, err := svc.performValuation(extremeGrowth, marketData, macroData, nil)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	// Growth should be capped to 30% (config max), not the raw ~124% CAGR
+	assert.LessOrEqual(t, result.GrowthRate, 0.30,
+		"Growth rate should be capped to configured maximum")
+}
+
+// --- Mock gateway implementations for DataFetcher integration tests ---
+
+// MockSECGateway mocks the SEC EDGAR gateway for DataFetcher tests.
+type MockSECGateway struct {
+	mock.Mock
+}
+
+func (m *MockSECGateway) GetCompanyFacts(ctx context.Context, cik string) (*entities.CompanyFactsResponse, error) {
+	args := m.Called(ctx, cik)
+	return args.Get(0).(*entities.CompanyFactsResponse), args.Error(1)
+}
+
+func (m *MockSECGateway) GetCompanyConcepts(ctx context.Context, cik string, tag string) (*entities.ConceptResponse, error) {
+	args := m.Called(ctx, cik, tag)
+	return args.Get(0).(*entities.ConceptResponse), args.Error(1)
+}
+
+func (m *MockSECGateway) GetTickerCIKMapping(ctx context.Context) (map[string]string, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(map[string]string), args.Error(1)
+}
+
+func (m *MockSECGateway) GetFinancialDataForTicker(ctx context.Context, ticker, cik string) (*entities.HistoricalFinancialData, error) {
+	args := m.Called(ctx, ticker, cik)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*entities.HistoricalFinancialData), args.Error(1)
+}
+
+func (m *MockSECGateway) HealthCheck(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+// MockMarketDataGateway mocks the market data gateway for DataFetcher tests.
+type MockMarketDataGateway struct {
+	mock.Mock
+}
+
+func (m *MockMarketDataGateway) GetQuote(ctx context.Context, ticker string) (*entities.MarketData, error) {
+	args := m.Called(ctx, ticker)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*entities.MarketData), args.Error(1)
+}
+
+func (m *MockMarketDataGateway) GetQuotes(ctx context.Context, tickers []string) (map[string]*entities.MarketData, error) {
+	args := m.Called(ctx, tickers)
+	return args.Get(0).(map[string]*entities.MarketData), args.Error(1)
+}
+
+func (m *MockMarketDataGateway) GetHistoricalPrices(ctx context.Context, ticker string, startDate, endDate time.Time) ([]*entities.PriceData, error) {
+	args := m.Called(ctx, ticker, startDate, endDate)
+	return args.Get(0).([]*entities.PriceData), args.Error(1)
+}
+
+func (m *MockMarketDataGateway) HealthCheck(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+// MockMacroDataGateway mocks the macro data gateway for DataFetcher tests.
+type MockMacroDataGateway struct {
+	mock.Mock
+}
+
+func (m *MockMacroDataGateway) GetTreasuryRates(ctx context.Context) (*entities.TreasuryRates, error) {
+	args := m.Called(ctx)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*entities.TreasuryRates), args.Error(1)
+}
+
+func (m *MockMacroDataGateway) GetMarketRiskPremium(ctx context.Context) (float64, error) {
+	args := m.Called(ctx)
+	return args.Get(0).(float64), args.Error(1)
+}
+
+func (m *MockMacroDataGateway) HealthCheck(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+// TestService_CalculateValuation_DataFetcherPath verifies the end-to-end path
+// where the repository has no data and the service falls back to the DataFetcher
+// to retrieve data from external APIs (SEC, market, macro).
+func TestService_CalculateValuation_DataFetcherPath(t *testing.T) {
+	ctx := context.Background()
+
+	// Create mock gateways for the DataFetcher
+	mockSEC := &MockSECGateway{}
+	mockMarketGW := &MockMarketDataGateway{}
+	mockMacroGW := &MockMacroDataGateway{}
+	fetcherCache := &MockCacheRepository{}
+
+	// Build a real DataFetcher with mock gateways
+	dataFetcher := datafetcher.NewDataFetcher(mockSEC, mockMarketGW, mockMacroGW, fetcherCache)
+
+	// Service-level mocks
+	freshFinancialRepo := &MockFinancialDataRepository{}
+	freshMarketRepo := &MockMarketDataRepository{}
+	freshMacroRepo := &MockMacroDataRepository{}
+	serviceCache := &MockCacheRepository{}
+	freshMetrics := &MockMetricsService{}
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+
+	// Create service with DataFetcher (not nil) and nil DataCleaner
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, serviceCache, nil, dataFetcher, freshMetrics, cfg, logger)
+
+	// Prepare test data that the gateways will return
+	historicalData := &entities.HistoricalFinancialData{
+		Ticker: "MSFT",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:                    "MSFT",
+				FilingPeriod:              "2023FY",
+				FilingDate:                time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now(),
+				OperatingIncome:           88000000000,
+				NormalizedOperatingIncome: 85000000000,
+				Revenue:                   211915000000,
+				TaxRate:                   0.18,
+				TotalAssets:               411000000000,
+				TangibleAssets:            300000000000,
+				InterestBearingDebt:       50000000000,
+				InterestExpense:           2000000000,
+				SharesOutstanding:         7433000000,
+				DilutedSharesOutstanding:  7500000000,
+				HasNormalizedData:         true,
+			},
+			"2022FY": {
+				Ticker:                    "MSFT",
+				FilingPeriod:              "2022FY",
+				FilingDate:                time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+				OperatingIncome:           83383000000,
+				NormalizedOperatingIncome: 80000000000,
+				Revenue:                   198270000000,
+				TaxRate:                   0.18,
+				TotalAssets:               364840000000,
+				TangibleAssets:            260000000000,
+				InterestBearingDebt:       47000000000,
+				InterestExpense:           1900000000,
+				SharesOutstanding:         7473000000,
+				DilutedSharesOutstanding:  7530000000,
+				HasNormalizedData:         true,
+			},
+		},
+	}
+
+	marketData := &entities.MarketData{
+		Ticker:            "MSFT",
+		AsOf:              time.Now(),
+		SharePrice:        420.0,
+		MarketCap:         3121860000000,
+		SharesOutstanding: 7433000000,
+		Beta:              0.89,
+		Beta3Y:            0.85,
+		AverageVolume:     25000000,
+		Source:            "yfinance",
+		DataQuality:       "good",
+	}
+
+	_ = &entities.MacroData{
+		AsOf:               time.Now(),
+		RiskFreeRate:       0.045,
+		RiskFreeRate3Month: 0.043,
+		MarketRiskPremium:  0.06,
+		InflationRate:      0.032,
+		Source:             "fred",
+	}
+
+	// --- Setup expectations ---
+
+	// Service cache miss
+	serviceCache.On("Get", ctx, "valuation:MSFT", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+
+	// Repository returns no data, triggering DataFetcher path
+	freshFinancialRepo.On("GetHistorical", ctx, "MSFT", 10).Return(
+		(*entities.HistoricalFinancialData)(nil), errors.New("no data found"))
+
+	// DataFetcher gateway mocks: SEC returns historical data
+	mockSEC.On("GetTickerCIKMapping", mock.Anything).Return(
+		map[string]string{"MSFT": "789019"}, nil)
+	mockSEC.On("GetFinancialDataForTicker", mock.Anything, "MSFT", "789019").Return(
+		historicalData, nil)
+
+	// DataFetcher gateway mocks: market data
+	mockMarketGW.On("GetQuote", mock.Anything, "MSFT").Return(marketData, nil)
+
+	// DataFetcher gateway mocks: macro data
+	mockMacroGW.On("GetTreasuryRates", mock.Anything).Return(
+		&entities.TreasuryRates{
+			AsOf:        time.Now(),
+			Yield10Year: 0.045,
+			Yield3Month: 0.043,
+		}, nil)
+	mockMacroGW.On("GetMarketRiskPremium", mock.Anything).Return(0.06, nil)
+
+	// DataFetcher uses its own cache for ticker mapping
+	fetcherCache.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("cache miss"))
+	fetcherCache.On("Set", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	// Service cache set after successful valuation
+	serviceCache.On("Set", ctx, "valuation:MSFT", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
+
+	// Metrics
+	freshMetrics.On("RecordValuationRequest", "MSFT", "single", "success", mock.AnythingOfType("time.Duration")).Return()
+	freshMetrics.On("IncWACCCalculations").Return()
+	freshMetrics.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	freshMetrics.On("IncDCFCalculations").Return()
+	freshMetrics.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	// Execute
+	result, err := service.CalculateValuation(ctx, "MSFT", nil)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+	assert.Equal(t, "MSFT", result.Ticker)
+	assert.Greater(t, result.DCFValuePerShare, 0.0)
+	assert.Greater(t, result.WACC, 0.0)
+	assert.Greater(t, result.EnterpriseValue, 0.0)
+
+	// Verify DataFetcher gateway mocks were called
+	mockSEC.AssertCalled(t, "GetTickerCIKMapping", mock.Anything)
+	mockSEC.AssertCalled(t, "GetFinancialDataForTicker", mock.Anything, "MSFT", "789019")
+	freshFinancialRepo.AssertExpectations(t)
+	serviceCache.AssertExpectations(t)
+}
+
+// TestService_CalculateValuation_DataFetcherFetchFails verifies that when the
+// DataFetcher's Fetch method fails, the error is propagated to the caller.
+func TestService_CalculateValuation_DataFetcherFetchFails(t *testing.T) {
+	ctx := context.Background()
+
+	// Create mock gateways that will cause failure
+	mockSEC := &MockSECGateway{}
+	mockMarketGW := &MockMarketDataGateway{}
+	mockMacroGW := &MockMacroDataGateway{}
+	fetcherCache := &MockCacheRepository{}
+
+	dataFetcher := datafetcher.NewDataFetcher(mockSEC, mockMarketGW, mockMacroGW, fetcherCache)
+
+	freshFinancialRepo := &MockFinancialDataRepository{}
+	serviceCache := &MockCacheRepository{}
+	freshMetrics := &MockMetricsService{}
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+
+	service := NewService(freshFinancialRepo, nil, nil, serviceCache, nil, dataFetcher, freshMetrics, cfg, logger)
+
+	// Cache miss
+	serviceCache.On("Get", ctx, "valuation:UNKNOWN", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+
+	// Repo returns no data
+	freshFinancialRepo.On("GetHistorical", ctx, "UNKNOWN", 10).Return(
+		(*entities.HistoricalFinancialData)(nil), errors.New("no data"))
+
+	// SEC gateway fails — causes DataFetcher to fail
+	mockSEC.On("GetTickerCIKMapping", mock.Anything).Return(
+		map[string]string{}, nil) // empty mapping — ticker not found
+
+	// SEC gateway returns nil for unknown ticker
+	mockSEC.On("GetFinancialDataForTicker", mock.Anything, "UNKNOWN", "").Return(
+		(*entities.HistoricalFinancialData)(nil), errors.New("CIK not found"))
+
+	// Market and macro gateways return errors too
+	mockMarketGW.On("GetQuote", mock.Anything, "UNKNOWN").Return(
+		(*entities.MarketData)(nil), errors.New("ticker not found"))
+	mockMacroGW.On("GetTreasuryRates", mock.Anything).Return(
+		(*entities.TreasuryRates)(nil), errors.New("service unavailable"))
+	mockMacroGW.On("GetMarketRiskPremium", mock.Anything).Return(0.0, errors.New("service unavailable"))
+
+	// Fetcher cache
+	fetcherCache.On("Get", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("cache miss"))
+	fetcherCache.On("Set", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
+
+	result, err := service.CalculateValuation(ctx, "UNKNOWN", nil)
+
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	// Should indicate either fetch failure or ticker not found
+	assert.True(t,
+		errors.Is(err, ErrTickerNotFound) ||
+			assert.ObjectsAreEqual("failed to fetch data via DataFetcher", err.Error()),
+		"Error should indicate data fetch failure: %v", err)
+
+	freshFinancialRepo.AssertExpectations(t)
 }

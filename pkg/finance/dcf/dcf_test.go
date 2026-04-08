@@ -97,6 +97,90 @@ func TestCalculateDCF_ValidInputs(t *testing.T) {
 	}
 }
 
+func TestCalculateDCF_TrueFCF(t *testing.T) {
+	// With true FCF: FCF = NOPAT + D&A - CapEx - NWC change
+	// D&A and CapEx scale proportionally with OI growth
+	baseOI := 1000.0
+	inputs := Inputs{
+		BaseOperatingIncome:         baseOI,
+		GrowthRate:                  0.10, // 10%
+		TerminalGrowthRate:          0.025,
+		WACC:                        0.10,
+		TaxRate:                     0.25,
+		ProjectionYears:             5,
+		UseTrueFCF:                  true,
+		DepreciationAndAmortization: 200.0, // $200 D&A
+		CapitalExpenditures:         300.0, // $300 CapEx
+		NetWorkingCapitalChange:     50.0,  // $50 NWC increase
+	}
+
+	result, err := CalculateDCF(inputs)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	// Year 1: OI = 1000*1.1 = 1100, NOPAT = 825
+	// growthFactor = 1100/1000 = 1.1
+	// scaledDA = 200*1.1 = 220, scaledCapEx = 300*1.1 = 330, scaledNWC = 50*1.1 = 55
+	// FCF = 825 + 220 - 330 - 55 = 660
+	year1 := result.Projections[0]
+	assert.InDelta(t, 1100.0, year1.OperatingIncome, 0.01)
+	assert.InDelta(t, 825.0, year1.NOPAT, 0.01)
+	assert.InDelta(t, 660.0, year1.FreeCashFlow, 0.01)
+
+	// Compare with NOPAT-only: FCF would be 825 (higher than true FCF of 660)
+	// This proves true FCF accounts for reinvestment needs
+	assert.Less(t, year1.FreeCashFlow, year1.NOPAT,
+		"True FCF should be less than NOPAT when CapEx > D&A (capital-intensive company)")
+
+	// Enterprise value should be positive and reasonable
+	assert.Greater(t, result.EnterpriseValue, 0.0)
+}
+
+func TestCalculateDCF_TrueFCF_AssetLight(t *testing.T) {
+	// Asset-light company: D&A > CapEx (SaaS model)
+	// FCF should be HIGHER than NOPAT
+	inputs := Inputs{
+		BaseOperatingIncome:         1000.0,
+		GrowthRate:                  0.15,
+		TerminalGrowthRate:          0.025,
+		WACC:                        0.12,
+		TaxRate:                     0.25,
+		ProjectionYears:             5,
+		UseTrueFCF:                  true,
+		DepreciationAndAmortization: 300.0, // High D&A (amortizing past acquisitions)
+		CapitalExpenditures:         100.0, // Low CapEx (SaaS, minimal PP&E)
+		NetWorkingCapitalChange:     20.0,
+	}
+
+	result, err := CalculateDCF(inputs)
+	assert.NoError(t, err)
+
+	year1 := result.Projections[0]
+	assert.Greater(t, year1.FreeCashFlow, year1.NOPAT,
+		"Asset-light company FCF should exceed NOPAT when D&A > CapEx")
+}
+
+func TestCalculateDCF_FallbackToNOPAT(t *testing.T) {
+	// When UseTrueFCF is false and no percentage-based inputs, FCF = NOPAT
+	inputs := Inputs{
+		BaseOperatingIncome: 1000.0,
+		GrowthRate:          0.10,
+		TerminalGrowthRate:  0.025,
+		WACC:                0.10,
+		TaxRate:             0.25,
+		ProjectionYears:     5,
+		UseTrueFCF:          false,
+	}
+
+	result, err := CalculateDCF(inputs)
+	assert.NoError(t, err)
+
+	for _, proj := range result.Projections {
+		assert.Equal(t, proj.NOPAT, proj.FreeCashFlow,
+			"Without true FCF data, FCF should equal NOPAT")
+	}
+}
+
 func TestCalculateDCF_InvalidInputs(t *testing.T) {
 	tests := []struct {
 		name    string

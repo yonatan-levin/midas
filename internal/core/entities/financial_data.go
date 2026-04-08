@@ -2,6 +2,9 @@ package entities
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/midas/dcf-valuation-api/pkg/finance/growth"
@@ -69,6 +72,18 @@ type FinancialData struct {
 	IncrementalBorrowingRate          float64            `json:"incremental_borrowing_rate"`           // IBR for lease capitalization (B1)
 	RiskFreeRate                      float64            `json:"risk_free_rate"`                       // Risk-free rate for discount rate calculations
 
+	// Cash Flow Statement fields (for true FCF calculation)
+	DepreciationAndAmortization float64 `json:"depreciation_and_amortization"` // Non-cash charge to add back
+	CapitalExpenditures         float64 `json:"capital_expenditures"`          // Cash outflow for PP&E (stored as positive)
+	OperatingCashFlow           float64 `json:"operating_cash_flow"`           // Net cash from operations
+
+	// Working capital components (for delta WC calculation)
+	CurrentAssets      float64 `json:"current_assets"`
+	CurrentLiabilities float64 `json:"current_liabilities"`
+
+	// Cash position (for equity bridge: EV - Debt + Cash = Equity Value)
+	CashAndCashEquivalents float64 `json:"cash_and_cash_equivalents"`
+
 	// Share information
 	SharesOutstanding        float64 `json:"shares_outstanding"`
 	DilutedSharesOutstanding float64 `json:"diluted_shares_outstanding"`
@@ -90,16 +105,60 @@ type HistoricalFinancialData struct {
 	Data   map[string]*FinancialData `json:"data"` // keyed by filing period (e.g., "2023Q4")
 }
 
-// GetSortedPeriods returns filing periods sorted chronologically
+// GetSortedPeriods returns filing periods sorted chronologically.
+// Period format: "2023FY", "2023Q1", "2023Q2", etc.
+// Sort order: FY sorts after all quarters of the same year (it covers the full year).
+// Example: 2022Q1 < 2022Q2 < 2022Q3 < 2022Q4 < 2022FY < 2023Q1 < ...
 func (h *HistoricalFinancialData) GetSortedPeriods() []string {
 	periods := make([]string, 0, len(h.Data))
 	for period := range h.Data {
 		periods = append(periods, period)
 	}
 
-	// TODO: Implement proper period sorting (2023Q1, 2023Q2, etc.)
-	// For now, basic string sort
+	sort.Slice(periods, func(i, j int) bool {
+		yi, si := parsePeriodKey(periods[i])
+		yj, sj := parsePeriodKey(periods[j])
+		if yi != yj {
+			return yi < yj
+		}
+		return si < sj
+	})
+
 	return periods
+}
+
+// parsePeriodKey extracts (year, subOrder) from a period string.
+// subOrder: Q1=1, Q2=2, Q3=3, Q4=4, FY=5 (FY sorts after all quarters).
+func parsePeriodKey(period string) (int, int) {
+	// Find where the suffix starts (e.g., "2023FY" -> year=2023, suffix="FY")
+	suffixIdx := strings.IndexFunc(period, func(r rune) bool {
+		return r < '0' || r > '9'
+	})
+
+	if suffixIdx <= 0 {
+		return 0, 0
+	}
+
+	year, err := strconv.Atoi(period[:suffixIdx])
+	if err != nil {
+		return 0, 0
+	}
+
+	suffix := period[suffixIdx:]
+	switch suffix {
+	case "Q1":
+		return year, 1
+	case "Q2":
+		return year, 2
+	case "Q3":
+		return year, 3
+	case "Q4":
+		return year, 4
+	case "FY":
+		return year, 5
+	default:
+		return year, 0
+	}
 }
 
 // GetLatestData returns the most recent financial data

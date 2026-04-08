@@ -228,6 +228,29 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		financialData.InterestExpense = val
 	}
 
+	// Cash flow statement items (for true FCF calculation)
+	if val, exists := p.findValue(data, []string{
+		"DepreciationDepletionAndAmortization",
+		"DepreciationAndAmortization",
+		"Depreciation",
+	}); exists {
+		financialData.DepreciationAndAmortization = val
+	}
+
+	if val, exists := p.findValue(data, []string{
+		"PaymentsToAcquirePropertyPlantAndEquipment",
+		"PaymentsToAcquireProductiveAssets",
+	}); exists {
+		financialData.CapitalExpenditures = val
+	}
+
+	if val, exists := p.findValue(data, []string{
+		"NetCashProvidedByOperatingActivities",
+		"CashProvidedByOperatingActivities",
+	}); exists {
+		financialData.OperatingCashFlow = val
+	}
+
 	// Extract balance sheet items
 	if val, exists := p.findValue(data, []string{
 		"Assets",
@@ -237,6 +260,26 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		financialData.TotalAssets = val
 	} else {
 		missingFields = append(missingFields, "total_assets")
+	}
+
+	if val, exists := p.findValue(data, []string{
+		"AssetsCurrent",
+	}); exists {
+		financialData.CurrentAssets = val
+	}
+
+	if val, exists := p.findValue(data, []string{
+		"LiabilitiesCurrent",
+	}); exists {
+		financialData.CurrentLiabilities = val
+	}
+
+	if val, exists := p.findValue(data, []string{
+		"CashAndCashEquivalentsAtCarryingValue",
+		"CashCashEquivalentsAndShortTermInvestments",
+		"Cash",
+	}); exists {
+		financialData.CashAndCashEquivalents = val
 	}
 
 	if val, exists := p.findValue(data, []string{

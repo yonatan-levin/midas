@@ -266,16 +266,20 @@ func isGrowthRateReliable(growthRate float64, yoyRates []float64) bool {
 	return len(yoyRates) >= 2
 }
 
-// CapGrowthRate applies reasonable bounds to growth rate
+// CapGrowthRate applies default reasonable bounds to growth rate.
+// For configurable bounds, use CapGrowthRateWithBounds.
 func CapGrowthRate(growthRate float64) float64 {
-	const maxGrowthRate = 0.5  // 50% max growth
-	const minGrowthRate = -0.3 // -30% max decline
+	return CapGrowthRateWithBounds(growthRate, -0.3, 0.5)
+}
 
-	if growthRate > maxGrowthRate {
-		return maxGrowthRate
+// CapGrowthRateWithBounds clamps a growth rate to [minRate, maxRate].
+// This keeps pkg/ config-free — bounds are passed from the service layer.
+func CapGrowthRateWithBounds(growthRate, minRate, maxRate float64) float64 {
+	if growthRate > maxRate {
+		return maxRate
 	}
-	if growthRate < minGrowthRate {
-		return minGrowthRate
+	if growthRate < minRate {
+		return minRate
 	}
 	return growthRate
 }

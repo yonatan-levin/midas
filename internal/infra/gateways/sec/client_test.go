@@ -3,6 +3,7 @@ package sec
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -475,4 +476,393 @@ func TestClient_ContextCancellation(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "context deadline exceeded")
+}
+
+// ---------------------------------------------------------------------------
+// makeRequest error path tests
+// ---------------------------------------------------------------------------
+
+// TestClient_MakeRequest_InvalidJSON verifies error handling when SEC returns
+// syntactically invalid JSON that cannot be decoded.
+func TestClient_MakeRequest_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{invalid json`))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyFacts(context.Background(), "320193")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to decode SEC response")
+}
+
+// TestClient_MakeRequest_MissingEntityName verifies error when the JSON response
+// has a valid CIK but an empty entity name.
+func TestClient_MakeRequest_MissingEntityName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"cik":320193,"entityName":"","facts":{"us-gaap":{"Assets":{"label":"Assets","units":{"USD":[]}}}}}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyFacts(context.Background(), "320193")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "missing entity name")
+}
+
+// TestClient_MakeRequest_EmptyFacts verifies error when the JSON response has no facts.
+func TestClient_MakeRequest_EmptyFacts(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"cik":320193,"entityName":"Apple Inc.","facts":{}}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyFacts(context.Background(), "320193")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no facts found")
+}
+
+// TestClient_MakeRequest_DefaultStatusCode verifies the default branch in
+// the status code switch (an unexpected HTTP status like 418).
+func TestClient_MakeRequest_DefaultStatusCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot) // 418
+		_, _ = w.Write([]byte("I'm a teapot"))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyFacts(context.Background(), "320193")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "status 418")
+}
+
+// ---------------------------------------------------------------------------
+// makeConceptRequest error path tests
+// ---------------------------------------------------------------------------
+
+// TestClient_MakeConceptRequest_RateLimit429 verifies handling of SEC 429 responses.
+func TestClient_MakeConceptRequest_RateLimit429(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyConcepts(context.Background(), "320193", "Revenues")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "rate limited by SEC API (429)")
+}
+
+// TestClient_MakeConceptRequest_ServerError verifies handling of 5xx server errors.
+func TestClient_MakeConceptRequest_ServerError(t *testing.T) {
+	statusCodes := []int{
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+	}
+
+	for _, statusCode := range statusCodes {
+		t.Run(fmt.Sprintf("status_%d", statusCode), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(statusCode)
+			}))
+			defer server.Close()
+
+			cfg := &config.SECConfig{
+				BaseURL:          server.URL,
+				UserAgent:        "Test",
+				RateLimit:        10,
+				RequestTimeout:   5 * time.Second,
+				MaxRetries:       1,
+				RetryBackoffBase: time.Millisecond,
+			}
+			client := NewClient(cfg, zap.NewNop())
+
+			_, err := client.GetCompanyConcepts(context.Background(), "320193", "Revenues")
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "SEC API server error")
+		})
+	}
+}
+
+// TestClient_MakeConceptRequest_DefaultStatus verifies the default status branch.
+func TestClient_MakeConceptRequest_DefaultStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = w.Write([]byte("teapot"))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyConcepts(context.Background(), "320193", "Revenues")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "status 418")
+}
+
+// TestClient_MakeConceptRequest_InvalidJSON verifies error on malformed JSON.
+func TestClient_MakeConceptRequest_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyConcepts(context.Background(), "320193", "Revenues")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to decode SEC concept response")
+}
+
+// TestClient_MakeConceptRequest_MissingCIK verifies error when CIK is empty in response.
+func TestClient_MakeConceptRequest_MissingCIK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"cik":"","entityName":"Apple","tag":"Revenues","units":{}}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyConcepts(context.Background(), "320193", "Revenues")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "missing CIK")
+}
+
+// TestClient_MakeConceptRequest_MissingTag verifies error when tag is empty in response.
+func TestClient_MakeConceptRequest_MissingTag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"cik":"320193","entityName":"Apple","tag":"","units":{}}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyConcepts(context.Background(), "320193", "Revenues")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "missing tag")
+}
+
+// ---------------------------------------------------------------------------
+// makeTickerMappingRequest error path tests
+// ---------------------------------------------------------------------------
+
+// TestClient_MakeTickerMappingRequest_InvalidJSON verifies error on malformed JSON.
+func TestClient_MakeTickerMappingRequest_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`broken json{`))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		TickerMappingURL: server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetTickerCIKMapping(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to decode ticker mapping")
+}
+
+// TestClient_MakeTickerMappingRequest_DefaultStatus verifies the default status branch.
+func TestClient_MakeTickerMappingRequest_DefaultStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = w.Write([]byte("teapot"))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		TickerMappingURL: server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetTickerCIKMapping(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "status 418")
+}
+
+// TestClient_MakeTickerMappingRequest_RateLimit429 verifies handling of 429 on
+// the ticker mapping endpoint.
+func TestClient_MakeTickerMappingRequest_RateLimit429(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		TickerMappingURL: server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetTickerCIKMapping(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "rate limited by SEC API (429)")
+}
+
+// TestClient_MakeTickerMappingRequest_SkipsEmptyTicker verifies entries with empty
+// ticker strings are silently skipped in the mapping.
+func TestClient_MakeTickerMappingRequest_SkipsEmptyTicker(t *testing.T) {
+	sample := map[string]map[string]interface{}{
+		"0": {"cik_str": "320193", "ticker": "AAPL", "title": "Apple Inc."},
+		"1": {"cik_str": "789019", "ticker": "", "title": "No Ticker Inc."}, // empty ticker
+		"2": {"cik_str": "", "ticker": "NOCIK", "title": "No CIK Inc."},     // empty CIK
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sample)
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		TickerMappingURL: server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	mapping, err := client.GetTickerCIKMapping(context.Background())
+	require.NoError(t, err)
+
+	// Only AAPL should be present; empty ticker and empty CIK entries skipped
+	assert.Equal(t, "320193", mapping["AAPL"])
+	assert.Len(t, mapping, 1)
+}
+
+// TestClient_GetCompanyConcepts_InvalidCIK verifies error handling for non-numeric CIK.
+func TestClient_GetCompanyConcepts_InvalidCIK(t *testing.T) {
+	cfg := &config.SECConfig{
+		BaseURL:          "https://data.sec.gov/api/xbrl",
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyConcepts(context.Background(), "INVALID", "Revenues")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid CIK")
+}
+
+// TestClient_GetCompanyFacts_InvalidCIK verifies error handling for non-numeric CIK.
+func TestClient_GetCompanyFacts_InvalidCIK(t *testing.T) {
+	cfg := &config.SECConfig{
+		BaseURL:          "https://data.sec.gov/api/xbrl",
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	_, err := client.GetCompanyFacts(context.Background(), "BADCIK")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid CIK")
 }

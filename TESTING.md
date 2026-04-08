@@ -93,12 +93,14 @@ pkg/
 | `pkg/finance/dcf` | >= 90% | ~95.9% |
 | `pkg/finance/growth` | >= 90% | ~90.4% |
 | `pkg/finance/wacc` | >= 85% | ~86.9% |
-| `internal/services/valuation` | >= 80% | ~82.2% |
+| `internal/services/valuation` | >= 90% | ~94.1% |
 | `internal/services/datafetcher` | >= 80% | ~93.9% |
 | `internal/services/metrics` | >= 85% | ~96.8% |
+| `internal/infra/gateways/sec` | >= 90% | ~94.2% |
 | `internal/infra/gateways/market` | >= 80% | ~91.2% |
+| `internal/api/v1/handlers` | >= 90% | ~94.1% |
 | `internal/services/datacleaner` | >= 80% | ~38.9% |
-| Overall | >= 80% | ~80%+ |
+| Overall | >= 80% | ~85%+ |
 
 ## Test Patterns
 

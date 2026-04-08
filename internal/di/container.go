@@ -142,6 +142,18 @@ var ServiceModule = fx.Options(
 	fx.Provide(NewValuationService),
 	fx.Provide(NewRateLimiterService),
 
+	// Bind *valuation.Service to handlers.ValuationCalculator interface
+	// so the FairValueHandler can receive it via DI.
+	fx.Provide(
+		func(s *valuation.Service) handlers.ValuationCalculator { return s },
+	),
+
+	// Bind *auth.Service to handlers.AuthKeyManager interface
+	// so the AuthHandler can receive it via DI.
+	fx.Provide(
+		func(s *auth.Service) handlers.AuthKeyManager { return s },
+	),
+
 	// Scheduler service (disabled by default, uses watchlist)
 	fx.Provide(NewSchedulerService),
 )

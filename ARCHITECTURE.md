@@ -88,6 +88,8 @@ All wiring uses **uber/fx** in `internal/di/container.go`:
 
 Services receive interfaces (ports), never concrete types. This enables testing with mocks and swapping implementations.
 
+**Handler interfaces**: `FairValueHandler` depends on `ValuationCalculator` interface (not `*valuation.Service` directly), and `AuthHandler` depends on `AuthKeyManager` interface. These are bridged in the DI container via `fx.Provide` bindings from the concrete types.
+
 ## Data Flow: Fair Value Calculation
 
 The core product flow for `GET /api/v1/fair-value/{ticker}`:
@@ -125,11 +127,13 @@ The core product flow for `GET /api/v1/fair-value/{ticker}`:
      │        └── WACC = E/(E+D) * Ke + D/(E+D) * Kd
      │
      ├── 5e. DCF Calculation (pkg/finance/dcf/)
-     │        ├── 5-year explicit forecast (FCF projections)
-     │        ├── Terminal value = FCF_n * (1+g) / (WACC - g)
+     │        ├── Growth rate capped to config bounds (BUG-010 fix)
+     │        ├── True FCF = NOPAT + D&A - CapEx - ΔWorkingCapital (fallback: NOPAT)
+     │        ├── 5-year explicit forecast (per-year growth rates)
+     │        ├── Terminal value = FCF_n * (1+g) / (WACC - g), min 1% spread enforced
      │        ├── Discount all cash flows to present value
      │        ├── Enterprise Value = Sum of PV(FCFs) + PV(Terminal Value)
-     │        └── Equity Value = EV - Debt + Cash → per share
+     │        └── Equity Value = EV - Debt + Cash → per share (diluted shares preferred)
      │
      ├── 5f. Tangible Book Value = (Total Assets - Intangibles - Liabilities) / Shares
      │

@@ -229,6 +229,25 @@ func (s *Service) performValuation(
 		}
 	}
 
+	// Enforce config-driven growth rate bounds (BUG-010 fix).
+	// Only apply when bounds are configured (non-zero); fall back to hardcoded defaults otherwise.
+	minGrowth := s.config.Valuation.DCFMinGrowthRate
+	maxGrowth := s.config.Valuation.DCFMaxGrowthRate
+	if minGrowth == 0 && maxGrowth == 0 {
+		minGrowth = -0.3
+		maxGrowth = 0.5
+	}
+	uncappedGrowth := growthResult.GrowthRate
+	growthResult.GrowthRate = growth.CapGrowthRateWithBounds(growthResult.GrowthRate, minGrowth, maxGrowth)
+	if growthResult.GrowthRate != uncappedGrowth {
+		s.logger.Warn("Growth rate capped to configured bounds",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Float64("original", uncappedGrowth),
+			zap.Float64("capped", growthResult.GrowthRate),
+			zap.Float64("max", maxGrowth),
+			zap.Float64("min", minGrowth))
+	}
+
 	// Get the latest financial data for asset calculations
 	latestFinancialData, latestPeriod := historicalData.GetLatestPeriod()
 	if latestFinancialData == nil {
@@ -270,17 +289,46 @@ func (s *Service) performValuation(
 	s.metricsService.IncWACCCalculations()
 	s.metricsService.SetAverageWACC(waccResult.WACC)
 
-	// Calculate terminal growth rate (conservative approach)
-	terminalGrowthRate := s.calculateTerminalGrowthRate(growthResult.GrowthRate)
+	// Calculate terminal growth rate (conservative approach, WACC-aware)
+	terminalGrowthRate := s.calculateTerminalGrowthRate(growthResult.GrowthRate, waccResult.WACC)
+
+	// Guard: standard DCF requires positive operating income.
+	// Companies with negative OI (growth-stage, turnaround) need industry-specific models.
+	baseOI := latestFinancialData.NormalizedOperatingIncome
+	if baseOI <= 0 {
+		baseOI = latestFinancialData.OperatingIncome
+	}
+	if baseOI <= 0 {
+		return nil, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, latestFinancialData.NormalizedOperatingIncome)
+	}
+
+	// Calculate net working capital change from historical data if available
+	nwcChange := s.calculateNetWorkingCapitalChange(historicalData, latestFinancialData)
 
 	// Perform DCF calculation
 	dcfInputs := dcf.Inputs{
-		BaseOperatingIncome: latestFinancialData.NormalizedOperatingIncome,
+		BaseOperatingIncome: baseOI,
 		GrowthRate:          growthResult.GrowthRate,
 		TerminalGrowthRate:  terminalGrowthRate,
 		WACC:                waccResult.WACC,
 		ProjectionYears:     5,
 		TaxRate:             latestFinancialData.TaxRate,
+	}
+
+	// Use true FCF when D&A and CapEx data are available
+	if latestFinancialData.DepreciationAndAmortization > 0 || latestFinancialData.CapitalExpenditures > 0 {
+		dcfInputs.UseTrueFCF = true
+		dcfInputs.DepreciationAndAmortization = latestFinancialData.DepreciationAndAmortization
+		dcfInputs.CapitalExpenditures = latestFinancialData.CapitalExpenditures
+		dcfInputs.NetWorkingCapitalChange = nwcChange
+		s.logger.Info("Using true FCF calculation",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Float64("da", latestFinancialData.DepreciationAndAmortization),
+			zap.Float64("capex", latestFinancialData.CapitalExpenditures),
+			zap.Float64("nwc_change", nwcChange))
+	} else {
+		s.logger.Info("Falling back to NOPAT-based FCF (D&A/CapEx unavailable)",
+			zap.String("ticker", historicalData.Ticker))
 	}
 
 	dcfResult, err := dcf.CalculateDCF(dcfInputs)
@@ -292,8 +340,12 @@ func (s *Service) performValuation(
 	s.metricsService.IncDCFCalculations()
 	s.metricsService.SetAverageGrowthRate(growthResult.GrowthRate)
 
-	// Calculate per-share values
-	sharesOutstanding := marketData.SharesOutstanding
+	// Calculate per-share values.
+	// Priority: diluted (most conservative) > market basic (most current) > financial basic
+	sharesOutstanding := latestFinancialData.DilutedSharesOutstanding
+	if sharesOutstanding <= 0 {
+		sharesOutstanding = marketData.SharesOutstanding
+	}
 	if sharesOutstanding <= 0 {
 		sharesOutstanding = latestFinancialData.SharesOutstanding
 	}
@@ -302,7 +354,13 @@ func (s *Service) performValuation(
 		return nil, fmt.Errorf("%w: shares outstanding not available", ErrInsufficientData)
 	}
 
-	dcfValuePerShare := dcfResult.EnterpriseValue / sharesOutstanding
+	// Equity value bridge: EV - Debt + Cash = Equity Value
+	equityValue := dcf.CalculateEquityValue(
+		dcfResult.EnterpriseValue,
+		latestFinancialData.InterestBearingDebt,
+		latestFinancialData.CashAndCashEquivalents,
+	)
+	dcfValuePerShare := equityValue / sharesOutstanding
 
 	// Calculate data freshness score
 	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
@@ -317,11 +375,11 @@ func (s *Service) performValuation(
 		TerminalGrowthRate:    terminalGrowthRate,
 		MarketRiskPremium:     macroData.MarketRiskPremium,
 		EnterpriseValue:       dcfResult.EnterpriseValue,
-		EquityValue:           dcfResult.EnterpriseValue - latestFinancialData.InterestBearingDebt,
+		EquityValue:           equityValue,
 		FinancialDataPeriod:   latestPeriod,
 		MarketDataDate:        marketData.AsOf,
 		DataFreshnessScore:    dataFreshnessScore,
-		CalculationVersion:    "1.0",
+		CalculationVersion:    "1.1",
 	}
 
 	return result, nil
@@ -345,18 +403,27 @@ func (s *Service) calculateTangibleValuePerShare(financial *entities.FinancialDa
 	return tangibleEquity / shares
 }
 
-// calculateTerminalGrowthRate calculates a conservative terminal growth rate
-func (s *Service) calculateTerminalGrowthRate(historicalCAGR float64) float64 {
+// calculateTerminalGrowthRate calculates a conservative terminal growth rate.
+// It also enforces a minimum 2% spread below WACC to prevent terminal value explosion.
+func (s *Service) calculateTerminalGrowthRate(historicalCAGR, wacc float64) float64 {
 	// Conservative approach: min of 3% or half of historical CAGR
 	terminalGrowth := historicalCAGR / 2
 	maxTerminalGrowth := 0.03 // 3%
 
 	if terminalGrowth > maxTerminalGrowth {
-		return maxTerminalGrowth
+		terminalGrowth = maxTerminalGrowth
 	}
 
-	if terminalGrowth < 0 {
-		return 0.02 // Minimum 2% for inflation
+	if terminalGrowth <= 0 {
+		terminalGrowth = 0.02 // Minimum 2% for inflation (viable businesses grow at least with prices)
+	}
+
+	// Ensure terminal growth stays at least 2% below WACC to prevent TV explosion
+	if wacc > 0 && terminalGrowth > wacc-0.02 {
+		terminalGrowth = wacc - 0.02
+		if terminalGrowth < 0.01 {
+			terminalGrowth = 0.01
+		}
 	}
 
 	return terminalGrowth
@@ -395,4 +462,32 @@ func (s *Service) calculateDataFreshnessScore(financial *entities.FinancialData,
 	}
 
 	return score
+}
+
+// calculateNetWorkingCapitalChange computes the change in net working capital
+// between the two most recent annual periods. Positive = cash consumed.
+func (s *Service) calculateNetWorkingCapitalChange(
+	historicalData *entities.HistoricalFinancialData,
+	latest *entities.FinancialData,
+) float64 {
+	if latest.CurrentAssets <= 0 || latest.CurrentLiabilities <= 0 {
+		return 0 // data not available
+	}
+
+	latestNWC := latest.CurrentAssets - latest.CurrentLiabilities
+
+	// Find prior period to compute delta
+	recentYears := historicalData.GetRecentYears(2)
+	if len(recentYears) < 2 {
+		return 0 // not enough history for delta
+	}
+
+	// recentYears[0] is most recent, [1] is prior (sorted descending by GetRecentYears)
+	prior := recentYears[1]
+	if prior.CurrentAssets <= 0 || prior.CurrentLiabilities <= 0 {
+		return 0
+	}
+
+	priorNWC := prior.CurrentAssets - prior.CurrentLiabilities
+	return latestNWC - priorNWC
 }

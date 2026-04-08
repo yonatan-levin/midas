@@ -293,6 +293,32 @@ func TestCapGrowthRate(t *testing.T) {
 	}
 }
 
+func TestCapGrowthRateWithBounds(t *testing.T) {
+	tests := []struct {
+		name     string
+		rate     float64
+		min      float64
+		max      float64
+		expected float64
+	}{
+		{"within bounds", 0.15, -0.3, 0.5, 0.15},
+		{"above max", 0.80, -0.3, 0.5, 0.5},
+		{"below min", -0.60, -0.3, 0.5, -0.3},
+		{"at max boundary", 0.5, -0.3, 0.5, 0.5},
+		{"at min boundary", -0.3, -0.3, 0.5, -0.3},
+		{"custom tight bounds", 0.20, -0.1, 0.15, 0.15},
+		{"custom tight bounds negative", -0.20, -0.1, 0.15, -0.1},
+		{"zero within bounds", 0.0, -0.3, 0.5, 0.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := CapGrowthRateWithBounds(tt.rate, tt.min, tt.max)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
 func TestHelperFunctions(t *testing.T) {
 	t.Run("removeInvalidValues", func(t *testing.T) {
 		input := []float64{100, 0, -50, math.NaN(), math.Inf(1), 110, 121}

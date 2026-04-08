@@ -2,6 +2,7 @@ package dcf
 
 import (
 	"errors"
+	"fmt"
 	"math"
 )
 
@@ -17,10 +18,17 @@ type Inputs struct {
 	// Projection parameters
 	ProjectionYears int // Number of explicit forecast years (typically 5)
 
-	// Optional: Capital expenditure and working capital assumptions
+	// Optional: Capital expenditure and working capital assumptions (legacy, percentage-based)
 	CapexAsPercentOfRevenue float64 // CapEx as % of revenue (for FCF calculation)
 	WorkingCapitalChange    float64 // Annual working capital change
 	DepreciationRate        float64 // Depreciation as % of revenue
+
+	// True FCF components (preferred over percentage-based when available).
+	// FCF = NOPAT + D&A - CapEx - deltaWC
+	DepreciationAndAmortization float64 // Actual D&A amount to add back (non-cash)
+	CapitalExpenditures         float64 // Actual CapEx amount to subtract (cash outflow, positive value)
+	NetWorkingCapitalChange     float64 // Change in NWC (positive = cash consumed)
+	UseTrueFCF                  bool    // When true, use actual D&A/CapEx instead of percentage-based
 }
 
 // Projection represents cash flow projection for a single year
@@ -85,15 +93,25 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 		// Calculate NOPAT (Net Operating Profit After Tax)
 		nopat := currentOperatingIncome * (1 - inputs.TaxRate)
 
-		// For simplified DCF, assume FCF ≈ NOPAT (can be enhanced with CapEx/WC adjustments)
-		freeCashFlow := nopat
+		// Calculate Free Cash Flow
+		var freeCashFlow float64
 
-		// Apply CapEx and working capital adjustments if provided
-		if inputs.CapexAsPercentOfRevenue > 0 || inputs.WorkingCapitalChange != 0 {
-			// Rough approximation: Revenue growth implies CapEx and WC needs
-			// This can be enhanced with more detailed modeling
+		if inputs.UseTrueFCF {
+			// True FCF: NOPAT + D&A - CapEx - delta_WC
+			// D&A and CapEx scale proportionally with operating income growth.
+			growthFactor := currentOperatingIncome / inputs.BaseOperatingIncome
+			scaledDA := inputs.DepreciationAndAmortization * growthFactor
+			scaledCapEx := inputs.CapitalExpenditures * growthFactor
+			scaledNWCChange := inputs.NetWorkingCapitalChange * growthFactor
+
+			freeCashFlow = nopat + scaledDA - scaledCapEx - scaledNWCChange
+		} else if inputs.CapexAsPercentOfRevenue > 0 || inputs.WorkingCapitalChange != 0 {
+			// Legacy percentage-based approximation
 			grossInvestment := currentOperatingIncome * inputs.CapexAsPercentOfRevenue
 			freeCashFlow = nopat - grossInvestment - inputs.WorkingCapitalChange
+		} else {
+			// Fallback: FCF = NOPAT (no reinvestment data available)
+			freeCashFlow = nopat
 		}
 
 		// Calculate discount factor and present value
@@ -121,11 +139,8 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 	result.TerminalYearFCF = finalYearProjection.FreeCashFlow
 
 	// Terminal value = FCF(final year) * (1 + terminal growth) / (WACC - terminal growth)
+	// The minimum 1% spread is enforced by validateInputs.
 	terminalFCF := result.TerminalYearFCF * (1 + inputs.TerminalGrowthRate)
-	if inputs.WACC <= inputs.TerminalGrowthRate {
-		return nil, errors.New("WACC must be greater than terminal growth rate for Gordon Growth Model")
-	}
-
 	result.TerminalValueNominal = terminalFCF / (inputs.WACC - inputs.TerminalGrowthRate)
 
 	// Discount terminal value to present
@@ -198,8 +213,9 @@ func validateInputs(inputs Inputs) error {
 		return errors.New("WACC must be between 0% and 50%")
 	}
 
-	if inputs.WACC <= inputs.TerminalGrowthRate {
-		return errors.New("WACC must be greater than terminal growth rate")
+	if inputs.WACC-inputs.TerminalGrowthRate < 0.01 {
+		return fmt.Errorf("WACC (%.2f%%) must exceed terminal growth rate (%.2f%%) by at least 1%%",
+			inputs.WACC*100, inputs.TerminalGrowthRate*100)
 	}
 
 	if inputs.TaxRate < 0 || inputs.TaxRate > 1 {
@@ -227,7 +243,7 @@ func isResultReasonable(result *Result) bool {
 
 	// Check for reasonable cash flows
 	for _, projection := range result.Projections {
-		 //Keep in eye on this check to see if it meet real life.
+		//Keep in eye on this check to see if it meet real life.
 		// Growth should be reasonable year-over-year
 		if projection.Year > 1 && projection.GrowthRateApplied > 1.0 {
 			return false

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -9,17 +10,25 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
 )
 
+// ValuationCalculator abstracts the valuation service so handlers depend on
+// an interface rather than a concrete type, following clean architecture.
+// *valuation.Service satisfies this interface implicitly.
+type ValuationCalculator interface {
+	CalculateValuation(ctx context.Context, ticker string, opts *valuation.ValuationOptions) (*entities.ValuationResult, error)
+}
+
 // FairValueHandler handles fair value related HTTP requests
 type FairValueHandler struct {
-	valuationService *valuation.Service
+	valuationService ValuationCalculator
 	logger           *zap.Logger
 }
 
 // NewFairValueHandler creates a new FairValueHandler instance
-func NewFairValueHandler(valuationService *valuation.Service, logger *zap.Logger) *FairValueHandler {
+func NewFairValueHandler(valuationService ValuationCalculator, logger *zap.Logger) *FairValueHandler {
 	return &FairValueHandler{
 		valuationService: valuationService,
 		logger:           logger,
@@ -146,6 +155,11 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 			h.sendError(c, http.StatusUnprocessableEntity, "INSUFFICIENT_DATA",
 				"Insufficient data for valuation",
 				"Not enough financial data available to perform reliable valuation",
+				map[string]interface{}{"ticker": ticker})
+		} else if errors.Is(err, valuation.ErrModelNotApplicable) {
+			h.sendError(c, http.StatusUnprocessableEntity, "MODEL_NOT_APPLICABLE",
+				"Standard DCF model not applicable",
+				"This company has non-positive operating income. Industry-specific valuation models (DDM, FFO, revenue multiples) are planned for a future release.",
 				map[string]interface{}{"ticker": ticker})
 		} else {
 			h.sendError(c, http.StatusInternalServerError, "CALCULATION_ERROR",
@@ -310,6 +324,12 @@ func classifyBulkError(ticker string, err error) BulkFailure {
 			Ticker:    ticker,
 			ErrorCode: "INSUFFICIENT_DATA",
 			Message:   "Not enough financial data for reliable valuation",
+		}
+	case errors.Is(err, valuation.ErrModelNotApplicable):
+		return BulkFailure{
+			Ticker:    ticker,
+			ErrorCode: "MODEL_NOT_APPLICABLE",
+			Message:   "Standard DCF not applicable; company has non-positive operating income",
 		}
 	default:
 		return BulkFailure{

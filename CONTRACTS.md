@@ -40,6 +40,7 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 | `AUTH_007` | 500 | Invalid authentication information |
 | `AUTH_008` | 403 | Insufficient permissions |
 | `INVALID_TICKER` | 400 | Empty or invalid ticker |
+| `MODEL_NOT_APPLICABLE` | 422 | Standard DCF not applicable (e.g., negative operating income) |
 | `RATE_LIMIT_EXCEEDED` | 429 | Rate limit exceeded |
 
 ---
@@ -87,7 +88,7 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 | `data_quality_score` | float | Data quality score (0.0 - 1.0) |
 | `data_quality_grade` | string | Quality grade (A/B/C/D/F) |
 
-**Error Responses**: 400, 401, 404, 422
+**Error Responses**: 400 (`INVALID_TICKER`), 401, 404 (`TICKER_NOT_FOUND`), 422 (`INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`)
 
 ---
 

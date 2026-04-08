@@ -156,13 +156,14 @@ data/                   # SQLite database files (gitignored)
 | `internal/core/ports/gateways.go` | External service interfaces |
 | `internal/core/ports/repositories.go` | Data storage interfaces |
 | `internal/services/valuation/service.go` | DCF valuation orchestration |
-| `internal/services/valuation/errors.go` | Sentinel errors (ErrTickerNotFound, ErrInsufficientData) |
+| `internal/services/valuation/errors.go` | Sentinel errors (ErrTickerNotFound, ErrInsufficientData, ErrModelNotApplicable) |
 | `internal/services/valuation/options.go` | ValuationOptions (override beta/risk-free rate) |
 | `internal/services/datafetcher/coordinator.go` | Multi-source data fetching |
 | `internal/services/datacleaner/service.go` | Financial data normalization |
 | `internal/infra/gateways/market/yfinance_auth.go` | Yahoo Finance cookie+crumb auth manager |
 | `internal/infra/database/schema.sql` | Database schema |
 | `docs/openapi.yaml` | OpenAPI 3.0 specification |
+| `docs/refactoring/valuation-engine-upgrade-spec.md` | Full upgrade spec: multi-stage growth, industry models, international |
 | `config.env.example` | Environment variable template |
 
 ## External Data Sources

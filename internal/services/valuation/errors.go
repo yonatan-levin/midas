@@ -12,4 +12,9 @@ var (
 	// ErrInsufficientData indicates there is not enough financial data
 	// to perform a reliable valuation.
 	ErrInsufficientData = errors.New("insufficient data")
+
+	// ErrModelNotApplicable indicates the standard DCF model cannot value this
+	// company (e.g., negative operating income). Industry-specific models
+	// (DDM, FFO, revenue multiples) may handle it in a future phase.
+	ErrModelNotApplicable = errors.New("model not applicable")
 )

@@ -1,25 +1,32 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
-	"github.com/midas/dcf-valuation-api/internal/services/auth"
 )
+
+// AuthKeyManager abstracts the auth service so handlers depend on an interface
+// rather than a concrete type, following clean architecture.
+// *auth.Service satisfies this interface implicitly.
+type AuthKeyManager interface {
+	CreateKey(ctx context.Context, userID string, permissions []entities.Permission) (*entities.APIKey, error)
+}
 
 // AuthHandler provides endpoints for API key management.
 // It intentionally depends only on the auth service to respect clean-arch boundaries.
 // All permission checks are handled by the outer middleware in server.go.
 type AuthHandler struct {
-	authService *auth.Service
+	authService AuthKeyManager
 	logger      *zap.Logger
 }
 
 // NewAuthHandler constructs an AuthHandler instance.
-func NewAuthHandler(authService *auth.Service, logger *zap.Logger) *AuthHandler {
+func NewAuthHandler(authService AuthKeyManager, logger *zap.Logger) *AuthHandler {
 	return &AuthHandler{
 		authService: authService,
 		logger:      logger,
