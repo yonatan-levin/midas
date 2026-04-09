@@ -91,6 +91,9 @@ type YFinanceGateway interface {
 
 	// GetHistoricalPrices retrieves historical price data for beta calculation
 	GetHistoricalPrices(ctx context.Context, ticker string, days int) ([]YFinancePricePoint, error)
+
+	// GetAnalystEstimates retrieves analyst consensus growth estimates from earningsTrend module
+	GetAnalystEstimates(ctx context.Context, ticker string) (*YFinanceAnalystEstimates, error)
 }
 
 // YFinanceQuote represents quote data from Yahoo Finance
@@ -130,6 +133,16 @@ type YFinancePricePoint struct {
 	Low    float64   `json:"low"`
 	Close  float64   `json:"close"`
 	Volume float64   `json:"volume"`
+}
+
+// YFinanceAnalystEstimates represents analyst consensus growth estimates
+type YFinanceAnalystEstimates struct {
+	RevenueEstimateCurrentYear float64 `json:"revenue_estimate_current_year"` // absolute revenue estimate in reporting currency (USD)
+	RevenueEstimateNextYear    float64 `json:"revenue_estimate_next_year"`    // absolute revenue estimate in reporting currency (USD)
+	EarningsGrowth5Year        float64 `json:"earnings_growth_5_year"`        // analyst consensus 5-year earnings growth rate (decimal)
+	NumberOfAnalysts           int     `json:"number_of_analysts"`
+	RevenueEstimateLow         float64 `json:"revenue_estimate_low"`  // bear-case revenue estimate (USD)
+	RevenueEstimateHigh        float64 `json:"revenue_estimate_high"` // bull-case revenue estimate (USD)
 }
 
 // FinziveGateway defines the interface for Finzive scraping operations

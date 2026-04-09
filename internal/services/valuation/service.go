@@ -12,6 +12,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
+	growthsvc "github.com/midas/dcf-valuation-api/internal/services/growth"
 	"github.com/midas/dcf-valuation-api/pkg/finance/dcf"
 	"github.com/midas/dcf-valuation-api/pkg/finance/growth"
 	"github.com/midas/dcf-valuation-api/pkg/finance/wacc"
@@ -19,15 +20,17 @@ import (
 
 // Service provides valuation operations
 type Service struct {
-	financialRepo  ports.FinancialDataRepository
-	marketRepo     ports.MarketDataRepository
-	macroRepo      ports.MacroDataRepository
-	cache          ports.CacheRepository
-	dataCleaner    datacleaner.DataCleanerService
-	dataFetcher    *datafetcher.DataFetcher
-	metricsService ports.MetricsService
-	config         *config.Config
-	logger         *zap.Logger
+	financialRepo   ports.FinancialDataRepository
+	marketRepo      ports.MarketDataRepository
+	macroRepo       ports.MacroDataRepository
+	cache           ports.CacheRepository
+	dataCleaner     datacleaner.DataCleanerService
+	dataFetcher     *datafetcher.DataFetcher
+	growthEstimator *growthsvc.Estimator
+	yfinanceGateway ports.YFinanceGateway // optional, for analyst estimates
+	metricsService  ports.MetricsService
+	config          *config.Config
+	logger          *zap.Logger
 }
 
 // NewService creates a new valuation service
@@ -42,17 +45,33 @@ func NewService(
 	cfg *config.Config,
 	logger *zap.Logger,
 ) *Service {
-	return &Service{
-		financialRepo:  financialRepo,
-		marketRepo:     marketRepo,
-		macroRepo:      macroRepo,
-		cache:          cache,
-		dataCleaner:    dataCleaner,
-		dataFetcher:    dataFetcher,
-		metricsService: metricsService,
-		config:         cfg,
-		logger:         logger,
+	// Build growth estimator from valuation config
+	estimatorCfg := growthsvc.DefaultEstimatorConfig()
+	if cfg.Valuation.DCFMaxGrowthRate > 0 {
+		estimatorCfg.MaxGrowthRate = cfg.Valuation.DCFMaxGrowthRate
 	}
+	if cfg.Valuation.DCFMinGrowthRate != 0 {
+		estimatorCfg.MinGrowthRate = cfg.Valuation.DCFMinGrowthRate
+	}
+
+	return &Service{
+		financialRepo:   financialRepo,
+		marketRepo:      marketRepo,
+		macroRepo:       macroRepo,
+		cache:           cache,
+		dataCleaner:     dataCleaner,
+		dataFetcher:     dataFetcher,
+		growthEstimator: growthsvc.NewEstimator(estimatorCfg, logger),
+		metricsService:  metricsService,
+		config:          cfg,
+		logger:          logger,
+	}
+}
+
+// SetYFinanceGateway injects the Yahoo Finance gateway for analyst estimates.
+// This is optional — when nil, the growth estimator uses historical data only.
+func (s *Service) SetYFinanceGateway(gw ports.YFinanceGateway) {
+	s.yfinanceGateway = gw
 }
 
 // CalculateValuation performs a complete DCF valuation for a ticker.
@@ -164,7 +183,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	}
 
 	// Calculate valuation using potentially cleaned data, applying any user overrides
-	result, err := s.performValuation(historicalData, marketData, macroData, opts)
+	result, err := s.performValuation(ctx, historicalData, marketData, macroData, opts)
 	if err != nil {
 		s.metricsService.RecordValuationRequest(ticker, "single", "error", time.Since(start))
 		s.metricsService.RecordValuationError(ticker, "calculation_failed")
@@ -197,6 +216,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 // performValuation executes the valuation calculation logic.
 // opts may be nil; when provided, its fields override data-source values in the WACC calculation.
 func (s *Service) performValuation(
+	ctx context.Context,
 	historicalData *entities.HistoricalFinancialData,
 	marketData *entities.MarketData,
 	macroData *entities.MacroData,
@@ -216,37 +236,38 @@ func (s *Service) performValuation(
 		return nil, fmt.Errorf("%w: incomplete macro data", ErrInsufficientData)
 	}
 
-	// Calculate growth rate from historical data.
-	// With < 2 years of data, growth rate calculation will fail — use a conservative default.
-	growthResult, err := historicalData.CalculateAverageGrowthRate(5)
+	// Calculate historical growth rate from SEC data.
+	historicalGrowth, err := historicalData.CalculateAverageGrowthRate(5)
 	if err != nil {
-		// Not enough history for growth calculation — use a conservative default rate
-		growthResult = &growth.CalculationResult{
-			GrowthRate:  s.config.Valuation.DefaultTerminalGrowthCap, // Use terminal growth cap as conservative estimate
+		historicalGrowth = &growth.CalculationResult{
+			GrowthRate:  s.config.Valuation.DefaultTerminalGrowthCap,
 			Method:      "default",
 			DataQuality: "low",
 			IsReliable:  false,
 		}
 	}
 
-	// Enforce config-driven growth rate bounds (BUG-010 fix).
-	// Only apply when bounds are configured (non-zero); fall back to hardcoded defaults otherwise.
-	minGrowth := s.config.Valuation.DCFMinGrowthRate
-	maxGrowth := s.config.Valuation.DCFMaxGrowthRate
-	if minGrowth == 0 && maxGrowth == 0 {
-		minGrowth = -0.3
-		maxGrowth = 0.5
+	// Fetch analyst consensus estimates (optional, degrades gracefully)
+	var analystData *ports.YFinanceAnalystEstimates
+	if s.yfinanceGateway != nil {
+		analystData, _ = s.yfinanceGateway.GetAnalystEstimates(ctx, historicalData.Ticker)
 	}
-	uncappedGrowth := growthResult.GrowthRate
-	growthResult.GrowthRate = growth.CapGrowthRateWithBounds(growthResult.GrowthRate, minGrowth, maxGrowth)
-	if growthResult.GrowthRate != uncappedGrowth {
-		s.logger.Warn("Growth rate capped to configured bounds",
-			zap.String("ticker", historicalData.Ticker),
-			zap.Float64("original", uncappedGrowth),
-			zap.Float64("capped", growthResult.GrowthRate),
-			zap.Float64("max", maxGrowth),
-			zap.Float64("min", minGrowth))
+
+	// Calculate ROIC-sustainable growth ceiling
+	sustainableGrowth := 0.0
+	latestForROIC, _ := historicalData.GetLatestPeriod()
+	if latestForROIC != nil {
+		nopat := latestForROIC.NormalizedOperatingIncome * (1 - latestForROIC.TaxRate)
+		investedCapital := growth.CalculateInvestedCapital(
+			latestForROIC.StockholdersEquity,
+			latestForROIC.InterestBearingDebt,
+			latestForROIC.CashAndCashEquivalents,
+		)
+		sustainableGrowth = growth.CalculateSustainableGrowth(nopat, investedCapital, s.growthEstimator.Config().DefaultPayoutRatio)
 	}
+
+	// Produce multi-stage growth estimate (analyst + historical blend)
+	growthEstimate := s.growthEstimator.EstimateGrowthRates(analystData, historicalGrowth, sustainableGrowth)
 
 	// Get the latest financial data for asset calculations
 	latestFinancialData, latestPeriod := historicalData.GetLatestPeriod()
@@ -289,8 +310,9 @@ func (s *Service) performValuation(
 	s.metricsService.IncWACCCalculations()
 	s.metricsService.SetAverageWACC(waccResult.WACC)
 
-	// Calculate terminal growth rate (conservative approach, WACC-aware)
-	terminalGrowthRate := s.calculateTerminalGrowthRate(growthResult.GrowthRate, waccResult.WACC)
+	// Use terminal growth from the growth estimate, with WACC safety guard
+	terminalGrowthRate := s.calculateTerminalGrowthRate(growthEstimate.SummaryGrowthRate(), waccResult.WACC)
+	growthEstimate.TerminalGrowthRate = terminalGrowthRate
 
 	// Guard: standard DCF requires positive operating income.
 	// Companies with negative OI (growth-stage, turnaround) need industry-specific models.
@@ -305,13 +327,18 @@ func (s *Service) performValuation(
 	// Calculate net working capital change from historical data if available
 	nwcChange := s.calculateNetWorkingCapitalChange(historicalData, latestFinancialData)
 
-	// Perform DCF calculation
+	// Perform DCF calculation with multi-stage growth rates
+	projectionYears := len(growthEstimate.ProjectedGrowthRates)
+	if projectionYears == 0 {
+		projectionYears = 5 // fallback
+	}
 	dcfInputs := dcf.Inputs{
 		BaseOperatingIncome: baseOI,
-		GrowthRate:          growthResult.GrowthRate,
+		GrowthRate:          growthEstimate.SummaryGrowthRate(), // backward-compatible summary
+		GrowthRates:         growthEstimate.ProjectedGrowthRates,
 		TerminalGrowthRate:  terminalGrowthRate,
 		WACC:                waccResult.WACC,
-		ProjectionYears:     5,
+		ProjectionYears:     projectionYears,
 		TaxRate:             latestFinancialData.TaxRate,
 	}
 
@@ -338,7 +365,7 @@ func (s *Service) performValuation(
 
 	// Record DCF calculation metrics
 	s.metricsService.IncDCFCalculations()
-	s.metricsService.SetAverageGrowthRate(growthResult.GrowthRate)
+	s.metricsService.SetAverageGrowthRate(growthEstimate.SummaryGrowthRate())
 
 	// Calculate per-share values.
 	// Priority: diluted (most conservative) > market basic (most current) > financial basic
@@ -371,15 +398,18 @@ func (s *Service) performValuation(
 		TangibleValuePerShare: tangibleValuePerShare,
 		DCFValuePerShare:      dcfValuePerShare,
 		WACC:                  waccResult.WACC,
-		GrowthRate:            growthResult.GrowthRate,
+		GrowthRate:            growthEstimate.SummaryGrowthRate(),
+		GrowthRates:           growthEstimate.ProjectedGrowthRates,
 		TerminalGrowthRate:    terminalGrowthRate,
+		GrowthSource:          growthEstimate.Source,
+		GrowthConfidence:      growthEstimate.Confidence,
 		MarketRiskPremium:     macroData.MarketRiskPremium,
 		EnterpriseValue:       dcfResult.EnterpriseValue,
 		EquityValue:           equityValue,
 		FinancialDataPeriod:   latestPeriod,
 		MarketDataDate:        marketData.AsOf,
 		DataFreshnessScore:    dataFreshnessScore,
-		CalculationVersion:    "1.1",
+		CalculationVersion:    "2.0",
 	}
 
 	return result, nil

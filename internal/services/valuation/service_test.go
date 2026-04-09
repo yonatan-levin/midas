@@ -815,7 +815,7 @@ func TestService_performValuation(t *testing.T) {
 	historicalData, marketData, macroData := createTestData()
 
 	t.Run("successful valuation with good data", func(t *testing.T) {
-		result, err := service.performValuation(historicalData, marketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -826,7 +826,7 @@ func TestService_performValuation(t *testing.T) {
 		assert.Greater(t, result.GrowthRate, 0.0)
 		assert.Greater(t, result.EnterpriseValue, 0.0)
 		assert.Greater(t, result.DataFreshnessScore, 0)
-		assert.Equal(t, "1.1", result.CalculationVersion)
+		assert.Equal(t, "2.0", result.CalculationVersion)
 	})
 
 	t.Run("single period uses default growth rate", func(t *testing.T) {
@@ -839,7 +839,7 @@ func TestService_performValuation(t *testing.T) {
 			},
 		}
 
-		result, err := service.performValuation(singlePeriodData, marketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), singlePeriodData, marketData, macroData, nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -855,7 +855,7 @@ func TestService_performValuation(t *testing.T) {
 			Data:   map[string]*entities.FinancialData{},
 		}
 
-		result, err := service.performValuation(emptyData, marketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), emptyData, marketData, macroData, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -870,7 +870,7 @@ func TestService_performValuation(t *testing.T) {
 			SharePrice: 0, // Missing price
 		}
 
-		result, err := service.performValuation(historicalData, incompleteMarketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), historicalData, incompleteMarketData, macroData, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -884,7 +884,7 @@ func TestService_performValuation(t *testing.T) {
 			RiskFreeRate: 0, // Missing risk-free rate
 		}
 
-		result, err := service.performValuation(historicalData, marketData, incompleteMacroData, nil)
+		result, err := service.performValuation(context.Background(), historicalData, marketData, incompleteMacroData, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -1504,12 +1504,12 @@ func TestService_CalculateValuation_OverrideBeta(t *testing.T) {
 
 	// Low beta (0.5) should produce a lower WACC
 	lowBeta := 0.5
-	resultLow, err := service.performValuation(historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &lowBeta})
+	resultLow, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &lowBeta})
 	require.NoError(t, err)
 
 	// High beta (2.0) should produce a higher WACC
 	highBeta := 2.0
-	resultHigh, err := service.performValuation(historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &highBeta})
+	resultHigh, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &highBeta})
 	require.NoError(t, err)
 
 	// Assert that different betas produce different WACCs
@@ -1541,12 +1541,12 @@ func TestService_CalculateValuation_OverrideRiskFree(t *testing.T) {
 
 	// Low risk-free rate (1%) should produce a lower WACC
 	lowRF := 0.01
-	resultLow, err := service.performValuation(historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &lowRF})
+	resultLow, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &lowRF})
 	require.NoError(t, err)
 
 	// High risk-free rate (8%) should produce a higher WACC
 	highRF := 0.08
-	resultHigh, err := service.performValuation(historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &highRF})
+	resultHigh, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &highRF})
 	require.NoError(t, err)
 
 	assert.NotEqual(t, resultLow.WACC, resultHigh.WACC,
@@ -1576,10 +1576,10 @@ func TestService_CalculateValuation_NilOptsDefaultBehavior(t *testing.T) {
 	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
 
 	// Two calls with nil opts should produce identical WACCs
-	result1, err := service.performValuation(historicalData, marketData, macroData, nil)
+	result1, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
 	require.NoError(t, err)
 
-	result2, err := service.performValuation(historicalData, marketData, macroData, nil)
+	result2, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, result1.WACC, result2.WACC, "nil opts should produce deterministic WACC")
@@ -1637,7 +1637,7 @@ func TestService_performValuation_InsufficientDataSentinel(t *testing.T) {
 		Data:   map[string]*entities.FinancialData{},
 	}
 
-	_, err := service.performValuation(emptyData, marketData, macroData, nil)
+	_, err := service.performValuation(context.Background(), emptyData, marketData, macroData, nil)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrInsufficientData, "empty data must return ErrInsufficientData sentinel")
 }
@@ -1845,7 +1845,7 @@ func TestService_performValuation_WACCFailure(t *testing.T) {
 
 	// Use a negative beta override to trigger WACC validation failure
 	negativeBeta := -1.0
-	result, err := service.performValuation(historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &negativeBeta})
+	result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &negativeBeta})
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -1911,7 +1911,7 @@ func TestService_performValuation_SharesFallback(t *testing.T) {
 			},
 		}
 
-		result, err := service.performValuation(historicalData, marketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.Greater(t, result.DCFValuePerShare, 0.0)
@@ -1957,7 +1957,7 @@ func TestService_performValuation_SharesFallback(t *testing.T) {
 			},
 		}
 
-		result, err := service.performValuation(historicalData, marketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		// Should use marketData.SharesOutstanding = 15744231000
@@ -2166,7 +2166,7 @@ func TestService_performValuation_NegativeOperatingIncome(t *testing.T) {
 	}
 	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
 
-	result, err := svc.performValuation(negativeOI, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), negativeOI, marketData, macroData, nil)
 	assert.Error(t, err)
 	assert.Nil(t, result)
 	assert.ErrorIs(t, err, ErrModelNotApplicable,
@@ -2203,12 +2203,12 @@ func TestService_performValuation_TrueFCF(t *testing.T) {
 	}
 	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
 
-	result, err := svc.performValuation(historicalData, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Greater(t, result.DCFValuePerShare, 0.0)
 	assert.Greater(t, result.EquityValue, 0.0)
-	assert.Equal(t, "1.1", result.CalculationVersion)
+	assert.Equal(t, "2.0", result.CalculationVersion)
 }
 
 func TestService_performValuation_GrowthCapping(t *testing.T) {
@@ -2264,7 +2264,7 @@ func TestService_performValuation_GrowthCapping(t *testing.T) {
 		},
 	}
 
-	result, err := svc.performValuation(extremeGrowth, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), extremeGrowth, marketData, macroData, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	// Growth should be capped to 30% (config max), not the raw ~124% CAGR

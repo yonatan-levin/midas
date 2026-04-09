@@ -209,7 +209,7 @@ func TestCalculateDCF_InvalidInputs(t *testing.T) {
 				TaxRate:             0.25,
 				ProjectionYears:     0,
 			},
-			wantErr: "projection years must be between 1 and 10",
+			wantErr: "projection years must be between 1 and 15",
 		},
 		{
 			name: "Negative WACC",
@@ -1016,7 +1016,7 @@ func TestInputValidationEdgeCases(t *testing.T) {
 					TerminalGrowthRate:  0.025,
 					WACC:                0.10,
 					TaxRate:             0.25,
-					ProjectionYears:     11, // Above 10
+					ProjectionYears:     16, // Above 15
 				},
 				reason: "too many projection years",
 			},

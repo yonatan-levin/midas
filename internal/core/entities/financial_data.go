@@ -84,6 +84,9 @@ type FinancialData struct {
 	// Cash position (for equity bridge: EV - Debt + Cash = Equity Value)
 	CashAndCashEquivalents float64 `json:"cash_and_cash_equivalents"`
 
+	// Equity (for ROIC / invested capital calculation)
+	StockholdersEquity float64 `json:"stockholders_equity"`
+
 	// Share information
 	SharesOutstanding        float64 `json:"shares_outstanding"`
 	DilutedSharesOutstanding float64 `json:"diluted_shares_outstanding"`

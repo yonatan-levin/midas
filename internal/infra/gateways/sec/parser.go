@@ -282,6 +282,14 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		financialData.CashAndCashEquivalents = val
 	}
 
+	// Stockholders' equity (for ROIC / invested capital)
+	if val, exists := p.findValue(data, []string{
+		"StockholdersEquity",
+		"StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+	}); exists {
+		financialData.StockholdersEquity = val
+	}
+
 	if val, exists := p.findValue(data, []string{
 		"Goodwill",
 	}); exists {

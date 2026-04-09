@@ -470,6 +470,31 @@ type YFinanceKeyStatsResponse struct {
 	} `json:"quoteSummary"`
 }
 
+// YFinanceEarningsTrendResponse represents the earningsTrend module response
+type YFinanceEarningsTrendResponse struct {
+	QuoteSummary struct {
+		Result []struct {
+			EarningsTrend *struct {
+				Trend []struct {
+					Period          string `json:"period"` // "0q", "+1q", "0y", "+1y", "+5y"
+					RevenueEstimate *struct {
+						Avg              *YFinanceValue `json:"avg"`
+						Low              *YFinanceValue `json:"low"`
+						High             *YFinanceValue `json:"high"`
+						NumberOfAnalysts *YFinanceValue `json:"numberOfAnalysts"`
+					} `json:"revenueEstimate"`
+					EarningsEstimate *struct {
+						Avg              *YFinanceValue `json:"avg"`
+						NumberOfAnalysts *YFinanceValue `json:"numberOfAnalysts"`
+					} `json:"earningsEstimate"`
+					Growth *YFinanceValue `json:"growth"`
+				} `json:"trend"`
+			} `json:"earningsTrend"`
+		} `json:"result"`
+		Error interface{} `json:"error"`
+	} `json:"quoteSummary"`
+}
+
 type YFinanceHistoricalResponse struct {
 	Chart struct {
 		Result []struct {
@@ -495,6 +520,102 @@ type YFinanceHistoricalResponse struct {
 type YFinanceValue struct {
 	Raw *float64 `json:"raw"`
 	Fmt string   `json:"fmt"`
+}
+
+// GetAnalystEstimates retrieves analyst consensus growth estimates from the earningsTrend module.
+// Returns nil (not error) when no analyst data is available (micro-caps, foreign tickers).
+func (c *YFinanceClient) GetAnalystEstimates(ctx context.Context, ticker string) (*ports.YFinanceAnalystEstimates, error) {
+	c.logger.Debug("Fetching analyst estimates", zap.String("ticker", ticker))
+
+	endpoint := fmt.Sprintf("%s/v10/finance/quoteSummary/%s", c.baseURL, ticker)
+
+	params := url.Values{}
+	params.Set("modules", "earningsTrend")
+
+	reqURL := fmt.Sprintf("%s?%s", endpoint, params.Encode())
+
+	// Reuse makeKeyStatsRequest but decode into EarningsTrend response
+	resp, err := c.makeEarningsTrendRequest(ctx, reqURL)
+	if err != nil {
+		c.logger.Warn("Failed to fetch analyst estimates, will use historical growth only",
+			zap.String("ticker", ticker), zap.Error(err))
+		return nil, nil // Graceful degradation — not an error
+	}
+
+	if len(resp.QuoteSummary.Result) == 0 || resp.QuoteSummary.Result[0].EarningsTrend == nil {
+		return nil, nil // No analyst data available
+	}
+
+	trend := resp.QuoteSummary.Result[0].EarningsTrend.Trend
+	estimates := &ports.YFinanceAnalystEstimates{}
+
+	for _, entry := range trend {
+		switch entry.Period {
+		case "0y": // Current year
+			if entry.RevenueEstimate != nil {
+				if entry.RevenueEstimate.Avg != nil && entry.RevenueEstimate.Avg.Raw != nil {
+					estimates.RevenueEstimateCurrentYear = *entry.RevenueEstimate.Avg.Raw
+				}
+				if entry.RevenueEstimate.Low != nil && entry.RevenueEstimate.Low.Raw != nil {
+					estimates.RevenueEstimateLow = *entry.RevenueEstimate.Low.Raw
+				}
+				if entry.RevenueEstimate.High != nil && entry.RevenueEstimate.High.Raw != nil {
+					estimates.RevenueEstimateHigh = *entry.RevenueEstimate.High.Raw
+				}
+				if entry.RevenueEstimate.NumberOfAnalysts != nil && entry.RevenueEstimate.NumberOfAnalysts.Raw != nil {
+					estimates.NumberOfAnalysts = int(*entry.RevenueEstimate.NumberOfAnalysts.Raw)
+				}
+			}
+		case "+1y": // Next year
+			if entry.RevenueEstimate != nil && entry.RevenueEstimate.Avg != nil && entry.RevenueEstimate.Avg.Raw != nil {
+				estimates.RevenueEstimateNextYear = *entry.RevenueEstimate.Avg.Raw
+			}
+		case "+5y": // 5-year growth estimate
+			if entry.Growth != nil && entry.Growth.Raw != nil {
+				estimates.EarningsGrowth5Year = *entry.Growth.Raw
+			}
+		}
+	}
+
+	c.logger.Debug("Successfully fetched analyst estimates",
+		zap.String("ticker", ticker),
+		zap.Int("analysts", estimates.NumberOfAnalysts),
+		zap.Float64("5y_growth", estimates.EarningsGrowth5Year))
+
+	return estimates, nil
+}
+
+// makeEarningsTrendRequest executes an earningsTrend request with cookie+crumb auth.
+func (c *YFinanceClient) makeEarningsTrendRequest(ctx context.Context, reqURL string) (*YFinanceEarningsTrendResponse, error) {
+	if err := c.auth.EnsureAuth(ctx); err != nil {
+		return nil, fmt.Errorf("failed to authenticate with Yahoo Finance: %w", err)
+	}
+
+	reqURL = c.appendCrumb(reqURL)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	c.applyAuth(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to execute request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("yahoo finance API returned status %d", resp.StatusCode)
+	}
+
+	var result YFinanceEarningsTrendResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return &result, nil
 }
 
 // HealthCheck performs a health check on the Yahoo Finance API

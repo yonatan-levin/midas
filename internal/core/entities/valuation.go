@@ -21,8 +21,11 @@ type ValuationResult struct {
 	WeightOfDebt   float64 `json:"weight_of_debt"`   // D/(E+D)
 
 	// Growth assumptions
-	GrowthRate         float64 `json:"growth_rate"`          // 5-year projected growth rate
-	TerminalGrowthRate float64 `json:"terminal_growth_rate"` // Long-term growth rate
+	GrowthRate         float64   `json:"growth_rate"`                 // Summary growth rate (CAGR of projected rates, backward-compatible)
+	GrowthRates        []float64 `json:"growth_rates,omitempty"`      // Per-year projected growth rates
+	TerminalGrowthRate float64   `json:"terminal_growth_rate"`        // Long-term growth rate
+	GrowthSource       string    `json:"growth_source,omitempty"`     // "analyst_blend", "historical_only", "default"
+	GrowthConfidence   string    `json:"growth_confidence,omitempty"` // "high", "medium", "low"
 
 	// DCF model details
 	ProjectionYears int     `json:"projection_years"` // Number of explicit forecast years

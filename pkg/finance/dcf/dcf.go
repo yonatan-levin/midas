@@ -9,14 +9,15 @@ import (
 // Inputs represents all inputs needed for DCF calculation
 type Inputs struct {
 	// Base financial data
-	BaseOperatingIncome float64 // Current normalized operating income
-	GrowthRate          float64 // Projected annual growth rate
-	TerminalGrowthRate  float64 // Long-term perpetual growth rate
-	WACC                float64 // Weighted Average Cost of Capital (discount rate)
-	TaxRate             float64 // Effective tax rate
+	BaseOperatingIncome float64   // Current normalized operating income
+	GrowthRate          float64   // Projected annual growth rate (backward-compatible single rate)
+	GrowthRates         []float64 // Per-year growth rates (optional, overrides GrowthRate when non-empty)
+	TerminalGrowthRate  float64   // Long-term perpetual growth rate
+	WACC                float64   // Weighted Average Cost of Capital (discount rate)
+	TaxRate             float64   // Effective tax rate
 
 	// Projection parameters
-	ProjectionYears int // Number of explicit forecast years (typically 5)
+	ProjectionYears int // Number of explicit forecast years (typically 5-7)
 
 	// Optional: Capital expenditure and working capital assumptions (legacy, percentage-based)
 	CapexAsPercentOfRevenue float64 // CapEx as % of revenue (for FCF calculation)
@@ -87,8 +88,14 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 	explicitPeriodValue := 0.0
 
 	for year := 1; year <= inputs.ProjectionYears; year++ {
+		// Select growth rate: per-year if available, otherwise single rate
+		rateForYear := inputs.GrowthRate
+		if len(inputs.GrowthRates) >= year {
+			rateForYear = inputs.GrowthRates[year-1]
+		}
+
 		// Apply growth to operating income
-		currentOperatingIncome *= (1 + inputs.GrowthRate)
+		currentOperatingIncome *= (1 + rateForYear)
 
 		// Calculate NOPAT (Net Operating Profit After Tax)
 		nopat := currentOperatingIncome * (1 - inputs.TaxRate)
@@ -126,7 +133,7 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 			FreeCashFlow:      freeCashFlow,
 			DiscountFactor:    discountFactor,
 			PresentValue:      presentValue,
-			GrowthRateApplied: inputs.GrowthRate,
+			GrowthRateApplied: rateForYear,
 		}
 
 		explicitPeriodValue += presentValue
@@ -222,8 +229,8 @@ func validateInputs(inputs Inputs) error {
 		return errors.New("tax rate must be between 0% and 100%")
 	}
 
-	if inputs.ProjectionYears < 1 || inputs.ProjectionYears > 10 {
-		return errors.New("projection years must be between 1 and 10")
+	if inputs.ProjectionYears < 1 || inputs.ProjectionYears > 15 {
+		return errors.New("projection years must be between 1 and 15")
 	}
 
 	return nil

@@ -81,7 +81,10 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 |-------|------|-------------|
 | `ticker` | string | Stock ticker symbol |
 | `wacc` | float | Weighted Average Cost of Capital (decimal, e.g., 0.095 = 9.5%) |
-| `growth_rate` | float | Terminal growth rate (decimal) |
+| `growth_rate` | float | Summary growth rate — CAGR of projected per-year rates (decimal, backward-compatible) |
+| `growth_rates` | float[] | Per-year projected growth rates for the explicit forecast period (optional, omitted if empty) |
+| `growth_source` | string | How growth was estimated: `"analyst_blend"`, `"historical_only"`, or `"default"` (optional) |
+| `growth_confidence` | string | Confidence level: `"high"`, `"medium"`, or `"low"` (optional) |
 | `tangible_value_per_share` | float | Net Tangible Asset Value per share (USD) |
 | `dcf_value_per_share` | float | DCF Fair Value per share (USD) |
 | `as_of` | datetime | Timestamp of data used for calculation (ISO 8601) |
