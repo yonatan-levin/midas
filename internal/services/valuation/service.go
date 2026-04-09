@@ -373,16 +373,19 @@ func (s *Service) performValuation(
 		TaxRate:             latestFinancialData.TaxRate,
 	}
 
-	// Use true FCF when D&A and CapEx data are available
-	if latestFinancialData.DepreciationAndAmortization > 0 || latestFinancialData.CapitalExpenditures > 0 {
+	// Use true FCF when D&A and CapEx data are available.
+	// Average CapEx and D&A over available annual periods to smooth cyclical spikes
+	// (e.g., MSFT's $30B AI infrastructure buildout year shouldn't define all future CapEx).
+	avgDA, avgCapEx := s.averageCapExAndDA(historicalData)
+	if avgDA > 0 || avgCapEx > 0 {
 		dcfInputs.UseTrueFCF = true
-		dcfInputs.DepreciationAndAmortization = latestFinancialData.DepreciationAndAmortization
-		dcfInputs.CapitalExpenditures = latestFinancialData.CapitalExpenditures
+		dcfInputs.DepreciationAndAmortization = avgDA
+		dcfInputs.CapitalExpenditures = avgCapEx
 		dcfInputs.NetWorkingCapitalChange = nwcChange
-		s.logger.Info("Using true FCF calculation",
+		s.logger.Info("Using true FCF calculation (smoothed over available periods)",
 			zap.String("ticker", historicalData.Ticker),
-			zap.Float64("da", latestFinancialData.DepreciationAndAmortization),
-			zap.Float64("capex", latestFinancialData.CapitalExpenditures),
+			zap.Float64("avg_da", avgDA),
+			zap.Float64("avg_capex", avgCapEx),
 			zap.Float64("nwc_change", nwcChange))
 	} else {
 		s.logger.Info("Falling back to NOPAT-based FCF (D&A/CapEx unavailable)",
@@ -502,6 +505,28 @@ func (s *Service) calculateTerminalGrowthRate(historicalCAGR, wacc float64) floa
 	}
 
 	return terminalGrowth
+}
+
+// averageCapExAndDA computes the average D&A and CapEx over available annual periods.
+// This smooths cyclical spikes (e.g., a single year's massive AI infrastructure buildout)
+// that would otherwise make projected FCF negative for all future years.
+func (s *Service) averageCapExAndDA(historicalData *entities.HistoricalFinancialData) (avgDA, avgCapEx float64) {
+	recentYears := historicalData.GetRecentYears(5)
+	var daSum, capexSum float64
+	var count float64
+
+	for _, fd := range recentYears {
+		if fd.DepreciationAndAmortization > 0 || fd.CapitalExpenditures > 0 {
+			daSum += fd.DepreciationAndAmortization
+			capexSum += fd.CapitalExpenditures
+			count++
+		}
+	}
+
+	if count == 0 {
+		return 0, 0
+	}
+	return daSum / count, capexSum / count
 }
 
 // isFinancialDataIncomplete checks whether stored financial data is missing

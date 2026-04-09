@@ -38,7 +38,7 @@ type ValuationResult struct {
 
 	// Calculation metadata
 	CalculationMethod string   `json:"calculation_method"` // "standard_dcf", "simplified", etc.
-	DataQualityScore  float64  `json:"data_quality_score"` // 0-1 score based on data completeness
+	DataQualityScore  float64  `json:"data_quality_score"` // 0-100 score based on data completeness
 	Warnings          []string `json:"warnings,omitempty"` // Any data quality or assumption warnings
 
 	// Extended fields for comprehensive analysis
