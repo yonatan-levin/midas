@@ -90,7 +90,9 @@ internal/
     metrics/            # Prometheus metrics collection
     ratelimit/          # Rate limiting
     scheduler/          # Background job scheduler
-    valuation/          # DCF + WACC calculation engine
+    growth/             # Forward-looking growth estimation service
+    valuation/          # Valuation orchestration engine
+      models/           # Industry-specific models (DCF, DDM, FFO, Revenue Multiple)
     watchlist/          # Scheduler watchlist management
     alerting/           # Alert configuration
   integration/          # Integration tests

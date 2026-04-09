@@ -55,7 +55,8 @@ The codebase follows **Clean Architecture** (Ports & Adapters), enforcing strict
 │  Handlers, Middleware, Routes (Gin)                      │
 ├──────────────────────────────────────────────────────────┤
 │             internal/services/ (Use Cases)               │
-│  valuation, datafetcher, datacleaner, auth, scheduler    │
+│  valuation, valuation/models, growth, datafetcher,       │
+│  datacleaner, auth, scheduler                            │
 ├──────────────────────────────────────────────────────────┤
 │               internal/core/ (Domain)                    │
 │  entities/ (models)    ports/ (interfaces)               │
@@ -126,18 +127,24 @@ The core product flow for `GET /api/v1/fair-value/{ticker}`:
      │        ├── Cost of Debt = Interest Expense / Total Debt * (1 - Tax Rate)
      │        └── WACC = E/(E+D) * Ke + D/(E+D) * Kd
      │
-     ├── 5e. DCF Calculation (pkg/finance/dcf/)
+     ├── 5e. Industry Classification + Model Selection
+     │        ├── IndustryClassifier: SIC/NAICS/keyword from SEC EntityName
+     │        ├── ModelRouter selects: DDM (financials), FFO (REITs),
+     │        │   Revenue Multiple (pre-revenue), Multi-Stage DCF (default)
+     │        └── Alternative models return early; DCF path continues below
+     │
+     ├── 5f. DCF Calculation (pkg/finance/dcf/) — for standard companies
      │        ├── Growth rate capped to config bounds (BUG-010 fix)
      │        ├── True FCF = NOPAT + D&A - CapEx - ΔWorkingCapital (fallback: NOPAT)
-     │        ├── 5-year explicit forecast (per-year growth rates)
+     │        ├── 7-year multi-stage projection (3 high-growth + 4 fade)
      │        ├── Terminal value = FCF_n * (1+g) / (WACC - g), min 1% spread enforced
      │        ├── Discount all cash flows to present value
      │        ├── Enterprise Value = Sum of PV(FCFs) + PV(Terminal Value)
      │        └── Equity Value = EV - Debt + Cash → per share (diluted shares preferred)
      │
-     ├── 5f. Tangible Book Value = (Total Assets - Intangibles - Liabilities) / Shares
+     ├── 5g. Tangible Book Value = (Total Assets - Intangibles - Liabilities) / Shares
      │
-     └── 5g. Cache result, return FairValueResponse
+     └── 5h. Cache result, return FairValueResponse
 ```
 
 ## External Integrations

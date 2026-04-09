@@ -93,9 +93,12 @@ pkg/
 | `pkg/finance/dcf` | >= 90% | ~95.9% |
 | `pkg/finance/growth` | >= 90% | ~90.4% |
 | `pkg/finance/wacc` | >= 85% | ~86.9% |
-| `internal/services/valuation` | >= 90% | ~94.1% |
+| `internal/services/valuation` | >= 90% | ~86.8% |
+| `internal/services/valuation/models` | >= 80% | ~79.9% |
+| `internal/services/growth` | >= 90% | ~98.5% |
 | `internal/services/datafetcher` | >= 80% | ~93.9% |
 | `internal/services/metrics` | >= 85% | ~96.8% |
+| `internal/services/datacleaner/industry` | >= 80% | ~80.3% |
 | `internal/infra/gateways/sec` | >= 90% | ~94.2% |
 | `internal/infra/gateways/market` | >= 80% | ~91.2% |
 | `internal/api/v1/handlers` | >= 90% | ~94.1% |

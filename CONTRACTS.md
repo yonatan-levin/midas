@@ -88,8 +88,11 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 | `tangible_value_per_share` | float | Net Tangible Asset Value per share (USD) |
 | `dcf_value_per_share` | float | DCF Fair Value per share (USD) |
 | `as_of` | datetime | Timestamp of data used for calculation (ISO 8601) |
-| `data_quality_score` | float | Data quality score (0.0 - 1.0) |
+| `data_quality_score` | float | Data quality score (0-100) |
 | `data_quality_grade` | string | Quality grade (A/B/C/D/F) |
+| `calculation_method` | string | Valuation model used: `"multi_stage_dcf"`, `"ddm"`, `"ffo"`, or `"revenue_multiple"` (optional) |
+| `calculation_version` | string | Engine version (e.g., `"3.0"`) (optional) |
+| `warnings` | string[] | Data quality or assumption warnings (optional, omitted if empty) |
 
 **Error Responses**: 400 (`INVALID_TICKER`), 401, 404 (`TICKER_NOT_FOUND`), 422 (`INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`)
 
