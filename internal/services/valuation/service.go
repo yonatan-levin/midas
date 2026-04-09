@@ -11,8 +11,10 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	growthsvc "github.com/midas/dcf-valuation-api/internal/services/growth"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/models"
 	"github.com/midas/dcf-valuation-api/pkg/finance/dcf"
 	"github.com/midas/dcf-valuation-api/pkg/finance/growth"
 	"github.com/midas/dcf-valuation-api/pkg/finance/wacc"
@@ -20,17 +22,19 @@ import (
 
 // Service provides valuation operations
 type Service struct {
-	financialRepo   ports.FinancialDataRepository
-	marketRepo      ports.MarketDataRepository
-	macroRepo       ports.MacroDataRepository
-	cache           ports.CacheRepository
-	dataCleaner     datacleaner.DataCleanerService
-	dataFetcher     *datafetcher.DataFetcher
-	growthEstimator *growthsvc.Estimator
-	yfinanceGateway ports.YFinanceGateway // optional, for analyst estimates
-	metricsService  ports.MetricsService
-	config          *config.Config
-	logger          *zap.Logger
+	financialRepo      ports.FinancialDataRepository
+	marketRepo         ports.MarketDataRepository
+	macroRepo          ports.MacroDataRepository
+	cache              ports.CacheRepository
+	dataCleaner        datacleaner.DataCleanerService
+	dataFetcher        *datafetcher.DataFetcher
+	growthEstimator    *growthsvc.Estimator
+	yfinanceGateway    ports.YFinanceGateway // optional, for analyst estimates
+	metricsService     ports.MetricsService
+	modelRouter        *models.ModelRouter          // Phase 3: industry-aware model selection
+	industryClassifier *industry.IndustryClassifier // Phase 3: SIC/NAICS classification
+	config             *config.Config
+	logger             *zap.Logger
 }
 
 // NewService creates a new valuation service
@@ -54,17 +58,32 @@ func NewService(
 		estimatorCfg.MinGrowthRate = cfg.Valuation.DCFMinGrowthRate
 	}
 
+	// Initialize industry classifier for SIC/NAICS-based model selection
+	classifier := industry.NewIndustryClassifier()
+
+	// Initialize model router with all available valuation models.
+	// Order matters: more specific models are listed first.
+	allModels := []models.ValuationModel{
+		models.NewDDMModel(logger),
+		models.NewFFOModel(logger),
+		models.NewRevenueMultipleModel(logger),
+		models.NewMultiStageDCFModel(logger),
+	}
+	router := models.NewModelRouter(allModels, logger)
+
 	return &Service{
-		financialRepo:   financialRepo,
-		marketRepo:      marketRepo,
-		macroRepo:       macroRepo,
-		cache:           cache,
-		dataCleaner:     dataCleaner,
-		dataFetcher:     dataFetcher,
-		growthEstimator: growthsvc.NewEstimator(estimatorCfg, logger),
-		metricsService:  metricsService,
-		config:          cfg,
-		logger:          logger,
+		financialRepo:      financialRepo,
+		marketRepo:         marketRepo,
+		macroRepo:          macroRepo,
+		cache:              cache,
+		dataCleaner:        dataCleaner,
+		dataFetcher:        dataFetcher,
+		growthEstimator:    growthsvc.NewEstimator(estimatorCfg, logger),
+		metricsService:     metricsService,
+		modelRouter:        router,
+		industryClassifier: classifier,
+		config:             cfg,
+		logger:             logger,
 	}
 }
 
@@ -345,13 +364,61 @@ func (s *Service) performValuation(
 	terminalGrowthRate := s.calculateTerminalGrowthRate(growthEstimate.SummaryGrowthRate(), waccResult.WACC)
 	growthEstimate.TerminalGrowthRate = terminalGrowthRate
 
+	// --- Phase 3: Industry-aware model selection ---
+	// Classify industry using IndustryClassifier (SIC/NAICS/keyword matching).
+	// The IndustryCode on the financial data may already be populated from upstream.
+	industryCode := latestFinancialData.IndustryCode
+	if industryCode == "" && s.industryClassifier != nil {
+		// Use company name from SEC EntityName for keyword-based classification.
+		// Falls back to ticker if company name unavailable.
+		companyName := historicalData.CompanyName
+		if companyName == "" {
+			companyName = historicalData.Ticker
+		}
+		classified, classifyErr := s.industryClassifier.Classify("", "", companyName)
+		if classifyErr == nil && classified != "" && classified != "NA" {
+			industryCode = classified
+		}
+		s.logger.Debug("Industry classification result",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("industry_code", industryCode))
+	}
+
+	// Resolve shares outstanding (needed by both DCF and alternative models)
+	// Priority: diluted (most conservative) > market basic (most current) > financial basic
+	sharesOutstanding := latestFinancialData.DilutedSharesOutstanding
+	if sharesOutstanding <= 0 {
+		sharesOutstanding = marketData.SharesOutstanding
+	}
+	if sharesOutstanding <= 0 {
+		sharesOutstanding = latestFinancialData.SharesOutstanding
+	}
+	if sharesOutstanding <= 0 {
+		return nil, fmt.Errorf("%w: shares outstanding not available", ErrInsufficientData)
+	}
+
+	// Select the appropriate valuation model based on industry and financials
+	selectedModel := s.modelRouter.SelectModel(industryCode, latestFinancialData)
+
+	// If an alternative model (non-DCF) is selected, use it and return early
+	if selectedModel != nil && selectedModel.ModelType() != "multi_stage_dcf" {
+		return s.performAlternativeValuation(
+			ctx, selectedModel, historicalData, marketData, macroData,
+			growthEstimate, waccResult, latestFinancialData, latestPeriod,
+			tangibleValuePerShare, sharesOutstanding, industryCode,
+		)
+	}
+
+	// --- Standard multi-stage DCF path (existing logic) ---
+
 	// Guard: standard DCF requires positive operating income.
-	// Companies with negative OI (growth-stage, turnaround) need industry-specific models.
+	// Companies with negative OI are routed to revenue_multiple model above.
 	baseOI := latestFinancialData.NormalizedOperatingIncome
 	if baseOI <= 0 {
 		baseOI = latestFinancialData.OperatingIncome
 	}
 	if baseOI <= 0 {
+		// This should only be reached if no alternative model is available
 		return nil, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, latestFinancialData.NormalizedOperatingIncome)
 	}
 
@@ -402,20 +469,6 @@ func (s *Service) performValuation(
 	s.metricsService.IncDCFCalculations()
 	s.metricsService.SetAverageGrowthRate(growthEstimate.SummaryGrowthRate())
 
-	// Calculate per-share values.
-	// Priority: diluted (most conservative) > market basic (most current) > financial basic
-	sharesOutstanding := latestFinancialData.DilutedSharesOutstanding
-	if sharesOutstanding <= 0 {
-		sharesOutstanding = marketData.SharesOutstanding
-	}
-	if sharesOutstanding <= 0 {
-		sharesOutstanding = latestFinancialData.SharesOutstanding
-	}
-
-	if sharesOutstanding <= 0 {
-		return nil, fmt.Errorf("%w: shares outstanding not available", ErrInsufficientData)
-	}
-
 	// Equity value bridge: EV - Debt + Cash = Equity Value
 	equityValue := dcf.CalculateEquityValue(
 		dcfResult.EnterpriseValue,
@@ -452,12 +505,90 @@ func (s *Service) performValuation(
 		FinancialDataPeriod:   latestPeriod,
 		MarketDataDate:        marketData.AsOf,
 		DataFreshnessScore:    dataFreshnessScore,
-		CalculationVersion:    "2.0",
+		CalculationMethod:     "multi_stage_dcf",
+		CalculationVersion:    "3.0",
 	}
 
 	if usingNOPATFallback {
 		result.Warnings = append(result.Warnings,
 			"FCF using NOPAT approximation (D&A/CapEx unavailable from filing). Valuation may be less accurate for capital-intensive companies.")
+	}
+
+	return result, nil
+}
+
+// performAlternativeValuation executes a non-DCF valuation model (DDM, FFO, Revenue Multiple)
+// and converts its result to the standard ValuationResult format.
+func (s *Service) performAlternativeValuation(
+	ctx context.Context,
+	model models.ValuationModel,
+	historicalData *entities.HistoricalFinancialData,
+	marketData *entities.MarketData,
+	macroData *entities.MacroData,
+	growthEstimate *entities.GrowthEstimate,
+	waccResult *wacc.Result,
+	latestFinancialData *entities.FinancialData,
+	latestPeriod string,
+	tangibleValuePerShare float64,
+	sharesOutstanding float64,
+	industryCode string,
+) (*entities.ValuationResult, error) {
+
+	s.logger.Info("Using alternative valuation model",
+		zap.String("ticker", historicalData.Ticker),
+		zap.String("model_type", model.ModelType()),
+		zap.String("industry", industryCode))
+
+	// Build the model input with all pre-computed values
+	modelInput := &models.ModelInput{
+		HistoricalData:         historicalData,
+		MarketData:             marketData,
+		MacroData:              macroData,
+		GrowthEstimate:         growthEstimate,
+		Industry:               industryCode,
+		WACC:                   waccResult.WACC,
+		CostOfEquity:           waccResult.CostOfEquity,
+		TaxRate:                latestFinancialData.TaxRate,
+		SharesOutstanding:      sharesOutstanding,
+		InterestBearingDebt:    latestFinancialData.InterestBearingDebt,
+		CashAndCashEquivalents: latestFinancialData.CashAndCashEquivalents,
+	}
+
+	// Execute the alternative model
+	modelResult, err := model.Calculate(ctx, modelInput)
+	if err != nil {
+		// If alternative model fails, fall through to ErrModelNotApplicable
+		// (do not silently fallback to DCF — the router already decided DCF isn't appropriate)
+		s.logger.Warn("Alternative model failed",
+			zap.String("model_type", model.ModelType()),
+			zap.Error(err))
+		return nil, fmt.Errorf("%w: %s model failed: %v", ErrModelNotApplicable, model.ModelType(), err)
+	}
+
+	// Calculate data freshness score
+	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
+
+	// Convert ModelResult to ValuationResult
+	result := &entities.ValuationResult{
+		Ticker:                historicalData.Ticker,
+		CalculatedAt:          time.Now(),
+		TangibleValuePerShare: tangibleValuePerShare,
+		DCFValuePerShare:      modelResult.IntrinsicValuePerShare,
+		WACC:                  waccResult.WACC,
+		GrowthRate:            growthEstimate.SummaryGrowthRate(),
+		GrowthRates:           growthEstimate.ProjectedGrowthRates,
+		TerminalGrowthRate:    growthEstimate.TerminalGrowthRate,
+		GrowthSource:          growthEstimate.Source,
+		GrowthConfidence:      modelResult.Confidence,
+		MarketRiskPremium:     macroData.MarketRiskPremium,
+		EnterpriseValue:       modelResult.EnterpriseValue,
+		EquityValue:           modelResult.EquityValue,
+		FinancialDataPeriod:   latestPeriod,
+		MarketDataDate:        marketData.AsOf,
+		DataFreshnessScore:    dataFreshnessScore,
+		CalculationMethod:     modelResult.ModelType,
+		CalculationVersion:    "3.0",
+		Warnings:              modelResult.Warnings,
 	}
 
 	return result, nil

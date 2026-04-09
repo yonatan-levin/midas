@@ -50,6 +50,11 @@ CREATE TABLE IF NOT EXISTS financial_data (
     inventory_turnover DECIMAL(8,4),
     dead_inventory_writedown DECIMAL(15,2),
     
+    -- Dividend and earnings data (for DDM and FFO models)
+    dividends_per_share DECIMAL(15,4),
+    net_income DECIMAL(15,2),
+    gain_on_property_sales DECIMAL(15,2),
+
     -- Cash flow statement (for true FCF calculation)
     depreciation_and_amortization DECIMAL(15,2),
     capital_expenditures DECIMAL(15,2),

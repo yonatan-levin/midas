@@ -211,7 +211,10 @@ func (r *AuthRepository) GetUsageStats(ctx context.Context, keyID string, since 
 
 	var stats entities.UsageStats
 	var avgResponseMs sql.NullFloat64
-	var lastActivity sql.NullTime
+	// NOTE: SQLite aggregate functions (MAX, MIN) return strings for timestamp
+	// columns. sql.NullTime cannot scan strings, so we scan into sql.NullString
+	// and parse manually. See: https://github.com/mattn/go-sqlite3/issues/1229
+	var lastActivity sql.NullString
 
 	err := r.db.QueryRowContext(ctx, statsQuery, keyID, since).Scan(
 		&stats.TotalRequests,
@@ -228,7 +231,20 @@ func (r *AuthRepository) GetUsageStats(ctx context.Context, keyID string, since 
 	}
 
 	if lastActivity.Valid {
-		stats.LastActivityAt = &lastActivity.Time
+		// Try multiple time formats that SQLite may return.
+		parsed, parseErr := time.Parse("2006-01-02T15:04:05Z", lastActivity.String)
+		if parseErr != nil {
+			parsed, parseErr = time.Parse("2006-01-02 15:04:05+00:00", lastActivity.String)
+		}
+		if parseErr != nil {
+			parsed, parseErr = time.Parse("2006-01-02 15:04:05", lastActivity.String)
+		}
+		if parseErr != nil {
+			parsed, parseErr = time.Parse(time.RFC3339Nano, lastActivity.String)
+		}
+		if parseErr == nil {
+			stats.LastActivityAt = &parsed
+		}
 	}
 
 	// Get error rate

@@ -1,0 +1,30 @@
+{
+  "version": "1.0.0",
+  "description": "Industry-specific valuation multiples for alternative models (DDM, FFO, Revenue Multiple). Values represent sector median multiples derived from market data.",
+  "reit_pffo_multiples": {
+    "default": 15.0,
+    "residential": 18.0,
+    "industrial": 22.0,
+    "office": 12.0,
+    "retail_reit": 13.0,
+    "healthcare_reit": 14.0,
+    "data_center": 25.0
+  },
+  "ev_revenue_multiples": {
+    "default": 2.0,
+    "TECH": 5.0,
+    "TECH_SAAS": 8.0,
+    "TECH_AI": 10.0,
+    "HEALTH": 3.0,
+    "HEALTH_BIOTECH": 6.0,
+    "HEALTH_PHARMA": 4.0,
+    "FIN": 2.5,
+    "RETAIL": 1.0,
+    "MFG": 1.5,
+    "ENERGY": 1.5,
+    "TELECOM": 2.0,
+    "CONS": 2.0,
+    "TRANS": 1.5,
+    "RESTATE": 3.0
+  }
+}

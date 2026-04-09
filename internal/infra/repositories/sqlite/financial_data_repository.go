@@ -14,6 +14,11 @@ import (
 )
 
 // FinancialDataRepository implements the FinancialDataRepository interface for SQLite
+// TODO: Phase 3 follow-up — add dividends_per_share, net_income, gain_on_property_sales,
+// depreciation_and_amortization, capital_expenditures, operating_cash_flow, cash_and_cash_equivalents,
+// stockholders_equity, current_assets, current_liabilities columns to INSERT/SELECT queries
+// so these fields round-trip through the database. Currently they are only populated
+// in-memory from SEC parser and used directly in valuation.
 type FinancialDataRepository struct {
 	db *sqlx.DB
 }

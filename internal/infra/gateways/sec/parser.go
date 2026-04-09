@@ -35,8 +35,9 @@ func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompany
 		zap.Int("fact_groups", len(facts.Facts)))
 
 	historical := &entities.HistoricalFinancialData{
-		Ticker: "", // Will be set by the caller
-		Data:   make(map[string]*entities.FinancialData),
+		Ticker:      "", // Will be set by the caller
+		CompanyName: facts.EntityName,
+		Data:        make(map[string]*entities.FinancialData),
 	}
 
 	// Extract data by fiscal periods
@@ -226,6 +227,32 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		"InterestExpenseDebt",
 	}); exists {
 		financialData.InterestExpense = val
+	}
+
+	// Net income (for DDM and FFO models)
+	if val, exists := p.findValue(data, []string{
+		"NetIncomeLoss",
+		"ProfitLoss",
+		"NetIncomeLossAvailableToCommonStockholdersBasic",
+	}); exists {
+		financialData.NetIncome = val
+	}
+
+	// Dividends per share (for DDM model)
+	if val, exists := p.findValue(data, []string{
+		"CommonStockDividendsPerShareDeclared",
+		"CommonStockDividendsPerShareCashPaid",
+	}); exists {
+		financialData.DividendsPerShare = val
+	}
+
+	// Gain/loss on sale of properties (for REIT FFO calculation)
+	if val, exists := p.findValue(data, []string{
+		"GainLossOnSaleOfProperties",
+		"GainLossOnSaleOfPropertyPlantEquipment",
+		"GainsLossesOnSalesOfInvestmentRealEstate",
+	}); exists {
+		financialData.GainOnPropertySales = val
 	}
 
 	// Cash flow statement items (for true FCF calculation)
@@ -455,6 +482,10 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"us-gaap:InterestExpense",
 		"us-gaap:InterestExpenseDebt",
 		"us-gaap:CostOfGoodsAndServicesSold",
+		"us-gaap:NetIncomeLoss",
+		"us-gaap:CommonStockDividendsPerShareDeclared",
+		"us-gaap:GainLossOnSaleOfProperties",
+		"us-gaap:GainLossOnSaleOfPropertyPlantEquipment",
 
 		// Balance Sheet - Assets
 		"us-gaap:Assets",

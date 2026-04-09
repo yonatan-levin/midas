@@ -323,15 +323,16 @@ func (r *WatchlistRepository) RecordFailure(ctx context.Context, ticker string) 
 
 // GetStats retrieves statistics about the watchlist
 func (r *WatchlistRepository) GetStats(ctx context.Context) (*entities.WatchlistStats, error) {
+	// COALESCE prevents NULL when the table is empty (SUM over 0 rows = NULL in SQLite)
 	query := `
-		SELECT 
+		SELECT
 		    COUNT(*) as total_entries,
-		    SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active_entries,
-		    SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) as inactive_entries,
-		    SUM(CASE WHEN priority = 1 THEN 1 ELSE 0 END) as high_priority,
-		    SUM(CASE WHEN priority = 2 THEN 1 ELSE 0 END) as medium_priority,
-		    SUM(CASE WHEN priority = 3 THEN 1 ELSE 0 END) as low_priority,
-		    SUM(CASE WHEN fetch_failures > 0 AND updated_at > datetime('now', '-1 day') THEN 1 ELSE 0 END) as recent_failures
+		    COALESCE(SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END), 0) as active_entries,
+		    COALESCE(SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END), 0) as inactive_entries,
+		    COALESCE(SUM(CASE WHEN priority = 1 THEN 1 ELSE 0 END), 0) as high_priority,
+		    COALESCE(SUM(CASE WHEN priority = 2 THEN 1 ELSE 0 END), 0) as medium_priority,
+		    COALESCE(SUM(CASE WHEN priority = 3 THEN 1 ELSE 0 END), 0) as low_priority,
+		    COALESCE(SUM(CASE WHEN fetch_failures > 0 AND updated_at > datetime('now', '-1 day') THEN 1 ELSE 0 END), 0) as recent_failures
 		FROM scheduler_watchlist`
 
 	stats := &entities.WatchlistStats{}

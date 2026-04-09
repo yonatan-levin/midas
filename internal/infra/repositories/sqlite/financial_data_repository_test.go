@@ -192,6 +192,65 @@ func TestFinancialDataRepository_GetByPeriod(t *testing.T) {
 	})
 }
 
+// TestFinancialDataRepository_MissingFieldsJSON exercises the JSON unmarshal
+// branch for missing_fields, which is skipped when data has no missing fields.
+func TestFinancialDataRepository_MissingFieldsJSON(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer cleanupTestDatabase(db)
+
+	repo := NewFinancialDataRepository(db)
+	ctx := context.Background()
+
+	// Store data WITH non-empty missing fields
+	data := &entities.FinancialData{
+		Ticker:            "AAPL",
+		CIK:               "0000320193",
+		FilingPeriod:      "2023Q4",
+		FilingDate:        time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+		AsOf:              time.Now(),
+		OperatingIncome:   123450000000,
+		Revenue:           383930000000,
+		SharesOutstanding: 15744231000,
+		HasNormalizedData: true,
+		MissingFields:     []string{"tax_rate", "interest_expense", "goodwill"},
+	}
+	err := repo.Store(ctx, data)
+	require.NoError(t, err)
+
+	// Also store a second period for GetHistorical
+	data2 := &entities.FinancialData{
+		Ticker:            "AAPL",
+		CIK:               "0000320193",
+		FilingPeriod:      "2022Q4",
+		FilingDate:        time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+		AsOf:              time.Now(),
+		Revenue:           300000000000,
+		SharesOutstanding: 15744231000,
+		MissingFields:     []string{"beta"},
+	}
+	err = repo.Store(ctx, data2)
+	require.NoError(t, err)
+
+	t.Run("GetLatest_unmarshals_missing_fields", func(t *testing.T) {
+		result, err := repo.GetLatest(ctx, "AAPL")
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"tax_rate", "interest_expense", "goodwill"}, result.MissingFields)
+	})
+
+	t.Run("GetHistorical_unmarshals_missing_fields", func(t *testing.T) {
+		result, err := repo.GetHistorical(ctx, "AAPL", 10)
+		require.NoError(t, err)
+		assert.Contains(t, result.Data["2023Q4"].MissingFields, "tax_rate")
+		assert.Contains(t, result.Data["2022Q4"].MissingFields, "beta")
+	})
+
+	t.Run("GetByPeriod_unmarshals_missing_fields", func(t *testing.T) {
+		result, err := repo.GetByPeriod(ctx, "AAPL", "2023Q4")
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []string{"tax_rate", "interest_expense", "goodwill"}, result.MissingFields)
+	})
+}
+
 func TestFinancialDataRepository_GetLastUpdated(t *testing.T) {
 	db := setupTestDatabase(t)
 	defer cleanupTestDatabase(db)

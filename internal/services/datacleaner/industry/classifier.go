@@ -1,16 +1,55 @@
 package industry
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
 
-// IndustryClassifier provides enhanced industry classification logic
-// TODO: Replace hardcoded industry detection with dynamic classification system
+// industryMapping represents a single industry mapping entry from config/datacleaner/industry_codes.json.
+// Each entry maps SIC codes, NAICS codes, and company name keywords to an industry code.
+type industryMapping struct {
+	Name     string `json:"name"`
+	Code     string `json:"code"`
+	Priority int    `json:"priority"`
+	Matchers struct {
+		SICCodes   []string `json:"sic_codes"`
+		NAICSCodes []string `json:"naics_codes"`
+		Keywords   []string `json:"keywords"`
+		Patterns   []string `json:"patterns"`
+		ExactNames []string `json:"exact_names"`
+	} `json:"matchers"`
+	SubIndustries []struct {
+		Name     string `json:"name"`
+		Code     string `json:"code"`
+		Matchers struct {
+			Keywords   []string `json:"keywords"`
+			SICCodes   []string `json:"sic_codes"`
+			NAICSCodes []string `json:"naics_codes"`
+			Patterns   []string `json:"patterns"`
+		} `json:"matchers"`
+	} `json:"sub_industries"`
+}
+
+// industryCodesConfig represents the full industry_codes.json file structure
+type industryCodesConfig struct {
+	Version     string            `json:"version"`
+	DefaultCode string            `json:"default_code"`
+	Mappings    []industryMapping `json:"mappings"`
+}
+
+// IndustryClassifier provides enhanced industry classification logic.
+// It supports two classification approaches:
+//   - Classify(): SIC/NAICS code and company name based classification (Phase 3)
+//   - ClassifyIndustry(): Financial heuristic based classification (original)
 type IndustryClassifier struct {
 	sectorConfigs map[string]*SectorConfig
+	codesConfig   *industryCodesConfig // loaded from industry_codes.json
 }
 
 // SectorConfig defines industry-specific configuration and thresholds
@@ -82,16 +121,174 @@ type IndustryCharacteristics struct {
 	TypicalAdjustments    []string `json:"typical_adjustments"`     // Common adjustment types
 }
 
+// DefaultIndustryCodesPath is the default path to the industry codes config file.
+// Override via dependency injection for testability.
+const DefaultIndustryCodesPath = "./config/datacleaner/industry_codes.json"
+
 // NewIndustryClassifier creates a new industry classifier with default configurations
 func NewIndustryClassifier() *IndustryClassifier {
 	classifier := &IndustryClassifier{
 		sectorConfigs: make(map[string]*SectorConfig),
 	}
 
-	// Load default sector configurations
+	// Load default sector configurations (for datacleaner thresholds)
 	classifier.loadDefaultConfigurations()
 
+	// Attempt to load industry codes config for SIC/NAICS classification.
+	// Gracefully degrade if the file is not found — keyword matching still works.
+	_ = classifier.LoadIndustryCodesConfig(DefaultIndustryCodesPath)
+
 	return classifier
+}
+
+// LoadIndustryCodesConfig loads the industry_codes.json file for SIC/NAICS/keyword classification.
+func (ic *IndustryClassifier) LoadIndustryCodesConfig(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("failed to read industry codes config: %w", err)
+	}
+
+	var cfg industryCodesConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("failed to parse industry codes config: %w", err)
+	}
+
+	ic.codesConfig = &cfg
+	return nil
+}
+
+// Classify determines the industry code for a company using SIC code, NAICS code,
+// and company name. It matches in priority order:
+//  1. SIC code (exact or range match)
+//  2. NAICS code (prefix match)
+//  3. Exact company name match
+//  4. Keyword/pattern matching on company name
+//
+// Returns the industry code string (e.g., "TECH", "FIN", "REIT") or the default code
+// ("NA") when no match is found.
+func (ic *IndustryClassifier) Classify(sicCode string, naicsCode string, companyName string) (string, error) {
+	if ic.codesConfig == nil {
+		return "NA", fmt.Errorf("industry codes config not loaded")
+	}
+
+	// Track the best match by priority (higher priority = better match)
+	bestCode := ic.codesConfig.DefaultCode
+	bestPriority := -1
+
+	lowerName := strings.ToLower(companyName)
+
+	for _, mapping := range ic.codesConfig.Mappings {
+		matched := false
+
+		// 1. SIC code matching (highest confidence)
+		if sicCode != "" {
+			if ic.matchSICCode(sicCode, mapping.Matchers.SICCodes) {
+				matched = true
+			}
+		}
+
+		// 2. NAICS code matching (prefix-based, e.g., "522" matches "52211")
+		if !matched && naicsCode != "" {
+			if ic.matchNAICSCode(naicsCode, mapping.Matchers.NAICSCodes) {
+				matched = true
+			}
+		}
+
+		// 3. Exact company name matching
+		if !matched && companyName != "" {
+			for _, exactName := range mapping.Matchers.ExactNames {
+				if strings.EqualFold(companyName, exactName) {
+					matched = true
+					break
+				}
+			}
+		}
+
+		// 4. Keyword matching on company name.
+		// Short keywords (<=3 chars, e.g., "ai", "oil") use word-boundary regex
+		// to avoid false positives like "ai" matching inside "retail".
+		if !matched && lowerName != "" {
+			for _, keyword := range mapping.Matchers.Keywords {
+				lowerKeyword := strings.ToLower(keyword)
+				if len(lowerKeyword) <= 3 {
+					// Use word-boundary matching for short keywords
+					re, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(lowerKeyword) + `\b`)
+					if err == nil && re.MatchString(lowerName) {
+						matched = true
+						break
+					}
+				} else {
+					if strings.Contains(lowerName, lowerKeyword) {
+						matched = true
+						break
+					}
+				}
+			}
+		}
+
+		// 5. Regex pattern matching on company name
+		if !matched && lowerName != "" {
+			for _, pattern := range mapping.Matchers.Patterns {
+				re, err := regexp.Compile("(?i)" + pattern)
+				if err != nil {
+					continue
+				}
+				if re.MatchString(lowerName) {
+					matched = true
+					break
+				}
+			}
+		}
+
+		// Track match with highest priority
+		if matched && mapping.Priority > bestPriority {
+			bestCode = mapping.Code
+			bestPriority = mapping.Priority
+		}
+	}
+
+	return bestCode, nil
+}
+
+// matchSICCode checks if a SIC code matches the mapping's SIC code list.
+// Supports both exact codes (e.g., "7372") and ranges (e.g., "2000-3999").
+func (ic *IndustryClassifier) matchSICCode(sicCode string, sicCodes []string) bool {
+	for _, code := range sicCodes {
+		// Handle range format: "2000-3999"
+		if strings.Contains(code, "-") {
+			parts := strings.SplitN(code, "-", 2)
+			if len(parts) == 2 {
+				low, errLow := strconv.Atoi(parts[0])
+				high, errHigh := strconv.Atoi(parts[1])
+				sicInt, errSIC := strconv.Atoi(sicCode)
+				if errLow == nil && errHigh == nil && errSIC == nil {
+					if sicInt >= low && sicInt <= high {
+						return true
+					}
+				}
+			}
+			continue
+		}
+
+		// Exact match
+		if sicCode == code {
+			return true
+		}
+	}
+	return false
+}
+
+// matchNAICSCode checks if a NAICS code matches via prefix matching.
+// For example, NAICS config "522" matches company NAICS "52211".
+func (ic *IndustryClassifier) matchNAICSCode(naicsCode string, configCodes []string) bool {
+	for _, configCode := range configCodes {
+		// Either the config code is a prefix of the company code,
+		// or the company code is a prefix of the config code
+		if strings.HasPrefix(naicsCode, configCode) || strings.HasPrefix(configCode, naicsCode) {
+			return true
+		}
+	}
+	return false
 }
 
 // ClassifyIndustry determines the industry classification for a company

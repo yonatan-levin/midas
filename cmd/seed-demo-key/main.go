@@ -57,7 +57,13 @@ CREATE TABLE IF NOT EXISTS api_keys (
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	key, err := svc.CreateKey(ctx, "demo-user", []entities.Permission{entities.PermissionReadFairValue})
+	key, err := svc.CreateKey(ctx, "demo-user", []entities.Permission{
+		entities.PermissionReadFairValue,
+		entities.PermissionReadHealth,
+		entities.PermissionReadMetrics,
+		entities.PermissionManageKeys,
+		entities.PermissionAdmin,
+	})
 	if err != nil {
 		log.Fatalf("failed to create demo key: %v", err)
 	}

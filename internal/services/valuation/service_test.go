@@ -826,7 +826,7 @@ func TestService_performValuation(t *testing.T) {
 		assert.Greater(t, result.GrowthRate, 0.0)
 		assert.Greater(t, result.EnterpriseValue, 0.0)
 		assert.Greater(t, result.DataFreshnessScore, 0)
-		assert.Equal(t, "2.0", result.CalculationVersion)
+		assert.Equal(t, "3.0", result.CalculationVersion)
 	})
 
 	t.Run("single period uses default growth rate", func(t *testing.T) {
@@ -2167,10 +2167,16 @@ func TestService_performValuation_NegativeOperatingIncome(t *testing.T) {
 	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
 
 	result, err := svc.performValuation(context.Background(), negativeOI, marketData, macroData, nil)
-	assert.Error(t, err)
-	assert.Nil(t, result)
-	assert.ErrorIs(t, err, ErrModelNotApplicable,
-		"Negative OI should return ErrModelNotApplicable")
+	// Phase 3: negative OI now routes to revenue_multiple model instead of failing
+	assert.NoError(t, err, "Negative OI should route to revenue multiple model")
+	assert.NotNil(t, result, "Should return a result from revenue multiple model")
+	if result != nil {
+		assert.Equal(t, "revenue_multiple", result.CalculationMethod,
+			"Should use revenue multiple model for negative OI")
+		assert.Equal(t, "3.0", result.CalculationVersion)
+		assert.Greater(t, result.DCFValuePerShare, 0.0,
+			"Revenue multiple should produce a positive value when revenue is available")
+	}
 }
 
 func TestService_performValuation_TrueFCF(t *testing.T) {
@@ -2208,7 +2214,7 @@ func TestService_performValuation_TrueFCF(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Greater(t, result.DCFValuePerShare, 0.0)
 	assert.Greater(t, result.EquityValue, 0.0)
-	assert.Equal(t, "2.0", result.CalculationVersion)
+	assert.Equal(t, "3.0", result.CalculationVersion)
 }
 
 func TestService_performValuation_GrowthCapping(t *testing.T) {

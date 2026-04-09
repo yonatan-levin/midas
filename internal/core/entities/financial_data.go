@@ -72,6 +72,11 @@ type FinancialData struct {
 	IncrementalBorrowingRate          float64            `json:"incremental_borrowing_rate"`           // IBR for lease capitalization (B1)
 	RiskFreeRate                      float64            `json:"risk_free_rate"`                       // Risk-free rate for discount rate calculations
 
+	// Dividend and earnings data (for DDM and FFO models)
+	DividendsPerShare   float64 `json:"dividends_per_share"`    // Cash dividends declared per common share
+	NetIncome           float64 `json:"net_income"`             // Net income attributable to common shareholders
+	GainOnPropertySales float64 `json:"gain_on_property_sales"` // Gain/loss on sale of properties (for REIT FFO calculation)
+
 	// Cash Flow Statement fields (for true FCF calculation)
 	DepreciationAndAmortization float64 `json:"depreciation_and_amortization"` // Non-cash charge to add back
 	CapitalExpenditures         float64 `json:"capital_expenditures"`          // Cash outflow for PP&E (stored as positive)
@@ -104,8 +109,9 @@ type FinancialData struct {
 // HistoricalFinancialData represents a time series of financial data
 // Used for calculating growth rates and trends
 type HistoricalFinancialData struct {
-	Ticker string                    `json:"ticker"`
-	Data   map[string]*FinancialData `json:"data"` // keyed by filing period (e.g., "2023Q4")
+	Ticker      string                    `json:"ticker"`
+	CompanyName string                    `json:"company_name,omitempty"` // From SEC EntityName, used for industry classification
+	Data        map[string]*FinancialData `json:"data"`                   // keyed by filing period (e.g., "2023Q4")
 }
 
 // GetSortedPeriods returns filing periods sorted chronologically.

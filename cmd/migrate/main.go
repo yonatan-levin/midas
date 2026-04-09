@@ -34,11 +34,19 @@ func applyMigration(db *sql.DB, path string) error {
 
 	// Split into individual statements for granular error handling
 	for _, stmt := range strings.Split(string(bytes), ";") {
-		stmt = strings.TrimSpace(stmt)
-		if stmt == "" || strings.HasPrefix(stmt, "--") {
+		// Strip comment-only lines before checking if the statement is empty
+		var sqlLines []string
+		for _, line := range strings.Split(stmt, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed != "" && !strings.HasPrefix(trimmed, "--") {
+				sqlLines = append(sqlLines, line)
+			}
+		}
+		cleanStmt := strings.TrimSpace(strings.Join(sqlLines, "\n"))
+		if cleanStmt == "" {
 			continue
 		}
-		if _, err := db.Exec(stmt); err != nil {
+		if _, err := db.Exec(cleanStmt); err != nil {
 			if strings.Contains(err.Error(), "duplicate column name") {
 				continue // Column already exists — schema.sql created it
 			}
