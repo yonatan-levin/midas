@@ -50,6 +50,21 @@ CREATE TABLE IF NOT EXISTS financial_data (
     inventory_turnover DECIMAL(8,4),
     dead_inventory_writedown DECIMAL(15,2),
     
+    -- Cash flow statement (for true FCF calculation)
+    depreciation_and_amortization DECIMAL(15,2),
+    capital_expenditures DECIMAL(15,2),
+    operating_cash_flow DECIMAL(15,2),
+
+    -- Working capital components
+    current_assets DECIMAL(15,2),
+    current_liabilities DECIMAL(15,2),
+
+    -- Cash position (for equity bridge)
+    cash_and_cash_equivalents DECIMAL(15,2),
+
+    -- Equity (for ROIC calculation)
+    stockholders_equity DECIMAL(15,2),
+
     -- Share information
     shares_outstanding DECIMAL(15,0),
     diluted_shares_outstanding DECIMAL(15,0),

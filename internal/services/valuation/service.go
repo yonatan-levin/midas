@@ -141,6 +141,37 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 			zap.Int("periods", len(historicalData.Data)),
 			zap.Bool("has_market_data", marketData != nil),
 			zap.Bool("has_macro_data", macroData != nil))
+	} else if s.isFinancialDataIncomplete(historicalData) && s.dataFetcher != nil {
+		// Data exists in repo but is incomplete (missing FCF fields like D&A, CapEx, Cash).
+		// Re-fetch from SEC to get complete data, then persist the update.
+		s.logger.Info("Stored financial data incomplete (missing FCF fields), re-fetching from SEC",
+			zap.String("ticker", ticker))
+
+		fetchResult, fetchErr := s.dataFetcher.Fetch(ctx, &entities.FetchRequest{Ticker: ticker})
+		if fetchErr == nil && fetchResult.HistoricalData != nil && len(fetchResult.HistoricalData.Data) > 0 {
+			historicalData = fetchResult.HistoricalData
+			if fetchResult.MarketData != nil {
+				marketData = fetchResult.MarketData
+			}
+			if fetchResult.MacroData != nil {
+				macroData = fetchResult.MacroData
+			}
+
+			// Persist the updated data so future requests don't re-fetch
+			if s.financialRepo != nil {
+				if storeErr := s.financialRepo.StoreHistorical(ctx, historicalData); storeErr != nil {
+					s.logger.Warn("Failed to persist re-fetched financial data",
+						zap.String("ticker", ticker), zap.Error(storeErr))
+				} else {
+					s.logger.Info("Persisted complete financial data to repository",
+						zap.String("ticker", ticker),
+						zap.Int("periods", len(historicalData.Data)))
+				}
+			}
+		} else {
+			s.logger.Warn("Re-fetch failed or returned no data, using incomplete stored data with NOPAT fallback",
+				zap.String("ticker", ticker))
+		}
 	}
 
 	// Fill in market and macro data from repositories if not already set by DataFetcher
@@ -357,6 +388,7 @@ func (s *Service) performValuation(
 		s.logger.Info("Falling back to NOPAT-based FCF (D&A/CapEx unavailable)",
 			zap.String("ticker", historicalData.Ticker))
 	}
+	usingNOPATFallback := !dcfInputs.UseTrueFCF
 
 	dcfResult, err := dcf.CalculateDCF(dcfInputs)
 	if err != nil {
@@ -392,6 +424,14 @@ func (s *Service) performValuation(
 	// Calculate data freshness score
 	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
 
+	// Apply NOPAT fallback penalty
+	if usingNOPATFallback {
+		dataFreshnessScore -= 15
+		if dataFreshnessScore < 0 {
+			dataFreshnessScore = 0
+		}
+	}
+
 	result := &entities.ValuationResult{
 		Ticker:                historicalData.Ticker,
 		CalculatedAt:          time.Now(),
@@ -410,6 +450,11 @@ func (s *Service) performValuation(
 		MarketDataDate:        marketData.AsOf,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationVersion:    "2.0",
+	}
+
+	if usingNOPATFallback {
+		result.Warnings = append(result.Warnings,
+			"FCF using NOPAT approximation (D&A/CapEx unavailable from filing). Valuation may be less accurate for capital-intensive companies.")
 	}
 
 	return result, nil
@@ -457,6 +502,19 @@ func (s *Service) calculateTerminalGrowthRate(historicalCAGR, wacc float64) floa
 	}
 
 	return terminalGrowth
+}
+
+// isFinancialDataIncomplete checks whether stored financial data is missing
+// critical FCF fields (D&A, CapEx, Cash). Returns true if ALL are zero/missing,
+// which indicates pre-Phase-1.2 data that should be re-fetched.
+func (s *Service) isFinancialDataIncomplete(data *entities.HistoricalFinancialData) bool {
+	latest, _ := data.GetLatestPeriod()
+	if latest == nil {
+		return true
+	}
+	return latest.DepreciationAndAmortization == 0 &&
+		latest.CapitalExpenditures == 0 &&
+		latest.CashAndCashEquivalents == 0
 }
 
 // calculateDataFreshnessScore calculates a score from 0-100 based on data age
