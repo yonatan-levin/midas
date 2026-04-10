@@ -2,6 +2,7 @@ package valuation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -399,26 +400,35 @@ func (s *Service) performValuation(
 
 	// Select the appropriate valuation model based on industry and financials
 	selectedModel := s.modelRouter.SelectModel(industryCode, latestFinancialData)
+	var dcfFallbackWarning string
 
-	// If an alternative model (non-DCF) is selected, use it and return early
+	// If an alternative model (non-DCF) is selected, use it.
+	// When the primary model fails but the company has positive OI,
+	// performAlternativeValuation returns errFallbackToDCF to signal DCF fallback.
 	if selectedModel != nil && selectedModel.ModelType() != "multi_stage_dcf" {
-		return s.performAlternativeValuation(
+		altResult, altErr := s.performAlternativeValuation(
 			ctx, selectedModel, historicalData, marketData, macroData,
 			growthEstimate, waccResult, latestFinancialData, latestPeriod,
 			tangibleValuePerShare, sharesOutstanding, industryCode,
 		)
+		if errors.Is(altErr, errFallbackToDCF) {
+			s.logger.Info("Falling back to standard DCF after alternative model failure",
+				zap.String("ticker", historicalData.Ticker),
+				zap.String("primary_model", selectedModel.ModelType()))
+			dcfFallbackWarning = fmt.Sprintf("Primary model (%s) could not value this company; fell back to multi_stage_dcf", selectedModel.ModelType())
+		} else if altErr != nil {
+			return nil, altErr
+		} else {
+			return altResult, nil
+		}
 	}
 
 	// --- Standard multi-stage DCF path (existing logic) ---
 
 	// Guard: standard DCF requires positive operating income.
 	// Companies with negative OI are routed to revenue_multiple model above.
-	baseOI := latestFinancialData.NormalizedOperatingIncome
+	baseOI := effectiveOI(latestFinancialData)
 	if baseOI <= 0 {
-		baseOI = latestFinancialData.OperatingIncome
-	}
-	if baseOI <= 0 {
-		// This should only be reached if no alternative model is available
 		return nil, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, latestFinancialData.NormalizedOperatingIncome)
 	}
 
@@ -514,6 +524,10 @@ func (s *Service) performValuation(
 			"FCF using NOPAT approximation (D&A/CapEx unavailable from filing). Valuation may be less accurate for capital-intensive companies.")
 	}
 
+	if dcfFallbackWarning != "" {
+		result.Warnings = append(result.Warnings, dcfFallbackWarning)
+	}
+
 	return result, nil
 }
 
@@ -557,12 +571,25 @@ func (s *Service) performAlternativeValuation(
 	// Execute the alternative model
 	modelResult, err := model.Calculate(ctx, modelInput)
 	if err != nil {
-		// If alternative model fails, fall through to ErrModelNotApplicable
-		// (do not silently fallback to DCF — the router already decided DCF isn't appropriate)
-		s.logger.Warn("Alternative model failed",
-			zap.String("model_type", model.ModelType()),
+		// Primary model failed — try fallback strategies before giving up
+		s.logger.Warn("Primary valuation model failed, attempting fallback",
+			zap.String("model", model.ModelType()),
+			zap.String("ticker", historicalData.Ticker),
 			zap.Error(err))
-		return nil, fmt.Errorf("%w: %s model failed: %v", ErrModelNotApplicable, model.ModelType(), err)
+
+		// If company has positive OI, fall back to standard DCF path
+		if effectiveOI(latestFinancialData) > 0 {
+			return nil, errFallbackToDCF
+		}
+
+		// Negative OI — try revenue_multiple as last resort
+		revModel := models.NewRevenueMultipleModelWithMultiples(nil, s.logger)
+		modelResult, err = revModel.Calculate(ctx, modelInput)
+		if err != nil {
+			return nil, fmt.Errorf("%w: all models failed for this company", ErrModelNotApplicable)
+		}
+		modelResult.Warnings = append(modelResult.Warnings,
+			fmt.Sprintf("Primary model (%s) failed, used revenue_multiple as fallback", model.ModelType()))
 	}
 
 	// Calculate data freshness score
@@ -663,6 +690,14 @@ func (s *Service) averageCapExAndDA(historicalData *entities.HistoricalFinancial
 // isFinancialDataIncomplete checks whether stored financial data is missing
 // critical FCF fields (D&A, CapEx, Cash). Returns true if ALL are zero/missing,
 // which indicates pre-Phase-1.2 data that should be re-fetched.
+// effectiveOI returns the best available operating income (normalized preferred, raw as fallback).
+func effectiveOI(fd *entities.FinancialData) float64 {
+	if fd.NormalizedOperatingIncome > 0 {
+		return fd.NormalizedOperatingIncome
+	}
+	return fd.OperatingIncome
+}
+
 func (s *Service) isFinancialDataIncomplete(data *entities.HistoricalFinancialData) bool {
 	latest, _ := data.GetLatestPeriod()
 	if latest == nil {

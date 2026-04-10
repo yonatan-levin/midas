@@ -13,12 +13,9 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 )
 
-// FinancialDataRepository implements the FinancialDataRepository interface for SQLite
-// TODO: Phase 3 follow-up — add dividends_per_share, net_income, gain_on_property_sales,
-// depreciation_and_amortization, capital_expenditures, operating_cash_flow, cash_and_cash_equivalents,
-// stockholders_equity, current_assets, current_liabilities columns to INSERT/SELECT queries
-// so these fields round-trip through the database. Currently they are only populated
-// in-memory from SEC parser and used directly in valuation.
+// FinancialDataRepository implements the FinancialDataRepository interface for SQLite.
+// All Phase 2/3 columns (D&A, CapEx, cash flow, dividends, equity, etc.)
+// are persisted and round-tripped through the database.
 type FinancialDataRepository struct {
 	db *sqlx.DB
 }
@@ -45,11 +42,15 @@ func (r *FinancialDataRepository) Store(ctx context.Context, data *entities.Fina
 	query := `
 		INSERT INTO financial_data (
 			ticker, cik, filing_period, filing_date, as_of_date,
-			operating_income, normalized_operating_income, revenue, 
+			operating_income, normalized_operating_income, revenue,
 			interest_expense, tax_rate,
 			total_assets, tangible_assets, goodwill, other_intangibles,
 			total_debt, interest_bearing_debt,
 			inventory, inventory_turnover, dead_inventory_writedown,
+			dividends_per_share, net_income, gain_on_property_sales,
+			depreciation_and_amortization, capital_expenditures, operating_cash_flow,
+			current_assets, current_liabilities,
+			cash_and_cash_equivalents, stockholders_equity,
 			shares_outstanding, diluted_shares_outstanding,
 			has_normalized_data, missing_fields, created_at, updated_at
 		) VALUES (
@@ -59,34 +60,48 @@ func (r *FinancialDataRepository) Store(ctx context.Context, data *entities.Fina
 			:total_assets, :tangible_assets, :goodwill, :other_intangibles,
 			:total_debt, :interest_bearing_debt,
 			:inventory, :inventory_turnover, :dead_inventory_writedown,
+			:dividends_per_share, :net_income, :gain_on_property_sales,
+			:depreciation_and_amortization, :capital_expenditures, :operating_cash_flow,
+			:current_assets, :current_liabilities,
+			:cash_and_cash_equivalents, :stockholders_equity,
 			:shares_outstanding, :diluted_shares_outstanding,
 			:has_normalized_data, :missing_fields, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 		)`
 
 	args := map[string]interface{}{
-		"ticker":                      data.Ticker,
-		"cik":                         data.CIK,
-		"filing_period":               data.FilingPeriod,
-		"filing_date":                 data.FilingDate,
-		"as_of_date":                  data.AsOf,
-		"operating_income":            data.OperatingIncome,
-		"normalized_operating_income": data.NormalizedOperatingIncome,
-		"revenue":                     data.Revenue,
-		"interest_expense":            data.InterestExpense,
-		"tax_rate":                    data.TaxRate,
-		"total_assets":                data.TotalAssets,
-		"tangible_assets":             data.TangibleAssets,
-		"goodwill":                    data.Goodwill,
-		"other_intangibles":           data.OtherIntangibles,
-		"total_debt":                  data.TotalDebt,
-		"interest_bearing_debt":       data.InterestBearingDebt,
-		"inventory":                   data.Inventory,
-		"inventory_turnover":          data.InventoryTurnover,
-		"dead_inventory_writedown":    data.DeadInventoryWritedown,
-		"shares_outstanding":          data.SharesOutstanding,
-		"diluted_shares_outstanding":  data.DilutedSharesOutstanding,
-		"has_normalized_data":         data.HasNormalizedData,
-		"missing_fields":              string(missingFieldsJSON),
+		"ticker":                        data.Ticker,
+		"cik":                           data.CIK,
+		"filing_period":                 data.FilingPeriod,
+		"filing_date":                   data.FilingDate,
+		"as_of_date":                    data.AsOf,
+		"operating_income":              data.OperatingIncome,
+		"normalized_operating_income":   data.NormalizedOperatingIncome,
+		"revenue":                       data.Revenue,
+		"interest_expense":              data.InterestExpense,
+		"tax_rate":                      data.TaxRate,
+		"total_assets":                  data.TotalAssets,
+		"tangible_assets":               data.TangibleAssets,
+		"goodwill":                      data.Goodwill,
+		"other_intangibles":             data.OtherIntangibles,
+		"total_debt":                    data.TotalDebt,
+		"interest_bearing_debt":         data.InterestBearingDebt,
+		"inventory":                     data.Inventory,
+		"inventory_turnover":            data.InventoryTurnover,
+		"dead_inventory_writedown":      data.DeadInventoryWritedown,
+		"dividends_per_share":           data.DividendsPerShare,
+		"net_income":                    data.NetIncome,
+		"gain_on_property_sales":        data.GainOnPropertySales,
+		"depreciation_and_amortization": data.DepreciationAndAmortization,
+		"capital_expenditures":          data.CapitalExpenditures,
+		"operating_cash_flow":           data.OperatingCashFlow,
+		"current_assets":                data.CurrentAssets,
+		"current_liabilities":           data.CurrentLiabilities,
+		"cash_and_cash_equivalents":     data.CashAndCashEquivalents,
+		"stockholders_equity":           data.StockholdersEquity,
+		"shares_outstanding":            data.SharesOutstanding,
+		"diluted_shares_outstanding":    data.DilutedSharesOutstanding,
+		"has_normalized_data":           data.HasNormalizedData,
+		"missing_fields":                string(missingFieldsJSON),
 	}
 
 	_, err = r.db.NamedExecContext(ctx, query, args)
@@ -100,18 +115,22 @@ func (r *FinancialDataRepository) Store(ctx context.Context, data *entities.Fina
 // GetLatest retrieves the most recent financial data for a ticker
 func (r *FinancialDataRepository) GetLatest(ctx context.Context, ticker string) (*entities.FinancialData, error) {
 	query := `
-		SELECT 
+		SELECT
 			ticker, cik, filing_period, filing_date, as_of_date,
 			operating_income, normalized_operating_income, revenue,
 			interest_expense, tax_rate,
 			total_assets, tangible_assets, goodwill, other_intangibles,
 			total_debt, interest_bearing_debt,
 			inventory, inventory_turnover, dead_inventory_writedown,
+			dividends_per_share, net_income, gain_on_property_sales,
+			depreciation_and_amortization, capital_expenditures, operating_cash_flow,
+			current_assets, current_liabilities,
+			cash_and_cash_equivalents, stockholders_equity,
 			shares_outstanding, diluted_shares_outstanding,
 			has_normalized_data, missing_fields
-		FROM financial_data 
-		WHERE ticker = ? 
-		ORDER BY filing_date DESC, as_of_date DESC 
+		FROM financial_data
+		WHERE ticker = ?
+		ORDER BY filing_date DESC, as_of_date DESC
 		LIMIT 1`
 
 	var data entities.FinancialData
@@ -124,6 +143,10 @@ func (r *FinancialDataRepository) GetLatest(ctx context.Context, ticker string) 
 		&data.TotalAssets, &data.TangibleAssets, &data.Goodwill, &data.OtherIntangibles,
 		&data.TotalDebt, &data.InterestBearingDebt,
 		&data.Inventory, &data.InventoryTurnover, &data.DeadInventoryWritedown,
+		&data.DividendsPerShare, &data.NetIncome, &data.GainOnPropertySales,
+		&data.DepreciationAndAmortization, &data.CapitalExpenditures, &data.OperatingCashFlow,
+		&data.CurrentAssets, &data.CurrentLiabilities,
+		&data.CashAndCashEquivalents, &data.StockholdersEquity,
 		&data.SharesOutstanding, &data.DilutedSharesOutstanding,
 		&data.HasNormalizedData, &missingFieldsJSON,
 	)
@@ -149,17 +172,21 @@ func (r *FinancialDataRepository) GetLatest(ctx context.Context, ticker string) 
 // GetHistorical retrieves historical financial data for a ticker
 func (r *FinancialDataRepository) GetHistorical(ctx context.Context, ticker string, periods int) (*entities.HistoricalFinancialData, error) {
 	query := `
-		SELECT 
+		SELECT
 			ticker, cik, filing_period, filing_date, as_of_date,
 			operating_income, normalized_operating_income, revenue,
 			interest_expense, tax_rate,
 			total_assets, tangible_assets, goodwill, other_intangibles,
 			total_debt, interest_bearing_debt,
 			inventory, inventory_turnover, dead_inventory_writedown,
+			dividends_per_share, net_income, gain_on_property_sales,
+			depreciation_and_amortization, capital_expenditures, operating_cash_flow,
+			current_assets, current_liabilities,
+			cash_and_cash_equivalents, stockholders_equity,
 			shares_outstanding, diluted_shares_outstanding,
 			has_normalized_data, missing_fields
-		FROM financial_data 
-		WHERE ticker = ? 
+		FROM financial_data
+		WHERE ticker = ?
 		ORDER BY filing_date DESC, as_of_date DESC
 		LIMIT ?`
 
@@ -185,6 +212,10 @@ func (r *FinancialDataRepository) GetHistorical(ctx context.Context, ticker stri
 			&data.TotalAssets, &data.TangibleAssets, &data.Goodwill, &data.OtherIntangibles,
 			&data.TotalDebt, &data.InterestBearingDebt,
 			&data.Inventory, &data.InventoryTurnover, &data.DeadInventoryWritedown,
+			&data.DividendsPerShare, &data.NetIncome, &data.GainOnPropertySales,
+			&data.DepreciationAndAmortization, &data.CapitalExpenditures, &data.OperatingCashFlow,
+			&data.CurrentAssets, &data.CurrentLiabilities,
+			&data.CashAndCashEquivalents, &data.StockholdersEquity,
 			&data.SharesOutstanding, &data.DilutedSharesOutstanding,
 			&data.HasNormalizedData, &missingFieldsJSON,
 		)
@@ -213,16 +244,20 @@ func (r *FinancialDataRepository) GetHistorical(ctx context.Context, ticker stri
 // GetByPeriod retrieves financial data for a specific period
 func (r *FinancialDataRepository) GetByPeriod(ctx context.Context, ticker, period string) (*entities.FinancialData, error) {
 	query := `
-		SELECT 
+		SELECT
 			ticker, cik, filing_period, filing_date, as_of_date,
 			operating_income, normalized_operating_income, revenue,
 			interest_expense, tax_rate,
 			total_assets, tangible_assets, goodwill, other_intangibles,
 			total_debt, interest_bearing_debt,
 			inventory, inventory_turnover, dead_inventory_writedown,
+			dividends_per_share, net_income, gain_on_property_sales,
+			depreciation_and_amortization, capital_expenditures, operating_cash_flow,
+			current_assets, current_liabilities,
+			cash_and_cash_equivalents, stockholders_equity,
 			shares_outstanding, diluted_shares_outstanding,
 			has_normalized_data, missing_fields
-		FROM financial_data 
+		FROM financial_data
 		WHERE ticker = ? AND filing_period = ?`
 
 	var data entities.FinancialData
@@ -235,6 +270,10 @@ func (r *FinancialDataRepository) GetByPeriod(ctx context.Context, ticker, perio
 		&data.TotalAssets, &data.TangibleAssets, &data.Goodwill, &data.OtherIntangibles,
 		&data.TotalDebt, &data.InterestBearingDebt,
 		&data.Inventory, &data.InventoryTurnover, &data.DeadInventoryWritedown,
+		&data.DividendsPerShare, &data.NetIncome, &data.GainOnPropertySales,
+		&data.DepreciationAndAmortization, &data.CapitalExpenditures, &data.OperatingCashFlow,
+		&data.CurrentAssets, &data.CurrentLiabilities,
+		&data.CashAndCashEquivalents, &data.StockholdersEquity,
 		&data.SharesOutstanding, &data.DilutedSharesOutstanding,
 		&data.HasNormalizedData, &missingFieldsJSON,
 	)

@@ -3,6 +3,7 @@ package valuation
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -2584,4 +2585,174 @@ func TestService_CalculateValuation_DataFetcherFetchFails(t *testing.T) {
 		"Error should indicate data fetch failure: %v", err)
 
 	freshFinancialRepo.AssertExpectations(t)
+}
+
+// TestService_performValuation_FINZeroDPS_FallbackToDCF verifies that when a FIN company
+// has zero dividends (DDM fails) but positive operating income, the service falls back
+// to the standard multi-stage DCF path instead of returning ErrModelNotApplicable.
+func TestService_performValuation_FINZeroDPS_FallbackToDCF(t *testing.T) {
+	_, marketData, macroData := createTestData()
+
+	// FIN company with zero dividends but positive OI -> DDM should fail -> DCF fallback
+	finData := &entities.HistoricalFinancialData{
+		Ticker: "JPM",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:                    "JPM",
+				FilingPeriod:              "2023FY",
+				FilingDate:                time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now(),
+				OperatingIncome:           55000000000,
+				NormalizedOperatingIncome: 53000000000,
+				Revenue:                   160000000000,
+				InterestExpense:           8000000000,
+				TaxRate:                   0.21,
+				TotalAssets:               3700000000000,
+				TangibleAssets:            3600000000000,
+				InterestBearingDebt:       300000000000,
+				SharesOutstanding:         2900000000,
+				DilutedSharesOutstanding:  2950000000,
+				HasNormalizedData:         true,
+				IndustryCode:              "FIN",
+				DividendsPerShare:         0, // Zero DPS causes DDM to fail
+				NetIncome:                 49000000000,
+			},
+			"2022FY": {
+				Ticker:                    "JPM",
+				FilingPeriod:              "2022FY",
+				FilingDate:                time.Date(2023, 2, 1, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+				OperatingIncome:           48000000000,
+				NormalizedOperatingIncome: 46000000000,
+				Revenue:                   130000000000,
+				InterestExpense:           6000000000,
+				TaxRate:                   0.20,
+				TotalAssets:               3500000000000,
+				TangibleAssets:            3400000000000,
+				InterestBearingDebt:       280000000000,
+				SharesOutstanding:         2950000000,
+				DilutedSharesOutstanding:  3000000000,
+				HasNormalizedData:         true,
+				IndustryCode:              "FIN",
+				DividendsPerShare:         0,
+				NetIncome:                 42000000000,
+			},
+		},
+	}
+
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+
+	result, err := svc.performValuation(context.Background(), finData, marketData, macroData, nil)
+
+	// DDM should fail (zero DPS) but positive OI triggers DCF fallback
+	assert.NoError(t, err, "FIN company with zero DPS but positive OI should fall back to DCF")
+	assert.NotNil(t, result, "Should return a result from DCF fallback")
+	if result != nil {
+		assert.Equal(t, "multi_stage_dcf", result.CalculationMethod,
+			"Should fall back to multi_stage_dcf when DDM fails and OI is positive")
+		assert.Equal(t, "3.0", result.CalculationVersion)
+		assert.Greater(t, result.DCFValuePerShare, 0.0,
+			"DCF fallback should produce a positive value")
+		// S-2 nit: verify the fallback warning is present
+		hasWarning := false
+		for _, w := range result.Warnings {
+			if strings.Contains(w, "Primary model") && strings.Contains(w, "fell back") {
+				hasWarning = true
+			}
+		}
+		assert.True(t, hasWarning, "Should have a warning about primary model fallback")
+	}
+}
+
+func TestService_performValuation_FINNegativeOI_FallbackToRevMultiple(t *testing.T) {
+	// FIN company with zero DPS AND negative OI → DDM fails → revenue_multiple fallback
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return().Maybe()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return().Maybe()
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+
+	_, marketData, macroData := createTestData()
+	historicalData := &entities.HistoricalFinancialData{
+		Ticker: "AFRM",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:                    "AFRM",
+				FilingPeriod:              "2023FY",
+				FilingDate:                time.Date(2024, 9, 1, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now(),
+				OperatingIncome:           -500000000,
+				NormalizedOperatingIncome: -450000000,
+				Revenue:                   1600000000,
+				TaxRate:                   0.0,
+				TotalAssets:               10000000000,
+				TangibleAssets:            8000000000,
+				InterestBearingDebt:       3000000000,
+				SharesOutstanding:         300000000,
+				DilutedSharesOutstanding:  320000000,
+				IndustryCode:              "FIN",
+				DividendsPerShare:         0,
+				HasNormalizedData:         true,
+			},
+			"2022FY": {
+				Ticker:                    "AFRM",
+				FilingPeriod:              "2022FY",
+				FilingDate:                time.Date(2023, 9, 1, 0, 0, 0, 0, time.UTC),
+				AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+				OperatingIncome:           -700000000,
+				NormalizedOperatingIncome: -650000000,
+				Revenue:                   1300000000,
+				TaxRate:                   0.0,
+				TotalAssets:               9000000000,
+				TangibleAssets:            7000000000,
+				InterestBearingDebt:       2500000000,
+				SharesOutstanding:         290000000,
+				DilutedSharesOutstanding:  310000000,
+				IndustryCode:              "FIN",
+				DividendsPerShare:         0,
+				HasNormalizedData:         true,
+			},
+		},
+	}
+
+	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+
+	assert.NoError(t, err, "FIN with negative OI should fall back to revenue_multiple, not error")
+	assert.NotNil(t, result)
+	if result != nil {
+		assert.Equal(t, "revenue_multiple", result.CalculationMethod,
+			"Should use revenue_multiple as last-resort fallback")
+		// Verify fallback warning
+		hasWarning := false
+		for _, w := range result.Warnings {
+			if strings.Contains(w, "revenue_multiple") && strings.Contains(w, "fallback") {
+				hasWarning = true
+			}
+		}
+		assert.True(t, hasWarning, "Should warn about revenue_multiple fallback")
+	}
 }

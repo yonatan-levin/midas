@@ -13,8 +13,12 @@ var (
 	// to perform a reliable valuation.
 	ErrInsufficientData = errors.New("insufficient data")
 
-	// ErrModelNotApplicable indicates the standard DCF model cannot value this
-	// company (e.g., negative operating income). Industry-specific models
-	// (DDM, FFO, revenue multiples) may handle it in a future phase.
+	// ErrModelNotApplicable indicates neither the standard DCF model nor any
+	// alternative model (DDM, FFO, revenue multiple) could produce a result.
 	ErrModelNotApplicable = errors.New("model not applicable")
+
+	// errFallbackToDCF is an internal signal (unexported) indicating the primary
+	// alternative model failed but the company has positive OI, so the caller
+	// should continue with the standard DCF path.
+	errFallbackToDCF = errors.New("primary model failed; falling back to DCF")
 )

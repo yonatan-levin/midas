@@ -312,6 +312,10 @@ func SeedTestData(t *testing.T, db *sqlx.DB) {
 					total_assets, tangible_assets, goodwill, other_intangibles,
 					total_debt, interest_bearing_debt,
 					inventory, inventory_turnover, dead_inventory_writedown,
+					dividends_per_share, net_income, gain_on_property_sales,
+					depreciation_and_amortization, capital_expenditures, operating_cash_flow,
+					current_assets, current_liabilities,
+					cash_and_cash_equivalents, stockholders_equity,
 					shares_outstanding, diluted_shares_outstanding,
 					has_normalized_data, missing_fields, created_at, updated_at
 				) VALUES (
@@ -321,6 +325,10 @@ func SeedTestData(t *testing.T, db *sqlx.DB) {
 					?, ?, ?, ?,
 					?, ?,
 					?, ?, ?,
+					?, ?, ?,
+					?, ?, ?,
+					?, ?,
+					?, ?,
 					?, ?,
 					?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 				)
@@ -330,6 +338,10 @@ func SeedTestData(t *testing.T, db *sqlx.DB) {
 				5.0e11, 4.5e11, 0.0, 0.0,
 				2.0e10, 2.0e10,
 				5.0e10, 5.0, 0.0,
+				0.0, p.oi*0.8, 0.0, // dividends_per_share, net_income, gain_on_property_sales
+				1.0e10, 1.2e10, p.oi*1.2, // D&A, CapEx, operating_cash_flow
+				1.0e11, 8.0e10, // current_assets, current_liabilities
+				5.0e10, 2.0e11, // cash_and_cash_equivalents, stockholders_equity
 				1.5e10, 1.5e10,
 				1, "[]")
 			require.NoError(t, err, "Failed to seed financial data for %s %s", ticker, p.period)
