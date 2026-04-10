@@ -92,7 +92,7 @@ pkg/
 |--------|--------|---------|
 | `pkg/finance/dcf` | >= 90% | ~95.9% |
 | `pkg/finance/growth` | >= 90% | ~90.4% |
-| `pkg/finance/wacc` | >= 85% | ~86.9% |
+| `pkg/finance/wacc` | >= 85% | ~87.5% |
 | `internal/services/valuation` | >= 90% | ~87.9% |
 | `internal/services/valuation/models` | >= 80% | ~79.9% |
 | `internal/services/growth` | >= 90% | ~98.5% |

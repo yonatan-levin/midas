@@ -91,8 +91,9 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 | `data_quality_score` | float | Data quality score (0-100) |
 | `data_quality_grade` | string | Quality grade (A/B/C/D/F) |
 | `calculation_method` | string | Valuation model used: `"multi_stage_dcf"`, `"ddm"`, `"ffo"`, or `"revenue_multiple"` (optional) |
-| `calculation_version` | string | Engine version (e.g., `"3.0"`) (optional) |
+| `calculation_version` | string | Engine version (e.g., `"4.0"`) (optional) |
 | `warnings` | string[] | Data quality or assumption warnings (optional, omitted if empty) |
+| `sanity_check` | object | Multiples cross-check: `implied_pe`, `sector_median_pe`, `implied_ev_ebitda`, `sector_median_ev_ebitda`, `is_reasonable`, `flags` (optional) |
 
 **Error Responses**: 400 (`INVALID_TICKER`), 401, 404 (`TICKER_NOT_FOUND`), 422 (`INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`)
 

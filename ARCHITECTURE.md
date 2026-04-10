@@ -123,7 +123,8 @@ The core product flow for `GET /api/v1/fair-value/{ticker}`:
      │        └── Quality scoring (0-100)
      │
      ├── 5d. WACC Calculation (pkg/finance/wacc/)
-     │        ├── Cost of Equity = Rf + Beta * Market Risk Premium
+     │        ├── Beta: Blume adjusted (0.67β + 0.33), unlevered/relevered
+     │        ├── Cost of Equity = Rf + β(ERP) + CRP (country risk premium)
      │        ├── Cost of Debt = Interest Expense / Total Debt * (1 - Tax Rate)
      │        └── WACC = E/(E+D) * Ke + D/(E+D) * Kd
      │
@@ -137,7 +138,7 @@ The core product flow for `GET /api/v1/fair-value/{ticker}`:
      │        ├── Growth rate capped to config bounds (BUG-010 fix)
      │        ├── True FCF = NOPAT + D&A - CapEx - ΔWorkingCapital (fallback: NOPAT)
      │        ├── 7-year multi-stage projection (3 high-growth + 4 fade)
-     │        ├── Terminal value = FCF_n * (1+g) / (WACC - g), min 1% spread enforced
+     │        ├── Terminal value: Gordon Growth averaged with exit-multiple TV when available
      │        ├── Discount all cash flows to present value
      │        ├── Enterprise Value = Sum of PV(FCFs) + PV(Terminal Value)
      │        └── Equity Value = EV - Debt + Cash → per share (diluted shares preferred)
