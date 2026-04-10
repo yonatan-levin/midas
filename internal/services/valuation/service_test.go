@@ -827,7 +827,7 @@ func TestService_performValuation(t *testing.T) {
 		assert.Greater(t, result.GrowthRate, 0.0)
 		assert.Greater(t, result.EnterpriseValue, 0.0)
 		assert.Greater(t, result.DataFreshnessScore, 0)
-		assert.Equal(t, "3.0", result.CalculationVersion)
+		assert.Equal(t, "4.0", result.CalculationVersion)
 	})
 
 	t.Run("single period uses default growth rate", func(t *testing.T) {
@@ -2174,7 +2174,7 @@ func TestService_performValuation_NegativeOperatingIncome(t *testing.T) {
 	if result != nil {
 		assert.Equal(t, "revenue_multiple", result.CalculationMethod,
 			"Should use revenue multiple model for negative OI")
-		assert.Equal(t, "3.0", result.CalculationVersion)
+		assert.Equal(t, "4.0", result.CalculationVersion)
 		assert.Greater(t, result.DCFValuePerShare, 0.0,
 			"Revenue multiple should produce a positive value when revenue is available")
 	}
@@ -2215,7 +2215,7 @@ func TestService_performValuation_TrueFCF(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Greater(t, result.DCFValuePerShare, 0.0)
 	assert.Greater(t, result.EquityValue, 0.0)
-	assert.Equal(t, "3.0", result.CalculationVersion)
+	assert.Equal(t, "4.0", result.CalculationVersion)
 }
 
 func TestService_performValuation_GrowthCapping(t *testing.T) {
@@ -2664,7 +2664,7 @@ func TestService_performValuation_FINZeroDPS_FallbackToDCF(t *testing.T) {
 	if result != nil {
 		assert.Equal(t, "multi_stage_dcf", result.CalculationMethod,
 			"Should fall back to multi_stage_dcf when DDM fails and OI is positive")
-		assert.Equal(t, "3.0", result.CalculationVersion)
+		assert.Equal(t, "4.0", result.CalculationVersion)
 		assert.Greater(t, result.DCFValuePerShare, 0.0,
 			"DCF fallback should produce a positive value")
 		// S-2 nit: verify the fallback warning is present

@@ -1,6 +1,7 @@
 package dcf
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/leanovate/gopter"
@@ -179,6 +180,64 @@ func TestCalculateDCF_FallbackToNOPAT(t *testing.T) {
 		assert.Equal(t, proj.NOPAT, proj.FreeCashFlow,
 			"Without true FCF data, FCF should equal NOPAT")
 	}
+}
+
+func TestCalculateDCF_ExitMultipleTV(t *testing.T) {
+	// When ExitMultiple is provided, terminal value should be the average of
+	// Gordon Growth TV and exit-multiple-based TV.
+	baseInputs := Inputs{
+		BaseOperatingIncome:         1000.0,
+		GrowthRate:                  0.10,
+		TerminalGrowthRate:          0.025,
+		WACC:                        0.10,
+		TaxRate:                     0.25,
+		ProjectionYears:             5,
+		UseTrueFCF:                  true,
+		DepreciationAndAmortization: 200.0,
+		CapitalExpenditures:         300.0,
+		NetWorkingCapitalChange:     50.0,
+	}
+
+	t.Run("ExitMultiple=0 uses Gordon Growth only", func(t *testing.T) {
+		inputs := baseInputs
+		inputs.ExitMultiple = 0
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// Verify no exit multiple warning is present
+		for _, w := range result.Warnings {
+			assert.NotContains(t, w, "Exit Multiple",
+				"Should not mention exit multiple when ExitMultiple=0")
+		}
+	})
+
+	t.Run("ExitMultiple > 0 averages Gordon and exit TV", func(t *testing.T) {
+		inputs := baseInputs
+		inputs.ExitMultiple = 12.0 // 12x EV/EBITDA
+
+		result, err := CalculateDCF(inputs)
+		require.NoError(t, err)
+
+		// Calculate what pure Gordon Growth would give
+		gordonInputs := baseInputs
+		gordonInputs.ExitMultiple = 0
+		gordonResult, _ := CalculateDCF(gordonInputs)
+
+		// The terminal value nominal should differ from pure Gordon
+		assert.NotEqual(t, gordonResult.TerminalValueNominal, result.TerminalValueNominal,
+			"Exit multiple should change the terminal value")
+
+		// The result should have a warning about the averaging
+		found := false
+		for _, w := range result.Warnings {
+			if strings.Contains(w, "Terminal value averaged") {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "Should include warning about TV averaging method")
+	})
 }
 
 func TestCalculateDCF_InvalidInputs(t *testing.T) {

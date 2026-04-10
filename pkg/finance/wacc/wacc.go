@@ -14,6 +14,10 @@ type Inputs struct {
 	RiskFreeRate        float64 // 10-year Treasury yield
 	MarketRiskPremium   float64 // Expected market return - risk-free rate
 
+	// International risk adjustment (Damodaran-style country risk premium).
+	// Zero-value means no adjustment (domestic US company).
+	CountryRiskPremium float64
+
 	// Financial data
 	InterestExpense float64 // Annual interest payments
 	TaxRate         float64 // Effective tax rate
@@ -50,8 +54,10 @@ func Calculate(inputs Inputs) (*Result, error) {
 
 	result := &Result{}
 
-	// Calculate cost of equity using CAPM: Re = Rf + β(Rm - Rf)
-	result.CostOfEquity = inputs.RiskFreeRate + inputs.Beta*inputs.MarketRiskPremium
+	// Calculate cost of equity using CAPM with country risk premium:
+	// Re = Rf + β(Rm - Rf) + CRP
+	// CRP is zero for domestic US companies, so the formula is backward-compatible.
+	result.CostOfEquity = inputs.RiskFreeRate + inputs.Beta*inputs.MarketRiskPremium + inputs.CountryRiskPremium
 
 	// Calculate cost of debt
 	if inputs.MarketValueOfDebt > 0 {

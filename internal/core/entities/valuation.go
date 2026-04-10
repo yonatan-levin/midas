@@ -54,6 +54,21 @@ type ValuationResult struct {
 	MarketDataDate      time.Time       `json:"market_data_date"`
 	DataFreshnessScore  int             `json:"data_freshness_score"`
 	CalculationVersion  string          `json:"calculation_version"`
+
+	// Phase 4: Multiples sanity cross-check comparing DCF-implied multiples
+	// against sector medians. Nil when cross-check data is unavailable.
+	SanityCheck *SanityCheck `json:"sanity_check,omitempty"`
+}
+
+// SanityCheck contains cross-check multiples that compare the DCF-implied valuation
+// against sector median multiples. Flags divergences > 2x or < 0.5x sector median.
+type SanityCheck struct {
+	ImpliedPE            float64  `json:"implied_pe"`              // DCF value / EPS
+	SectorMedianPE       float64  `json:"sector_median_pe"`        // Sector median P/E ratio
+	ImpliedEVEBITDA      float64  `json:"implied_ev_ebitda"`       // DCF enterprise value / EBITDA
+	SectorMedianEVEBITDA float64  `json:"sector_median_ev_ebitda"` // Sector median EV/EBITDA
+	IsReasonable         bool     `json:"is_reasonable"`           // True if implied multiples are within 0.5x-2x of sector medians
+	Flags                []string `json:"flags,omitempty"`         // Specific warnings about divergences
 }
 
 // DCFProjection represents the detailed cash flow projections

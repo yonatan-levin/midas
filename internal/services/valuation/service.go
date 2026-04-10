@@ -34,6 +34,8 @@ type Service struct {
 	metricsService     ports.MetricsService
 	modelRouter        *models.ModelRouter          // Phase 3: industry-aware model selection
 	industryClassifier *industry.IndustryClassifier // Phase 3: SIC/NAICS classification
+	countryRiskMap     map[string]float64           // Phase 4: ISO-2 country code -> CRP
+	industryMultiples  *industryMultiplesConfig     // Phase 4: EV/EBITDA and P/E multiples for cross-checks
 	config             *config.Config
 	logger             *zap.Logger
 }
@@ -72,6 +74,23 @@ func NewService(
 	}
 	router := models.NewModelRouter(allModels, logger)
 
+	// Phase 4: Load country risk premiums for international support.
+	// Graceful degradation: if config file is missing, all tickers get CRP = 0 (domestic US).
+	crpMap, crpErr := LoadCountryRiskPremiums(DefaultCountryRiskConfigPath)
+	if crpErr != nil {
+		logger.Warn("Country risk config unavailable, defaulting CRP to 0 for all tickers",
+			zap.Error(crpErr))
+		crpMap = map[string]float64{"US": 0, "default": 0}
+	}
+
+	// Phase 4: Load industry multiples for exit-multiple TV and sanity cross-checks.
+	// Graceful degradation: if missing, exit-multiple and cross-checks are skipped.
+	indMultiples, imErr := LoadIndustryMultiples(models.DefaultIndustryMultiplesPath)
+	if imErr != nil {
+		logger.Warn("Industry multiples config unavailable, exit-multiple TV and cross-checks disabled",
+			zap.Error(imErr))
+	}
+
 	return &Service{
 		financialRepo:      financialRepo,
 		marketRepo:         marketRepo,
@@ -83,6 +102,8 @@ func NewService(
 		metricsService:     metricsService,
 		modelRouter:        router,
 		industryClassifier: classifier,
+		countryRiskMap:     crpMap,
+		industryMultiples:  indMultiples,
 		config:             cfg,
 		logger:             logger,
 	}
@@ -341,11 +362,32 @@ func (s *Service) performValuation(
 		}
 	}
 
-	// Calculate WACC
+	// Phase 4: Apply Blume mean-reversion adjustment to raw beta.
+	// This reduces estimation error for extreme beta values by pulling toward 1.0.
+	rawBeta := beta
+	beta = wacc.BlumeAdjustedBeta(beta)
+	s.logger.Debug("Blume beta adjustment applied",
+		zap.String("ticker", historicalData.Ticker),
+		zap.Float64("raw_beta", rawBeta),
+		zap.Float64("adjusted_beta", beta))
+
+	// Phase 4: Look up country risk premium for international / ADR companies.
+	// US-domiciled companies get CRP = 0, so the formula is backward-compatible.
+	countryCode := GetCountryForTicker(historicalData.Ticker)
+	countryRiskPremium := GetCountryRiskPremium(s.countryRiskMap, countryCode)
+	if countryRiskPremium > 0 {
+		s.logger.Info("Country risk premium applied",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("country", countryCode),
+			zap.Float64("crp", countryRiskPremium))
+	}
+
+	// Calculate WACC (with CRP for international companies)
 	waccInputs := wacc.Inputs{
 		RiskFreeRate:        riskFreeRate,
 		MarketRiskPremium:   macroData.MarketRiskPremium,
 		Beta:                beta,
+		CountryRiskPremium:  countryRiskPremium,
 		MarketValueOfEquity: marketData.CalculateMarketValue(),
 		MarketValueOfDebt:   latestFinancialData.InterestBearingDebt,
 		InterestExpense:     latestFinancialData.InterestExpense,
@@ -470,6 +512,19 @@ func (s *Service) performValuation(
 	}
 	usingNOPATFallback := !dcfInputs.UseTrueFCF
 
+	// Phase 4: Wire exit-multiple terminal value from industry config.
+	// When available, DCF averages Gordon Growth TV with exit-multiple TV to reduce model risk.
+	if s.industryMultiples != nil && s.industryMultiples.EVEBITDAMultiples != nil {
+		exitMultiple := LookupMultiple(s.industryMultiples.EVEBITDAMultiples, industryCode)
+		if exitMultiple > 0 {
+			dcfInputs.ExitMultiple = exitMultiple
+			s.logger.Debug("Exit multiple wired for terminal value averaging",
+				zap.String("ticker", historicalData.Ticker),
+				zap.String("industry", industryCode),
+				zap.Float64("exit_multiple", exitMultiple))
+		}
+	}
+
 	dcfResult, err := dcf.CalculateDCF(dcfInputs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate DCF: %w", err)
@@ -516,7 +571,7 @@ func (s *Service) performValuation(
 		MarketDataDate:        marketData.AsOf,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     "multi_stage_dcf",
-		CalculationVersion:    "3.0",
+		CalculationVersion:    "4.0",
 	}
 
 	if usingNOPATFallback {
@@ -526,6 +581,34 @@ func (s *Service) performValuation(
 
 	if dcfFallbackWarning != "" {
 		result.Warnings = append(result.Warnings, dcfFallbackWarning)
+	}
+
+	// Phase 4: Run multiples sanity cross-check to flag extreme divergences.
+	// Uses EPS and EBITDA from financials to compute implied P/E and EV/EBITDA,
+	// then compares against sector medians.
+	if s.industryMultiples != nil {
+		eps := 0.0
+		if latestFinancialData.NetIncome > 0 && sharesOutstanding > 0 {
+			eps = latestFinancialData.NetIncome / sharesOutstanding
+		}
+		ebitda := latestFinancialData.OperatingIncome + latestFinancialData.DepreciationAndAmortization
+
+		sectorPE := LookupMultiple(s.industryMultiples.SectorMedianPE, industryCode)
+		sectorEVEBITDA := LookupMultiple(s.industryMultiples.EVEBITDAMultiples, industryCode)
+
+		sanity := CalculateSanityCheck(
+			equityValue, dcfResult.EnterpriseValue,
+			eps, ebitda,
+			sharesOutstanding,
+			industryCode,
+			sectorPE, sectorEVEBITDA,
+		)
+		result.SanityCheck = sanity
+
+		// Propagate sanity check flags as warnings for visibility in the API response
+		if !sanity.IsReasonable {
+			result.Warnings = append(result.Warnings, sanity.Flags...)
+		}
 	}
 
 	return result, nil
@@ -614,7 +697,7 @@ func (s *Service) performAlternativeValuation(
 		MarketDataDate:        marketData.AsOf,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     modelResult.ModelType,
-		CalculationVersion:    "3.0",
+		CalculationVersion:    "4.0",
 		Warnings:              modelResult.Warnings,
 	}
 

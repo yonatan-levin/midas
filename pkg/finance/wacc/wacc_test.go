@@ -386,6 +386,62 @@ func TestIsReasonable(t *testing.T) {
 	}
 }
 
+// TestCalculate_WithCountryRiskPremium verifies that CRP is additive to cost of equity
+// and flows through to WACC correctly.
+func TestCalculate_WithCountryRiskPremium(t *testing.T) {
+	tests := []struct {
+		name               string
+		countryRiskPremium float64
+		expectedCoE        float64 // Rf + Beta*MRP + CRP
+	}{
+		{
+			name:               "US company (CRP = 0) — no change",
+			countryRiskPremium: 0.0,
+			expectedCoE:        0.03 + 1.2*0.05, // 0.09
+		},
+		{
+			name:               "China ADR (CRP = 2.5%)",
+			countryRiskPremium: 0.025,
+			expectedCoE:        0.03 + 1.2*0.05 + 0.025, // 0.115
+		},
+		{
+			name:               "Brazil ADR (CRP = 3.5%)",
+			countryRiskPremium: 0.035,
+			expectedCoE:        0.03 + 1.2*0.05 + 0.035, // 0.125
+		},
+	}
+
+	baseInputs := Inputs{
+		MarketValueOfEquity: 1000000,
+		MarketValueOfDebt:   200000,
+		Beta:                1.2,
+		RiskFreeRate:        0.03,
+		MarketRiskPremium:   0.05,
+		InterestExpense:     10000,
+		TaxRate:             0.21,
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputs := baseInputs
+			inputs.CountryRiskPremium = tt.countryRiskPremium
+
+			result, err := Calculate(inputs)
+			require.NoError(t, err)
+
+			assert.InDelta(t, tt.expectedCoE, result.CostOfEquity, 0.0001,
+				"Cost of equity should include CRP")
+
+			// WACC with CRP should be higher than without (when CRP > 0)
+			if tt.countryRiskPremium > 0 {
+				baseResult, _ := Calculate(baseInputs)
+				assert.Greater(t, result.WACC, baseResult.WACC,
+					"WACC should increase when country risk premium is added")
+			}
+		})
+	}
+}
+
 // Benchmark tests
 func BenchmarkCalculate(b *testing.B) {
 	inputs := Inputs{

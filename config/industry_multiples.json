@@ -1,6 +1,6 @@
 {
-  "version": "1.0.0",
-  "description": "Industry-specific valuation multiples for alternative models (DDM, FFO, Revenue Multiple). Values represent sector median multiples derived from market data.",
+  "version": "1.1.0",
+  "description": "Industry-specific valuation multiples for alternative models (DDM, FFO, Revenue Multiple) and exit-multiple terminal value cross-check. Values represent sector median multiples derived from market data.",
   "reit_pffo_multiples": {
     "default": 15.0,
     "residential": 18.0,
@@ -26,5 +26,39 @@
     "CONS": 2.0,
     "TRANS": 1.5,
     "RESTATE": 3.0
+  },
+  "ev_ebitda_multiples": {
+    "default": 12.0,
+    "TECH": 18.0,
+    "TECH_SAAS": 22.0,
+    "TECH_AI": 25.0,
+    "HEALTH": 14.0,
+    "HEALTH_BIOTECH": 16.0,
+    "HEALTH_PHARMA": 13.0,
+    "FIN": 10.0,
+    "RETAIL": 8.0,
+    "MFG": 10.0,
+    "ENERGY": 6.0,
+    "TELECOM": 7.0,
+    "CONS": 10.0,
+    "TRANS": 8.0,
+    "RESTATE": 15.0
+  },
+  "sector_median_pe": {
+    "default": 18.0,
+    "TECH": 28.0,
+    "TECH_SAAS": 35.0,
+    "TECH_AI": 40.0,
+    "HEALTH": 22.0,
+    "HEALTH_BIOTECH": 30.0,
+    "HEALTH_PHARMA": 18.0,
+    "FIN": 12.0,
+    "RETAIL": 15.0,
+    "MFG": 16.0,
+    "ENERGY": 10.0,
+    "TELECOM": 14.0,
+    "CONS": 18.0,
+    "TRANS": 14.0,
+    "RESTATE": 20.0
   }
 }

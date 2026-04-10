@@ -22,6 +22,10 @@ type MarketData struct {
 	// Volume and liquidity
 	AverageVolume float64 `json:"average_volume"` // Average daily trading volume
 
+	// International risk metrics
+	DomicileCountry    string  `json:"domicile_country,omitempty"`     // ISO-2 country code (e.g., "US", "CN", "TW")
+	CountryRiskPremium float64 `json:"country_risk_premium,omitempty"` // Damodaran-style CRP for the domicile country
+
 	// Data source metadata
 	Source      string `json:"source"`       // yfinance, finzive, etc.
 	DataQuality string `json:"data_quality"` // high, medium, low

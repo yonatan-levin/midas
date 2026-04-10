@@ -30,6 +30,11 @@ type Inputs struct {
 	CapitalExpenditures         float64 // Actual CapEx amount to subtract (cash outflow, positive value)
 	NetWorkingCapitalChange     float64 // Change in NWC (positive = cash consumed)
 	UseTrueFCF                  bool    // When true, use actual D&A/CapEx instead of percentage-based
+
+	// Exit multiple terminal value (Phase 4: cross-check).
+	// When non-zero, the terminal value is averaged between Gordon Growth TV
+	// and an exit-multiple-based TV to reduce single-model dependency.
+	ExitMultiple float64 // Sector median EV/EBITDA multiple; 0 = use Gordon Growth only
 }
 
 // Projection represents cash flow projection for a single year
@@ -148,7 +153,24 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 	// Terminal value = FCF(final year) * (1 + terminal growth) / (WACC - terminal growth)
 	// The minimum 1% spread is enforced by validateInputs.
 	terminalFCF := result.TerminalYearFCF * (1 + inputs.TerminalGrowthRate)
-	result.TerminalValueNominal = terminalFCF / (inputs.WACC - inputs.TerminalGrowthRate)
+	gordonTV := terminalFCF / (inputs.WACC - inputs.TerminalGrowthRate)
+	result.TerminalValueNominal = gordonTV
+
+	// When an exit multiple is provided, average Gordon Growth TV with exit-multiple TV.
+	// This reduces model risk by blending two independent terminal value estimates.
+	if inputs.ExitMultiple > 0 {
+		// Approximate terminal year EBITDA: OI + D&A
+		// OI is recovered from FCF: FCF / (1 - TaxRate) = NOPAT -> OI = NOPAT / (1-T)... but simpler:
+		// Terminal EBITDA = TerminalYearFCF / (1 - TaxRate) + D&A
+		terminalEBITDA := result.TerminalYearFCF/(1-inputs.TaxRate) + inputs.DepreciationAndAmortization
+		if terminalEBITDA > 0 {
+			exitMultipleTV := terminalEBITDA * inputs.ExitMultiple
+			result.TerminalValueNominal = (gordonTV + exitMultipleTV) / 2
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("Terminal value averaged: Gordon Growth (%.0f) and Exit Multiple %.1fx (%.0f)",
+					gordonTV, inputs.ExitMultiple, exitMultipleTV))
+		}
+	}
 
 	// Discount terminal value to present
 	terminalDiscountFactor := math.Pow(1+inputs.WACC, float64(inputs.ProjectionYears))
@@ -159,7 +181,8 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 
 	// Perform reasonableness checks
 	result.IsReasonable = isResultReasonable(result)
-	result.Warnings = generateWarnings(inputs, result)
+	// Append generated warnings to any warnings already accumulated (e.g., from exit multiple averaging)
+	result.Warnings = append(result.Warnings, generateWarnings(inputs, result)...)
 
 	return result, nil
 }
