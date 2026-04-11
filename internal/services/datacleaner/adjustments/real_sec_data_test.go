@@ -300,22 +300,21 @@ func extractLatestAnnualData(t *testing.T, realAppleData *ports.SECCompanyFacts)
 	require.NoError(t, err, "Should parse real Apple data")
 	require.NotNil(t, historicalData)
 
-	// Find the most recent annual data
+	// Find the most recent annual data using proper sorted period selection
 	var latestAnnualData *entities.FinancialData
+	var latestFYPeriod string
 	for period, data := range historicalData.Data {
-		// Look for annual data (FY periods)
 		if strings.Contains(period, "FY") {
-			latestAnnualData = data
-			break // Use first FY data found
+			if period > latestFYPeriod { // string comparison works: "2024FY" > "2011FY"
+				latestFYPeriod = period
+				latestAnnualData = data
+			}
 		}
 	}
 
-	// Fallback: use any available data if no FY data found
-	if latestAnnualData == nil && len(historicalData.Data) > 0 {
-		for _, data := range historicalData.Data {
-			latestAnnualData = data
-			break // Use first available
-		}
+	// Fallback: use GetLatestPeriod if no FY data found
+	if latestAnnualData == nil {
+		latestAnnualData, _ = historicalData.GetLatestPeriod()
 	}
 
 	require.NotNil(t, latestAnnualData, "Should have latest annual data")

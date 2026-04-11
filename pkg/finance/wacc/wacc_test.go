@@ -442,6 +442,200 @@ func TestCalculate_WithCountryRiskPremium(t *testing.T) {
 	}
 }
 
+// TestCalculate_InvalidInputs_ExtendedEdgeCases tests additional validation paths
+// that are not covered by the main invalid inputs table.
+func TestCalculate_InvalidInputs_ExtendedEdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		inputs  Inputs
+		wantErr string
+	}{
+		{
+			name: "Negative debt is rejected",
+			inputs: Inputs{
+				MarketValueOfEquity: 1000,
+				MarketValueOfDebt:   -500,
+				Beta:                1.0,
+				RiskFreeRate:        0.03,
+				MarketRiskPremium:   0.05,
+				TaxRate:             0.21,
+			},
+			wantErr: "market value of debt cannot be negative",
+		},
+		{
+			name: "Negative interest expense with positive debt is rejected",
+			inputs: Inputs{
+				MarketValueOfEquity: 1000,
+				MarketValueOfDebt:   500,
+				Beta:                1.0,
+				RiskFreeRate:        0.03,
+				MarketRiskPremium:   0.05,
+				InterestExpense:     -100,
+				TaxRate:             0.21,
+			},
+			wantErr: "interest expense cannot be negative when debt is positive",
+		},
+		{
+			name: "Negative risk-free rate is rejected",
+			inputs: Inputs{
+				MarketValueOfEquity: 1000,
+				MarketValueOfDebt:   500,
+				Beta:                1.0,
+				RiskFreeRate:        -0.01,
+				MarketRiskPremium:   0.05,
+				TaxRate:             0.21,
+			},
+			wantErr: "risk-free rate must be between 0% and 20%",
+		},
+		{
+			name: "Market risk premium above 15% is rejected",
+			inputs: Inputs{
+				MarketValueOfEquity: 1000,
+				MarketValueOfDebt:   100,
+				Beta:                1.0,
+				RiskFreeRate:        0.03,
+				MarketRiskPremium:   0.16,
+				TaxRate:             0.21,
+			},
+			wantErr: "market risk premium must be between 0% and 15%",
+		},
+		{
+			name: "Negative tax rate is rejected",
+			inputs: Inputs{
+				MarketValueOfEquity: 1000,
+				MarketValueOfDebt:   100,
+				Beta:                1.0,
+				RiskFreeRate:        0.03,
+				MarketRiskPremium:   0.05,
+				TaxRate:             -0.1,
+			},
+			wantErr: "tax rate must be between 0% and 100%",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := Calculate(tt.inputs)
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+			assert.Nil(t, result)
+		})
+	}
+}
+
+// TestCalculateWithOverrides_TaxRateOverride verifies that the tax_rate override
+// is applied correctly through CalculateWithOverrides.
+func TestCalculateWithOverrides_TaxRateOverride(t *testing.T) {
+	baseInputs := Inputs{
+		MarketValueOfEquity: 1000000,
+		MarketValueOfDebt:   200000,
+		Beta:                1.0,
+		RiskFreeRate:        0.03,
+		MarketRiskPremium:   0.05,
+		InterestExpense:     10000,
+		TaxRate:             0.21,
+	}
+
+	// Override tax rate to 30%
+	overrides := map[string]float64{
+		"tax_rate": 0.30,
+	}
+
+	result, err := CalculateWithOverrides(baseInputs, overrides)
+	require.NoError(t, err)
+
+	// Higher tax rate means larger tax shield, so after-tax cost of debt is lower
+	// which should lower the WACC slightly compared to 21% tax
+	resultBase, err := Calculate(baseInputs)
+	require.NoError(t, err)
+
+	assert.Less(t, result.CostOfDebtAfterTax, resultBase.CostOfDebtAfterTax,
+		"Higher tax rate should reduce after-tax cost of debt")
+}
+
+// TestCalculateAfterTaxCostOfDebt_EdgeCases tests edge cases for the standalone function
+func TestCalculateAfterTaxCostOfDebt_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name            string
+		interestExpense float64
+		debt            float64
+		taxRate         float64
+		expected        float64
+	}{
+		{
+			name:            "Zero debt returns zero",
+			interestExpense: 5000,
+			debt:            0,
+			taxRate:         0.21,
+			expected:        0,
+		},
+		{
+			name:            "Negative debt returns zero",
+			interestExpense: 5000,
+			debt:            -100,
+			taxRate:         0.21,
+			expected:        0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := CalculateAfterTaxCostOfDebt(tt.interestExpense, tt.debt, tt.taxRate)
+			assert.InDelta(t, tt.expected, result, 0.0001)
+		})
+	}
+}
+
+// TestCalculateEquityWeight_EdgeCases tests edge cases for the standalone function
+func TestCalculateEquityWeight_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		equity   float64
+		debt     float64
+		expected float64
+	}{
+		{
+			name:     "Zero total value returns zero",
+			equity:   0,
+			debt:     0,
+			expected: 0,
+		},
+		{
+			name:     "Negative total value returns zero",
+			equity:   -100,
+			debt:     0,
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := CalculateEquityWeight(tt.equity, tt.debt)
+			assert.InDelta(t, tt.expected, result, 0.0001)
+		})
+	}
+}
+
+// TestSensitivityAnalysis_ErrorPropagation verifies that when a beta value in the range
+// causes a validation error, SensitivityAnalysis propagates the error correctly.
+func TestSensitivityAnalysis_ErrorPropagation(t *testing.T) {
+	baseInputs := Inputs{
+		MarketValueOfEquity: 1000000,
+		MarketValueOfDebt:   200000,
+		Beta:                1.0,
+		RiskFreeRate:        0.03,
+		MarketRiskPremium:   0.05,
+		InterestExpense:     10000,
+		TaxRate:             0.21,
+	}
+
+	// Include a negative beta which should fail validation
+	betaRange := []float64{0.5, 1.0, -0.5}
+	results, err := SensitivityAnalysis(baseInputs, betaRange)
+	assert.Error(t, err, "negative beta in range should cause error")
+	assert.Nil(t, results)
+}
+
 // Benchmark tests
 func BenchmarkCalculate(b *testing.B) {
 	inputs := Inputs{

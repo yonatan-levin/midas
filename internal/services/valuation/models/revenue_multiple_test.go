@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -220,4 +221,110 @@ func TestRevenueMultipleModel_SupportsIndustry(t *testing.T) {
 func TestRevenueMultipleModel_ModelType(t *testing.T) {
 	model := newTestRevenueMultipleModel()
 	assert.Equal(t, "revenue_multiple", model.ModelType())
+}
+
+// TestRevenueMultipleModel_GetMultiple_NoDefaultFallback tests getMultiple when no
+// default key exists in the multiples map, falling back to DefaultEVRevenueMultiple constant.
+func TestRevenueMultipleModel_GetMultiple_NoDefaultFallback(t *testing.T) {
+	// Create model without a "default" key in multiples
+	model := NewRevenueMultipleModelWithMultiples(map[string]float64{
+		"TECH": 5.0,
+	}, testLogger())
+
+	// Unknown industry with no default key should return DefaultEVRevenueMultiple
+	result := model.getMultiple("UNKNOWN")
+	assert.Equal(t, DefaultEVRevenueMultiple, result)
+}
+
+// TestRevenueMultipleModel_GetMultiple_PrefixMatch tests prefix matching (e.g., "TECH_SAAS" matches "TECH")
+func TestRevenueMultipleModel_GetMultiple_PrefixMatch(t *testing.T) {
+	model := NewRevenueMultipleModelWithMultiples(map[string]float64{
+		"TECH": 5.0,
+	}, testLogger())
+
+	result := model.getMultiple("TECH_SAAS")
+	assert.Equal(t, 5.0, result)
+}
+
+// TestRevenueMultipleModel_Calculate_NoFinancialData tests with empty historical data
+func TestRevenueMultipleModel_Calculate_NoFinancialData(t *testing.T) {
+	model := newTestRevenueMultipleModel()
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "EMPTY",
+			Data:   map[string]*entities.FinancialData{},
+		},
+		Industry:          "TECH",
+		SharesOutstanding: 100000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	assert.Error(t, err)
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "no financial data")
+}
+
+// TestRevenueMultipleModel_Calculate_PositiveOI tests that companies with positive OI
+// do not get the negative OI warning
+func TestRevenueMultipleModel_Calculate_PositiveOI(t *testing.T) {
+	model := newTestRevenueMultipleModel()
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "POSITIVE_OI",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					Revenue:                   1000000000,
+					OperatingIncome:           100000000, // positive OI
+					NormalizedOperatingIncome: 100000000,
+					FilingDate:                time.Now(),
+					FilingPeriod:              "2023FY",
+				},
+			},
+		},
+		Industry:          "TECH",
+		SharesOutstanding: 100000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should have exactly 2 warnings (base + multiple info), not 3 (no negative OI warning)
+	assert.Len(t, result.Warnings, 2)
+}
+
+// TestLoadEVRevenueMultiples_ValidFile tests loading EV/Revenue multiples from a temp file
+func TestLoadEVRevenueMultiples_ValidFile(t *testing.T) {
+	tmpFile := t.TempDir() + "/industry_multiples.json"
+	content := `{"ev_revenue_multiples": {"default": 2.5, "TECH": 6.0, "HEALTH": 3.5}}`
+	err := os.WriteFile(tmpFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	multiples, err := loadEVRevenueMultiples(tmpFile)
+	require.NoError(t, err)
+	assert.Equal(t, 2.5, multiples["default"])
+	assert.Equal(t, 6.0, multiples["TECH"])
+	assert.Equal(t, 3.5, multiples["HEALTH"])
+}
+
+// TestLoadEVRevenueMultiples_InvalidJSON tests loading from invalid JSON
+func TestLoadEVRevenueMultiples_InvalidJSON(t *testing.T) {
+	tmpFile := t.TempDir() + "/bad.json"
+	err := os.WriteFile(tmpFile, []byte("{invalid json}"), 0644)
+	require.NoError(t, err)
+
+	_, err = loadEVRevenueMultiples(tmpFile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse")
+}
+
+// TestLoadEVRevenueMultiples_MissingFile tests loading from non-existent file
+func TestLoadEVRevenueMultiples_MissingFile(t *testing.T) {
+	_, err := loadEVRevenueMultiples("/nonexistent/path/file.json")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read")
 }

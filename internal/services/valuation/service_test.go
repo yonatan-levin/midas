@@ -3,6 +3,7 @@ package valuation
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -14,8 +15,10 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/models"
 )
 
 // MockMetricsService for testing
@@ -2756,3 +2759,422 @@ func TestService_performValuation_FINNegativeOI_FallbackToRevMultiple(t *testing
 		assert.True(t, hasWarning, "Should warn about revenue_multiple fallback")
 	}
 }
+
+// TestService_SetYFinanceGateway verifies that the optional Yahoo Finance gateway
+// can be injected after service creation.
+func TestService_SetYFinanceGateway(t *testing.T) {
+	service, _, _, _, _, _ := createTestService()
+
+	// Initially nil
+	assert.Nil(t, service.yfinanceGateway)
+
+	// Inject mock gateway
+	mockGW := &MockYFinanceGateway{}
+	service.SetYFinanceGateway(mockGW)
+
+	assert.NotNil(t, service.yfinanceGateway, "gateway should be set after injection")
+}
+
+// MockYFinanceGateway is a mock for the YFinanceGateway port interface
+type MockYFinanceGateway struct {
+	mock.Mock
+}
+
+func (m *MockYFinanceGateway) GetQuote(ctx context.Context, ticker string) (*ports.YFinanceQuote, error) {
+	args := m.Called(ctx, ticker)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ports.YFinanceQuote), args.Error(1)
+}
+
+func (m *MockYFinanceGateway) GetBatchQuotes(ctx context.Context, tickers []string) (map[string]*ports.YFinanceQuote, error) {
+	args := m.Called(ctx, tickers)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(map[string]*ports.YFinanceQuote), args.Error(1)
+}
+
+func (m *MockYFinanceGateway) GetKeyStatistics(ctx context.Context, ticker string) (*ports.YFinanceKeyStats, error) {
+	args := m.Called(ctx, ticker)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ports.YFinanceKeyStats), args.Error(1)
+}
+
+func (m *MockYFinanceGateway) GetHistoricalPrices(ctx context.Context, ticker string, days int) ([]ports.YFinancePricePoint, error) {
+	args := m.Called(ctx, ticker, days)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]ports.YFinancePricePoint), args.Error(1)
+}
+
+func (m *MockYFinanceGateway) GetAnalystEstimates(ctx context.Context, ticker string) (*ports.YFinanceAnalystEstimates, error) {
+	args := m.Called(ctx, ticker)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*ports.YFinanceAnalystEstimates), args.Error(1)
+}
+
+// TestService_isFinancialDataIncomplete_NilLatest verifies that when GetLatestPeriod
+// returns nil (no data in any period), isFinancialDataIncomplete returns true.
+func TestService_isFinancialDataIncomplete_NilLatest(t *testing.T) {
+	service, _, _, _, _, _ := createTestService()
+
+	// Empty data map - GetLatestPeriod returns nil
+	emptyData := &entities.HistoricalFinancialData{
+		Ticker: "EMPTY",
+		Data:   map[string]*entities.FinancialData{},
+	}
+
+	assert.True(t, service.isFinancialDataIncomplete(emptyData),
+		"should be incomplete when no periods exist")
+}
+
+// TestService_isFinancialDataIncomplete_CompleteData verifies that data with
+// FCF fields populated is NOT flagged as incomplete.
+func TestService_isFinancialDataIncomplete_CompleteData(t *testing.T) {
+	service, _, _, _, _, _ := createTestService()
+
+	completeData := &entities.HistoricalFinancialData{
+		Ticker: "COMPLETE",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				DepreciationAndAmortization: 5000000000,
+				CapitalExpenditures:         3000000000,
+				CashAndCashEquivalents:      10000000000,
+				FilingDate:                  time.Now(),
+				FilingPeriod:                "2023FY",
+			},
+		},
+	}
+
+	assert.False(t, service.isFinancialDataIncomplete(completeData),
+		"should NOT be incomplete when FCF fields are populated")
+}
+
+// TestService_isFinancialDataIncomplete_AllZero verifies that when all FCF fields
+// are zero, the data is flagged as incomplete.
+func TestService_isFinancialDataIncomplete_AllZero(t *testing.T) {
+	service, _, _, _, _, _ := createTestService()
+
+	incompleteData := &entities.HistoricalFinancialData{
+		Ticker: "INCOMPLETE",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				DepreciationAndAmortization: 0,
+				CapitalExpenditures:         0,
+				CashAndCashEquivalents:      0,
+				FilingDate:                  time.Now(),
+				FilingPeriod:                "2023FY",
+			},
+		},
+	}
+
+	assert.True(t, service.isFinancialDataIncomplete(incompleteData),
+		"should be incomplete when all FCF fields are zero")
+}
+
+// TestService_averageCapExAndDA_NoPeriods verifies that when no periods have
+// CapEx or D&A data, the function returns (0, 0).
+func TestService_averageCapExAndDA_NoPeriods(t *testing.T) {
+	service, _, _, _, _, _ := createTestService()
+
+	// All periods have zero D&A and CapEx
+	data := &entities.HistoricalFinancialData{
+		Ticker: "NO_CAPEX",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				DepreciationAndAmortization: 0,
+				CapitalExpenditures:         0,
+				FilingDate:                  time.Now(),
+				FilingPeriod:                "2023FY",
+			},
+			"2022FY": {
+				DepreciationAndAmortization: 0,
+				CapitalExpenditures:         0,
+				FilingDate:                  time.Now().Add(-365 * 24 * time.Hour),
+				FilingPeriod:                "2022FY",
+			},
+		},
+	}
+
+	avgDA, avgCapEx := service.averageCapExAndDA(data)
+	assert.Equal(t, 0.0, avgDA, "should return 0 for D&A when no periods have data")
+	assert.Equal(t, 0.0, avgCapEx, "should return 0 for CapEx when no periods have data")
+}
+
+// TestLoadCountryRiskPremiums_ValidFile tests loading CRP from a valid JSON file
+func TestLoadCountryRiskPremiums_ValidFile(t *testing.T) {
+	tmpFile := t.TempDir() + "/country_risk.json"
+	content := `{"country_risk_premiums": {"US": 0.0, "CN": 0.025, "BR": 0.035, "default": 0.02}}`
+	err := os.WriteFile(tmpFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	premiums, err := LoadCountryRiskPremiums(tmpFile)
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, premiums["US"])
+	assert.Equal(t, 0.025, premiums["CN"])
+	assert.Equal(t, 0.035, premiums["BR"])
+	assert.Equal(t, 0.02, premiums["default"])
+}
+
+// TestLoadCountryRiskPremiums_InvalidJSON tests loading CRP from invalid JSON
+func TestLoadCountryRiskPremiums_InvalidJSON(t *testing.T) {
+	tmpFile := t.TempDir() + "/bad_country_risk.json"
+	err := os.WriteFile(tmpFile, []byte("{invalid json}"), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadCountryRiskPremiums(tmpFile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse")
+}
+
+// TestLoadCountryRiskPremiums_MissingFile tests loading CRP from non-existent file
+func TestLoadCountryRiskPremiums_MissingFile(t *testing.T) {
+	_, err := LoadCountryRiskPremiums("/nonexistent/path/country_risk.json")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read")
+}
+
+// TestLoadIndustryMultiples_ValidFile tests loading industry multiples from valid JSON
+func TestLoadIndustryMultiples_ValidFile(t *testing.T) {
+	tmpFile := t.TempDir() + "/industry_multiples.json"
+	content := `{
+		"ev_ebitda_multiples": {"TECH": 18.0, "FIN": 10.0, "default": 12.0},
+		"sector_median_pe": {"TECH": 25.0, "FIN": 12.0, "default": 16.0}
+	}`
+	err := os.WriteFile(tmpFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	cfg, err := LoadIndustryMultiples(tmpFile)
+	require.NoError(t, err)
+	assert.NotNil(t, cfg)
+	assert.Equal(t, 18.0, cfg.EVEBITDAMultiples["TECH"])
+	assert.Equal(t, 25.0, cfg.SectorMedianPE["TECH"])
+}
+
+// TestLoadIndustryMultiples_InvalidJSON tests loading industry multiples from invalid JSON
+func TestLoadIndustryMultiples_InvalidJSON(t *testing.T) {
+	tmpFile := t.TempDir() + "/bad_multiples.json"
+	err := os.WriteFile(tmpFile, []byte("not valid json"), 0644)
+	require.NoError(t, err)
+
+	_, err = LoadIndustryMultiples(tmpFile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse")
+}
+
+// TestLoadIndustryMultiples_MissingFile tests loading industry multiples from non-existent file
+func TestLoadIndustryMultiples_MissingFile(t *testing.T) {
+	_, err := LoadIndustryMultiples("/nonexistent/path/multiples.json")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read")
+}
+
+// TestLookupMultiple_NoDefaultAndNoMatch tests LookupMultiple when there is no default key
+// and the industry code doesn't match any entry (returns 0).
+func TestLookupMultiple_NoDefaultAndNoMatch(t *testing.T) {
+	multiples := map[string]float64{
+		"TECH": 18.0,
+		"FIN":  10.0,
+	}
+
+	result := LookupMultiple(multiples, "UNKNOWN")
+	assert.Equal(t, 0.0, result, "should return 0 when no match and no default")
+}
+
+// TestService_performValuation_NegativeOI_ErrModelNotApplicable verifies that
+// a company with negative OI and no alternative model routes to ErrModelNotApplicable.
+func TestService_performValuation_NegativeOI_ErrModelNotApplicable(t *testing.T) {
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+
+	// Create service with no models registered (empty router) — so no alternative
+	// model can handle the negative OI, and DCF requires positive OI
+	emptyRouter := models.NewModelRouter([]models.ValuationModel{
+		models.NewMultiStageDCFModel(zap.NewNop()),
+	}, zap.NewNop())
+
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+	service.modelRouter = emptyRouter
+
+	_, marketData, macroData := createTestData()
+
+	// Create data with negative operating income
+	negOIData := &entities.HistoricalFinancialData{
+		Ticker: "NEGOI",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:                    "NEGOI",
+				FilingPeriod:              "2023FY",
+				FilingDate:                time.Now(),
+				AsOf:                      time.Now(),
+				OperatingIncome:           -50000000,
+				NormalizedOperatingIncome: -40000000,
+				Revenue:                   200000000,
+				InterestExpense:           5000000,
+				TaxRate:                   0.21,
+				TotalAssets:               500000000,
+				TangibleAssets:            400000000,
+				InterestBearingDebt:       100000000,
+				SharesOutstanding:         10000000,
+				DilutedSharesOutstanding:  10000000,
+				HasNormalizedData:         true,
+			},
+		},
+	}
+
+	_, err := service.performValuation(context.Background(), negOIData, marketData, macroData, nil)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, ErrModelNotApplicable,
+		"negative OI with no revenue_multiple model should return ErrModelNotApplicable")
+}
+
+// TestService_performValuation_WithExitMultiple verifies that when industryMultiples
+// config is present, the exit multiple is wired into the DCF calculation.
+func TestService_performValuation_WithExitMultiple(t *testing.T) {
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+
+	// Inject industry multiples with EV/EBITDA and P/E data for sanity checks
+	service.industryMultiples = &industryMultiplesConfig{
+		EVEBITDAMultiples: map[string]float64{
+			"default": 12.0,
+			"TECH":    18.0,
+		},
+		SectorMedianPE: map[string]float64{
+			"default": 16.0,
+			"TECH":    25.0,
+		},
+	}
+
+	historicalData, marketData, macroData := createTestData()
+
+	result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Verify sanity check was attached (non-nil means cross-check ran)
+	assert.NotNil(t, result.SanityCheck, "sanity check should be populated when industry multiples are configured")
+}
+
+// TestService_performValuation_DDMFallbackToDCF verifies that when the DDM model
+// fails for a financial company with positive OI, the service falls back to DCF.
+func TestService_performValuation_DDMFallbackToDCF(t *testing.T) {
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+
+	_, marketData, macroData := createTestData()
+
+	// Financial company (FIN industry) with positive OI but zero DPS -> DDM will fail,
+	// and since OI is positive, it should fall back to DCF
+	finData := &entities.HistoricalFinancialData{
+		Ticker:      "BANK",
+		CompanyName: "Test Bank Corp",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:                    "BANK",
+				FilingPeriod:              "2023FY",
+				FilingDate:                time.Now(),
+				AsOf:                      time.Now(),
+				OperatingIncome:           5000000000,
+				NormalizedOperatingIncome: 5000000000,
+				Revenue:                   20000000000,
+				NetIncome:                 4000000000,
+				InterestExpense:           1000000000,
+				TaxRate:                   0.21,
+				TotalAssets:               100000000000,
+				TangibleAssets:            80000000000,
+				InterestBearingDebt:       30000000000,
+				SharesOutstanding:         1000000000,
+				DilutedSharesOutstanding:  1000000000,
+				DividendsPerShare:         0, // Zero DPS -> DDM will fail
+				IndustryCode:              "FIN",
+				HasNormalizedData:         true,
+			},
+			"2022FY": {
+				Ticker:                    "BANK",
+				FilingPeriod:              "2022FY",
+				FilingDate:                time.Now().Add(-365 * 24 * time.Hour),
+				AsOf:                      time.Now().Add(-365 * 24 * time.Hour),
+				OperatingIncome:           4500000000,
+				NormalizedOperatingIncome: 4500000000,
+				Revenue:                   18000000000,
+				NetIncome:                 3500000000,
+				InterestExpense:           900000000,
+				TaxRate:                   0.21,
+				TotalAssets:               95000000000,
+				TangibleAssets:            75000000000,
+				InterestBearingDebt:       28000000000,
+				SharesOutstanding:         1000000000,
+				DilutedSharesOutstanding:  1000000000,
+				DividendsPerShare:         0,
+				HasNormalizedData:         true,
+			},
+		},
+	}
+
+	result, err := service.performValuation(context.Background(), finData, marketData, macroData, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should have fallen back to DCF and produced a warning
+	assert.Equal(t, "multi_stage_dcf", result.CalculationMethod,
+		"should fall back to DCF when DDM fails for company with positive OI")
+
+	hasWarning := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "fell back to multi_stage_dcf") {
+			hasWarning = true
+		}
+	}
+	assert.True(t, hasWarning, "should have a DCF fallback warning")
+}
+
+// Note: TestService_CalculateValuation_WithDataFetcher removed — the DataFetcher
+// path is already covered by TestService_CalculateValuation_DataFetcherPath (line 2374)
+// which uses proper mock gateways. Testing with nil gateways panics in the
+// coordinator's concurrent goroutines (not a service-layer bug).

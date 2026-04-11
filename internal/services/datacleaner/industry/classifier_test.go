@@ -1,6 +1,7 @@
 package industry
 
 import (
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -266,4 +267,436 @@ func TestIndustryClassifier_ErrorHandling(t *testing.T) {
 	rules := []*entities.CleaningRule{{ID: "test", Enabled: true}}
 	adjustedRules := classifier.ApplyIndustrySpecificThresholds(rules, nil)
 	assert.Equal(t, rules, adjustedRules) // Should return original rules unchanged
+}
+
+// TestIndustryClassifier_Classify_ExactNameMatching tests exact company name matching
+// using a manually constructed config (distinct from the production config tests).
+func TestIndustryClassifier_Classify_ExactNameMatching(t *testing.T) {
+	classifier := &IndustryClassifier{
+		sectorConfigs: make(map[string]*SectorConfig),
+		codesConfig: &industryCodesConfig{
+			Version:     "test",
+			DefaultCode: "NA",
+			Mappings: []industryMapping{
+				{
+					Name:     "REIT",
+					Code:     "REIT",
+					Priority: 95,
+					Matchers: struct {
+						SICCodes   []string `json:"sic_codes"`
+						NAICSCodes []string `json:"naics_codes"`
+						Keywords   []string `json:"keywords"`
+						Patterns   []string `json:"patterns"`
+						ExactNames []string `json:"exact_names"`
+					}{
+						ExactNames: []string{"American Tower Corp", "Prologis Inc"},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := classifier.Classify("", "", "American Tower Corp")
+	require.NoError(t, err)
+	assert.Equal(t, "REIT", result)
+
+	// Case-insensitive match
+	result, err = classifier.Classify("", "", "american tower corp")
+	require.NoError(t, err)
+	assert.Equal(t, "REIT", result)
+
+	// No match
+	result, err = classifier.Classify("", "", "Random Company")
+	require.NoError(t, err)
+	assert.Equal(t, "NA", result)
+}
+
+// TestIndustryClassifier_Classify_ShortKeywordBoundary tests word-boundary handling
+// for short keywords (<=3 chars) to prevent false matches inside longer words.
+func TestIndustryClassifier_Classify_ShortKeywordBoundary(t *testing.T) {
+	classifier := &IndustryClassifier{
+		sectorConfigs: make(map[string]*SectorConfig),
+		codesConfig: &industryCodesConfig{
+			Version:     "test",
+			DefaultCode: "NA",
+			Mappings: []industryMapping{
+				{
+					Name:     "Technology",
+					Code:     "TECH",
+					Priority: 100,
+					Matchers: struct {
+						SICCodes   []string `json:"sic_codes"`
+						NAICSCodes []string `json:"naics_codes"`
+						Keywords   []string `json:"keywords"`
+						Patterns   []string `json:"patterns"`
+						ExactNames []string `json:"exact_names"`
+					}{
+						Keywords: []string{"software", "ai", "cloud"},
+					},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name        string
+		companyName string
+		expected    string
+	}{
+		{name: "Long keyword match", companyName: "Acme Software Corp", expected: "TECH"},
+		{name: "Short keyword with word boundary", companyName: "OpenAI Inc", expected: "NA"},
+		{name: "Short keyword standalone", companyName: "AI Corp", expected: "TECH"},
+		{name: "Short keyword inside word should not match", companyName: "Retail Chains Inc", expected: "NA"},
+		{name: "Cloud keyword match", companyName: "Big Cloud Solutions", expected: "TECH"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := classifier.Classify("", "", tt.companyName)
+			require.NoError(t, err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+// TestIndustryClassifier_Classify_PatternMatching tests regex pattern matching
+func TestIndustryClassifier_Classify_PatternMatching(t *testing.T) {
+	classifier := &IndustryClassifier{
+		sectorConfigs: make(map[string]*SectorConfig),
+		codesConfig: &industryCodesConfig{
+			Version:     "test",
+			DefaultCode: "NA",
+			Mappings: []industryMapping{
+				{
+					Name:     "Energy",
+					Code:     "ENERGY",
+					Priority: 85,
+					Matchers: struct {
+						SICCodes   []string `json:"sic_codes"`
+						NAICSCodes []string `json:"naics_codes"`
+						Keywords   []string `json:"keywords"`
+						Patterns   []string `json:"patterns"`
+						ExactNames []string `json:"exact_names"`
+					}{
+						Patterns: []string{`oil\s+and\s+gas`, `petroleum`},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := classifier.Classify("", "", "Big Oil and Gas Company")
+	require.NoError(t, err)
+	assert.Equal(t, "ENERGY", result)
+
+	result, err = classifier.Classify("", "", "National Petroleum Corp")
+	require.NoError(t, err)
+	assert.Equal(t, "ENERGY", result)
+}
+
+// TestIndustryClassifier_Classify_NilCodesConfigError tests that Classify returns an error
+// when the codes config is not loaded (direct construction without loading config file).
+func TestIndustryClassifier_Classify_NilCodesConfigError(t *testing.T) {
+	classifier := &IndustryClassifier{
+		sectorConfigs: make(map[string]*SectorConfig),
+		codesConfig:   nil, // not loaded
+	}
+
+	result, err := classifier.Classify("7372", "", "")
+	assert.Error(t, err)
+	assert.Equal(t, "NA", result)
+	assert.Contains(t, err.Error(), "config not loaded")
+}
+
+// TestIndustryClassifier_Classify_PriorityOrderingDualKeywords tests that higher-priority
+// mappings take precedence when both match the same keyword.
+func TestIndustryClassifier_Classify_PriorityOrderingDualKeywords(t *testing.T) {
+	classifier := &IndustryClassifier{
+		sectorConfigs: make(map[string]*SectorConfig),
+		codesConfig: &industryCodesConfig{
+			Version:     "test",
+			DefaultCode: "NA",
+			Mappings: []industryMapping{
+				{
+					Name:     "Generic Tech",
+					Code:     "TECH",
+					Priority: 50, // Lower priority
+					Matchers: struct {
+						SICCodes   []string `json:"sic_codes"`
+						NAICSCodes []string `json:"naics_codes"`
+						Keywords   []string `json:"keywords"`
+						Patterns   []string `json:"patterns"`
+						ExactNames []string `json:"exact_names"`
+					}{
+						Keywords: []string{"software"},
+					},
+				},
+				{
+					Name:     "SaaS Tech",
+					Code:     "TECH_SAAS",
+					Priority: 100, // Higher priority
+					Matchers: struct {
+						SICCodes   []string `json:"sic_codes"`
+						NAICSCodes []string `json:"naics_codes"`
+						Keywords   []string `json:"keywords"`
+						Patterns   []string `json:"patterns"`
+						ExactNames []string `json:"exact_names"`
+					}{
+						Keywords: []string{"software"},
+					},
+				},
+			},
+		},
+	}
+
+	result, err := classifier.Classify("", "", "Big Software Inc")
+	require.NoError(t, err)
+	assert.Equal(t, "TECH_SAAS", result, "higher priority mapping should win")
+}
+
+// TestIndustryClassifier_LoadIndustryCodesConfig_InvalidJSON tests loading invalid JSON
+func TestIndustryClassifier_LoadIndustryCodesConfig_InvalidJSON(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	tmpFile := t.TempDir() + "/bad_industry_codes.json"
+	err := os.WriteFile(tmpFile, []byte("not valid json"), 0644)
+	require.NoError(t, err)
+
+	err = classifier.LoadIndustryCodesConfig(tmpFile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse")
+}
+
+// TestIndustryClassifier_isUtilitiesCompany_Qualifying tests the utilities detection
+// heuristic directly (tangible > 80% AND inventory < 5%).
+// Note: In ClassifyIndustry, isManufacturingCompany is checked before isUtilitiesCompany.
+// Since tangible > 60% triggers manufacturing, utilities is currently unreachable
+// through ClassifyIndustry. This tests the function in isolation.
+func TestIndustryClassifier_isUtilitiesCompany_Qualifying(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	data := &entities.FinancialData{
+		TotalAssets:    10000000000,
+		TangibleAssets: 8500000000, // 85% tangible (> 80%)
+		Inventory:      100000000,  // 1% inventory (< 5%)
+		Revenue:        5000000000,
+	}
+
+	assert.True(t, classifier.isUtilitiesCompany(data),
+		"should detect utilities with high tangible assets and low inventory")
+}
+
+// TestIndustryClassifier_isUtilitiesCompany_ZeroInventory tests utilities detection
+// when inventory is exactly zero (common for pure utilities).
+func TestIndustryClassifier_isUtilitiesCompany_ZeroInventory(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	data := &entities.FinancialData{
+		TotalAssets:    10000000000,
+		TangibleAssets: 9000000000, // 90% tangible
+		Inventory:      0,          // no inventory at all
+		Revenue:        5000000000,
+	}
+
+	assert.True(t, classifier.isUtilitiesCompany(data),
+		"zero inventory is classic utilities profile")
+}
+
+// TestIndustryClassifier_isHealthcareCompany_Qualifying tests the healthcare detection
+// heuristic directly (R&D > 15% AND stock comp < 5%).
+// Note: In ClassifyIndustry, isTechnologyCompany is checked before isHealthcareCompany.
+// Since R&D > 10% triggers tech, healthcare is currently unreachable through
+// ClassifyIndustry for companies with R&D > 15%. This tests the function in isolation.
+func TestIndustryClassifier_isHealthcareCompany_Qualifying(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	data := &entities.FinancialData{
+		Revenue:                1000000000,
+		ResearchAndDevelopment: 200000000, // 20% R&D intensity (> 15%)
+		StockBasedCompensation: 30000000,  // 3% stock comp (< 5%)
+		TotalAssets:            2000000000,
+	}
+
+	assert.True(t, classifier.isHealthcareCompany(data),
+		"should detect healthcare with high R&D and low stock comp")
+}
+
+// TestIndustryClassifier_isHealthcareCompany_TooHighStockComp tests that companies
+// with high stock comp are NOT classified as healthcare (they look more like tech).
+func TestIndustryClassifier_isHealthcareCompany_TooHighStockComp(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	data := &entities.FinancialData{
+		Revenue:                1000000000,
+		ResearchAndDevelopment: 200000000, // 20% R&D intensity
+		StockBasedCompensation: 60000000,  // 6% stock comp (> 5%)
+		TotalAssets:            2000000000,
+	}
+
+	assert.False(t, classifier.isHealthcareCompany(data),
+		"high stock comp suggests tech, not healthcare")
+}
+
+// TestIndustryClassifier_isHealthcareCompany_LowRD tests that companies with low R&D
+// do not qualify as healthcare.
+func TestIndustryClassifier_isHealthcareCompany_LowRD(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	data := &entities.FinancialData{
+		Revenue:                1000000000,
+		ResearchAndDevelopment: 100000000, // 10% R&D intensity (< 15%)
+		StockBasedCompensation: 10000000,
+		TotalAssets:            2000000000,
+	}
+
+	assert.False(t, classifier.isHealthcareCompany(data),
+		"R&D below 15% should not qualify as healthcare")
+}
+
+// TestIndustryClassifier_isManufacturingCompany_HighInventory tests the high inventory path
+// for manufacturing. Uses inventory > 30% (outside retail 10-30% range) to avoid
+// triggering the retail classifier which is checked first.
+func TestIndustryClassifier_isManufacturingCompany_HighInventory(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	// Inventory > 30% of total assets falls outside retail range (10-30%), so retail
+	// check returns false. Then manufacturing detects inventory > 15%.
+	data := &entities.FinancialData{
+		TotalAssets:    2000000000,
+		TangibleAssets: 800000000, // 40% tangible (below 60% threshold)
+		Inventory:      700000000, // 35% inventory (above 15%, but outside retail 10-30%)
+		Revenue:        1500000000,
+	}
+
+	sectorConfig, err := classifier.ClassifyIndustry("MFG2", data)
+	require.NoError(t, err)
+	assert.Equal(t, "20", sectorConfig.SectorCode) // Industrials (manufacturing)
+}
+
+// TestIndustryClassifier_isTechnologyCompany_HighIntangibles tests the high intangible assets path
+func TestIndustryClassifier_isTechnologyCompany_HighIntangibles(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	data := &entities.FinancialData{
+		Revenue:                1000000000,
+		ResearchAndDevelopment: 50000000, // 5% R&D (below 10% threshold)
+		StockBasedCompensation: 30000000, // 3% stock comp (below 5% threshold)
+		TotalAssets:            2000000000,
+		IntangibleAssets:       400000000, // 20% intangibles (above 15% threshold)
+	}
+
+	sectorConfig, err := classifier.ClassifyIndustry("INTANGIBLE_CO", data)
+	require.NoError(t, err)
+	assert.Equal(t, "45", sectorConfig.SectorCode) // Technology (via intangible path)
+}
+
+// TestIndustryClassifier_isUtilitiesCompany_NotQualifying tests that high tangible with
+// high inventory does NOT classify as utilities
+func TestIndustryClassifier_isUtilitiesCompany_NotQualifying(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	data := &entities.FinancialData{
+		TotalAssets:    10000000000,
+		TangibleAssets: 8500000000, // 85% tangible (high)
+		Inventory:      600000000,  // 6% inventory (above 5% threshold - not utility-like)
+		Revenue:        5000000000,
+	}
+
+	// High tangible but too much inventory -> not utilities, falls to manufacturing
+	sectorConfig, err := classifier.ClassifyIndustry("NOT_UTIL", data)
+	require.NoError(t, err)
+	// Should be manufacturing (high tangible ratio > 60%)
+	assert.Equal(t, "20", sectorConfig.SectorCode)
+}
+
+// TestIndustryClassifier_isFinancialCompany_NotQualifying tests that a company with
+// high tangible assets is NOT classified as financial
+func TestIndustryClassifier_isFinancialCompany_NotQualifying(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	data := &entities.FinancialData{
+		TotalAssets:    10000000000,
+		TangibleAssets: 5000000000, // 50% tangible (above 30% threshold)
+		Inventory:      0,
+		TotalDebt:      3000000000,
+		Revenue:        1000000000,
+	}
+
+	// High tangible ratio -> not financial, falls to default
+	sectorConfig, err := classifier.ClassifyIndustry("NOT_FIN", data)
+	require.NoError(t, err)
+	// With 50% tangible and no other triggers, defaults to industrials
+	assert.Equal(t, "20", sectorConfig.SectorCode)
+}
+
+// TestIndustryClassifier_ApplyIndustrySpecificThresholds_AllRuleTypes tests applying
+// thresholds for all supported rule types
+func TestIndustryClassifier_ApplyIndustrySpecificThresholds_AllRuleTypes(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	// Get technology sector config for its thresholds
+	techConfig, exists := classifier.GetSectorConfig("45")
+	require.True(t, exists)
+
+	// Create rules for all supported types
+	rules := []*entities.CleaningRule{
+		{ID: "goodwill_exclusion", Category: entities.AssetQuality, Enabled: true},
+		{ID: "intangible_writedown", Category: entities.AssetQuality, Enabled: true},
+		{ID: "inventory_obsolescence", Category: entities.AssetQuality, Enabled: true},
+		{ID: "deferred_tax_adjustment", Category: entities.AssetQuality, Enabled: true},
+		{ID: "restructuring_charges", Category: entities.EarningsNormalization, Enabled: true},
+		{ID: "stock_compensation", Category: entities.EarningsNormalization, Enabled: true},
+		{ID: "litigation_settlements", Category: entities.EarningsNormalization, Enabled: true},
+	}
+
+	adjustedRules := classifier.ApplyIndustrySpecificThresholds(rules, techConfig)
+
+	// Verify each rule type got its threshold applied
+	for _, rule := range adjustedRules {
+		assert.NotNil(t, rule.Threshold, "rule %s should have threshold", rule.ID)
+
+		switch rule.ID {
+		case "goodwill_exclusion":
+			assert.NotNil(t, rule.Threshold.PercentageOfAssets)
+			assert.Equal(t, techConfig.Thresholds.GoodwillThreshold, *rule.Threshold.PercentageOfAssets)
+		case "intangible_writedown":
+			assert.NotNil(t, rule.Threshold.PercentageOfAssets)
+			assert.Equal(t, techConfig.Thresholds.IntangibleThreshold, *rule.Threshold.PercentageOfAssets)
+		case "inventory_obsolescence":
+			assert.NotNil(t, rule.Threshold.WritedownRate)
+			assert.Equal(t, techConfig.Thresholds.InventoryObsolescenceRate, *rule.Threshold.WritedownRate)
+		case "deferred_tax_adjustment":
+			assert.NotNil(t, rule.Threshold.PercentageOfAssets)
+			assert.Equal(t, techConfig.Thresholds.DeferredTaxThreshold, *rule.Threshold.PercentageOfAssets)
+		case "restructuring_charges":
+			assert.NotNil(t, rule.Threshold.PercentageOfRevenue)
+			assert.Equal(t, techConfig.Thresholds.RestructuringThreshold, *rule.Threshold.PercentageOfRevenue)
+		case "stock_compensation":
+			assert.NotNil(t, rule.Threshold.PercentageOfRevenue)
+			assert.Equal(t, techConfig.Thresholds.StockCompThreshold, *rule.Threshold.PercentageOfRevenue)
+		case "litigation_settlements":
+			assert.NotNil(t, rule.Threshold.PercentageOfRevenue)
+			assert.Equal(t, techConfig.Thresholds.LitigationThreshold, *rule.Threshold.PercentageOfRevenue)
+		}
+	}
+}
+
+// TestIndustryClassifier_ApplyIndustrySpecificThresholds_NilThreshold tests that the function
+// initializes a nil Threshold field on rules before applying sector-specific values.
+func TestIndustryClassifier_ApplyIndustrySpecificThresholds_NilThreshold(t *testing.T) {
+	classifier := NewIndustryClassifier()
+
+	techConfig, exists := classifier.GetSectorConfig("45")
+	require.True(t, exists)
+
+	// Rule with nil Threshold — the function should initialize it
+	rules := []*entities.CleaningRule{
+		{ID: "goodwill_exclusion", Category: entities.AssetQuality, Enabled: true, Threshold: nil},
+	}
+
+	adjustedRules := classifier.ApplyIndustrySpecificThresholds(rules, techConfig)
+
+	require.Len(t, adjustedRules, 1)
+	assert.NotNil(t, adjustedRules[0].Threshold)
+	assert.NotNil(t, adjustedRules[0].Threshold.PercentageOfAssets)
 }

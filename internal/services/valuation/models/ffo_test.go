@@ -2,6 +2,8 @@ package models
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,4 +236,122 @@ func TestFFOModel_CustomMultiple(t *testing.T) {
 
 	// FFO = 100M + 50M = 150M, FFO/share = 15.0, Value = 15 * 20 = 300
 	assert.InDelta(t, 300.0, result.IntrinsicValuePerShare, 0.01)
+}
+
+// TestFFOModel_Calculate_NegativeFFOWithDA tests FFO with negative net income but positive D&A
+// producing a negative FFO (net income + D&A < gains). Verifies value is capped at zero.
+func TestFFOModel_Calculate_NegativeFFOWithDA(t *testing.T) {
+	model := NewFFOModelWithMultiple(15.0, testLogger())
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "NEG_FFO_DA",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   -200000000,
+					DepreciationAndAmortization: 50000000,
+					GainOnPropertySales:         0,
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      100000000,
+		InterestBearingDebt:    5000000000,
+		CashAndCashEquivalents: 200000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// FFO = -200M + 50M - 0 = -150M -> value should be 0
+	assert.Equal(t, 0.0, result.IntrinsicValuePerShare, "negative FFO should result in zero value")
+	assert.Equal(t, "low", result.Confidence)
+	// Should have warnings about negative FFO and zero value
+	assert.GreaterOrEqual(t, len(result.Warnings), 2)
+}
+
+// TestFFOModel_Calculate_MissingDAWarning tests that missing D&A generates a data quality warning
+func TestFFOModel_Calculate_MissingDAWarning(t *testing.T) {
+	model := NewFFOModelWithMultiple(15.0, testLogger())
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "NO_DA",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   500000000,
+					DepreciationAndAmortization: 0, // missing D&A
+					GainOnPropertySales:         0,
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      100000000,
+		InterestBearingDebt:    1000000000,
+		CashAndCashEquivalents: 200000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should have warning about missing D&A
+	hasDAWarning := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "D&A not available") {
+			hasDAWarning = true
+			break
+		}
+	}
+	assert.True(t, hasDAWarning, "should warn about missing D&A")
+	// Confidence should not be "high" since D&A is missing
+	assert.NotEqual(t, "high", result.Confidence)
+}
+
+// TestLoadPFFOMultiple_ValidFile tests loading P/FFO multiple from a valid temp config file
+func TestLoadPFFOMultiple_ValidFile(t *testing.T) {
+	// Create a temporary config file with valid JSON
+	tmpFile := t.TempDir() + "/industry_multiples.json"
+	content := `{"reit_pffo_multiples": {"default": 18.5, "residential": 20.0}}`
+	err := os.WriteFile(tmpFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	multiple, err := loadPFFOMultiple(tmpFile)
+	require.NoError(t, err)
+	assert.InDelta(t, 18.5, multiple, 0.001)
+}
+
+// TestLoadPFFOMultiple_InvalidJSON tests loading P/FFO multiple from invalid JSON
+func TestLoadPFFOMultiple_InvalidJSON(t *testing.T) {
+	tmpFile := t.TempDir() + "/bad.json"
+	err := os.WriteFile(tmpFile, []byte("not valid json"), 0644)
+	require.NoError(t, err)
+
+	_, err = loadPFFOMultiple(tmpFile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse")
+}
+
+// TestLoadPFFOMultiple_MissingFile tests loading P/FFO multiple from non-existent file
+func TestLoadPFFOMultiple_MissingFile(t *testing.T) {
+	_, err := loadPFFOMultiple("/nonexistent/path/file.json")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read")
+}
+
+// TestLoadPFFOMultiple_NoDefaultKey tests loading when the config has no "default" key
+func TestLoadPFFOMultiple_NoDefaultKey(t *testing.T) {
+	tmpFile := t.TempDir() + "/no_default.json"
+	content := `{"reit_pffo_multiples": {"residential": 20.0}}`
+	err := os.WriteFile(tmpFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	_, err = loadPFFOMultiple(tmpFile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no default P/FFO multiple")
 }

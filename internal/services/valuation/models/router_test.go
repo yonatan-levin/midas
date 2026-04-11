@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -199,4 +200,33 @@ func TestModelRouter_FindModel(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMultiStageDCFModel_SupportsIndustry verifies the DCF model marker supports all industries
+func TestMultiStageDCFModel_SupportsIndustry(t *testing.T) {
+	model := NewMultiStageDCFModel(testLogger())
+
+	// DCF is the universal default — supports every industry
+	assert.True(t, model.SupportsIndustry("TECH"))
+	assert.True(t, model.SupportsIndustry("FIN"))
+	assert.True(t, model.SupportsIndustry("REIT"))
+	assert.True(t, model.SupportsIndustry(""))
+	assert.True(t, model.SupportsIndustry("UNKNOWN"))
+}
+
+// TestMultiStageDCFModel_Calculate_ReturnsError verifies that calling Calculate on the
+// DCF model marker returns an error, since the real DCF logic lives in the service layer.
+func TestMultiStageDCFModel_Calculate_ReturnsError(t *testing.T) {
+	model := NewMultiStageDCFModel(testLogger())
+
+	result, err := model.Calculate(context.Background(), &ModelInput{})
+	assert.Error(t, err, "DCF model Calculate should return error")
+	assert.Nil(t, result)
+	assert.Contains(t, err.Error(), "should not be called directly")
+}
+
+// TestMultiStageDCFModel_ModelType verifies the model type identifier
+func TestMultiStageDCFModel_ModelType(t *testing.T) {
+	model := NewMultiStageDCFModel(testLogger())
+	assert.Equal(t, "multi_stage_dcf", model.ModelType())
 }
