@@ -493,11 +493,12 @@ func NewValuationService(
 	cache ports.CacheRepository,
 	dataCleaner datacleaner.DataCleanerService,
 	dataFetcher *datafetcher.DataFetcher,
+	marketGateway ports.MarketDataGateway,
 	metricsService *metrics.Service,
 	cfg *config.Config,
 	logger *zap.Logger,
 ) *valuation.Service {
-	return valuation.NewService(
+	svc := valuation.NewService(
 		financialRepo,
 		marketRepo,
 		macroRepo,
@@ -508,6 +509,15 @@ func NewValuationService(
 		cfg,
 		logger,
 	)
+
+	// Wire YFinanceGateway for analyst consensus estimates.
+	// The market gateway wraps a YFinanceClient that implements YFinanceGateway.
+	if gw, ok := marketGateway.(*market.Gateway); ok && gw.YFinanceClient() != nil {
+		svc.SetYFinanceGateway(gw.YFinanceClient())
+		logger.Info("YFinanceGateway wired for analyst consensus estimates")
+	}
+
+	return svc
 }
 
 // NewAIService creates the AI service based on configuration with logger injection.

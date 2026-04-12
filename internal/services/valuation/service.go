@@ -125,7 +125,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	// Skip cache for requests with overrides — they represent ad-hoc user queries
 	// that should not pollute (or be served from) the default-parameter cache.
 	hasOverrides := opts != nil && (opts.OverrideBeta != nil || opts.OverrideRiskFree != nil)
-	cacheKey := fmt.Sprintf("valuation:%s", ticker)
+	cacheKey := fmt.Sprintf("valuation:v4:%s", ticker)
 
 	if !hasOverrides {
 		var cachedResult entities.ValuationResult
@@ -362,11 +362,21 @@ func (s *Service) performValuation(
 		}
 	}
 
-	// Phase 4: Apply Blume mean-reversion adjustment to raw beta.
-	// This reduces estimation error for extreme beta values by pulling toward 1.0.
+	// Phase 4: Beta improvements — Blume adjustment + unlever/relever.
 	rawBeta := beta
 	beta = wacc.BlumeAdjustedBeta(beta)
-	s.logger.Debug("Blume beta adjustment applied",
+
+	// Unlever beta to remove capital structure effect, then relever at current D/E.
+	// For a single company this is near-identity, but it normalizes extreme D/E betas
+	// and prepares the pipeline for industry-average beta comparison.
+	marketEquity := marketData.CalculateMarketValue()
+	if marketEquity > 0 && latestFinancialData.InterestBearingDebt > 0 {
+		debtEquityRatio := latestFinancialData.InterestBearingDebt / marketEquity
+		unlevered := wacc.UnleveredBeta(beta, latestFinancialData.TaxRate, debtEquityRatio)
+		beta = wacc.RelleveredBeta(unlevered, latestFinancialData.TaxRate, debtEquityRatio)
+	}
+
+	s.logger.Debug("Beta adjustments applied",
 		zap.String("ticker", historicalData.Ticker),
 		zap.Float64("raw_beta", rawBeta),
 		zap.Float64("adjusted_beta", beta))

@@ -444,7 +444,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		service := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, mockMetrics, cfg, logger)
 
 		// Setup expectations - cache miss first
-		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+		cache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 
 		// Then data retrieval
 		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
@@ -452,7 +452,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		macroRepo.On("GetLatest", ctx).Return(macroData, nil)
 
 		// Cache storage
-		cache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
+		cache.On("Set", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
 
 		// Setup metrics service expectations
 		mockMetrics.On("RecordValuationRequest", "AAPL", "single", "success", mock.AnythingOfType("time.Duration")).Return()
@@ -511,7 +511,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		}
 
 		// Setup cache hit expectation
-		freshCache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Run(func(args mock.Arguments) {
+		freshCache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Run(func(args mock.Arguments) {
 			dest := args.Get(2).(*entities.ValuationResult)
 			*dest = *cachedResult
 		}).Return(nil)
@@ -553,7 +553,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		freshService := NewService(freshFinancialRepo, marketRepo, macroRepo, freshCache, freshDataCleaner, nil, mockMetrics, cfg, logger)
 
 		// Setup expectations - cache miss, no data in repo
-		freshCache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+		freshCache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 		freshFinancialRepo.On("GetHistorical", ctx, "AAPL", 10).Return((*entities.HistoricalFinancialData)(nil), errors.New("no data found"))
 
 		result, err := freshService.CalculateValuation(ctx, "AAPL", nil)
@@ -575,7 +575,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		macroRepo.ExpectedCalls = nil
 		cache.ExpectedCalls = nil
 
-		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+		cache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
 		marketRepo.On("GetLatest", ctx, "AAPL").Return((*entities.MarketData)(nil), errors.New("no market data"))
 
@@ -597,7 +597,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		macroRepo.ExpectedCalls = nil
 		cache.ExpectedCalls = nil
 
-		cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+		cache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 		financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
 		marketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
 		macroRepo.On("GetLatest", ctx).Return((*entities.MacroData)(nil), errors.New("no macro data"))
@@ -641,11 +641,11 @@ func TestService_CalculateValuation_NilDataCleaner(t *testing.T) {
 	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, nil, nil, freshMetrics, cfg, logger)
 
 	// Setup expectations: cache miss, then successful data retrieval
-	freshCache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	freshCache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 	freshFinancialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
 	freshMarketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
 	freshMacroRepo.On("GetLatest", ctx).Return(macroData, nil)
-	freshCache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
+	freshCache.On("Set", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
 
 	// Setup metrics expectations
 	freshMetrics.On("RecordValuationRequest", "AAPL", "single", "success", mock.AnythingOfType("time.Duration")).Return()
@@ -699,11 +699,11 @@ func TestService_CalculateValuation_DataCleanerError(t *testing.T) {
 		Return((*entities.CleaningResult)(nil), errors.New("cleaning service unavailable"))
 
 	// Setup expectations: cache miss, then successful data retrieval
-	freshCache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	freshCache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 	freshFinancialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
 	freshMarketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
 	freshMacroRepo.On("GetLatest", ctx).Return(macroData, nil)
-	freshCache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
+	freshCache.On("Set", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
 
 	// Metrics expectations for a successful valuation
 	freshMetrics.On("RecordValuationRequest", "AAPL", "single", "success", mock.AnythingOfType("time.Duration")).Return()
@@ -761,11 +761,11 @@ func TestService_CalculateValuation_CacheSetFailure(t *testing.T) {
 	freshDataCleaner.On("CleanFinancialData", ctx, mock.AnythingOfType("*entities.FinancialData")).Return(cleaningResult, nil)
 
 	// Cache miss on read, then cache Set returns an error (e.g., Redis unavailable)
-	freshCache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	freshCache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 	freshFinancialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
 	freshMarketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
 	freshMacroRepo.On("GetLatest", ctx).Return(macroData, nil)
-	freshCache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).
+	freshCache.On("Set", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).
 		Return(errors.New("redis connection refused"))
 
 	// Metrics expectations: valuation still succeeds despite cache failure
@@ -1609,7 +1609,7 @@ func TestService_CalculateValuation_TickerNotFoundSentinel(t *testing.T) {
 	service := NewService(freshFinancialRepo, nil, nil, freshCache, nil, nil, freshMetrics, cfg, zap.NewNop())
 
 	// Cache miss, then repo returns no data
-	freshCache.On("Get", ctx, "valuation:XYZA1", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	freshCache.On("Get", ctx, "valuation:v4:XYZA1", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 	freshFinancialRepo.On("GetHistorical", ctx, "XYZA1", 10).Return((*entities.HistoricalFinancialData)(nil), errors.New("no data"))
 
 	result, err := service.CalculateValuation(ctx, "XYZA1", nil)
@@ -1794,7 +1794,7 @@ func TestService_CalculateValuation_PerformValuationError(t *testing.T) {
 	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger)
 
 	// Cache miss
-	freshCache.On("Get", ctx, "valuation:BAD", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	freshCache.On("Get", ctx, "valuation:v4:BAD", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 
 	// Repo returns bad data
 	freshFinancialRepo.On("GetHistorical", ctx, "BAD", 10).Return(badHistorical, nil)
@@ -2468,7 +2468,7 @@ func TestService_CalculateValuation_DataFetcherPath(t *testing.T) {
 	// --- Setup expectations ---
 
 	// Service cache miss
-	serviceCache.On("Get", ctx, "valuation:MSFT", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	serviceCache.On("Get", ctx, "valuation:v4:MSFT", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 
 	// Repository returns no data, triggering DataFetcher path
 	freshFinancialRepo.On("GetHistorical", ctx, "MSFT", 10).Return(
@@ -2497,7 +2497,7 @@ func TestService_CalculateValuation_DataFetcherPath(t *testing.T) {
 	fetcherCache.On("Set", mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	// Service cache set after successful valuation
-	serviceCache.On("Set", ctx, "valuation:MSFT", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
+	serviceCache.On("Set", ctx, "valuation:v4:MSFT", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
 
 	// Metrics
 	freshMetrics.On("RecordValuationRequest", "MSFT", "single", "success", mock.AnythingOfType("time.Duration")).Return()
@@ -2552,7 +2552,7 @@ func TestService_CalculateValuation_DataFetcherFetchFails(t *testing.T) {
 	service := NewService(freshFinancialRepo, nil, nil, serviceCache, nil, dataFetcher, freshMetrics, cfg, logger)
 
 	// Cache miss
-	serviceCache.On("Get", ctx, "valuation:UNKNOWN", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
+	serviceCache.On("Get", ctx, "valuation:v4:UNKNOWN", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
 
 	// Repo returns no data
 	freshFinancialRepo.On("GetHistorical", ctx, "UNKNOWN", 10).Return(

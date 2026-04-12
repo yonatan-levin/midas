@@ -119,7 +119,7 @@ func TestService_ConcurrentDataFetch(t *testing.T) {
 	}
 
 	// Mock cache miss - using errors.New instead of entities.ErrCacheNotFound
-	cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(assert.AnError)
+	cache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(assert.AnError)
 
 	// Setup DataCleaner mock - using correct field names
 	cleaningResult := &entities.CleaningResult{
@@ -137,7 +137,7 @@ func TestService_ConcurrentDataFetch(t *testing.T) {
 	macroRepo.On("GetLatest", ctx).Return(macroData, nil)
 
 	// Cache storage
-	cache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
+	cache.On("Set", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
 
 	// Setup metrics service expectations - only success case for this test
 	mockMetrics.On("RecordValuationRequest", "AAPL", "single", "success", mock.AnythingOfType("time.Duration")).Return()
@@ -290,11 +290,11 @@ func benchmarkServiceWithConfig(b *testing.B, enableConcurrent bool) {
 	}
 
 	// Setup mocks for each iteration
-	cache.On("Get", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(assert.AnError)
+	cache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(assert.AnError)
 	financialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
 	marketRepo.On("GetLatest", ctx, "AAPL").Return(marketData, nil)
 	macroRepo.On("GetLatest", ctx).Return(macroData, nil)
-	cache.On("Set", ctx, "valuation:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
+	cache.On("Set", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult"), 1*time.Hour).Return(nil)
 
 	cleaningResult := &entities.CleaningResult{
 		Success:      true,

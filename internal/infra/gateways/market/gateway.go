@@ -42,6 +42,12 @@ func NewGateway(cfg *config.MarketConfig, logger *zap.Logger) *Gateway {
 	}
 }
 
+// YFinanceClient returns the underlying YFinanceClient for direct access
+// (e.g., analyst estimates). Returns nil if Yahoo Finance is disabled.
+func (g *Gateway) YFinanceClient() *YFinanceClient {
+	return g.yfinance
+}
+
 // GetMarketData retrieves current market data for a ticker with fallback
 func (g *Gateway) GetMarketData(ctx context.Context, ticker string) (*entities.MarketData, error) {
 	g.logger.Debug("Fetching market data", zap.String("ticker", ticker))

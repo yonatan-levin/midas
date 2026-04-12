@@ -90,16 +90,16 @@ pkg/
 
 | Module | Target | Current |
 |--------|--------|---------|
-| `pkg/finance/dcf` | >= 90% | ~95.9% |
-| `pkg/finance/growth` | >= 90% | ~90.4% |
-| `pkg/finance/wacc` | >= 85% | ~87.5% |
-| `internal/services/valuation` | >= 90% | ~87.9% |
-| `internal/services/valuation/models` | >= 80% | ~79.9% |
-| `internal/services/growth` | >= 90% | ~98.5% |
+| `pkg/finance/dcf` | >= 90% | ~96.5% |
+| `pkg/finance/growth` | >= 90% | ~91.6% |
+| `pkg/finance/wacc` | >= 85% | ~98.4% |
+| `internal/services/valuation` | >= 90% | ~90.9% |
+| `internal/services/valuation/models` | >= 90% | ~96.7% |
+| `internal/services/growth` | >= 90% | ~97.1% |
 | `internal/services/datafetcher` | >= 80% | ~93.9% |
 | `internal/services/metrics` | >= 85% | ~96.8% |
-| `internal/services/datacleaner/industry` | >= 80% | ~80.3% |
-| `internal/infra/gateways/sec` | >= 90% | ~94.2% |
+| `internal/services/datacleaner/industry` | >= 80% | ~97.2% |
+| `internal/infra/gateways/sec` | >= 90% | ~93.3% |
 | `internal/infra/gateways/market` | >= 80% | ~91.2% |
 | `internal/api/v1/handlers` | >= 90% | ~94.1% |
 | `internal/services/datacleaner` | >= 80% | ~38.9% |
