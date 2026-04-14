@@ -424,7 +424,7 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 // findValue finds a value by trying multiple possible field names
 func (p *Parser) findValue(data map[string]float64, fieldNames []string) (float64, bool) {
 	for _, fieldName := range fieldNames {
-		if val, exists := data[fieldName]; exists && val != 0 {
+		if val, exists := data[fieldName]; exists {
 			return val, true
 		}
 	}

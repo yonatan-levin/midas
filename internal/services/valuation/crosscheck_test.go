@@ -120,10 +120,11 @@ func TestCalculateSanityCheck(t *testing.T) {
 
 func TestLookupMultiple(t *testing.T) {
 	multiples := map[string]float64{
-		"TECH":    18.0,
-		"FIN":     10.0,
-		"ENERGY":  6.0,
-		"default": 12.0,
+		"TECH":      18.0,
+		"TECH_SAAS": 22.0,
+		"FIN":       10.0,
+		"ENERGY":    6.0,
+		"default":   12.0,
 	}
 
 	tests := []struct {
@@ -133,7 +134,9 @@ func TestLookupMultiple(t *testing.T) {
 	}{
 		{name: "Exact match TECH", industry: "TECH", expected: 18.0},
 		{name: "Exact match FIN", industry: "FIN", expected: 10.0},
-		{name: "Prefix match TECH_SAAS", industry: "TECH_SAAS", expected: 18.0},
+		{name: "Exact match TECH_SAAS", industry: "TECH_SAAS", expected: 22.0},
+		{name: "Prefix match TECH_HARDWARE", industry: "TECH_HARDWARE", expected: 18.0},
+		{name: "Longest prefix match TECH_SAAS_CLOUD prefers TECH_SAAS over TECH", industry: "TECH_SAAS_CLOUD", expected: 22.0},
 		{name: "Unknown falls back to default", industry: "UNKNOWN", expected: 12.0},
 		{name: "Case insensitive", industry: "tech", expected: 18.0},
 	}

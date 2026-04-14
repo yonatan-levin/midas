@@ -30,14 +30,17 @@ type RevenueMultipleModel struct {
 }
 
 // NewRevenueMultipleModel creates a new Revenue Multiple model.
-// Loads sector multiples from the industry_multiples.json config file.
-func NewRevenueMultipleModel(logger *zap.Logger) *RevenueMultipleModel {
+// Loads sector multiples from the given config path. If configPath is empty, uses DefaultIndustryMultiplesPath.
+func NewRevenueMultipleModel(configPath string, logger *zap.Logger) *RevenueMultipleModel {
+	if configPath == "" {
+		configPath = DefaultIndustryMultiplesPath
+	}
 	multiples := map[string]float64{
 		"default": DefaultEVRevenueMultiple,
 	}
 
 	// Attempt to load multiples from config
-	configMultiples, err := loadEVRevenueMultiples(DefaultIndustryMultiplesPath)
+	configMultiples, err := loadEVRevenueMultiples(configPath)
 	if err == nil && len(configMultiples) > 0 {
 		multiples = configMultiples
 	}
@@ -140,6 +143,7 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 
 // getMultiple returns the EV/Revenue multiple for the given industry code.
 // Falls back to the default multiple if no industry-specific multiple is configured.
+// Uses longest-prefix-match to avoid nondeterminism from Go's random map iteration.
 func (m *RevenueMultipleModel) getMultiple(industry string) float64 {
 	upper := strings.ToUpper(industry)
 
@@ -148,11 +152,17 @@ func (m *RevenueMultipleModel) getMultiple(industry string) float64 {
 		return multiple
 	}
 
-	// Try prefix match (e.g., "TECH_SAAS" -> "TECH")
+	// Longest prefix match (e.g., "TECH_SAAS_CLOUD" matches "TECH_SAAS" over "TECH")
+	bestKey := ""
+	bestVal := 0.0
 	for code, multiple := range m.multiples {
-		if strings.HasPrefix(upper, code) {
-			return multiple
+		if code != "default" && strings.HasPrefix(upper, code) && len(code) > len(bestKey) {
+			bestKey = code
+			bestVal = multiple
 		}
+	}
+	if bestKey != "" {
+		return bestVal
 	}
 
 	// Default fallback

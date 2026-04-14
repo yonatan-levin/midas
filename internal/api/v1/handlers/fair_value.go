@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -89,12 +90,15 @@ type BulkSummary struct {
 // ErrorResponse represents an error response structure
 // @Description Standard error response following RFC 7807 Problem Details
 type ErrorResponse struct {
-	Type     string                 `json:"type" example:"https://problems.midas.dev/INVALID_TICKER"` // Problem type URI
-	Title    string                 `json:"title" example:"Bad Request"`                              // Human-readable title
-	Status   int                    `json:"status" example:"400"`                                     // HTTP status code
-	Detail   string                 `json:"detail" example:"Invalid ticker format"`                   // Human-readable explanation
-	Instance string                 `json:"instance" example:"/api/v1/fair-value/INVALID"`            // URI reference to specific occurrence
-	Context  map[string]interface{} `json:"context,omitempty"`                                        // Additional context information
+	Type      string                 `json:"type" example:"https://problems.midas.dev/INVALID_TICKER"` // Problem type URI
+	Title     string                 `json:"title" example:"Bad Request"`                              // Human-readable title
+	Status    int                    `json:"status" example:"400"`                                     // HTTP status code
+	Detail    string                 `json:"detail" example:"Invalid ticker format"`                   // Human-readable explanation
+	Instance  string                 `json:"instance" example:"/api/v1/fair-value/INVALID"`            // URI reference to specific occurrence
+	Context   map[string]interface{} `json:"context,omitempty"`                                        // Additional context information
+	Code      string                 `json:"code,omitempty" example:"INVALID_TICKER"`                  // Error code (RFC 7807 extension)
+	Timestamp string                 `json:"timestamp,omitempty"`                                      // ISO 8601 timestamp (RFC 7807 extension)
+	Method    string                 `json:"method,omitempty" example:"GET"`                           // HTTP method (RFC 7807 extension)
 }
 
 // GetFairValue handles GET /api/v1/fair-value/:ticker requests
@@ -127,9 +131,25 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		return
 	}
 
-	// Parse query parameters
+	// Parse and validate query parameters
 	overrideBeta := parseFloatParam(c, "override_beta")
 	overrideRF := parseFloatParam(c, "override_rf")
+
+	// Validate override ranges (defense in depth — matches Swagger spec bounds)
+	if overrideBeta != nil && (*overrideBeta < 0 || *overrideBeta > 3.0) {
+		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
+			"Invalid override_beta",
+			"Beta override must be between 0 and 3.0",
+			map[string]interface{}{"override_beta": *overrideBeta})
+		return
+	}
+	if overrideRF != nil && (*overrideRF < 0 || *overrideRF > 0.20) {
+		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
+			"Invalid override_rf",
+			"Risk-free rate override must be between 0 and 0.20",
+			map[string]interface{}{"override_rf": *overrideRF})
+		return
+	}
 
 	h.logger.Info("Processing fair value request",
 		zap.String("ticker", ticker),
@@ -230,6 +250,22 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		return
 	}
 
+	// Validate override ranges (same bounds as single endpoint)
+	if request.OverrideBeta != nil && (*request.OverrideBeta < 0 || *request.OverrideBeta > 3.0) {
+		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
+			"Invalid override_beta",
+			"Beta override must be between 0 and 3.0",
+			map[string]interface{}{"override_beta": *request.OverrideBeta})
+		return
+	}
+	if request.OverrideRiskFree != nil && (*request.OverrideRiskFree < 0 || *request.OverrideRiskFree > 0.20) {
+		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
+			"Invalid override_rf",
+			"Risk-free rate override must be between 0 and 0.20",
+			map[string]interface{}{"override_rf": *request.OverrideRiskFree})
+		return
+	}
+
 	h.logger.Info("Processing bulk fair value request",
 		zap.Int("ticker_count", len(request.Tickers)),
 		zap.Strings("tickers", request.Tickers))
@@ -291,6 +327,7 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 			AsOf:                  result.CalculatedAt.Format("2006-01-02T15:04:05Z"),
 			DataQualityScore:      result.DataQualityScore,
 			DataQualityGrade:      string(result.DataQualityGrade),
+			CalculationMethod:     result.CalculationMethod,
 			CalculationVersion:    result.CalculationVersion,
 			Warnings:              result.Warnings,
 			SanityCheck:           result.SanityCheck,
@@ -362,18 +399,22 @@ func classifyBulkError(ticker string, err error) BulkFailure {
 
 // Helper functions
 
-// sendError sends an RFC 7807 compliant error response
-func (h *FairValueHandler) sendError(c *gin.Context, status int, errorType, title, detail string, context map[string]interface{}) {
-	errorResponse := ErrorResponse{
-		Type:     "https://api.dcf-valuation.com/errors/" + errorType,
-		Title:    title,
-		Status:   status,
-		Detail:   detail,
-		Instance: c.Request.URL.Path,
-		Context:  context,
-	}
-
-	c.JSON(status, errorResponse)
+// sendError sends an RFC 7807 compliant error response, consistent with
+// the server.go respondWithError format (code, timestamp, method fields).
+func (h *FairValueHandler) sendError(c *gin.Context, status int, errorType, title, detail string, ctx map[string]interface{}) {
+	c.Header("Content-Type", "application/problem+json")
+	c.JSON(status, gin.H{
+		"type":      "https://problems.midas.dev/" + errorType,
+		"title":     title,
+		"status":    status,
+		"detail":    detail,
+		"instance":  c.Request.URL.Path,
+		"context":   ctx,
+		"code":      errorType,
+		"timestamp": time.Now().UTC(),
+		"method":    c.Request.Method,
+	})
+	c.Abort()
 }
 
 // isValidTicker validates ticker format (1-5 alphanumeric characters)

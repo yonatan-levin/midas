@@ -20,8 +20,8 @@ func newTestRouter() *ModelRouter {
 	logger := testLogger()
 	allModels := []ValuationModel{
 		NewDDMModel(logger),
-		NewFFOModel(logger),
-		NewRevenueMultipleModel(logger),
+		NewFFOModelWithMultiple(DefaultPFFOMultiple, logger),
+		NewRevenueMultipleModelWithMultiples(map[string]float64{"default": DefaultEVRevenueMultiple}, logger),
 		NewMultiStageDCFModel(logger),
 	}
 	return NewModelRouter(allModels, logger)

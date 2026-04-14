@@ -29,13 +29,16 @@ type FFOModel struct {
 	logger       *zap.Logger
 }
 
-// NewFFOModel creates a new FFO model with the default P/FFO multiple.
-// The multiple can be overridden from the industry_multiples.json config.
-func NewFFOModel(logger *zap.Logger) *FFOModel {
+// NewFFOModel creates a new FFO model with P/FFO multiple loaded from the given config path.
+// If configPath is empty, uses DefaultIndustryMultiplesPath.
+func NewFFOModel(configPath string, logger *zap.Logger) *FFOModel {
+	if configPath == "" {
+		configPath = DefaultIndustryMultiplesPath
+	}
 	multiple := DefaultPFFOMultiple
 
 	// Attempt to load the P/FFO multiple from config
-	configMultiple, err := loadPFFOMultiple(DefaultIndustryMultiplesPath)
+	configMultiple, err := loadPFFOMultiple(configPath)
 	if err == nil && configMultiple > 0 {
 		multiple = configMultiple
 	}

@@ -160,12 +160,19 @@ data/                   # SQLite database files (gitignored)
 | `internal/services/valuation/service.go` | DCF valuation orchestration |
 | `internal/services/valuation/errors.go` | Sentinel errors (ErrTickerNotFound, ErrInsufficientData, ErrModelNotApplicable) |
 | `internal/services/valuation/options.go` | ValuationOptions (override beta/risk-free rate) |
+| `internal/services/valuation/models/router.go` | Industry-aware model selection (DDM, FFO, Revenue Multiple, DCF) |
+| `internal/services/valuation/adr.go` | ADR ticker-to-country mapping + country risk premium lookup |
+| `internal/services/valuation/crosscheck.go` | Sanity check: DCF-implied multiples vs sector medians |
+| `internal/services/growth/estimator.go` | Multi-stage growth estimation with analyst/historical blending |
 | `internal/services/datafetcher/coordinator.go` | Multi-source data fetching |
 | `internal/services/datacleaner/service.go` | Financial data normalization |
 | `internal/infra/gateways/market/yfinance_auth.go` | Yahoo Finance cookie+crumb auth manager |
 | `internal/infra/database/schema.sql` | Database schema |
+| `config/country_risk.json` | Damodaran country risk premiums (30+ countries) |
+| `config/industry_multiples.json` | Sector median P/E, EV/EBITDA, EV/Revenue, P/FFO multiples |
 | `docs/openapi.yaml` | OpenAPI 3.0 specification |
 | `docs/refactoring/valuation-engine-upgrade-spec.md` | Full upgrade spec: multi-stage growth, industry models, international |
+| `docs/reviewer/` | Tracked follow-up items from code review (D1, D2, B2, W1-W5, S1-S5) |
 | `config.env.example` | Environment variable template |
 
 ## External Data Sources

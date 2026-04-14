@@ -140,7 +140,7 @@ func BenchmarkErrorResponse_Creation(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		errorResponse := ErrorResponse{
-			Type:     "https://api.dcf-valuation.com/errors/INVALID_TICKER",
+			Type:     "https://problems.midas.dev/INVALID_TICKER",
 			Title:    "Bad Request",
 			Status:   http.StatusBadRequest,
 			Detail:   "Invalid ticker format",

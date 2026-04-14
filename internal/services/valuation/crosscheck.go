@@ -112,7 +112,8 @@ func LoadIndustryMultiples(path string) (*industryMultiplesConfig, error) {
 }
 
 // LookupMultiple finds the appropriate multiple for an industry code.
-// Tries exact match first, then prefix match, then default.
+// Tries exact match first, then longest prefix match, then default.
+// Longest-prefix-match is used to avoid nondeterminism from Go's random map iteration order.
 func LookupMultiple(multiples map[string]float64, industry string) float64 {
 	upper := strings.ToUpper(industry)
 
@@ -121,11 +122,17 @@ func LookupMultiple(multiples map[string]float64, industry string) float64 {
 		return val
 	}
 
-	// Prefix match (e.g., "TECH_SAAS" -> "TECH")
+	// Longest prefix match (e.g., "TECH_SAAS_CLOUD" matches "TECH_SAAS" over "TECH")
+	bestKey := ""
+	bestVal := 0.0
 	for code, val := range multiples {
-		if strings.HasPrefix(upper, code) && code != "default" {
-			return val
+		if code != "default" && strings.HasPrefix(upper, code) && len(code) > len(bestKey) {
+			bestKey = code
+			bestVal = val
 		}
+	}
+	if bestKey != "" {
+		return bestVal
 	}
 
 	// Default fallback

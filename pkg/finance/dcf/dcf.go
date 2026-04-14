@@ -159,10 +159,16 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 	// When an exit multiple is provided, average Gordon Growth TV with exit-multiple TV.
 	// This reduces model risk by blending two independent terminal value estimates.
 	if inputs.ExitMultiple > 0 {
-		// Approximate terminal year EBITDA: OI + D&A
-		// OI is recovered from FCF: FCF / (1 - TaxRate) = NOPAT -> OI = NOPAT / (1-T)... but simpler:
-		// Terminal EBITDA = TerminalYearFCF / (1 - TaxRate) + D&A
-		terminalEBITDA := result.TerminalYearFCF/(1-inputs.TaxRate) + inputs.DepreciationAndAmortization
+		// Terminal EBITDA = terminal year OI + scaled D&A.
+		// We use the projection's OI directly (already grown) and scale D&A
+		// by the same growth factor to reflect terminal-year magnitude.
+		terminalOI := finalYearProjection.OperatingIncome
+		growthFactor := 1.0
+		if inputs.BaseOperatingIncome > 0 {
+			growthFactor = terminalOI / inputs.BaseOperatingIncome
+		}
+		scaledDA := inputs.DepreciationAndAmortization * growthFactor
+		terminalEBITDA := terminalOI + scaledDA
 		if terminalEBITDA > 0 {
 			exitMultipleTV := terminalEBITDA * inputs.ExitMultiple
 			result.TerminalValueNominal = (gordonTV + exitMultipleTV) / 2

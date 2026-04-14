@@ -49,6 +49,9 @@ E2E_LIVE=1 go test ./internal/integration/...
 
 ```
 internal/
+  api/
+    server.go                  # HTTP server, middleware, routes
+    server_test.go             # Server middleware + handler tests (96.2%)
   services/
     valuation/
       service.go              # Implementation
@@ -90,18 +93,19 @@ pkg/
 
 | Module | Target | Current |
 |--------|--------|---------|
-| `pkg/finance/dcf` | >= 90% | ~96.5% |
+| `internal/api` | >= 90% | ~96.2% |
+| `pkg/finance/dcf` | >= 90% | ~96.6% |
 | `pkg/finance/growth` | >= 90% | ~91.6% |
-| `pkg/finance/wacc` | >= 85% | ~98.4% |
-| `internal/services/valuation` | >= 90% | ~90.9% |
-| `internal/services/valuation/models` | >= 90% | ~96.7% |
+| `pkg/finance/wacc` | >= 85% | ~98.5% |
+| `internal/services/valuation` | >= 90% | ~91.2% |
+| `internal/services/valuation/models` | >= 90% | ~91.5% |
 | `internal/services/growth` | >= 90% | ~97.1% |
-| `internal/services/datafetcher` | >= 80% | ~93.9% |
+| `internal/services/datafetcher` | >= 80% | ~95.3% |
 | `internal/services/metrics` | >= 85% | ~96.8% |
 | `internal/services/datacleaner/industry` | >= 80% | ~97.2% |
 | `internal/infra/gateways/sec` | >= 90% | ~93.3% |
-| `internal/infra/gateways/market` | >= 80% | ~91.2% |
-| `internal/api/v1/handlers` | >= 90% | ~94.1% |
+| `internal/infra/gateways/market` | >= 80% | ~82.0% |
+| `internal/api/v1/handlers` | >= 90% | ~94.3% |
 | `internal/services/datacleaner` | >= 80% | ~38.9% |
 | Overall | >= 80% | ~85%+ |
 

@@ -68,8 +68,8 @@ func NewService(
 	// Order matters: more specific models are listed first.
 	allModels := []models.ValuationModel{
 		models.NewDDMModel(logger),
-		models.NewFFOModel(logger),
-		models.NewRevenueMultipleModel(logger),
+		models.NewFFOModel(models.DefaultIndustryMultiplesPath, logger),
+		models.NewRevenueMultipleModel(models.DefaultIndustryMultiplesPath, logger),
 		models.NewMultiStageDCFModel(logger),
 	}
 	router := models.NewModelRouter(allModels, logger)

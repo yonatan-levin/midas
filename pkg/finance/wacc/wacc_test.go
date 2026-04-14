@@ -511,6 +511,32 @@ func TestCalculate_InvalidInputs_ExtendedEdgeCases(t *testing.T) {
 			},
 			wantErr: "tax rate must be between 0% and 100%",
 		},
+		{
+			name: "Negative country risk premium is rejected",
+			inputs: Inputs{
+				MarketValueOfEquity: 1000,
+				MarketValueOfDebt:   100,
+				Beta:                1.0,
+				RiskFreeRate:        0.03,
+				MarketRiskPremium:   0.05,
+				TaxRate:             0.21,
+				CountryRiskPremium:  -0.01,
+			},
+			wantErr: "country risk premium must be between 0% and 20%",
+		},
+		{
+			name: "Country risk premium above 20% is rejected",
+			inputs: Inputs{
+				MarketValueOfEquity: 1000,
+				MarketValueOfDebt:   100,
+				Beta:                1.0,
+				RiskFreeRate:        0.03,
+				MarketRiskPremium:   0.05,
+				TaxRate:             0.21,
+				CountryRiskPremium:  0.25,
+			},
+			wantErr: "country risk premium must be between 0% and 20%",
+		},
 	}
 
 	for _, tt := range tests {

@@ -40,7 +40,11 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 | `AUTH_007` | 500 | Invalid authentication information |
 | `AUTH_008` | 403 | Insufficient permissions |
 | `INVALID_TICKER` | 400 | Empty or invalid ticker |
+| `INVALID_PARAMETER` | 400 | Override parameter out of valid range |
+| `TICKER_NOT_FOUND` | 404 | Ticker not found in any data source |
+| `INSUFFICIENT_DATA` | 422 | Not enough financial data for reliable valuation |
 | `MODEL_NOT_APPLICABLE` | 422 | Standard DCF not applicable (e.g., negative operating income) |
+| `CALCULATION_ERROR` | 500 | Internal valuation calculation failure |
 | `RATE_LIMIT_EXCEEDED` | 429 | Rate limit exceeded |
 
 ---
@@ -57,10 +61,12 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 | `ticker` | string | Yes | 1-5 characters, uppercase stock ticker |
 
 **Query Parameters**:
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `override_beta` | float | No | Override calculated beta value |
-| `override_rf` | float | No | Override risk-free rate |
+| Name | Type | Required | Description | Constraints |
+|------|------|----------|-------------|-------------|
+| `override_beta` | float | No | Override calculated beta value | 0 - 3.0 |
+| `override_rf` | float | No | Override risk-free rate | 0 - 0.20 |
+
+Out-of-range values return 400 `INVALID_PARAMETER`.
 
 **Response 200** (`application/json`):
 ```json
@@ -95,7 +101,7 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 | `warnings` | string[] | Data quality or assumption warnings (optional, omitted if empty) |
 | `sanity_check` | object | Multiples cross-check: `implied_pe`, `sector_median_pe`, `implied_ev_ebitda`, `sector_median_ev_ebitda`, `is_reasonable`, `flags` (optional) |
 
-**Error Responses**: 400 (`INVALID_TICKER`), 401, 404 (`TICKER_NOT_FOUND`), 422 (`INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`)
+**Error Responses**: 400 (`INVALID_TICKER`, `INVALID_PARAMETER`), 401, 404 (`TICKER_NOT_FOUND`), 422 (`INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`)
 
 ---
 
@@ -116,8 +122,10 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 | Field | Type | Required | Constraints |
 |-------|------|----------|-------------|
 | `tickers` | string[] | Yes | 1-10 items, each 1-5 chars |
-| `override_beta` | float | No | Override beta for all tickers |
-| `override_rf` | float | No | Override risk-free rate |
+| `override_beta` | float | No | Override beta for all tickers (0 - 3.0) |
+| `override_rf` | float | No | Override risk-free rate (0 - 0.20) |
+
+Out-of-range overrides return 400 `INVALID_PARAMETER` (same bounds as single endpoint).
 
 **Response 200** (all succeed) / **207** (partial) / **422** (all fail):
 ```json
@@ -127,11 +135,24 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
       "ticker": "AAPL",
       "wacc": 0.095,
       "growth_rate": 0.033,
+      "growth_rates": [0.08, 0.07, 0.06, 0.05, 0.04, 0.035, 0.03],
+      "growth_source": "analyst_blend",
+      "growth_confidence": "high",
       "tangible_value_per_share": 3.47,
       "dcf_value_per_share": 167.23,
       "as_of": "2025-01-31T10:30:00Z",
       "data_quality_score": 0.92,
-      "data_quality_grade": "A"
+      "data_quality_grade": "A",
+      "calculation_method": "multi_stage_dcf",
+      "calculation_version": "4.0",
+      "sanity_check": {
+        "implied_pe": 28.5,
+        "sector_median_pe": 25.0,
+        "implied_ev_ebitda": 18.2,
+        "sector_median_ev_ebitda": 15.0,
+        "is_reasonable": true,
+        "flags": []
+      }
     }
   ],
   "failures": [
@@ -165,7 +186,7 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 | 207 | Partial success — some succeeded, some failed |
 | 422 | All tickers failed |
 
-**Error Responses**: 400, 401
+**Error Responses**: 400 (`INVALID_REQUEST`, `INVALID_PARAMETER`), 401
 
 ---
 

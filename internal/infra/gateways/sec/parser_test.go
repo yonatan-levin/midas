@@ -479,7 +479,7 @@ func TestParser_ParsePeriodData_AllXBRLTags(t *testing.T) {
 		"AssetsCurrent":                         143566000000,
 		"LiabilitiesCurrent":                    145308000000,
 		"CashAndCashEquivalentsAtCarryingValue": 29965000000,
-		"Goodwill":                              0, // zero value - should not be found
+		"Goodwill":                              0, // zero value - legitimate, found as 0
 		"IntangibleAssetsNetExcludingGoodwill":  5000000000,
 		"LongTermDebt":                          109280000000,
 		"InventoryNet":                          6331000000,

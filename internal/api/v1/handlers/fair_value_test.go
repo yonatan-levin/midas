@@ -207,16 +207,25 @@ func TestFairValueHandler_sendError(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 
+	// Verify Content-Type is RFC 7807 compliant
+	assert.Equal(t, "application/problem+json", w.Header().Get("Content-Type"))
+
 	var resp ErrorResponse
 	err := json.Unmarshal(w.Body.Bytes(), &resp)
 	require.NoError(t, err)
 
-	assert.Equal(t, "https://api.dcf-valuation.com/errors/INVALID_TICKER", resp.Type)
+	// Standard RFC 7807 fields
+	assert.Equal(t, "https://problems.midas.dev/INVALID_TICKER", resp.Type)
 	assert.Equal(t, "Bad Request", resp.Title)
 	assert.Equal(t, http.StatusBadRequest, resp.Status)
 	assert.Equal(t, "Ticker format is wrong", resp.Detail)
 	assert.Equal(t, "/api/v1/fair-value/TEST", resp.Instance)
 	assert.Equal(t, "TEST", resp.Context["ticker"])
+
+	// RFC 7807 extension fields (code, timestamp, method)
+	assert.Equal(t, "INVALID_TICKER", resp.Code)
+	assert.Equal(t, "GET", resp.Method)
+	assert.NotEmpty(t, resp.Timestamp, "timestamp must be present")
 }
 
 // ---- Tests for GetFairValue ----
@@ -400,6 +409,54 @@ func TestFairValueHandler_GetFairValue(t *testing.T) {
 			},
 			wantStatus: http.StatusOK,
 		},
+		{
+			name:       "override_beta_too_high",
+			ticker:     "AAPL",
+			query:      "override_beta=4.0",
+			setupMock:  func(m *mockValuationService) { /* no call expected */ },
+			wantStatus: http.StatusBadRequest,
+			wantBody: func(t *testing.T, body []byte) {
+				var resp ErrorResponse
+				require.NoError(t, json.Unmarshal(body, &resp))
+				assert.Equal(t, "INVALID_PARAMETER", extractErrorCode(resp.Type))
+			},
+		},
+		{
+			name:       "override_beta_negative",
+			ticker:     "AAPL",
+			query:      "override_beta=-0.5",
+			setupMock:  func(m *mockValuationService) {},
+			wantStatus: http.StatusBadRequest,
+			wantBody: func(t *testing.T, body []byte) {
+				var resp ErrorResponse
+				require.NoError(t, json.Unmarshal(body, &resp))
+				assert.Equal(t, "INVALID_PARAMETER", extractErrorCode(resp.Type))
+			},
+		},
+		{
+			name:       "override_rf_too_high",
+			ticker:     "AAPL",
+			query:      "override_rf=0.25",
+			setupMock:  func(m *mockValuationService) {},
+			wantStatus: http.StatusBadRequest,
+			wantBody: func(t *testing.T, body []byte) {
+				var resp ErrorResponse
+				require.NoError(t, json.Unmarshal(body, &resp))
+				assert.Equal(t, "INVALID_PARAMETER", extractErrorCode(resp.Type))
+			},
+		},
+		{
+			name:       "override_rf_negative",
+			ticker:     "AAPL",
+			query:      "override_rf=-0.01",
+			setupMock:  func(m *mockValuationService) {},
+			wantStatus: http.StatusBadRequest,
+			wantBody: func(t *testing.T, body []byte) {
+				var resp ErrorResponse
+				require.NoError(t, json.Unmarshal(body, &resp))
+				assert.Equal(t, "INVALID_PARAMETER", extractErrorCode(resp.Type))
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -568,6 +625,39 @@ func TestFairValueHandler_GetBulkFairValue(t *testing.T) {
 				assert.Equal(t, "AAPL", resp.Results[0].Ticker)
 			},
 		},
+		{
+			name:       "bulk_override_beta_too_high_400",
+			body:       `{"tickers":["AAPL"],"override_beta":99.0}`,
+			setupMock:  func(m *mockValuationService) {},
+			wantStatus: http.StatusBadRequest,
+			wantBody: func(t *testing.T, body []byte) {
+				var resp ErrorResponse
+				require.NoError(t, json.Unmarshal(body, &resp))
+				assert.Equal(t, "INVALID_PARAMETER", extractErrorCode(resp.Type))
+			},
+		},
+		{
+			name:       "bulk_override_beta_negative_400",
+			body:       `{"tickers":["AAPL"],"override_beta":-1.0}`,
+			setupMock:  func(m *mockValuationService) {},
+			wantStatus: http.StatusBadRequest,
+			wantBody: func(t *testing.T, body []byte) {
+				var resp ErrorResponse
+				require.NoError(t, json.Unmarshal(body, &resp))
+				assert.Equal(t, "INVALID_PARAMETER", extractErrorCode(resp.Type))
+			},
+		},
+		{
+			name:       "bulk_override_rf_too_high_400",
+			body:       `{"tickers":["AAPL"],"override_rf":0.50}`,
+			setupMock:  func(m *mockValuationService) {},
+			wantStatus: http.StatusBadRequest,
+			wantBody: func(t *testing.T, body []byte) {
+				var resp ErrorResponse
+				require.NoError(t, json.Unmarshal(body, &resp))
+				assert.Equal(t, "INVALID_PARAMETER", extractErrorCode(resp.Type))
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -595,7 +685,7 @@ func TestFairValueHandler_GetBulkFairValue(t *testing.T) {
 }
 
 // extractErrorCode extracts the trailing segment from an error type URI.
-// E.g., "https://api.dcf-valuation.com/errors/INVALID_TICKER" -> "INVALID_TICKER"
+// E.g., "https://problems.midas.dev/INVALID_TICKER" -> "INVALID_TICKER"
 func extractErrorCode(typeURI string) string {
 	parts := strings.Split(typeURI, "/")
 	if len(parts) == 0 {

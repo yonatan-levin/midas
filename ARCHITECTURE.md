@@ -113,6 +113,11 @@ The core product flow for `GET /api/v1/fair-value/{ticker}`:
      │        ├── Market Gateway: GetQuote(ticker) → MarketData
      │        └── Macro Gateway: GetTreasuryRates() → MacroData
      │
+     ├── 5b'. Data Quality Guardrail:
+     │        ├── isFinancialDataIncomplete(): checks D&A, CapEx, Cash fields
+     │        ├── If missing → re-fetch from SEC EDGAR, persist updated data
+     │        └── averageCapExAndDA(): smooth CapEx/D&A over available annual periods
+     │
      ├── 5c. DataCleaner.Clean(FinancialData) ──── Pipeline:
      │        ├── Validate raw data
      │        ├── Apply asset adjustments (goodwill, intangibles, inventory, ROU, etc.)
@@ -123,7 +128,8 @@ The core product flow for `GET /api/v1/fair-value/{ticker}`:
      │        └── Quality scoring (0-100)
      │
      ├── 5d. WACC Calculation (pkg/finance/wacc/)
-     │        ├── Beta: Blume adjusted (0.67β + 0.33), unlevered/relevered
+     │        ├── Input validation: beta [0,∞), RF [0,20%], CRP [0,20%], MRP [0,15%]
+     │        ├── Beta: Blume adjusted (0.67β + 0.33), unlevered/relevered (Hamada)
      │        ├── Cost of Equity = Rf + β(ERP) + CRP (country risk premium)
      │        ├── Cost of Debt = Interest Expense / Total Debt * (1 - Tax Rate)
      │        └── WACC = E/(E+D) * Ke + D/(E+D) * Kd
@@ -179,6 +185,8 @@ The core product flow for `GET /api/v1/fair-value/{ticker}`:
 - **SQLite3** (default): Single-file database at `./data/midas.db`, ideal for development and small deployments
 - **PostgreSQL**: Production option via `database.driver: postgres`
 
+**Transaction Safety**: `StoreHistorical` wraps all period inserts in a single transaction (`BeginTxx`/`Commit`/`defer Rollback`). If any period fails, the entire batch is rolled back.
+
 ### Core Tables
 
 | Table | Purpose |
@@ -215,7 +223,7 @@ Two-tier caching with Redis (primary) and in-memory (fallback):
 
 **Design principle**: Caching is done at the valuation layer (final result) and per-credential layer (auth tokens). The DataFetcher always fetches fresh data from external APIs to avoid serving stale market prices. Requests with override parameters (`override_beta`, `override_rf`) bypass the valuation cache entirely to prevent cache poisoning.
 
-Cache keys are pattern-based for bulk invalidation (e.g., `valuation:AAPL:*`).
+Cache keys are versioned and pattern-based: `valuation:v4:{ticker}`. The version prefix is bumped when the calculation engine changes (e.g., Phase 4 upgrade), automatically invalidating stale cached results without a manual flush.
 
 ## Security Architecture
 

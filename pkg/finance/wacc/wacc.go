@@ -136,6 +136,10 @@ func validateInputs(inputs Inputs) error {
 		return errors.New("interest expense cannot be negative when debt is positive")
 	}
 
+	if inputs.CountryRiskPremium < 0 || inputs.CountryRiskPremium > 0.20 {
+		return errors.New("country risk premium must be between 0% and 20%")
+	}
+
 	return nil
 }
 
