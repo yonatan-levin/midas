@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"strings"
 
 	"go.uber.org/zap"
 )
@@ -53,11 +52,6 @@ func NewDDMModel(logger *zap.Logger) *DDMModel {
 // ModelType returns the model identifier.
 func (m *DDMModel) ModelType() string {
 	return "ddm"
-}
-
-// SupportsIndustry returns true for financial industry codes.
-func (m *DDMModel) SupportsIndustry(industry string) bool {
-	return strings.HasPrefix(strings.ToUpper(industry), "FIN")
 }
 
 // Calculate performs a DDM valuation.

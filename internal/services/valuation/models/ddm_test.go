@@ -203,17 +203,6 @@ func TestDDMModel_Calculate_ZeroCostOfEquity(t *testing.T) {
 	assert.Contains(t, err.Error(), "cost of equity must be positive")
 }
 
-// TestDDMModel_SupportsIndustry tests industry support check
-func TestDDMModel_SupportsIndustry(t *testing.T) {
-	model := NewDDMModel(testLogger())
-
-	assert.True(t, model.SupportsIndustry("FIN"))
-	assert.True(t, model.SupportsIndustry("FIN_IB"))
-	assert.True(t, model.SupportsIndustry("fin"))
-	assert.False(t, model.SupportsIndustry("TECH"))
-	assert.False(t, model.SupportsIndustry("REIT"))
-}
-
 // TestDDMModel_ModelType tests model type identifier
 func TestDDMModel_ModelType(t *testing.T) {
 	model := NewDDMModel(testLogger())

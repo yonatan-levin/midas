@@ -4,7 +4,7 @@
 |-------|-------|
 | **ID** | W-4 |
 | **Severity** | LOW |
-| **Status** | Open |
+| **Status** | Resolved (2026-04-19) |
 | **Found In** | Phase 3 Code Review |
 | **File** | `internal/services/valuation/models/revenue_multiple.go:152` |
 

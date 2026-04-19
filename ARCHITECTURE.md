@@ -136,9 +136,12 @@ The core product flow for `GET /api/v1/fair-value/{ticker}`:
      │
      ├── 5e. Industry Classification + Model Selection
      │        ├── IndustryClassifier: SIC/NAICS/keyword from SEC EntityName
+     │        │   ├── Two-pass: parent industry (TECH, FIN) then sub-industry (TECH_SAAS, FIN_IB)
+     │        │   └── Pre-compiled regexes at config load (no per-call compilation)
      │        ├── ModelRouter selects: DDM (financials), FFO (REITs),
      │        │   Revenue Multiple (pre-revenue), Multi-Stage DCF (default)
-     │        └── Alternative models return early; DCF path continues below
+     │        └── Fallback chain: if primary model fails (e.g., FIN with zero DPS),
+     │            falls back to DCF (positive OI) or Revenue Multiple (negative OI)
      │
      ├── 5f. DCF Calculation (pkg/finance/dcf/) — for standard companies
      │        ├── Growth rate capped to config bounds (BUG-010 fix)

@@ -4,7 +4,7 @@
 |-------|-------|
 | **ID** | W-2 |
 | **Severity** | MEDIUM |
-| **Status** | Open |
+| **Status** | Resolved (2026-04-19) |
 | **Found In** | Phase 3 Code Review |
 | **File** | `internal/services/datacleaner/industry/classifier.go:215, 232` |
 

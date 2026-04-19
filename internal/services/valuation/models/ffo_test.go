@@ -194,17 +194,6 @@ func TestFFOModel_Calculate_MissingNetIncomeAndDA(t *testing.T) {
 	assert.Contains(t, err.Error(), "insufficient data")
 }
 
-// TestFFOModel_SupportsIndustry tests industry support
-func TestFFOModel_SupportsIndustry(t *testing.T) {
-	model := NewFFOModelWithMultiple(15.0, testLogger())
-
-	assert.True(t, model.SupportsIndustry("REIT"))
-	assert.True(t, model.SupportsIndustry("RESTATE"))
-	assert.True(t, model.SupportsIndustry("reit"))
-	assert.False(t, model.SupportsIndustry("FIN"))
-	assert.False(t, model.SupportsIndustry("TECH"))
-}
-
 // TestFFOModel_ModelType tests model type identifier
 func TestFFOModel_ModelType(t *testing.T) {
 	model := NewFFOModelWithMultiple(15.0, testLogger())

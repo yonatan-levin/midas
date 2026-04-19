@@ -11,6 +11,23 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
 
+// subIndustryMapping represents a sub-industry classification (e.g., TECH_SAAS within TECH).
+type subIndustryMapping struct {
+	Name     string `json:"name"`
+	Code     string `json:"code"`
+	Matchers struct {
+		Keywords   []string `json:"keywords"`
+		SICCodes   []string `json:"sic_codes"`
+		NAICSCodes []string `json:"naics_codes"`
+		Patterns   []string `json:"patterns"`
+	} `json:"matchers"`
+
+	// Pre-compiled regexes, populated during LoadIndustryCodesConfig.
+	// These avoid recompiling on every Classify() call (W-2).
+	compiledKeywords []*regexp.Regexp `json:"-"`
+	compiledPatterns []*regexp.Regexp `json:"-"`
+}
+
 // industryMapping represents a single industry mapping entry from config/datacleaner/industry_codes.json.
 // Each entry maps SIC codes, NAICS codes, and company name keywords to an industry code.
 type industryMapping struct {
@@ -24,16 +41,12 @@ type industryMapping struct {
 		Patterns   []string `json:"patterns"`
 		ExactNames []string `json:"exact_names"`
 	} `json:"matchers"`
-	SubIndustries []struct {
-		Name     string `json:"name"`
-		Code     string `json:"code"`
-		Matchers struct {
-			Keywords   []string `json:"keywords"`
-			SICCodes   []string `json:"sic_codes"`
-			NAICSCodes []string `json:"naics_codes"`
-			Patterns   []string `json:"patterns"`
-		} `json:"matchers"`
-	} `json:"sub_industries"`
+	SubIndustries []subIndustryMapping `json:"sub_industries"`
+
+	// Pre-compiled regexes, populated during LoadIndustryCodesConfig.
+	// These avoid recompiling on every Classify() call (W-2).
+	compiledKeywords []*regexp.Regexp `json:"-"`
+	compiledPatterns []*regexp.Regexp `json:"-"`
 }
 
 // industryCodesConfig represents the full industry_codes.json file structure
@@ -142,6 +155,8 @@ func NewIndustryClassifier() *IndustryClassifier {
 }
 
 // LoadIndustryCodesConfig loads the industry_codes.json file for SIC/NAICS/keyword classification.
+// Pre-compiles all keyword and pattern regexes at load time so Classify() reuses them
+// instead of compiling on every call (W-2).
 func (ic *IndustryClassifier) LoadIndustryCodesConfig(path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -153,101 +168,213 @@ func (ic *IndustryClassifier) LoadIndustryCodesConfig(path string) error {
 		return fmt.Errorf("failed to parse industry codes config: %w", err)
 	}
 
+	compileCodesConfig(&cfg)
 	ic.codesConfig = &cfg
 	return nil
 }
 
+// ensureCompiled lazily compiles regexes if they haven't been compiled yet.
+// Handles test scenarios where codesConfig is set directly without LoadIndustryCodesConfig.
+// The check looks at whether ANY mapping with keywords/patterns has compiled slices
+// of the expected length — a cheap heuristic that avoids recompiling on every call.
+func (ic *IndustryClassifier) ensureCompiled() {
+	if ic.codesConfig == nil {
+		return
+	}
+	for i := range ic.codesConfig.Mappings {
+		m := &ic.codesConfig.Mappings[i]
+		// If keyword/pattern slices don't match the counts, we haven't compiled yet
+		if len(m.compiledKeywords) != len(m.Matchers.Keywords) ||
+			len(m.compiledPatterns) != len(m.Matchers.Patterns) {
+			compileCodesConfig(ic.codesConfig)
+			return
+		}
+	}
+}
+
+// compileCodesConfig pre-compiles all keyword and pattern regexes for parent industries
+// and sub-industries. Idempotent — safe to call multiple times.
+func compileCodesConfig(cfg *industryCodesConfig) {
+	for i := range cfg.Mappings {
+		m := &cfg.Mappings[i]
+		m.compiledKeywords = compileKeywordRegexes(m.Matchers.Keywords)
+		m.compiledPatterns = compilePatternRegexes(m.Matchers.Patterns)
+		for j := range m.SubIndustries {
+			sub := &m.SubIndustries[j]
+			sub.compiledKeywords = compileKeywordRegexes(sub.Matchers.Keywords)
+			sub.compiledPatterns = compilePatternRegexes(sub.Matchers.Patterns)
+		}
+	}
+}
+
+// compileKeywordRegexes pre-compiles word-boundary regexes for short keywords only.
+// Long keywords (> 3 chars) use simple strings.Contains in Classify(), so no regex needed.
+// Returns a slice parallel to the input — entries for long keywords are nil.
+func compileKeywordRegexes(keywords []string) []*regexp.Regexp {
+	out := make([]*regexp.Regexp, len(keywords))
+	for i, keyword := range keywords {
+		lower := strings.ToLower(keyword)
+		if len(lower) <= 3 {
+			// Word-boundary regex prevents false positives (e.g., "ai" in "retail")
+			re, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(lower) + `\b`)
+			if err == nil {
+				out[i] = re
+			}
+		}
+	}
+	return out
+}
+
+// compilePatternRegexes pre-compiles full regex patterns.
+// Invalid patterns are silently skipped (entry left nil).
+func compilePatternRegexes(patterns []string) []*regexp.Regexp {
+	out := make([]*regexp.Regexp, len(patterns))
+	for i, pattern := range patterns {
+		re, err := regexp.Compile("(?i)" + pattern)
+		if err == nil {
+			out[i] = re
+		}
+	}
+	return out
+}
+
 // Classify determines the industry code for a company using SIC code, NAICS code,
-// and company name. It matches in priority order:
+// and company name. It performs a two-pass classification:
+//  1. Parent industry match (TECH, FIN, HEALTH, etc.) — by priority
+//  2. Sub-industry refinement within the matched parent (TECH_SAAS, FIN_IB, etc.)
+//
+// Matchers are evaluated in order:
 //  1. SIC code (exact or range match)
 //  2. NAICS code (prefix match)
 //  3. Exact company name match
-//  4. Keyword/pattern matching on company name
+//  4. Keyword matching on company name (word-boundary for short keywords)
+//  5. Regex pattern matching on company name
 //
-// Returns the industry code string (e.g., "TECH", "FIN", "REIT") or the default code
-// ("NA") when no match is found.
+// Returns the most specific industry code string (e.g., "TECH_SAAS" if sub-industry
+// matches, else "TECH"), or the default code ("NA") when no match is found.
 func (ic *IndustryClassifier) Classify(sicCode string, naicsCode string, companyName string) (string, error) {
 	if ic.codesConfig == nil {
 		return "NA", fmt.Errorf("industry codes config not loaded")
 	}
 
-	// Track the best match by priority (higher priority = better match)
-	bestCode := ic.codesConfig.DefaultCode
-	bestPriority := -1
+	// Ensure regexes are compiled — handles the case where tests set codesConfig
+	// directly without going through LoadIndustryCodesConfig.
+	ic.ensureCompiled()
 
 	lowerName := strings.ToLower(companyName)
 
-	for _, mapping := range ic.codesConfig.Mappings {
-		matched := false
+	// Pass 1: Find best parent industry by priority
+	bestCode := ic.codesConfig.DefaultCode
+	bestPriority := -1
+	var bestMapping *industryMapping
 
-		// 1. SIC code matching (highest confidence)
-		if sicCode != "" {
-			if ic.matchSICCode(sicCode, mapping.Matchers.SICCodes) {
-				matched = true
+	for i := range ic.codesConfig.Mappings {
+		mapping := &ic.codesConfig.Mappings[i]
+
+		if ic.matchesParent(mapping, sicCode, naicsCode, companyName, lowerName) {
+			if mapping.Priority > bestPriority {
+				bestCode = mapping.Code
+				bestPriority = mapping.Priority
+				bestMapping = mapping
 			}
 		}
+	}
 
-		// 2. NAICS code matching (prefix-based, e.g., "522" matches "52211")
-		if !matched && naicsCode != "" {
-			if ic.matchNAICSCode(naicsCode, mapping.Matchers.NAICSCodes) {
-				matched = true
-			}
-		}
-
-		// 3. Exact company name matching
-		if !matched && companyName != "" {
-			for _, exactName := range mapping.Matchers.ExactNames {
-				if strings.EqualFold(companyName, exactName) {
-					matched = true
-					break
-				}
-			}
-		}
-
-		// 4. Keyword matching on company name.
-		// Short keywords (<=3 chars, e.g., "ai", "oil") use word-boundary regex
-		// to avoid false positives like "ai" matching inside "retail".
-		if !matched && lowerName != "" {
-			for _, keyword := range mapping.Matchers.Keywords {
-				lowerKeyword := strings.ToLower(keyword)
-				if len(lowerKeyword) <= 3 {
-					// Use word-boundary matching for short keywords
-					re, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(lowerKeyword) + `\b`)
-					if err == nil && re.MatchString(lowerName) {
-						matched = true
-						break
-					}
-				} else {
-					if strings.Contains(lowerName, lowerKeyword) {
-						matched = true
-						break
-					}
-				}
-			}
-		}
-
-		// 5. Regex pattern matching on company name
-		if !matched && lowerName != "" {
-			for _, pattern := range mapping.Matchers.Patterns {
-				re, err := regexp.Compile("(?i)" + pattern)
-				if err != nil {
-					continue
-				}
-				if re.MatchString(lowerName) {
-					matched = true
-					break
-				}
-			}
-		}
-
-		// Track match with highest priority
-		if matched && mapping.Priority > bestPriority {
-			bestCode = mapping.Code
-			bestPriority = mapping.Priority
+	// Pass 2: Refine with sub-industry classification within the matched parent (W-3).
+	// A sub-industry match returns a more specific code like "TECH_SAAS" instead of "TECH".
+	if bestMapping != nil {
+		if subCode := ic.classifySubIndustry(bestMapping, sicCode, naicsCode, lowerName); subCode != "" {
+			return subCode, nil
 		}
 	}
 
 	return bestCode, nil
+}
+
+// matchesParent checks if a company matches a parent industry mapping across all matcher types.
+// Uses pre-compiled regexes from LoadIndustryCodesConfig to avoid per-call compilation (W-2).
+func (ic *IndustryClassifier) matchesParent(mapping *industryMapping, sicCode, naicsCode, companyName, lowerName string) bool {
+	// 1. SIC code matching (highest confidence)
+	if sicCode != "" && ic.matchSICCode(sicCode, mapping.Matchers.SICCodes) {
+		return true
+	}
+
+	// 2. NAICS code matching (prefix-based, e.g., "522" matches "52211")
+	if naicsCode != "" && ic.matchNAICSCode(naicsCode, mapping.Matchers.NAICSCodes) {
+		return true
+	}
+
+	// 3. Exact company name matching
+	if companyName != "" {
+		for _, exactName := range mapping.Matchers.ExactNames {
+			if strings.EqualFold(companyName, exactName) {
+				return true
+			}
+		}
+	}
+
+	// 4. Keyword matching with pre-compiled regexes for short keywords
+	if lowerName != "" && ic.matchKeywords(mapping.Matchers.Keywords, mapping.compiledKeywords, lowerName) {
+		return true
+	}
+
+	// 5. Regex pattern matching with pre-compiled regexes
+	if lowerName != "" && ic.matchPatterns(mapping.compiledPatterns, lowerName) {
+		return true
+	}
+
+	return false
+}
+
+// classifySubIndustry checks if the company matches any sub-industry within the given parent.
+// Returns the sub-industry code (e.g., "TECH_SAAS") or empty string if no sub-match.
+func (ic *IndustryClassifier) classifySubIndustry(parent *industryMapping, sicCode, naicsCode, lowerName string) string {
+	for i := range parent.SubIndustries {
+		sub := &parent.SubIndustries[i]
+
+		if sicCode != "" && ic.matchSICCode(sicCode, sub.Matchers.SICCodes) {
+			return sub.Code
+		}
+		if naicsCode != "" && ic.matchNAICSCode(naicsCode, sub.Matchers.NAICSCodes) {
+			return sub.Code
+		}
+		if lowerName != "" && ic.matchKeywords(sub.Matchers.Keywords, sub.compiledKeywords, lowerName) {
+			return sub.Code
+		}
+		if lowerName != "" && ic.matchPatterns(sub.compiledPatterns, lowerName) {
+			return sub.Code
+		}
+	}
+	return ""
+}
+
+// matchKeywords checks if any keyword matches the company name.
+// Uses pre-compiled word-boundary regex for short keywords (<=3 chars),
+// and simple strings.Contains for longer keywords.
+func (ic *IndustryClassifier) matchKeywords(keywords []string, compiled []*regexp.Regexp, lowerName string) bool {
+	for i, keyword := range keywords {
+		lowerKeyword := strings.ToLower(keyword)
+		if len(lowerKeyword) <= 3 {
+			if i < len(compiled) && compiled[i] != nil && compiled[i].MatchString(lowerName) {
+				return true
+			}
+		} else {
+			if strings.Contains(lowerName, lowerKeyword) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// matchPatterns runs all pre-compiled patterns against the company name.
+func (ic *IndustryClassifier) matchPatterns(compiled []*regexp.Regexp, lowerName string) bool {
+	for _, re := range compiled {
+		if re != nil && re.MatchString(lowerName) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchSICCode checks if a SIC code matches the mapping's SIC code list.

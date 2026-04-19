@@ -147,9 +147,11 @@ func TestIndustryClassifier_Classify_KeywordMatching(t *testing.T) {
 			expected:    "TECH",
 		},
 		{
-			name:        "keyword match for pharmaceutical",
+			// W-3: Sub-industry classification is now active — "pharmaceutical" matches the
+			// HEALTH_PHARMA sub-industry, returning the more specific code instead of parent HEALTH.
+			name:        "keyword match for pharmaceutical (sub-industry)",
 			companyName: "Global Pharmaceutical Holdings",
-			expected:    "HEALTH",
+			expected:    "HEALTH_PHARMA",
 		},
 		{
 			name:        "keyword match for retail store",

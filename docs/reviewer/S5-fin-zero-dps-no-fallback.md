@@ -4,7 +4,7 @@
 |-------|-------|
 | **ID** | S-5 |
 | **Severity** | MEDIUM |
-| **Status** | Open |
+| **Status** | Resolved (2026-04-19) |
 | **Found In** | Phase 3 Code Review |
 | **Files** | `router.go:89-95`, `service.go:400-406` |
 

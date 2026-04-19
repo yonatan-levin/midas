@@ -31,11 +31,6 @@ func (m *MultiStageDCFModel) ModelType() string {
 	return "multi_stage_dcf"
 }
 
-// SupportsIndustry returns true for all industries — DCF is the universal default.
-func (m *MultiStageDCFModel) SupportsIndustry(industry string) bool {
-	return true
-}
-
 // Calculate is a no-op for the DCF model. The actual DCF calculation is performed
 // by the valuation service's performValuation method. This exists only to satisfy
 // the ValuationModel interface.

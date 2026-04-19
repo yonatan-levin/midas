@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"go.uber.org/zap"
 )
@@ -145,12 +144,6 @@ func loadREITCapRate(path string) (float64, error) {
 // ModelType returns the model identifier.
 func (m *FFOModel) ModelType() string {
 	return "ffo"
-}
-
-// SupportsIndustry returns true for REIT/real estate industry codes.
-func (m *FFOModel) SupportsIndustry(industry string) bool {
-	upper := strings.ToUpper(industry)
-	return upper == "REIT" || upper == "RESTATE"
 }
 
 // Calculate performs an FFO-based valuation for a REIT.

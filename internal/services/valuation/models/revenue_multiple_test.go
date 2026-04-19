@@ -206,17 +206,6 @@ func TestRevenueMultipleModel_GetMultiple(t *testing.T) {
 	}
 }
 
-// TestRevenueMultipleModel_SupportsIndustry tests that revenue multiple supports all industries
-func TestRevenueMultipleModel_SupportsIndustry(t *testing.T) {
-	model := newTestRevenueMultipleModel()
-
-	assert.True(t, model.SupportsIndustry("TECH"))
-	assert.True(t, model.SupportsIndustry("FIN"))
-	assert.True(t, model.SupportsIndustry("REIT"))
-	assert.True(t, model.SupportsIndustry(""))
-	assert.True(t, model.SupportsIndustry("ANYTHING"))
-}
-
 // TestRevenueMultipleModel_ModelType tests model type identifier
 func TestRevenueMultipleModel_ModelType(t *testing.T) {
 	model := newTestRevenueMultipleModel()
@@ -244,6 +233,30 @@ func TestRevenueMultipleModel_GetMultiple_PrefixMatch(t *testing.T) {
 
 	result := model.getMultiple("TECH_SAAS")
 	assert.Equal(t, 5.0, result)
+}
+
+// TestRevenueMultipleModel_GetMultiple_LongestPrefixWinsDeterministic (W-4)
+// verifies that when multiple keys could prefix-match, the longest (most specific)
+// wins deterministically — regardless of Go's random map iteration order.
+// Run the same lookup many times to surface non-determinism if it exists.
+func TestRevenueMultipleModel_GetMultiple_LongestPrefixWinsDeterministic(t *testing.T) {
+	model := NewRevenueMultipleModelWithMultiples(map[string]float64{
+		"HEALTH":         2.0,
+		"HEALTH_BIOTECH": 4.0, // longer — should win for "HEALTH_BIO"
+		"default":        1.0,
+	}, testLogger())
+
+	// "HEALTH_BIO" doesn't exactly match either key, but both could prefix-match.
+	// HEALTH_BIOTECH (14 chars) should NOT match "HEALTH_BIO" (10 chars) since
+	// HEALTH_BIO is shorter than the key, so only "HEALTH" prefix-matches.
+	result := model.getMultiple("HEALTH_BIO")
+	assert.Equal(t, 2.0, result, "HEALTH_BIO should prefix-match HEALTH (HEALTH_BIOTECH is longer than input)")
+
+	// "HEALTH_BIOTECH_ONCOLOGY" prefix-matches both; longest (HEALTH_BIOTECH) must win deterministically
+	for i := range 100 {
+		r := model.getMultiple("HEALTH_BIOTECH_ONCOLOGY")
+		require.Equal(t, 4.0, r, "longest prefix (HEALTH_BIOTECH) must always win, run %d", i)
+	}
 }
 
 // TestRevenueMultipleModel_Calculate_NoFinancialData tests with empty historical data

@@ -65,11 +65,6 @@ func (m *RevenueMultipleModel) ModelType() string {
 	return "revenue_multiple"
 }
 
-// SupportsIndustry returns true for all industries — this is a universal fallback model.
-func (m *RevenueMultipleModel) SupportsIndustry(industry string) bool {
-	return true
-}
-
 // Calculate performs a revenue multiple valuation.
 //
 // This is the simplest valuation model and should be used only when DCF is not applicable.

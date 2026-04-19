@@ -202,18 +202,6 @@ func TestModelRouter_FindModel(t *testing.T) {
 	}
 }
 
-// TestMultiStageDCFModel_SupportsIndustry verifies the DCF model marker supports all industries
-func TestMultiStageDCFModel_SupportsIndustry(t *testing.T) {
-	model := NewMultiStageDCFModel(testLogger())
-
-	// DCF is the universal default — supports every industry
-	assert.True(t, model.SupportsIndustry("TECH"))
-	assert.True(t, model.SupportsIndustry("FIN"))
-	assert.True(t, model.SupportsIndustry("REIT"))
-	assert.True(t, model.SupportsIndustry(""))
-	assert.True(t, model.SupportsIndustry("UNKNOWN"))
-}
-
 // TestMultiStageDCFModel_Calculate_ReturnsError verifies that calling Calculate on the
 // DCF model marker returns an error, since the real DCF logic lives in the service layer.
 func TestMultiStageDCFModel_Calculate_ReturnsError(t *testing.T) {

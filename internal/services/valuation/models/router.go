@@ -10,17 +10,15 @@ import (
 )
 
 // ValuationModel defines the interface for industry-specific valuation models.
-// Each model implements a different valuation methodology (DCF, DDM, FFO, Revenue Multiple)
-// and declares which industries it supports.
+// Each model implements a different valuation methodology (DCF, DDM, FFO, Revenue Multiple).
+// Routing is performed by ModelRouter.SelectModel based on industry + financials,
+// not by self-declaration from the models themselves.
 type ValuationModel interface {
 	// Calculate performs the valuation using this model's methodology.
 	Calculate(ctx context.Context, input *ModelInput) (*ModelResult, error)
 
 	// ModelType returns a string identifier for this model (e.g., "multi_stage_dcf", "ddm").
 	ModelType() string
-
-	// SupportsIndustry returns true if this model is appropriate for the given industry code.
-	SupportsIndustry(industry string) bool
 }
 
 // ModelInput contains all data needed by any valuation model.
