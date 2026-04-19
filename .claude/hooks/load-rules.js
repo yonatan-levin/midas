@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
- * UserPromptSubmit hook — load Cursor rules into Claude Code context.
+ * UserPromptSubmit hook — load workflow rules into Claude Code context.
  *
- * Reads .cursor/rules/*.mdc files and writes them as plain text to stdout.
+ * Reads agents/rules/*.mdc files and writes them as plain text to stdout.
  * For UserPromptSubmit hooks, Claude Code adds stdout content directly
  * into Claude's context (not JSON — raw text).
+ *
+ * Canonical rule location per AGENTS.md Tier 3 loading contract.
+ * Previously lived under .cursor/rules/ (Cursor-specific).
  *
  * Deduplication: skips loading when the same session already has
  * the same rule content loaded. Detects new sessions and file changes
@@ -22,9 +25,9 @@ const { PROJECT_ROOT, readStdin } = require('./utils');
 
 // Rule files to load (relative to project root).
 const RULE_FILES = [
-  '.cursor/rules/_shared-workflow.mdc',   // Foundation: roles, validation cycle, response format
-  '.cursor/rules/preflight.mdc',          // Pre-implementation checklist
-  '.cursor/rules/orchestrator.mdc',       // Routing logic and specialist dispatch
+  'agents/rules/_shared-workflow.mdc',   // Foundation: roles, validation cycle, response format
+  'agents/rules/preflight.mdc',          // Pre-implementation checklist
+  'agents/rules/orchestrator.mdc',       // Routing logic and specialist dispatch
 ];
 
 // State file tracking what was loaded and for which session
@@ -133,9 +136,9 @@ async function main() {
       .join('\n\n---\n\n');
 
     const message =
-      '# Loaded Workflow Rules (.cursor/rules/)\n\n' +
+      '# Loaded Workflow Rules (agents/rules/)\n\n' +
       'The following project workflow rules have been loaded into context. ' +
-      'Follow these rules alongside CLAUDE.md instructions.\n\n' +
+      'Follow these rules alongside CLAUDE.md and AGENTS.md instructions.\n\n' +
       body;
 
     // Write plain text to stdout — Claude Code injects stdout content

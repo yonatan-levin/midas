@@ -33,17 +33,17 @@ This file contains shared workflow patterns used across all roles and modes.
 
 ## Available Roles
 
-Each role has a corresponding agents file that defines their responsibilities and how to invoke them. You can find the agents files in the `.cursor/agents/` folder. and invoke them with the `@` prefix.
+Each role has a corresponding role file that defines its responsibilities and how to invoke it. Role files live in `agents/roles/` (repo root). Invoke them via Claude Code's Task tool with the matching `subagent_type`, or reference the file path directly.
 
-| Role | Responsibility | Subagent |
-|------|----------------|----------|
-| **ARCH** | Architecture decisions, API design, refactor plans, requirements clarification, spec updates | `@code-architect.md` |
-| **BACKEND** | Server-side logic, APIs, database access, background jobs | `@backend-architect.md` |
-| **FRONTEND** | Client-side components, UI behavior, state management, styling | `@frontend-developer.md` |
-| **UX_UI** | User flows, screens, states, copy, accessibility requirements | `@ui-designer.md` |
-| **VERIFIER** | Independent validation that implementation works - runs tests, checks outputs, validates behavior | `@verifier.md` |
-| **QA** | Behavior verification, test coverage, regression checking, debugging | `@qa-debugger.md` |
-| **REVIEWER** | Code review for readability, maintainability, security, performance | `@code-reviewer.md` |
+| Role | Responsibility | Role File |
+|------|----------------|-----------|
+| **ARCH** | Architecture decisions, API design, refactor plans, requirements clarification, spec updates | `agents/roles/code-architect.md` |
+| **BACKEND** | Server-side logic, APIs, database access, background jobs | `agents/roles/backend-architect.md` |
+| **FRONTEND** | Client-side components, UI behavior, state management, styling | `agents/roles/frontend-developer.md` |
+| **UX_UI** | User flows, screens, states, copy, accessibility requirements | `agents/roles/ui-designer.md` |
+| **VERIFIER** | Independent validation that implementation works - runs tests, checks outputs, validates behavior | `agents/roles/verifier.md` |
+| **QA** | Behavior verification, test coverage, regression checking, debugging | `agents/roles/qa-debugger.md` |
+| **REVIEWER** | Code review for readability, maintainability, security, performance | `agents/roles/code-reviewer.md` |
 
 ---
 
