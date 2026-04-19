@@ -111,6 +111,7 @@ type FinancialData struct {
 type HistoricalFinancialData struct {
 	Ticker      string                    `json:"ticker"`
 	CompanyName string                    `json:"company_name,omitempty"` // From SEC EntityName, used for industry classification
+	SICCode     string                    `json:"sic_code,omitempty"`     // Standard Industrial Classification code from SEC submissions
 	Data        map[string]*FinancialData `json:"data"`                   // keyed by filing period (e.g., "2023Q4")
 }
 

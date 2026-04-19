@@ -1,9 +1,33 @@
 # Midas Valuation Engine — Full Upgrade Specification
 
-**Version:** 1.0  
-**Date:** 2026-04-07  
-**Status:** Approved for implementation  
+**Version:** 1.1  
+**Date:** 2026-04-16 (updated from 2026-04-07)  
+**Status:** Phases 0-4 complete. 5 follow-up items in progress (see Implementation Status below).  
 **Scope:** Upgrade the valuation engine to correctly value any company — growth, value, US, international — at fintech-platform-grade accuracy.
+
+---
+
+## Implementation Status
+
+| Phase | Status | Commits | Notes |
+|-------|--------|---------|-------|
+| Phase 0 | **DONE** | `49b0afa` | GetSortedPeriods fix, ErrModelNotApplicable |
+| Phase 1 | **DONE** | `49b0afa` | True FCF, growth caps, diluted shares, equity bridge, WACC spread |
+| Phase 2 | **DONE** | `66ece97` | Growth estimator, analyst blending, ROIC ceiling, 3-stage |
+| Phase 3 | **DONE** | `7eaa488`, `01f4db0` | DDM, FFO, Revenue Multiple, ModelRouter, classifier, fallback chain |
+| Phase 4 | **DONE** | `440d204` | CRP, ADR, Blume/Hamada beta, exit-multiple TV, sanity check |
+| Validation | **DONE** | `ed9cf63` | 10 correctness fixes, server tests (0%→96.2%), docs sync |
+
+### Remaining Spec Items (v4.1)
+
+| # | Spec Section | Item | Status |
+|---|---|---|---|
+| 1 | 2.1 | Analyst estimate caching (7-day TTL) | IN PROGRESS |
+| 2 | 4.5 | ImpliedPFCF in SanityCheck | IN PROGRESS |
+| 3 | 4.2 | SIC code extraction from SEC filing header | IN PROGRESS |
+| 4 | 3.4 | REIT NAV calculation (NOI / Cap Rate) | IN PROGRESS |
+| 5 | 3.3 | DDM P/BV cross-check vs ROE-justified multiple | IN PROGRESS |
+| 6 | 4.3b | Size premium (Fama-French SMB) | DEFERRED (spec says "implement later") |
 
 ---
 

@@ -319,11 +319,9 @@ func (s *Service) performValuation(
 		}
 	}
 
-	// Fetch analyst consensus estimates (optional, degrades gracefully)
-	var analystData *ports.YFinanceAnalystEstimates
-	if s.yfinanceGateway != nil {
-		analystData, _ = s.yfinanceGateway.GetAnalystEstimates(ctx, historicalData.Ticker)
-	}
+	// Fetch analyst consensus estimates with caching (optional, degrades gracefully).
+	// Cached separately with 7-day TTL since analyst estimates change infrequently.
+	analystData := s.getAnalystEstimates(ctx, historicalData.Ticker)
 
 	// Calculate ROIC-sustainable growth ceiling
 	sustainableGrowth := 0.0
@@ -422,13 +420,13 @@ func (s *Service) performValuation(
 	// The IndustryCode on the financial data may already be populated from upstream.
 	industryCode := latestFinancialData.IndustryCode
 	if industryCode == "" && s.industryClassifier != nil {
-		// Use company name from SEC EntityName for keyword-based classification.
+		// Use SIC code and company name from SEC data for classification.
 		// Falls back to ticker if company name unavailable.
 		companyName := historicalData.CompanyName
 		if companyName == "" {
 			companyName = historicalData.Ticker
 		}
-		classified, classifyErr := s.industryClassifier.Classify("", "", companyName)
+		classified, classifyErr := s.industryClassifier.Classify(historicalData.SICCode, "", companyName)
 		if classifyErr == nil && classified != "" && classified != "NA" {
 			industryCode = classified
 		}
@@ -594,8 +592,8 @@ func (s *Service) performValuation(
 	}
 
 	// Phase 4: Run multiples sanity cross-check to flag extreme divergences.
-	// Uses EPS and EBITDA from financials to compute implied P/E and EV/EBITDA,
-	// then compares against sector medians.
+	// Uses EPS, EBITDA, and FCF from financials to compute implied P/E, EV/EBITDA,
+	// and P/FCF, then compares against sector medians.
 	if s.industryMultiples != nil {
 		eps := 0.0
 		if latestFinancialData.NetIncome > 0 && sharesOutstanding > 0 {
@@ -603,15 +601,24 @@ func (s *Service) performValuation(
 		}
 		ebitda := latestFinancialData.OperatingIncome + latestFinancialData.DepreciationAndAmortization
 
+		// Calculate FCF per share for P/FCF cross-check.
+		// FCF = NetIncome + D&A - CapEx (simplified owner earnings approach).
+		fcfPerShare := 0.0
+		fcf := latestFinancialData.NetIncome + latestFinancialData.DepreciationAndAmortization - latestFinancialData.CapitalExpenditures
+		if fcf > 0 && sharesOutstanding > 0 {
+			fcfPerShare = fcf / sharesOutstanding
+		}
+
 		sectorPE := LookupMultiple(s.industryMultiples.SectorMedianPE, industryCode)
 		sectorEVEBITDA := LookupMultiple(s.industryMultiples.EVEBITDAMultiples, industryCode)
+		sectorPFCF := LookupMultiple(s.industryMultiples.SectorMedianPFCF, industryCode)
 
 		sanity := CalculateSanityCheck(
 			equityValue, dcfResult.EnterpriseValue,
-			eps, ebitda,
+			eps, ebitda, fcfPerShare,
 			sharesOutstanding,
 			industryCode,
-			sectorPE, sectorEVEBITDA,
+			sectorPE, sectorEVEBITDA, sectorPFCF,
 		)
 		result.SanityCheck = sanity
 
@@ -834,6 +841,52 @@ func (s *Service) calculateDataFreshnessScore(financial *entities.FinancialData,
 	}
 
 	return score
+}
+
+// analystEstimateCacheTTL defines the cache duration for analyst consensus estimates.
+// 7 days is appropriate because analyst estimate revisions are infrequent (typically
+// quarterly around earnings), and Yahoo Finance rate limits make aggressive fetching costly.
+const analystEstimateCacheTTL = 168 * time.Hour // 7 days
+
+// analystEstimateCachePrefix is the versioned cache key prefix for analyst estimates.
+const analystEstimateCachePrefix = "analyst:v1:"
+
+// getAnalystEstimates returns analyst consensus estimates for a ticker, using a 7-day
+// cache to reduce external API calls. Returns nil when the gateway is not configured
+// or when both cache and live fetch fail (graceful degradation).
+func (s *Service) getAnalystEstimates(ctx context.Context, ticker string) *ports.YFinanceAnalystEstimates {
+	if s.yfinanceGateway == nil {
+		return nil
+	}
+
+	cacheKey := analystEstimateCachePrefix + ticker
+
+	// Try cache first
+	var cached ports.YFinanceAnalystEstimates
+	if err := s.cache.Get(ctx, cacheKey, &cached); err == nil {
+		s.logger.Debug("Analyst estimates cache hit", zap.String("ticker", ticker))
+		return &cached
+	}
+
+	// Cache miss — fetch from Yahoo Finance
+	estimates, err := s.yfinanceGateway.GetAnalystEstimates(ctx, ticker)
+	if err != nil || estimates == nil {
+		s.logger.Debug("Failed to fetch analyst estimates, proceeding without",
+			zap.String("ticker", ticker), zap.Error(err))
+		return nil
+	}
+
+	// Store in cache for future requests
+	if cacheErr := s.cache.Set(ctx, cacheKey, estimates, analystEstimateCacheTTL); cacheErr != nil {
+		s.logger.Warn("Failed to cache analyst estimates",
+			zap.String("ticker", ticker), zap.Error(cacheErr))
+	}
+
+	s.logger.Debug("Analyst estimates fetched and cached",
+		zap.String("ticker", ticker),
+		zap.Int("analysts", estimates.NumberOfAnalysts))
+
+	return estimates
 }
 
 // calculateNetWorkingCapitalChange computes the change in net working capital

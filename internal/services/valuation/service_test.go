@@ -3178,3 +3178,108 @@ func TestService_performValuation_DDMFallbackToDCF(t *testing.T) {
 // path is already covered by TestService_CalculateValuation_DataFetcherPath (line 2374)
 // which uses proper mock gateways. Testing with nil gateways panics in the
 // coordinator's concurrent goroutines (not a service-layer bug).
+
+// TestService_getAnalystEstimates_CacheHit verifies that cached analyst estimates
+// are returned without calling the Yahoo Finance gateway.
+func TestService_getAnalystEstimates_CacheHit(t *testing.T) {
+	service, _, _, _, cache, _ := createTestService()
+	ctx := context.Background()
+
+	// Inject mock YFinance gateway (should NOT be called on cache hit)
+	mockGW := &MockYFinanceGateway{}
+	service.SetYFinanceGateway(mockGW)
+
+	cachedEstimates := &ports.YFinanceAnalystEstimates{
+		EarningsGrowth5Year: 0.12,
+		NumberOfAnalysts:    15,
+	}
+
+	// Cache hit: populate dest with cached value
+	cache.On("Get", ctx, "analyst:v1:AAPL", mock.AnythingOfType("*ports.YFinanceAnalystEstimates")).
+		Run(func(args mock.Arguments) {
+			dest := args.Get(2).(*ports.YFinanceAnalystEstimates)
+			*dest = *cachedEstimates
+		}).Return(nil)
+
+	result := service.getAnalystEstimates(ctx, "AAPL")
+
+	require.NotNil(t, result)
+	assert.Equal(t, 0.12, result.EarningsGrowth5Year)
+	assert.Equal(t, 15, result.NumberOfAnalysts)
+
+	// YFinance gateway should NOT have been called
+	mockGW.AssertNotCalled(t, "GetAnalystEstimates", mock.Anything, mock.Anything)
+	cache.AssertExpectations(t)
+}
+
+// TestService_getAnalystEstimates_CacheMiss verifies that on cache miss,
+// estimates are fetched from Yahoo Finance and then cached with 7-day TTL.
+func TestService_getAnalystEstimates_CacheMiss(t *testing.T) {
+	service, _, _, _, cache, _ := createTestService()
+	ctx := context.Background()
+
+	mockGW := &MockYFinanceGateway{}
+	service.SetYFinanceGateway(mockGW)
+
+	freshEstimates := &ports.YFinanceAnalystEstimates{
+		EarningsGrowth5Year: 0.08,
+		NumberOfAnalysts:    22,
+	}
+
+	// Cache miss
+	cache.On("Get", ctx, "analyst:v1:MSFT", mock.AnythingOfType("*ports.YFinanceAnalystEstimates")).
+		Return(errors.New("cache miss"))
+
+	// YFinance gateway returns fresh data
+	mockGW.On("GetAnalystEstimates", ctx, "MSFT").Return(freshEstimates, nil)
+
+	// Cache set with 7-day TTL (168 hours)
+	cache.On("Set", ctx, "analyst:v1:MSFT", freshEstimates, 168*time.Hour).Return(nil)
+
+	result := service.getAnalystEstimates(ctx, "MSFT")
+
+	require.NotNil(t, result)
+	assert.Equal(t, 0.08, result.EarningsGrowth5Year)
+	assert.Equal(t, 22, result.NumberOfAnalysts)
+
+	mockGW.AssertExpectations(t)
+	cache.AssertExpectations(t)
+}
+
+// TestService_getAnalystEstimates_NoGateway verifies graceful degradation
+// when YFinance gateway is not configured (nil).
+func TestService_getAnalystEstimates_NoGateway(t *testing.T) {
+	service, _, _, _, _, _ := createTestService()
+	ctx := context.Background()
+
+	// yfinanceGateway is nil by default
+	assert.Nil(t, service.yfinanceGateway)
+
+	result := service.getAnalystEstimates(ctx, "AAPL")
+
+	assert.Nil(t, result, "should return nil when gateway is not configured")
+}
+
+// TestService_getAnalystEstimates_FetchError verifies graceful degradation
+// when Yahoo Finance returns an error.
+func TestService_getAnalystEstimates_FetchError(t *testing.T) {
+	service, _, _, _, cache, _ := createTestService()
+	ctx := context.Background()
+
+	mockGW := &MockYFinanceGateway{}
+	service.SetYFinanceGateway(mockGW)
+
+	// Cache miss
+	cache.On("Get", ctx, "analyst:v1:FAIL", mock.AnythingOfType("*ports.YFinanceAnalystEstimates")).
+		Return(errors.New("cache miss"))
+
+	// YFinance gateway returns error
+	mockGW.On("GetAnalystEstimates", ctx, "FAIL").Return(nil, errors.New("rate limited"))
+
+	result := service.getAnalystEstimates(ctx, "FAIL")
+
+	assert.Nil(t, result, "should return nil on fetch error")
+
+	// Cache Set should NOT be called when fetch fails
+	cache.AssertNotCalled(t, "Set", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+}

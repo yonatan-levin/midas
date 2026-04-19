@@ -60,5 +60,31 @@
     "CONS": 18.0,
     "TRANS": 14.0,
     "RESTATE": 20.0
+  },
+  "reit_cap_rates": {
+    "default": 0.06,
+    "residential": 0.05,
+    "industrial": 0.055,
+    "office": 0.07,
+    "retail_reit": 0.065,
+    "healthcare_reit": 0.06,
+    "data_center": 0.045
+  },
+  "sector_median_pfcf": {
+    "default": 22.0,
+    "TECH": 32.0,
+    "TECH_SAAS": 40.0,
+    "TECH_AI": 50.0,
+    "HEALTH": 26.0,
+    "HEALTH_BIOTECH": 35.0,
+    "HEALTH_PHARMA": 22.0,
+    "FIN": 14.0,
+    "RETAIL": 18.0,
+    "MFG": 18.0,
+    "ENERGY": 12.0,
+    "TELECOM": 16.0,
+    "CONS": 20.0,
+    "TRANS": 16.0,
+    "RESTATE": 24.0
   }
 }

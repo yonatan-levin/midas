@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -26,6 +27,11 @@ type Client struct {
 	logger         *zap.Logger
 	rateLimiter    *rate.Limiter
 	normalizedBase *url.URL
+
+	// sicCache memoizes SIC codes by CIK for the process lifetime.
+	// SIC codes effectively never change for a company, so a per-process cache
+	// eliminates a redundant SEC API call on every valuation request.
+	sicCache sync.Map // map[string]string: CIK -> SIC
 }
 
 // NewClient creates a new SEC API client
@@ -467,6 +473,67 @@ func (c *Client) makeTickerMappingRequest(ctx context.Context, url string) (map[
 	}
 
 	return mapping, nil
+}
+
+// GetCompanySIC fetches the SIC (Standard Industrial Classification) code from the
+// SEC EDGAR submissions endpoint. Results are cached in-process by CIK for the
+// process lifetime — SIC codes effectively never change for a company.
+//
+// Returns the SIC code as a string (e.g., "3571" for Electronic Computers) or empty
+// string if SIC is not available.
+func (c *Client) GetCompanySIC(ctx context.Context, cik string) (string, error) {
+	formattedCIK, err := formatCIK(cik)
+	if err != nil {
+		return "", err
+	}
+
+	// Cache hit: return immediately, skip rate limiter and network.
+	if cached, ok := c.sicCache.Load(formattedCIK); ok {
+		return cached.(string), nil
+	}
+
+	if err := c.rateLimiter.Wait(ctx); err != nil {
+		return "", fmt.Errorf("rate limiter error: %w", err)
+	}
+
+	// Build the submissions URL: https://data.sec.gov/submissions/CIK{padded}.json
+	// This uses the base host (data.sec.gov) but a different path from the XBRL API.
+	submissionsURL := fmt.Sprintf("%s://%s/submissions/%s.json",
+		c.normalizedBase.Scheme, c.normalizedBase.Host, formattedCIK)
+
+	c.logger.Debug("Fetching company SIC code from submissions endpoint",
+		zap.String("cik", cik),
+		zap.String("url", submissionsURL))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", submissionsURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create submissions request: %w", err)
+	}
+
+	req.Header.Set("User-Agent", c.config.UserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch submissions: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("SEC submissions endpoint returned status %d for CIK %s", resp.StatusCode, cik)
+	}
+
+	// Parse only the fields we need (SIC code). The submissions response is large
+	// but we only decode the top-level metadata fields.
+	var submission struct {
+		SIC string `json:"sic"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&submission); err != nil {
+		return "", fmt.Errorf("failed to decode submissions response: %w", err)
+	}
+
+	c.sicCache.Store(formattedCIK, submission.SIC)
+	return submission.SIC, nil
 }
 
 // HealthCheck performs a health check on the SEC API

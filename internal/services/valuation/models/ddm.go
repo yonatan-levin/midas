@@ -9,6 +9,21 @@ import (
 	"go.uber.org/zap"
 )
 
+// Minimum spread between cost of equity and dividend growth rate.
+// Below this the Gordon Growth denominator blows up and the model is unreliable.
+const ddmDenominatorEpsilon = 0.005
+
+// Fraction of cost of equity to cap dividend growth at when g >= CoE.
+// Keeps the model numerically stable for companies with temporarily high growth.
+const ddmGrowthCapFraction = 0.7
+
+// DDM P/BV divergence thresholds — kept in sync with valuation.DeviationThreshold{High,Low}.
+// Declared locally because the models package cannot import its parent valuation package.
+const (
+	ddmPBVDeviationHigh = 2.0
+	ddmPBVDeviationLow  = 0.5
+)
+
 // DDMModel implements the Gordon Growth / Dividend Discount Model for financial companies.
 //
 // Value = DPS * (1 + g) / (CoE - g)
@@ -21,6 +36,9 @@ import (
 // This model is appropriate for mature financial companies (banks, insurance)
 // that pay regular dividends. It should NOT be used for growth companies
 // with zero or irregular dividends.
+//
+// P/BV cross-check: compares implied P/BV against the ROE-justified P/BV
+// = (ROE - g) / (CoE - g). Informational only — does not override DDM.
 type DDMModel struct {
 	logger *zap.Logger
 }
@@ -72,7 +90,7 @@ func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 	// Guard: dividend growth must be below cost of equity for Gordon model to work
 	if dividendGrowth >= costOfEquity {
 		originalGrowth := dividendGrowth
-		dividendGrowth = costOfEquity * 0.7 // Cap at 70% of CoE
+		dividendGrowth = costOfEquity * ddmGrowthCapFraction
 		m.logger.Warn("Dividend growth exceeds cost of equity, capping",
 			zap.Float64("original_growth", originalGrowth),
 			zap.Float64("capped_growth", dividendGrowth))
@@ -80,9 +98,8 @@ func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 
 	// Gordon Growth Model: Value = DPS * (1 + g) / (CoE - g)
 	denominator := costOfEquity - dividendGrowth
-	if denominator <= 0.005 {
-		// Spread too narrow, use minimum 0.5% spread
-		denominator = 0.005
+	if denominator <= ddmDenominatorEpsilon {
+		denominator = ddmDenominatorEpsilon
 	}
 
 	valuePerShare := dps * (1 + dividendGrowth) / denominator
@@ -111,6 +128,36 @@ func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 			payoutRatio := dps / eps
 			if payoutRatio > 0.9 {
 				warnings = append(warnings, fmt.Sprintf("High payout ratio (%.0f%%) leaves little room for growth", payoutRatio*100))
+			}
+		}
+	}
+
+	// P/BV cross-check: implied P/BV (DDM value / book value per share) vs
+	// ROE-justified P/BV (= (ROE - g) / (CoE - g)). Flags >2x or <0.5x divergence
+	// as a signal that the DDM value may be inconsistent with fundamentals.
+	if latest.StockholdersEquity > 0 && input.SharesOutstanding > 0 && latest.NetIncome > 0 {
+		bookValuePerShare := latest.StockholdersEquity / input.SharesOutstanding
+		if bookValuePerShare > 0 {
+			impliedPBV := valuePerShare / bookValuePerShare
+			roe := latest.NetIncome / latest.StockholdersEquity
+
+			coeMinusG := costOfEquity - dividendGrowth
+			roeMinusG := roe - dividendGrowth
+			if coeMinusG > ddmDenominatorEpsilon && roeMinusG > 0 {
+				roeJustifiedPBV := roeMinusG / coeMinusG
+				if roeJustifiedPBV > 0 && impliedPBV > 0 {
+					ratio := impliedPBV / roeJustifiedPBV
+					if ratio > ddmPBVDeviationHigh || ratio < ddmPBVDeviationLow {
+						warnings = append(warnings,
+							fmt.Sprintf("Implied P/BV (%.2fx) diverges from ROE-justified P/BV (%.2fx); ratio=%.2fx",
+								impliedPBV, roeJustifiedPBV, ratio))
+					}
+				}
+				m.logger.Debug("P/BV cross-check",
+					zap.Float64("implied_pbv", impliedPBV),
+					zap.Float64("book_value_per_share", bookValuePerShare),
+					zap.Float64("roe", roe),
+					zap.Float64("dividend_growth", dividendGrowth))
 			}
 		}
 	}

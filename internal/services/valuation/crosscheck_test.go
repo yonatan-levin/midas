@@ -13,10 +13,12 @@ func TestCalculateSanityCheck(t *testing.T) {
 		enterpriseValue   float64
 		eps               float64
 		ebitda            float64
+		fcfPerShare       float64
 		sharesOutstanding float64
 		industry          string
 		sectorPE          float64
 		sectorEVEBITDA    float64
+		sectorPFCF        float64
 		wantReasonable    bool
 		wantFlagCount     int
 	}{
@@ -26,10 +28,12 @@ func TestCalculateSanityCheck(t *testing.T) {
 			enterpriseValue:   1200.0,
 			eps:               5.0,
 			ebitda:            100.0,
+			fcfPerShare:       0.0, // skip P/FCF
 			sharesOutstanding: 100.0,
 			industry:          "TECH",
-			sectorPE:          20.0,  // implied P/E = (1000/100)/5 = 2.0 -> ratio 2/20 = 0.1 < 0.5
-			sectorEVEBITDA:    12.0,  // implied EV/EBITDA = 1200/100 = 12.0 -> ratio 1.0
+			sectorPE:          20.0, // implied P/E = (1000/100)/5 = 2.0 -> ratio 2/20 = 0.1 < 0.5
+			sectorEVEBITDA:    12.0, // implied EV/EBITDA = 1200/100 = 12.0 -> ratio 1.0
+			sectorPFCF:        0.0,
 			wantReasonable:    false, // P/E is way below sector
 			wantFlagCount:     1,     // only P/E flagged
 		},
@@ -39,10 +43,12 @@ func TestCalculateSanityCheck(t *testing.T) {
 			enterpriseValue:   12000.0,
 			eps:               5.0,
 			ebitda:            1000.0,
+			fcfPerShare:       0.0, // skip P/FCF
 			sharesOutstanding: 100.0,
 			industry:          "TECH",
 			sectorPE:          25.0, // implied P/E = (10000/100)/5 = 20.0 -> ratio 20/25 = 0.8
 			sectorEVEBITDA:    12.0, // implied EV/EBITDA = 12000/1000 = 12.0 -> ratio 1.0
+			sectorPFCF:        0.0,
 			wantReasonable:    true,
 			wantFlagCount:     0,
 		},
@@ -52,10 +58,12 @@ func TestCalculateSanityCheck(t *testing.T) {
 			enterpriseValue:   55000.0,
 			eps:               5.0,
 			ebitda:            1000.0,
+			fcfPerShare:       0.0, // skip P/FCF
 			sharesOutstanding: 100.0,
 			industry:          "MFG",
 			sectorPE:          16.0, // implied P/E = (50000/100)/5 = 100.0 -> ratio 100/16 = 6.25
 			sectorEVEBITDA:    10.0, // implied EV/EBITDA = 55000/1000 = 55 -> ratio 5.5
+			sectorPFCF:        0.0,
 			wantReasonable:    false,
 			wantFlagCount:     2, // both P/E and EV/EBITDA flagged
 		},
@@ -65,10 +73,12 @@ func TestCalculateSanityCheck(t *testing.T) {
 			enterpriseValue:   2000.0,
 			eps:               5.0,
 			ebitda:            1000.0,
+			fcfPerShare:       0.0, // skip P/FCF
 			sharesOutstanding: 100.0,
 			industry:          "ENERGY",
 			sectorPE:          10.0, // implied P/E = (5000/100)/5 = 10.0 -> ratio 1.0
 			sectorEVEBITDA:    6.0,  // implied EV/EBITDA = 2000/1000 = 2.0 -> ratio 0.33
+			sectorPFCF:        0.0,
 			wantReasonable:    false,
 			wantFlagCount:     1, // only EV/EBITDA flagged
 		},
@@ -78,10 +88,12 @@ func TestCalculateSanityCheck(t *testing.T) {
 			enterpriseValue:   12000.0,
 			eps:               0.0,
 			ebitda:            1000.0,
+			fcfPerShare:       0.0, // skip P/FCF
 			sharesOutstanding: 100.0,
 			industry:          "TECH",
 			sectorPE:          25.0,
 			sectorEVEBITDA:    12.0,
+			sectorPFCF:        0.0,
 			wantReasonable:    true,
 			wantFlagCount:     0,
 		},
@@ -91,12 +103,90 @@ func TestCalculateSanityCheck(t *testing.T) {
 			enterpriseValue:   12000.0,
 			eps:               5.0,
 			ebitda:            0.0,
+			fcfPerShare:       0.0, // skip P/FCF
 			sharesOutstanding: 100.0,
 			industry:          "TECH",
 			sectorPE:          25.0, // implied P/E = 20.0 -> ratio 0.8
 			sectorEVEBITDA:    12.0,
+			sectorPFCF:        0.0,
 			wantReasonable:    true,
 			wantFlagCount:     0,
+		},
+		// P/FCF cross-check test cases
+		{
+			name:              "P/FCF within sector norms",
+			dcfEquityValue:    10000.0,
+			enterpriseValue:   12000.0,
+			eps:               5.0,
+			ebitda:            1000.0,
+			fcfPerShare:       4.0, // implied P/FCF = (10000/100)/4 = 25.0
+			sharesOutstanding: 100.0,
+			industry:          "TECH",
+			sectorPE:          25.0,
+			sectorEVEBITDA:    12.0,
+			sectorPFCF:        32.0, // ratio = 25/32 = 0.78 -> within range
+			wantReasonable:    true,
+			wantFlagCount:     0,
+		},
+		{
+			name:              "P/FCF way above sector median (>2x)",
+			dcfEquityValue:    50000.0,
+			enterpriseValue:   55000.0,
+			eps:               0.0, // skip P/E
+			ebitda:            0.0, // skip EV/EBITDA
+			fcfPerShare:       2.0, // implied P/FCF = (50000/100)/2 = 250.0
+			sharesOutstanding: 100.0,
+			industry:          "MFG",
+			sectorPE:          0.0,
+			sectorEVEBITDA:    0.0,
+			sectorPFCF:        18.0, // ratio = 250/18 = 13.9 -> >2x
+			wantReasonable:    false,
+			wantFlagCount:     1, // only P/FCF flagged
+		},
+		{
+			name:              "P/FCF below sector median (<0.5x)",
+			dcfEquityValue:    5000.0,
+			enterpriseValue:   6000.0,
+			eps:               0.0,  // skip P/E
+			ebitda:            0.0,  // skip EV/EBITDA
+			fcfPerShare:       10.0, // implied P/FCF = (5000/100)/10 = 5.0
+			sharesOutstanding: 100.0,
+			industry:          "ENERGY",
+			sectorPE:          0.0,
+			sectorEVEBITDA:    0.0,
+			sectorPFCF:        12.0, // ratio = 5/12 = 0.42 -> <0.5x
+			wantReasonable:    false,
+			wantFlagCount:     1, // only P/FCF flagged
+		},
+		{
+			name:              "Zero fcfPerShare skips P/FCF check",
+			dcfEquityValue:    10000.0,
+			enterpriseValue:   12000.0,
+			eps:               5.0,
+			ebitda:            1000.0,
+			fcfPerShare:       0.0, // skip P/FCF
+			sharesOutstanding: 100.0,
+			industry:          "TECH",
+			sectorPE:          25.0,
+			sectorEVEBITDA:    12.0,
+			sectorPFCF:        32.0, // should not be used
+			wantReasonable:    true,
+			wantFlagCount:     0,
+		},
+		{
+			name:              "All three multiples flagged",
+			dcfEquityValue:    50000.0,
+			enterpriseValue:   55000.0,
+			eps:               5.0,
+			ebitda:            1000.0,
+			fcfPerShare:       2.0, // implied P/FCF = (50000/100)/2 = 250.0
+			sharesOutstanding: 100.0,
+			industry:          "MFG",
+			sectorPE:          16.0, // implied P/E = 100 -> ratio 6.25
+			sectorEVEBITDA:    10.0, // implied EV/EBITDA = 55 -> ratio 5.5
+			sectorPFCF:        18.0, // implied P/FCF = 250 -> ratio 13.9
+			wantReasonable:    false,
+			wantFlagCount:     3, // P/E, EV/EBITDA, P/FCF all flagged
 		},
 	}
 
@@ -104,18 +194,37 @@ func TestCalculateSanityCheck(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := CalculateSanityCheck(
 				tt.dcfEquityValue, tt.enterpriseValue,
-				tt.eps, tt.ebitda,
+				tt.eps, tt.ebitda, tt.fcfPerShare,
 				tt.sharesOutstanding,
 				tt.industry,
-				tt.sectorPE, tt.sectorEVEBITDA,
+				tt.sectorPE, tt.sectorEVEBITDA, tt.sectorPFCF,
 			)
 
 			assert.Equal(t, tt.wantReasonable, result.IsReasonable,
 				"IsReasonable mismatch")
 			assert.Len(t, result.Flags, tt.wantFlagCount,
 				"Flag count mismatch: %v", result.Flags)
+
+			// Verify SectorMedianPFCF is stored on the result
+			assert.Equal(t, tt.sectorPFCF, result.SectorMedianPFCF,
+				"SectorMedianPFCF should be stored")
 		})
 	}
+}
+
+// TestCalculateSanityCheck_PFCF_ImpliedValue verifies the exact implied P/FCF value.
+func TestCalculateSanityCheck_PFCF_ImpliedValue(t *testing.T) {
+	// dcfValuePerShare = 10000 / 100 = 100
+	// implied P/FCF = 100 / 4 = 25.0
+	result := CalculateSanityCheck(
+		10000.0, 12000.0,
+		0.0, 0.0, 4.0,
+		100.0,
+		"TECH",
+		0.0, 0.0, 32.0,
+	)
+	assert.InDelta(t, 25.0, result.ImpliedPFCF, 0.001, "ImpliedPFCF should be 25.0")
+	assert.True(t, result.IsReasonable, "25/32 = 0.78, should be reasonable")
 }
 
 func TestLookupMultiple(t *testing.T) {

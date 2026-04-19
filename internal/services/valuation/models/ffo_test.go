@@ -313,6 +313,190 @@ func TestFFOModel_Calculate_MissingDAWarning(t *testing.T) {
 	assert.NotEqual(t, "high", result.Confidence)
 }
 
+// ---------------------------------------------------------------------------
+// NAV Cross-Check Tests — REIT NAV = NOI / Cap Rate
+// ---------------------------------------------------------------------------
+
+// TestFFOModel_Calculate_NAVCrossCheck_Reasonable tests that NAV cross-check does NOT
+// produce a warning when P/FFO value and NAV are within 2x of each other.
+func TestFFOModel_Calculate_NAVCrossCheck_Reasonable(t *testing.T) {
+	model := NewFFOModelWithMultiple(15.0, testLogger())
+	// Inject a cap rate that yields a NAV close to the P/FFO value
+	model.navCapRate = 0.06 // 6% cap rate
+	ctx := context.Background()
+
+	// OperatingIncome as NOI proxy = 600M
+	// NAV = 600M / 0.06 = 10B, NAV/share = 10B / 500M = 20.0
+	// FFO = 2B + 1.5B - 0.1B = 3.4B, FFO/share = 6.8, Value = 6.8 * 15 = 102
+	// ratio = 102 / 20 = 5.1 -> >2x, so this will warn.
+	// Let me adjust: use OI=3B. NAV/share = 3B/0.06/500M = 100.
+	// That's close to 102. No warning.
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "AMT",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   2000000000,
+					DepreciationAndAmortization: 1500000000,
+					GainOnPropertySales:         100000000,
+					OperatingIncome:             3060000000, // NOI proxy -> NAV/share ~102
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      500000000,
+		InterestBearingDebt:    30000000000,
+		CashAndCashEquivalents: 2000000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// FFO value = 102. NAV = 3.06B / 0.06 / 500M = 102. No NAV divergence warning.
+	for _, w := range result.Warnings {
+		assert.NotContains(t, w, "NAV", "should NOT have NAV divergence warning when values are close")
+	}
+}
+
+// TestFFOModel_Calculate_NAVCrossCheck_Divergent tests that a NAV warning is produced
+// when P/FFO value diverges significantly from NAV per share (>2x or <0.5x).
+func TestFFOModel_Calculate_NAVCrossCheck_Divergent(t *testing.T) {
+	model := NewFFOModelWithMultiple(15.0, testLogger())
+	model.navCapRate = 0.06
+	ctx := context.Background()
+
+	// FFO = 100M + 50M = 150M, FFO/share = 15, Value = 15 * 15 = 225
+	// OI = 50M, NAV = 50M / 0.06 / 10M = 83.33
+	// Ratio = 225 / 83.33 = 2.7 -> >2x, should warn
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "DIVERGENT",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   100000000,
+					DepreciationAndAmortization: 50000000,
+					OperatingIncome:             50000000,
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding: 10000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Should have NAV divergence warning
+	hasNAVWarning := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "NAV") {
+			hasNAVWarning = true
+			break
+		}
+	}
+	assert.True(t, hasNAVWarning, "should warn when P/FFO value diverges significantly from NAV")
+}
+
+// TestFFOModel_Calculate_NAVCrossCheck_NoCapRate tests that NAV cross-check is
+// gracefully skipped when no cap rate is configured.
+func TestFFOModel_Calculate_NAVCrossCheck_NoCapRate(t *testing.T) {
+	model := NewFFOModelWithMultiple(15.0, testLogger())
+	model.navCapRate = 0 // No cap rate -> skip NAV
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "NO_CAPRATE",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   100000000,
+					DepreciationAndAmortization: 50000000,
+					OperatingIncome:             80000000,
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding: 10000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// No NAV warning because cap rate is zero (skipped)
+	for _, w := range result.Warnings {
+		assert.NotContains(t, w, "NAV", "should not produce NAV warning when cap rate is 0")
+	}
+}
+
+// TestFFOModel_Calculate_NAVCrossCheck_ZeroOI tests that NAV cross-check is
+// gracefully skipped when operating income (NOI proxy) is zero or negative.
+func TestFFOModel_Calculate_NAVCrossCheck_ZeroOI(t *testing.T) {
+	model := NewFFOModelWithMultiple(15.0, testLogger())
+	model.navCapRate = 0.06
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "ZERO_OI",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   100000000,
+					DepreciationAndAmortization: 50000000,
+					OperatingIncome:             0, // no OI data
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding: 10000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// No NAV warning because OI (NOI proxy) is zero
+	for _, w := range result.Warnings {
+		assert.NotContains(t, w, "NAV", "should not produce NAV warning when OI is zero")
+	}
+}
+
+// TestLoadREITCapRate_ValidFile tests loading cap rate from config
+func TestLoadREITCapRate_ValidFile(t *testing.T) {
+	tmpFile := t.TempDir() + "/industry_multiples.json"
+	content := `{"reit_cap_rates": {"default": 0.065, "office": 0.07}}`
+	err := os.WriteFile(tmpFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	capRate, err := loadREITCapRate(tmpFile)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.065, capRate, 0.001)
+}
+
+// TestLoadREITCapRate_MissingFile tests cap rate loading from non-existent file
+func TestLoadREITCapRate_MissingFile(t *testing.T) {
+	_, err := loadREITCapRate("/nonexistent/path/file.json")
+	assert.Error(t, err)
+}
+
+// TestLoadREITCapRate_NoDefaultKey tests when config has no default cap rate
+func TestLoadREITCapRate_NoDefaultKey(t *testing.T) {
+	tmpFile := t.TempDir() + "/no_default.json"
+	content := `{"reit_cap_rates": {"office": 0.07}}`
+	err := os.WriteFile(tmpFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	_, err = loadREITCapRate(tmpFile)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no default")
+}
+
 // TestLoadPFFOMultiple_ValidFile tests loading P/FFO multiple from a valid temp config file
 func TestLoadPFFOMultiple_ValidFile(t *testing.T) {
 	// Create a temporary config file with valid JSON
@@ -354,4 +538,43 @@ func TestLoadPFFOMultiple_NoDefaultKey(t *testing.T) {
 	_, err = loadPFFOMultiple(tmpFile)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no default P/FFO multiple")
+}
+
+// TestLoadFFOConfig_ValidFile verifies loadFFOConfig returns both values from a single read.
+func TestLoadFFOConfig_ValidFile(t *testing.T) {
+	tmpFile := t.TempDir() + "/industry_multiples.json"
+	content := `{"reit_pffo_multiples": {"default": 17.0}, "reit_cap_rates": {"default": 0.055}}`
+	err := os.WriteFile(tmpFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	pffo, capRate := loadFFOConfig(tmpFile)
+	assert.InDelta(t, 17.0, pffo, 0.001)
+	assert.InDelta(t, 0.055, capRate, 0.0001)
+}
+
+// TestLoadFFOConfig_MissingFile falls back to defaults on missing config.
+func TestLoadFFOConfig_MissingFile(t *testing.T) {
+	pffo, capRate := loadFFOConfig("/nonexistent/path/file.json")
+	assert.InDelta(t, DefaultPFFOMultiple, pffo, 0.001)
+	assert.InDelta(t, DefaultREITCapRate, capRate, 0.0001)
+}
+
+// TestLoadFFOConfig_PartialConfig returns defaults for missing keys and loaded values for present keys.
+func TestLoadFFOConfig_PartialConfig(t *testing.T) {
+	tmpFile := t.TempDir() + "/industry_multiples.json"
+	content := `{"reit_pffo_multiples": {"default": 19.0}}` // no cap rates
+	err := os.WriteFile(tmpFile, []byte(content), 0644)
+	require.NoError(t, err)
+
+	pffo, capRate := loadFFOConfig(tmpFile)
+	assert.InDelta(t, 19.0, pffo, 0.001)
+	assert.InDelta(t, DefaultREITCapRate, capRate, 0.0001, "cap rate should fall back to default")
+}
+
+// TestNewFFOModelWithConfig verifies the explicit-config constructor wires both fields.
+func TestNewFFOModelWithConfig(t *testing.T) {
+	model := NewFFOModelWithConfig(14.0, 0.055, testLogger())
+	require.NotNil(t, model)
+	assert.InDelta(t, 14.0, model.pffoMultiple, 0.001)
+	assert.InDelta(t, 0.055, model.navCapRate, 0.0001)
 }

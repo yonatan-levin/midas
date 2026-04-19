@@ -134,7 +134,23 @@ func (g *Gateway) GetFinancialDataForTicker(ctx context.Context, ticker, cik str
 		data.Ticker = ticker
 	}
 
-	// 4. Normalize each period's data
+	// 4. Fetch SIC code from the SEC submissions endpoint for industry classification.
+	// This is a lightweight call that extracts only the SIC field from the metadata.
+	// Graceful degradation: if the call fails, we proceed without SIC (keyword matching
+	// in IndustryClassifier still works).
+	sicCode, sicErr := g.client.GetCompanySIC(ctx, cik)
+	if sicErr != nil {
+		g.logger.Debug("Could not fetch SIC code from submissions endpoint, proceeding without",
+			zap.String("ticker", ticker),
+			zap.Error(sicErr))
+	} else if sicCode != "" {
+		historical.SICCode = sicCode
+		g.logger.Debug("Extracted SIC code from SEC submissions",
+			zap.String("ticker", ticker),
+			zap.String("sic_code", sicCode))
+	}
+
+	// 5. Normalize each period's data
 	for period, data := range historical.Data {
 		normalized, err := g.parser.NormalizeFinancialData(ctx, data)
 		if err != nil {

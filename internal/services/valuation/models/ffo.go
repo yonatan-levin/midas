@@ -14,48 +14,132 @@ import (
 // multiple is available from config.
 const DefaultPFFOMultiple = 15.0
 
+// DefaultREITCapRate is the default capitalization rate for NAV cross-check (6%).
+const DefaultREITCapRate = 0.06
+
 // DefaultIndustryMultiplesPath is the default path to the industry multiples config file.
 const DefaultIndustryMultiplesPath = "./config/industry_multiples.json"
+
+// NAV divergence thresholds — kept in sync with valuation.DeviationThreshold{High,Low}.
+// Declared locally because the models package cannot import its parent valuation package.
+const (
+	navDeviationThresholdHigh = 2.0
+	navDeviationThresholdLow  = 0.5
+)
 
 // FFOModel implements the Funds From Operations model for REITs.
 //
 // FFO = Net Income + D&A - Gains on Property Sales
 // Value = (FFO / Shares) * P/FFO Multiple
 //
-// This model is the standard valuation approach for Real Estate Investment Trusts (REITs)
-// since traditional earnings are distorted by large depreciation charges on real estate assets.
+// Applied to REITs because accounting depreciation distorts net income —
+// buildings depreciate on paper while typically appreciating in value.
+//
+// NAV cross-check: compares P/FFO value against NAV (= NOI / Cap Rate, using
+// OperatingIncome as NOI proxy). Informational only — does not override P/FFO.
 type FFOModel struct {
 	pffoMultiple float64 // P/FFO multiple to apply
+	navCapRate   float64 // Cap rate for NAV cross-check (0 = skip NAV)
 	logger       *zap.Logger
 }
 
-// NewFFOModel creates a new FFO model with P/FFO multiple loaded from the given config path.
-// If configPath is empty, uses DefaultIndustryMultiplesPath.
+// NewFFOModel creates a new FFO model with P/FFO multiple and NAV cap rate
+// loaded from the given config path. If configPath is empty, uses DefaultIndustryMultiplesPath.
+// The config file is read ONCE — both fields are parsed from a single read.
 func NewFFOModel(configPath string, logger *zap.Logger) *FFOModel {
 	if configPath == "" {
 		configPath = DefaultIndustryMultiplesPath
 	}
-	multiple := DefaultPFFOMultiple
-
-	// Attempt to load the P/FFO multiple from config
-	configMultiple, err := loadPFFOMultiple(configPath)
-	if err == nil && configMultiple > 0 {
-		multiple = configMultiple
-	}
+	multiple, capRate := loadFFOConfig(configPath)
 
 	return &FFOModel{
 		pffoMultiple: multiple,
+		navCapRate:   capRate,
 		logger:       logger.Named("ffo-model"),
 	}
 }
 
-// NewFFOModelWithMultiple creates an FFO model with an explicit P/FFO multiple.
-// Used for testing and when the multiple is provided externally.
-func NewFFOModelWithMultiple(pffoMultiple float64, logger *zap.Logger) *FFOModel {
+// NewFFOModelWithConfig creates an FFO model with explicit P/FFO multiple and
+// NAV cap rate. Used for testing and when config is provided externally.
+func NewFFOModelWithConfig(pffoMultiple, navCapRate float64, logger *zap.Logger) *FFOModel {
 	return &FFOModel{
 		pffoMultiple: pffoMultiple,
+		navCapRate:   navCapRate,
 		logger:       logger.Named("ffo-model"),
 	}
+}
+
+// NewFFOModelWithMultiple creates an FFO model with an explicit P/FFO multiple,
+// defaulting the NAV cap rate. Kept for backward compatibility with existing tests.
+func NewFFOModelWithMultiple(pffoMultiple float64, logger *zap.Logger) *FFOModel {
+	return NewFFOModelWithConfig(pffoMultiple, DefaultREITCapRate, logger)
+}
+
+// loadFFOConfig reads the industry multiples file ONCE and returns both the
+// P/FFO multiple and the NAV cap rate. Falls back to defaults on any error.
+// This replaces two separate file reads in the constructor.
+func loadFFOConfig(path string) (pffoMultiple, navCapRate float64) {
+	pffoMultiple = DefaultPFFOMultiple
+	navCapRate = DefaultREITCapRate
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return pffoMultiple, navCapRate
+	}
+
+	var cfg struct {
+		REITPFFOMultiples map[string]float64 `json:"reit_pffo_multiples"`
+		REITCapRates      map[string]float64 `json:"reit_cap_rates"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return pffoMultiple, navCapRate
+	}
+
+	if v, ok := cfg.REITPFFOMultiples["default"]; ok && v > 0 {
+		pffoMultiple = v
+	}
+	if v, ok := cfg.REITCapRates["default"]; ok && v > 0 {
+		navCapRate = v
+	}
+	return pffoMultiple, navCapRate
+}
+
+// loadPFFOMultiple returns only the P/FFO multiple from the config file.
+// Thin wrapper preserved for backward compatibility with existing tests.
+func loadPFFOMultiple(path string) (float64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read industry multiples config: %w", err)
+	}
+	var cfg struct {
+		REITPFFOMultiples map[string]float64 `json:"reit_pffo_multiples"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return 0, fmt.Errorf("failed to parse industry multiples config: %w", err)
+	}
+	if v, ok := cfg.REITPFFOMultiples["default"]; ok {
+		return v, nil
+	}
+	return 0, fmt.Errorf("no default P/FFO multiple found in config")
+}
+
+// loadREITCapRate returns only the REIT cap rate from the config file.
+// Thin wrapper preserved for backward compatibility with existing tests.
+func loadREITCapRate(path string) (float64, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read industry multiples config: %w", err)
+	}
+	var cfg struct {
+		REITCapRates map[string]float64 `json:"reit_cap_rates"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return 0, fmt.Errorf("failed to parse industry multiples config: %w", err)
+	}
+	if v, ok := cfg.REITCapRates["default"]; ok {
+		return v, nil
+	}
+	return 0, fmt.Errorf("no default REIT cap rate found in config")
 }
 
 // ModelType returns the model identifier.
@@ -139,6 +223,30 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 		confidence = "low"
 	}
 
+	// NAV cross-check: compare P/FFO value against NAV per share.
+	// NAV = NOI / Cap Rate, using OperatingIncome as a proxy for Net Operating Income.
+	// Informational only — does not change the primary P/FFO valuation.
+	if m.navCapRate > 0 && latest.OperatingIncome > 0 && valuePerShare > 0 {
+		nav := latest.OperatingIncome / m.navCapRate
+		navPerShare := nav / shares
+
+		m.logger.Debug("NAV cross-check",
+			zap.Float64("noi_proxy", latest.OperatingIncome),
+			zap.Float64("cap_rate", m.navCapRate),
+			zap.Float64("nav_per_share", navPerShare),
+			zap.Float64("pffo_value_per_share", valuePerShare))
+
+		// Flag if P/FFO value diverges significantly from NAV per share
+		if navPerShare > 0 {
+			ratio := valuePerShare / navPerShare
+			if ratio > navDeviationThresholdHigh || ratio < navDeviationThresholdLow {
+				warnings = append(warnings,
+					fmt.Sprintf("P/FFO value ($%.2f) diverges from NAV cross-check ($%.2f/share, cap rate %.1f%%); ratio=%.2fx",
+						valuePerShare, navPerShare, m.navCapRate*100, ratio))
+			}
+		}
+	}
+
 	m.logger.Info("FFO valuation completed",
 		zap.Float64("net_income", netIncome),
 		zap.Float64("da", da),
@@ -156,25 +264,4 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 		Warnings:               warnings,
 		Confidence:             confidence,
 	}, nil
-}
-
-// loadPFFOMultiple loads the default P/FFO multiple from the industry multiples config file.
-func loadPFFOMultiple(path string) (float64, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read industry multiples config: %w", err)
-	}
-
-	var cfg struct {
-		REITPFFOMultiples map[string]float64 `json:"reit_pffo_multiples"`
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return 0, fmt.Errorf("failed to parse industry multiples config: %w", err)
-	}
-
-	if defaultMultiple, ok := cfg.REITPFFOMultiples["default"]; ok {
-		return defaultMultiple, nil
-	}
-
-	return 0, fmt.Errorf("no default P/FFO multiple found in config")
 }

@@ -866,3 +866,96 @@ func TestClient_GetCompanyFacts_InvalidCIK(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid CIK")
 }
+
+// ---------------------------------------------------------------------------
+// GetCompanySIC tests — Item 3: Extract SIC code from SEC submissions endpoint
+// ---------------------------------------------------------------------------
+
+// TestClient_GetCompanySIC_Success verifies successful SIC code extraction
+// from the SEC submissions endpoint response.
+func TestClient_GetCompanySIC_Success(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Contains(t, r.URL.Path, "/submissions/CIK0000320193.json")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"cik":"320193","entityType":"operating","sic":"3571","sicDescription":"ELECTRONIC COMPUTERS","name":"Apple Inc."}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test User Agent",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	sic, err := client.GetCompanySIC(context.Background(), "320193")
+	require.NoError(t, err)
+	assert.Equal(t, "3571", sic)
+}
+
+// TestClient_GetCompanySIC_NotFound verifies graceful handling when submissions
+// endpoint returns 404 (e.g., unknown CIK).
+func TestClient_GetCompanySIC_NotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	sic, err := client.GetCompanySIC(context.Background(), "9999999")
+	assert.Error(t, err)
+	assert.Empty(t, sic)
+}
+
+// TestClient_GetCompanySIC_NoSICField verifies behavior when the submissions response
+// is valid JSON but lacks the "sic" field.
+func TestClient_GetCompanySIC_NoSICField(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"cik":"320193","entityType":"operating","name":"Test Corp"}`))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	sic, err := client.GetCompanySIC(context.Background(), "320193")
+	assert.NoError(t, err)
+	assert.Empty(t, sic, "should return empty string when SIC is not in response")
+}
+
+// TestClient_GetCompanySIC_InvalidCIK verifies error handling for invalid CIK format.
+func TestClient_GetCompanySIC_InvalidCIK(t *testing.T) {
+	cfg := &config.SECConfig{
+		BaseURL:          "https://data.sec.gov",
+		UserAgent:        "Test",
+		RateLimit:        10,
+		RequestTimeout:   5 * time.Second,
+		MaxRetries:       1,
+		RetryBackoffBase: time.Millisecond,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	sic, err := client.GetCompanySIC(context.Background(), "BADCIK")
+	assert.Error(t, err)
+	assert.Empty(t, sic)
+}
