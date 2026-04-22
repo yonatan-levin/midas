@@ -3,12 +3,15 @@ package di
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"gopkg.in/natefinch/lumberjack.v2"
 
 	// Ensure sqlite drivers are registered in all build modes (including distroless containers)
 	_ "github.com/mattn/go-sqlite3"
@@ -22,6 +25,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/infra/repositories/cache"
 	"github.com/midas/dcf-valuation-api/internal/infra/repositories/sqlite"
 	"github.com/midas/dcf-valuation-api/internal/infra/resilience"
+	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	"github.com/midas/dcf-valuation-api/internal/services/auth"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
 	aiSvc "github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
@@ -90,6 +94,9 @@ func (a *RateLimiterCacheAdapter) Delete(ctx context.Context, key string) error 
 var CoreModule = fx.Options(
 	// Logging Module
 	fx.Provide(NewLogger),
+
+	// Observability: calculation-stage emitter (consumed by services in Phase S)
+	fx.Provide(calclog.NewEmitter),
 
 	// Database Module
 	fx.Provide(NewDatabase),
@@ -207,45 +214,105 @@ func (c *Container) Stop(ctx context.Context) error {
 
 // Dependency Providers
 
-// NewLogger creates a new structured logger
+// NewLogger creates a structured logger using the LoggingConfig from the
+// application configuration. It builds a zapcore.Tee that always writes to
+// stdout and optionally writes to a rolling log file (lumberjack) when
+// cfg.Logging.File.Enabled is true.
+//
+// Format decisions:
+//   - "console" → coloured, human-readable output (development)
+//   - "json"    → structured JSON output (staging / production)
+//
+// The file sink always uses JSON regardless of the stdout format so that
+// log-processing pipelines can parse it reliably.
+//
+// Backward compatibility: if cfg.Logging.Level is empty (e.g. the Config was
+// constructed manually in a test without going through Load()), the function
+// falls back to cfg.LogLevel, and then to "info".
 func NewLogger(cfg *config.Config) (*zap.Logger, error) {
-	var config zap.Config
-
-	switch cfg.LogLevel {
-	case "debug":
-		config = zap.NewDevelopmentConfig()
-		config.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
-	case "info":
-		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
-	case "warn":
-		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zap.WarnLevel)
-	case "error":
-		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zap.ErrorLevel)
-	default:
-		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
+	// Resolve effective log level, applying backward-compat fallback chain.
+	levelStr := cfg.Logging.Level
+	if levelStr == "" {
+		levelStr = cfg.LogLevel
+	}
+	if levelStr == "" {
+		levelStr = "info"
 	}
 
-	// Customize output format for better readability
-	config.Encoding = "json"
-	config.OutputPaths = []string{"stdout"}
-	config.ErrorOutputPaths = []string{"stderr"}
+	var zapLevel zapcore.Level
+	if err := zapLevel.UnmarshalText([]byte(levelStr)); err != nil {
+		// Unknown level string — default to info rather than failing startup.
+		zapLevel = zapcore.InfoLevel
+	}
+	levelEnabler := zap.NewAtomicLevelAt(zapLevel)
 
-	// Add caller information in development
-	if cfg.LogLevel == "debug" {
-		config.Development = true
-		config.DisableCaller = false
-		config.DisableStacktrace = false
+	// Resolve effective format, defaulting to JSON when unset.
+	format := cfg.Logging.Format
+	if format == "" {
+		format = "json"
+	}
+
+	// Build the stdout encoder according to the configured format.
+	var stdoutEncoder zapcore.Encoder
+	if format == "console" {
+		// Human-readable, coloured console output for development.
+		encCfg := zap.NewDevelopmentEncoderConfig()
+		encCfg.TimeKey = "ts"
+		encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+		encCfg.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		stdoutEncoder = zapcore.NewConsoleEncoder(encCfg)
 	} else {
-		config.Development = false
-		config.DisableCaller = true
-		config.DisableStacktrace = true
+		// Structured JSON output for staging and production.
+		encCfg := zap.NewProductionEncoderConfig()
+		encCfg.TimeKey = "ts"
+		encCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+		stdoutEncoder = zapcore.NewJSONEncoder(encCfg)
 	}
 
-	return config.Build()
+	// Stdout core — always present.
+	stdoutCore := zapcore.NewCore(
+		stdoutEncoder,
+		zapcore.Lock(os.Stdout),
+		levelEnabler,
+	)
+
+	// Optional file core backed by lumberjack for automatic log rotation.
+	var cores []zapcore.Core
+	cores = append(cores, stdoutCore)
+
+	if cfg.Logging.File.Enabled {
+		fileWriter := &lumberjack.Logger{
+			Filename:   cfg.Logging.File.Path,
+			MaxSize:    cfg.Logging.File.MaxSizeMB,
+			MaxBackups: cfg.Logging.File.MaxBackups,
+			MaxAge:     cfg.Logging.File.MaxAgeDays,
+			Compress:   cfg.Logging.File.Compress,
+		}
+
+		// The file sink always uses JSON so log-ingestion pipelines can parse it,
+		// even when the stdout format is set to "console".
+		jsonEncCfg := zap.NewProductionEncoderConfig()
+		jsonEncCfg.TimeKey = "ts"
+		jsonEncCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+		fileCore := zapcore.NewCore(
+			zapcore.NewJSONEncoder(jsonEncCfg),
+			zapcore.AddSync(fileWriter),
+			levelEnabler,
+		)
+		cores = append(cores, fileCore)
+	}
+
+	// Tee all cores together.
+	core := zapcore.NewTee(cores...)
+
+	// Build the final logger with caller info always enabled and stacktraces
+	// only at Error level and above to avoid noise in normal operation.
+	logger := zap.New(core,
+		zap.AddCaller(),
+		zap.AddStacktrace(zapcore.ErrorLevel),
+	).Named("midas")
+
+	return logger, nil
 }
 
 // mapDatabaseDriver maps configuration driver names to actual registered driver names

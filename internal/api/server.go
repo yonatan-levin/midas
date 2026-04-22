@@ -6,10 +6,12 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
@@ -25,6 +27,13 @@ import (
 )
 
 // (No embedded spec; serving from filesystem path when available)
+
+// requestIDValidator is a precompiled regex that validates an incoming
+// X-Request-ID header value. The allowed character set is intentionally
+// conservative to prevent log-injection and header-injection attacks.
+// Consumed by Phase R's requestIDMiddleware to decide whether to accept or
+// replace a client-supplied request ID.
+var requestIDValidator = regexp.MustCompile(`^[A-Za-z0-9_.:\-]{1,128}$`)
 
 // Server represents the HTTP server
 type Server struct {
@@ -557,8 +566,29 @@ func (s *Server) respondWithError(c *gin.Context, statusCode int, errorCode, mes
 
 // Helper functions
 
-// generateRequestID generates a unique request ID
+// generateRequestID generates a cryptographically random, globally unique
+// request identifier using UUID v4 (RFC 4122).
+// The returned string is a standard UUID in hyphenated form, e.g.:
+//
+//	"550e8400-e29b-41d4-a716-446655440000"
+//
+// Phase R's requestIDMiddleware will use this when no valid X-Request-ID
+// header is provided by the client.
 func generateRequestID() string {
-	// TODO: Implement proper UUID generation
-	return fmt.Sprintf("req-%d", time.Now().UnixNano())
+	return uuid.NewString()
+}
+
+// isValidRequestID reports whether s is a safe, non-empty request ID that can
+// be accepted from an X-Request-ID header and propagated through the system.
+//
+// The validator enforces:
+//   - Non-empty string
+//   - Maximum length of 128 characters (prevents header-size abuse)
+//   - Only alphanumeric characters plus ".", "_", ":", "-"
+//     (excludes whitespace, control characters, and other injection vectors)
+//
+// Phase R will use this to decide whether to trust a client-supplied ID or
+// generate a fresh one.
+func isValidRequestID(s string) bool {
+	return requestIDValidator.MatchString(s)
 }

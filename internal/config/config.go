@@ -30,6 +30,54 @@ type Config struct {
 	Valuation   ValuationConfig   `mapstructure:"valuation"`
 	DataCleaner DataCleanerConfig `mapstructure:"datacleaner"`
 	Scheduler   SchedulerConfig   `mapstructure:"scheduler"`
+
+	// Observability
+	Logging LoggingConfig `mapstructure:"logging"`
+}
+
+// LoggingConfig holds structured-logging and log-file configuration.
+// Environment-specific defaults are applied by applyLoggingEnvironmentDefaults
+// after the config file is read, so that explicit user values always win.
+type LoggingConfig struct {
+	// Level controls the minimum log level emitted (debug|info|warn|error).
+	Level string `mapstructure:"level"`
+
+	// Format selects the encoder: "json" for production, "console" for development.
+	Format string `mapstructure:"format"`
+
+	// TraceCalculations, when true, emits per-stage DCF calculation entries at
+	// Info level (via calclog.Emitter). When false, they are emitted at Debug
+	// level and are effectively invisible in production log streams.
+	TraceCalculations bool `mapstructure:"trace_calculations"`
+
+	// AccessLogSkipPaths lists endpoint paths that are excluded from the
+	// access-log middleware (e.g. health probes, metrics scrape endpoint).
+	AccessLogSkipPaths []string `mapstructure:"access_log_skip_paths"`
+
+	// File holds rolling-file sink configuration.
+	File LogFileConfig `mapstructure:"file"`
+}
+
+// LogFileConfig controls the rolling log-file sink backed by lumberjack.
+type LogFileConfig struct {
+	// Enabled enables the file sink alongside the stdout sink (NewTee).
+	Enabled bool `mapstructure:"enabled"`
+
+	// Path is the absolute or relative path to the log file.
+	// The directory is created automatically by lumberjack if it doesn't exist.
+	Path string `mapstructure:"path"`
+
+	// MaxSizeMB is the maximum size in megabytes before the file is rotated.
+	MaxSizeMB int `mapstructure:"max_size_mb"`
+
+	// MaxBackups is the number of old log files to retain.
+	MaxBackups int `mapstructure:"max_backups"`
+
+	// MaxAgeDays is the maximum number of days to retain old log files.
+	MaxAgeDays int `mapstructure:"max_age_days"`
+
+	// Compress determines whether rotated log files are gzip-compressed.
+	Compress bool `mapstructure:"compress"`
 }
 
 // ServerConfig holds HTTP server configuration
@@ -182,7 +230,7 @@ func Load() (*Config, error) {
 	viper.AddConfigPath("./config")
 	viper.AddConfigPath(".")
 
-	// Set default values
+	// Set base default values (environment-agnostic)
 	setDefaults()
 
 	// Enable environment variable support (map nested keys like database.driver -> DATABASE_DRIVER)
@@ -197,9 +245,21 @@ func Load() (*Config, error) {
 		// Config file not found, continue with env vars and defaults
 	}
 
+	// Apply environment-specific logging defaults AFTER reading the config file.
+	// SetDefault has the lowest priority in Viper (below explicit config values
+	// and env-var overrides), so user-supplied values always win.
+	applyLoggingEnvironmentDefaults()
+
 	var config Config
 	if err := viper.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+
+	// Backward compatibility: if the new Logging.Level is empty (e.g. the caller
+	// constructed a Config manually without filling Logging), fall back to the
+	// legacy LogLevel field so the logger always has a usable level.
+	if config.Logging.Level == "" && config.LogLevel != "" {
+		config.Logging.Level = config.LogLevel
 	}
 
 	// Validate configuration
@@ -210,7 +270,9 @@ func Load() (*Config, error) {
 	return &config, nil
 }
 
-// setDefaults sets default configuration values
+// setDefaults sets base (environment-agnostic) default configuration values.
+// Environment-specific logging defaults are applied separately by
+// applyLoggingEnvironmentDefaults after the config file has been read.
 func setDefaults() {
 	// Application defaults
 	viper.SetDefault("port", "8080")
@@ -218,6 +280,17 @@ func setDefaults() {
 	viper.SetDefault("log_level", "debug")
 	viper.SetDefault("enable_swagger", false)
 	viper.SetDefault("enable_pprof", false)
+
+	// Logging file defaults (always apply regardless of environment)
+	viper.SetDefault("logging.file.path", "./logs/midas.log")
+	viper.SetDefault("logging.file.max_size_mb", 100)
+	viper.SetDefault("logging.file.max_backups", 10)
+	viper.SetDefault("logging.file.max_age_days", 14)
+	viper.SetDefault("logging.file.compress", true)
+
+	// Access log skip paths: health probes and metrics scrape endpoint should
+	// not pollute access logs with high-frequency noise.
+	viper.SetDefault("logging.access_log_skip_paths", []string{"/metrics", "/health", "/ready"})
 
 	// Server defaults
 	viper.SetDefault("server.port", "8080")
@@ -312,6 +385,36 @@ func setDefaults() {
 	viper.SetDefault("scheduler.enabled", false)     // Disabled by default
 	viper.SetDefault("scheduler.interval", "24h")    // Run daily by default
 	viper.SetDefault("scheduler.max_concurrency", 2) // Maximum 2 concurrent jobs
+}
+
+// applyLoggingEnvironmentDefaults sets environment-specific logging defaults.
+//
+// This is called AFTER viper.ReadInConfig so that values from the config file
+// are already loaded. Because we use viper.SetDefault, these values have the
+// lowest priority — explicit config-file keys and env-var overrides win.
+//
+// Rules:
+//
+//	development → format=console, file.enabled=true, level=debug, trace_calculations=true
+//	staging     → format=json,    file.enabled=false, level=info,  trace_calculations=false
+//	production  → format=json,    file.enabled=false, level=info,  trace_calculations=false
+func applyLoggingEnvironmentDefaults() {
+	env := viper.GetString("environment")
+
+	switch env {
+	case "staging", "production":
+		viper.SetDefault("logging.format", "json")
+		viper.SetDefault("logging.file.enabled", false)
+		viper.SetDefault("logging.level", "info")
+		viper.SetDefault("logging.trace_calculations", false)
+	default:
+		// "development" and any unrecognised environment fall through to
+		// developer-friendly defaults: coloured console output with file sink.
+		viper.SetDefault("logging.format", "console")
+		viper.SetDefault("logging.file.enabled", true)
+		viper.SetDefault("logging.level", "debug")
+		viper.SetDefault("logging.trace_calculations", true)
+	}
 }
 
 // validate performs basic validation on the configuration

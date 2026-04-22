@@ -182,20 +182,26 @@ func buildActiveAPIKey(permissions []entities.Permission) *entities.APIKey {
 // ===================================================================
 
 func TestGenerateRequestID(t *testing.T) {
-	t.Run("returns non-empty string with req- prefix", func(t *testing.T) {
+	t.Run("returns non-empty UUID string", func(t *testing.T) {
 		id := generateRequestID()
-		assert.True(t, strings.HasPrefix(id, "req-"), "should start with req-")
-		assert.Greater(t, len(id), 4, "should be longer than just the prefix")
+		assert.NotEmpty(t, id, "generated ID must not be empty")
+		// UUID v4 hyphenated form is 36 characters: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+		assert.Equal(t, 36, len(id), "UUID v4 hyphenated form should be 36 characters")
 	})
 
-	t.Run("IDs are non-empty and properly formatted", func(t *testing.T) {
-		// generateRequestID uses time.Now().UnixNano(), which on Windows
-		// has ~15ms granularity — tight-loop uniqueness isn't guaranteed.
-		// We verify format correctness instead.
+	t.Run("IDs pass the request ID validator", func(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			id := generateRequestID()
-			assert.True(t, strings.HasPrefix(id, "req-"), "ID must start with req- prefix")
-			assert.Greater(t, len(id), 8, "ID must include a numeric suffix")
+			assert.True(t, isValidRequestID(id), "generated ID %q must pass isValidRequestID", id)
+		}
+	})
+
+	t.Run("IDs are unique across consecutive calls", func(t *testing.T) {
+		seen := make(map[string]struct{}, 50)
+		for i := 0; i < 50; i++ {
+			id := generateRequestID()
+			assert.NotContains(t, seen, id, "duplicate ID: %q", id)
+			seen[id] = struct{}{}
 		}
 	})
 }
@@ -437,7 +443,9 @@ func TestServer_requestIDMiddleware(t *testing.T) {
 		assert.Equal(t, http.StatusOK, w.Code)
 		responseID := w.Header().Get("X-Request-ID")
 		assert.NotEmpty(t, responseID, "should generate a request ID")
-		assert.True(t, strings.HasPrefix(responseID, "req-"), "generated ID should have req- prefix")
+		// Since O.6, IDs are UUID v4 — 36 chars in hyphenated form.
+		assert.Equal(t, 36, len(responseID), "generated ID should be a 36-character UUID v4")
+		assert.True(t, isValidRequestID(responseID), "generated ID must pass the request ID validator")
 		// Body should match the header
 		assert.Equal(t, responseID, w.Body.String())
 	})
@@ -1428,4 +1436,116 @@ func TestNewServer_SwaggerEnabledInDevelopment(t *testing.T) {
 	// Should redirect to /swagger/index.html (302)
 	assert.Equal(t, http.StatusFound, w.Code)
 	assert.Contains(t, w.Header().Get("Location"), "/swagger/index.html")
+}
+
+// ===================================================================
+// Group 20: isValidRequestID (O.6 — Phase O observability foundation)
+// ===================================================================
+
+// TestIsValidRequestID verifies the request ID validator accepts well-formed
+// IDs and rejects malformed ones. This helper will be consumed by Phase R's
+// requestIDMiddleware to decide whether to trust client-supplied X-Request-ID
+// headers.
+func TestIsValidRequestID(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		valid   bool
+		comment string
+	}{
+		// --- Valid inputs ---
+		{
+			name:    "uuid_v4_hyphenated",
+			input:   "550e8400-e29b-41d4-a716-446655440000",
+			valid:   true,
+			comment: "Standard hyphenated UUID should be accepted",
+		},
+		{
+			name:    "alphanumeric_only",
+			input:   "abc123",
+			valid:   true,
+			comment: "Plain alphanumeric string should be accepted",
+		},
+		{
+			name:    "dots_colons_underscores",
+			input:   "svc.req:001_trace",
+			valid:   true,
+			comment: "Dots, colons, and underscores are allowed",
+		},
+		{
+			name:    "single_character",
+			input:   "a",
+			valid:   true,
+			comment: "Minimum-length (1) valid ID",
+		},
+		{
+			name:    "exactly_128_characters",
+			input:   strings.Repeat("a", 128),
+			valid:   true,
+			comment: "Exactly 128 characters should be accepted (at limit)",
+		},
+		{
+			name:    "mixed_case",
+			input:   "Req-ID-XYZabc",
+			valid:   true,
+			comment: "Mixed case is allowed",
+		},
+
+		// --- Invalid inputs ---
+		{
+			name:    "empty_string",
+			input:   "",
+			valid:   false,
+			comment: "Empty string must be rejected",
+		},
+		{
+			name:    "129_characters",
+			input:   strings.Repeat("a", 129),
+			valid:   false,
+			comment: "Over-length ID must be rejected (length 129 > 128)",
+		},
+		{
+			name:    "space_in_id",
+			input:   "req id with space",
+			valid:   false,
+			comment: "Whitespace must be rejected (injection risk)",
+		},
+		{
+			name:    "newline_injection",
+			input:   "req\ninjection",
+			valid:   false,
+			comment: "Newline must be rejected (log/header injection risk)",
+		},
+		{
+			name:    "null_byte",
+			input:   "req\x00null",
+			valid:   false,
+			comment: "Null byte must be rejected",
+		},
+		{
+			name:    "angle_brackets",
+			input:   "<script>alert(1)</script>",
+			valid:   false,
+			comment: "HTML special characters must be rejected",
+		},
+		{
+			name:    "hash_character",
+			input:   "req#001",
+			valid:   false,
+			comment: "Hash character must be rejected",
+		},
+		{
+			name:    "slash_character",
+			input:   "req/path",
+			valid:   false,
+			comment: "Forward slash must be rejected",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := isValidRequestID(tc.input)
+			assert.Equal(t, tc.valid, result, tc.comment)
+		})
+	}
 }
