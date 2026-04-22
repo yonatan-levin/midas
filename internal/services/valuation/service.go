@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"go.uber.org/zap"
@@ -271,19 +272,39 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	// whether they succeeded. This always fires regardless of whether data came from
 	// the repository or the DataFetcher, giving operators full acquisition visibility.
 	if s.calcEmitter != nil {
-		sourcesTried := []string{"financial_repo", "market_repo", "macro_repo"}
+		// sourcesTried reflects the code path taken. When DataFetcher is active,
+		// the live gateways (SEC/Yahoo/FRED) are tried; otherwise the repo layer.
+		var sourcesTried []string
+		if s.dataFetcher != nil {
+			sourcesTried = []string{"sec_edgar", "yahoo_finance", "fred"}
+		} else {
+			sourcesTried = []string{"financial_repo", "market_repo", "macro_repo"}
+		}
 		sourcesOk := []string{}
 		if len(historicalData.Data) > 0 {
-			sourcesOk = append(sourcesOk, "financial_repo")
+			if s.dataFetcher != nil {
+				sourcesOk = append(sourcesOk, "sec_edgar")
+			} else {
+				sourcesOk = append(sourcesOk, "financial_repo")
+			}
 		}
 		if marketData != nil {
-			sourcesOk = append(sourcesOk, "market_repo")
+			if s.dataFetcher != nil {
+				sourcesOk = append(sourcesOk, "yahoo_finance")
+			} else {
+				sourcesOk = append(sourcesOk, "market_repo")
+			}
 		}
 		if macroData != nil {
-			sourcesOk = append(sourcesOk, "macro_repo")
+			if s.dataFetcher != nil {
+				sourcesOk = append(sourcesOk, "fred")
+			} else {
+				sourcesOk = append(sourcesOk, "macro_repo")
+			}
 		}
 		s.calcEmitter.Emit(ctx, "data_fetch",
 			zap.String("ticker", ticker),
+			zap.Bool("via_fetcher", s.dataFetcher != nil),
 			zap.Strings("sources_tried", sourcesTried),
 			zap.Strings("sources_ok", sourcesOk),
 			zap.Int64("duration_ms", time.Since(start).Milliseconds()),
@@ -537,13 +558,15 @@ func (s *Service) performValuation(
 	// Stage 3 — "industry_classification" calc trace: always emitted from here (not
 	// inside Classify) so only the valuation pipeline fires it once per valuation —
 	// avoids double-emission if Classify is also called from the datacleaner path.
+	// Emits only the fields the current Classify actually produces (a single
+	// industry code string). A parent-sector split is not surfaced because the
+	// classifier returns one code — see docs/reviewer/M1 follow-up for a richer
+	// classification return type.
 	if s.calcEmitter != nil {
 		s.calcEmitter.Emit(ctx, "industry_classification",
 			zap.String("ticker", historicalData.Ticker),
 			zap.String("sic", historicalData.SICCode),
-			zap.String("naics", ""),
-			zap.String("sector", industryCode),
-			zap.String("industry", industryCode),
+			zap.String("industry_code", industryCode),
 			zap.String("model_hint", industryCode),
 		)
 	}
@@ -680,10 +703,15 @@ func (s *Service) performValuation(
 		if waccResult.WACC > terminalGrowthRate {
 			gordonTV = dcfResult.TerminalYearFCF * (1 + terminalGrowthRate) / (waccResult.WACC - terminalGrowthRate)
 		}
+		// exit_multiple_used is true when TerminalValueNominal differs from the pure
+		// Gordon Growth value — i.e. pkg/finance/dcf averaged an exit-multiple TV in.
+		// The raw exit_multiple_tv component is not exposed by dcf.Result; surfacing
+		// it would require a pkg/finance change that is out of Phase M's scope (D7/R1).
+		exitMultipleUsed := math.Abs(dcfResult.TerminalValueNominal-gordonTV) > 1e-6
 		s.calcEmitter.Emit(ctx, "terminal_value",
 			zap.String("ticker", historicalData.Ticker),
 			zap.Float64("gordon_tv", gordonTV),
-			zap.Float64("exit_multiple_tv", dcfResult.TerminalValueNominal-gordonTV), // zero when only Gordon used
+			zap.Bool("exit_multiple_used", exitMultipleUsed),
 			zap.Float64("averaged_tv", dcfResult.TerminalValueNominal),
 			zap.Float64("terminal_growth", terminalGrowthRate),
 		)
