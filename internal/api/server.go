@@ -350,19 +350,25 @@ func (s *Server) accessLogMiddleware() gin.HandlerFunc {
 		path := c.Request.URL.Path
 
 		// Normalize bytes_out: c.Writer.Size() returns -1 when nothing was written
-		bytesOut := c.Writer.Size()
-		if bytesOut < 0 {
-			bytesOut = 0
+		bytesOut := max(c.Writer.Size(), 0)
+
+		// Normalize route: c.FullPath() returns "" for unmatched requests (404);
+		// use a sentinel so log consumers can distinguish "matched empty route"
+		// from "no route matched".
+		route := c.FullPath()
+		if route == "" {
+			route = "(unmatched)"
 		}
 
 		// Core access log fields
 		fields := []zap.Field{
 			zap.String("method", c.Request.Method),
 			zap.String("path", path),
-			zap.String("route", c.FullPath()), // matched route template, e.g. "/api/v1/fair-value/:ticker"
+			zap.String("route", route),
 			zap.Int("status", c.Writer.Status()),
 			zap.Duration("latency", time.Since(start)),
 			zap.String("client_ip", c.ClientIP()),
+			zap.String("user_agent", c.Request.UserAgent()),
 			zap.Int("bytes_out", bytesOut),
 		}
 
@@ -534,29 +540,34 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		// R.4.1: Enrich the context logger with user_id and key_id so that all
 		// downstream log lines — in handlers, services, and the access log —
 		// automatically carry these fields without extra plumbing.
-		enriched := logctx.From(c.Request.Context()).With(
+		ctx := c.Request.Context()
+		enriched := logctx.From(ctx).With(
 			zap.String("user_id", keyInfo.UserID),
 			zap.String("key_id", keyInfo.ID),
 		)
-		c.Request = c.Request.WithContext(logctx.Inject(c.Request.Context(), enriched))
+		c.Request = c.Request.WithContext(logctx.Inject(ctx, enriched))
 
 		// Capture a correlated child logger before spawning the goroutine.
-		// This preserves request_id + key_id on the async log line even though
-		// the goroutine runs with a background-derived context.
+		// Reads the just-enriched context so request_id, user_id, and key_id
+		// are all inherited from the parent — do NOT re-add them here.
 		reqLogger := logctx.From(c.Request.Context()).With(
 			zap.String("async_task", "record_usage"),
-			zap.String("key_id", keyInfo.ID),
 		)
 
-		// Record usage asynchronously (don't block request)
+		// Record usage asynchronously (don't block request).
+		// ResponseStatus / ResponseTimeMs are recorded as zero — the async path
+		// fires before the handler completes, and there is no post-response
+		// hook wired to back-fill these. Accepted tradeoff: RecordUsage captures
+		// the key+endpoint+IP for billing/audit; response attributes come from
+		// Prometheus metrics instead.
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			asyncCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			err := s.authService.RecordUsage(ctx, keyInfo.ID, entities.UsageRecord{
+			err := s.authService.RecordUsage(asyncCtx, keyInfo.ID, entities.UsageRecord{
 				Endpoint:       c.Request.URL.Path,
-				ResponseStatus: 0, // Will be updated in response middleware
-				ResponseTimeMs: 0, // Will be calculated
+				ResponseStatus: 0,
+				ResponseTimeMs: 0,
 				UserAgent:      c.Request.UserAgent(),
 				IPAddress:      c.ClientIP(),
 			})
