@@ -65,8 +65,11 @@ func TestLogctx_BackgroundReturnsNop(t *testing.T) {
 // TestLogctx_NilContextReturnsNop verifies From(nil) returns a non-nil no-op logger
 // and does not panic.
 func TestLogctx_NilContextReturnsNop(t *testing.T) {
-	// This should not panic
-	got := logctx.From(nil)
+	// Typed nil (not bare nil) — exercises the nil-safety contract without
+	// tripping staticcheck SA1012. The function MUST handle a nil Context
+	// because middleware plumbing or missing Inject calls can leave one.
+	var nilCtx context.Context //nolint:staticcheck // intentional nil for contract test
+	got := logctx.From(nilCtx)
 	require.NotNil(t, got, "From(nil) must return a non-nil logger")
 	got.Info("nil context nop check")
 }

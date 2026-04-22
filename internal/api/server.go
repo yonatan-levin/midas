@@ -33,7 +33,13 @@ import (
 // conservative to prevent log-injection and header-injection attacks.
 // Consumed by Phase R's requestIDMiddleware to decide whether to accept or
 // replace a client-supplied request ID.
-var requestIDValidator = regexp.MustCompile(`^[A-Za-z0-9_.:\-]{1,128}$`)
+//
+// This is an immutable sentinel (compiled once at package init), not mutable
+// state. The project's "no globals" rule targets mutable state managed
+// through DI, not precompiled constants.
+//
+//nolint:gochecknoglobals // immutable precompiled regex; not mutable state
+var requestIDValidator = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,128}$`)
 
 // Server represents the HTTP server
 type Server struct {
@@ -589,6 +595,8 @@ func generateRequestID() string {
 //
 // Phase R will use this to decide whether to trust a client-supplied ID or
 // generate a fresh one.
+//
+//nolint:unused // wired by Phase R (R.1 requestIDMiddleware)
 func isValidRequestID(s string) bool {
 	return requestIDValidator.MatchString(s)
 }

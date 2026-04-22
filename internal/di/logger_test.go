@@ -43,8 +43,13 @@ func TestNewLogger_FileEnabled(t *testing.T) {
 	// lumberjack holds the file handle open on Windows until the logger is
 	// synced and the underlying lumberjack.Logger is closed. t.TempDir()
 	// would fail to clean up while the handle is still open.
+	//
+	// t.Cleanup runs after the test body returns, at which point Sync() has
+	// flushed and the file handle has been released — so cleanup is safe
+	// even if an assertion mid-test causes an early bail-out.
 	dir, err := os.MkdirTemp("", "midas-logger-test-*")
 	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 
 	logPath := filepath.Join(dir, "test.log")
 
@@ -76,16 +81,12 @@ func TestNewLogger_FileEnabled(t *testing.T) {
 	lines := splitLines(data)
 	require.NotEmpty(t, lines, "log file should contain at least one line")
 
-	var entry map[string]interface{}
+	var entry map[string]any
 	parseErr := json.Unmarshal([]byte(lines[0]), &entry)
 	require.NoError(t, parseErr, "first log line should be valid JSON")
 
-	// The "midas" name is added via .Named("midas") — check the logger name field.
 	assert.Contains(t, entry, "ts", "JSON log entry should have a 'ts' (timestamp) field")
 	assert.Contains(t, entry, "level", "JSON log entry should have a 'level' field")
-
-	// Cleanup: remove directory manually after we're done reading.
-	_ = os.RemoveAll(dir)
 }
 
 // TestNewLogger_FileDisabled verifies that when File.Enabled=false, no log
