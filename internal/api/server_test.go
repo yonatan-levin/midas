@@ -919,9 +919,10 @@ func TestServer_accessLogMiddleware(t *testing.T) {
 		assert.True(t, hasField(entry, "request_id"), "access log must carry request_id")
 	})
 
-	t.Run("skips info-level for paths in AccessLogSkipPaths", func(t *testing.T) {
-		s, logs := newObserverServer(zap.InfoLevel)
-		// Add /metrics to skip paths
+	t.Run("skips info-level for paths in AccessLogSkipPaths but still emits at debug", func(t *testing.T) {
+		// Observer at DebugLevel so we can confirm the skipped path still logs
+		// at debug (spec: skip paths demote from info -> debug, not silenced).
+		s, logs := newObserverServer(zap.DebugLevel)
 		s.config.Logging.AccessLogSkipPaths = []string{"/metrics", "/health", "/ready"}
 		s.engine.Use(s.requestIDMiddleware())
 		s.engine.Use(s.accessLogMiddleware())
@@ -932,9 +933,11 @@ func TestServer_accessLogMiddleware(t *testing.T) {
 		w := performRequest(s.engine, http.MethodGet, "/metrics", nil)
 		assert.Equal(t, http.StatusOK, w.Code)
 
-		// No info-level access lines for skip-listed paths
 		infoEntries := logs.FilterMessage("access").FilterLevelExact(zap.InfoLevel).All()
 		assert.Len(t, infoEntries, 0, "skip-listed path must not produce info-level access log")
+
+		debugEntries := logs.FilterMessage("access").FilterLevelExact(zap.DebugLevel).All()
+		assert.Len(t, debugEntries, 1, "skip-listed path must still produce exactly one debug-level access log")
 	})
 
 	t.Run("includes error_code when respondWithError sets it", func(t *testing.T) {
