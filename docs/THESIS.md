@@ -91,7 +91,7 @@ These are known gaps from Phase 4 review. Scheduled for post-MVP cleanup.
 
 | Initiative | Status | Branch / Spec |
 |------------|--------|---------------|
-| **Observability upgrade** — request correlation via context-scoped logger, file logging in local dev only, 12-stage DCF calc tracing | Phases O + R + S COMPLETE (2026-04-23); Phase M next | `feat/observability` · `docs/refactoring/observability-upgrade-spec.md` |
+| **Observability upgrade** — request correlation via context-scoped logger, file logging in local dev only, 12-stage DCF calc tracing | Phases O + R + S + M COMPLETE (2026-04-23); Phase U next (polish + docker cleanup) | `feat/observability` · `docs/refactoring/observability-upgrade-spec.md` |
 
 ## Next Candidate Work (Ranked)
 

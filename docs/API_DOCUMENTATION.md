@@ -1093,7 +1093,36 @@ Every HTTP request is correlated by a **UUIDv4 request ID** that flows through e
 - **Outbound:** The effective ID is always echoed on the `X-Request-ID` response header, whether the client supplied it or the server generated it. On recovered panics, the access line and the `"panic recovered"` error line share the same `request_id`.
 - **Service + gateway depth:** Every service (`valuation`, `datacleaner`, `growth`, `datafetcher`) and gateway (`sec`, `market/yfinance`, `macro/fred`) emits its log lines through `logctx.Or(ctx, <fallback>)` — so a single `request_id` correlates a request all the way from the handler down to the outbound HTTP calls to SEC EDGAR, Yahoo Finance, and FRED. The same methods, when invoked from the scheduler (background context), fall back to the fx-provided singleton logger and still emit, just without request correlation.
 
-### 10.4 Health Checks
+### 10.4 Calculation Tracing
+
+Every DCF valuation emits 12 structured trace entries, one per math stage, all correlated to the triggering request via `logctx`. Set `logging.trace_calculations=true` (the default in `development`) to surface them at `info`; staging / production emit them at `debug` so they're available on demand without polluting the default info stream.
+
+Example stage emission (JSON format):
+
+```json
+{"ts":"2026-04-23T06:14:02.212Z","level":"info","msg":"calc","event":"calc","request_id":"7f9b3e0a-...","stage":"wacc","ticker":"AAPL","rf":0.0421,"beta_raw":1.18,"beta_blume":1.12,"beta_unlevered":0.95,"beta_relevered":1.05,"erp":0.055,"crp":0.000,"tax_rate":0.21,"cost_of_debt":0.045,"wacc":0.1039}
+```
+
+The full stage set emitted per request:
+
+| Stage | Emits | Key fields |
+|-------|-------|------------|
+| `data_fetch` | After data acquisition | `ticker`, `via_fetcher`, `sources_tried`, `sources_ok`, `duration_ms` |
+| `data_clean_summary` | After normalization | `ticker`, `adjustments_count`, `flags_count`, `quality_score`, `quality_grade` |
+| `industry_classification` | After SIC/NAICS classification | `ticker`, `sic`, `industry_code`, `model_hint` |
+| `model_selection` | After model router decision | `model_chosen` (`dcf`/`ddm`/`ffo`/`revenue_multiple`), `reason` |
+| `growth` | After growth estimation | `source` (analyst/historical/blended), `growth_rates`, `roic_ceiling`, `sustainability` |
+| `wacc` | After WACC computation | `rf`, `beta_*`, `erp`, `crp`, `tax_rate`, `cost_of_debt`, `wacc` |
+| `fcf_projection` | After FCF series build | `years`, `growth_rates`, `fcf_series` |
+| `terminal_value` | After terminal value | `gordon_tv`, `exit_multiple_used`, `averaged_tv`, `terminal_growth` |
+| `discount` | After discounting | `pv_explicit`, `pv_terminal`, `enterprise_value` |
+| `equity_bridge` | In equity-bridge block | `cash`, `debt`, `minority_interest`, `preferred`, `equity_value`, `diluted_shares`, `per_share` |
+| `cross_check` | After sanity check (if multiples config present) | `implied_pe`, `implied_ev_ebitda`, `sector_median_pe`, `sector_median_ev_ebitda`, `flags` |
+| `final` | Happy-path return | `dcf_per_share`, `tangible_per_share`, `method`, `version`, `quality_score`, `warnings_count` |
+
+All 12 entries carry identical `request_id`, `user_id`, and `key_id` field values, so `jq 'select(.request_id == "...")'` reconstructs the full math story for any single request.
+
+### 10.5 Health Checks
 
 | Endpoint | Purpose | Auth | Status Mapping |
 |----------|---------|------|---------------|

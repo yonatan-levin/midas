@@ -2,7 +2,7 @@
 
 **Version:** 1.1
 **Date:** 2026-04-23 (v1.0 drafted 2026-04-22; v1.1 refinements R1/R2/R3 applied during execution kickoff)
-**Status:** Phase S COMPLETE (2026-04-23) — commits `30425e7` (impl) + `7128c13` (quality fixes). Phases O + R landed earlier the same day. Phase M next (calc tracing across the 12 DCF stages). Work continues on branch `feat/observability` in worktree `.worktrees/feat-observability`.
+**Status:** Phase M COMPLETE (2026-04-23) — commits `2f95d12` (impl) + `2da7d7b` (spec-review fixes) + `52ad5ef` (quality-review fixes). Phases O + R + S landed earlier the same day. Phase U next (console polish + docker-compose cleanup). Three noted field-completeness follow-ups tracked in `docs/reviewer/M1`. Work continues on branch `feat/observability` in worktree `.worktrees/feat-observability`.
 **Scope:** Make every HTTP request's full execution flow reconstructible from logs. Persist logs locally for development, rely on container log drivers in staging / production. Add calculation-level tracing so each DCF valuation's math can be inspected end-to-end.
 
 ---
