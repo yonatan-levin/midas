@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // AuthKeyManager abstracts the auth service so handlers depend on an interface
@@ -22,7 +23,8 @@ type AuthKeyManager interface {
 // All permission checks are handled by the outer middleware in server.go.
 type AuthHandler struct {
 	authService AuthKeyManager
-	logger      *zap.Logger
+	// logger is retained for non-request contexts; request-path log sites use logctx.From(ctx)
+	logger *zap.Logger
 }
 
 // NewAuthHandler constructs an AuthHandler instance.
@@ -60,7 +62,7 @@ func (h *AuthHandler) CreateAPIKey(c *gin.Context) {
 
 	apiKey, err := h.authService.CreateKey(c.Request.Context(), req.UserID, perms)
 	if err != nil {
-		h.logger.Error("failed to create API key", zap.Error(err))
+		logctx.From(c.Request.Context()).Error("failed to create API key", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "internal_error",
 			"message": err.Error(),

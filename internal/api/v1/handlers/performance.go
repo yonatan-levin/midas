@@ -11,11 +11,13 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/services/alerting"
 )
 
 // PerformanceHandler handles performance monitoring and analytics endpoints
 type PerformanceHandler struct {
+	// logger is retained for non-request contexts; request-path log sites use logctx.From(ctx)
 	logger             *zap.Logger
 	integrationService *alerting.IntegrationService
 	alertRepo          ports.AlertRepository
@@ -128,7 +130,7 @@ func (h *PerformanceHandler) GetPerformanceDashboard(c *gin.Context) {
 	timeRange := time.Duration(hours) * time.Hour
 	startTime := time.Now().Add(-timeRange)
 
-	h.logger.Info("Generating performance dashboard",
+	logctx.From(c.Request.Context()).Info("Generating performance dashboard",
 		zap.Int("hours", hours),
 		zap.Time("start_time", startTime),
 	)
@@ -141,7 +143,7 @@ func (h *PerformanceHandler) GetPerformanceDashboard(c *gin.Context) {
 	// Get performance overview
 	overview, err := h.buildPerformanceOverview(ctx)
 	if err != nil {
-		h.logger.Error("Failed to build performance overview", zap.Error(err))
+		logctx.From(c.Request.Context()).Error("Failed to build performance overview", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate performance overview"})
 		return
 	}
@@ -150,7 +152,7 @@ func (h *PerformanceHandler) GetPerformanceDashboard(c *gin.Context) {
 	// Get performance trends (simplified for now)
 	trends, err := h.buildPerformanceTrends(ctx, startTime)
 	if err != nil {
-		h.logger.Error("Failed to build performance trends", zap.Error(err))
+		logctx.From(c.Request.Context()).Error("Failed to build performance trends", zap.Error(err))
 		// Continue with empty trends rather than failing
 		trends = PerformanceTrends{}
 	}
@@ -159,7 +161,7 @@ func (h *PerformanceHandler) GetPerformanceDashboard(c *gin.Context) {
 	// Get recent alerts
 	alerts, err := h.getRecentAlerts(ctx, startTime)
 	if err != nil {
-		h.logger.Error("Failed to get recent alerts", zap.Error(err))
+		logctx.From(c.Request.Context()).Error("Failed to get recent alerts", zap.Error(err))
 		alerts = []AlertSummary{}
 	}
 	dashboard.RecentAlerts = alerts
@@ -194,7 +196,7 @@ func (h *PerformanceHandler) buildPerformanceOverview(ctx context.Context) (Perf
 	// Get active alerts count
 	activeAlerts, err := h.alertRepo.ListAlertsByStatus(ctx, entities.StatusActive)
 	if err != nil {
-		h.logger.Warn("Failed to get active alerts", zap.Error(err))
+		logctx.From(ctx).Warn("Failed to get active alerts", zap.Error(err))
 		overview.ActiveAlertsCount = 0
 	} else {
 		overview.ActiveAlertsCount = len(activeAlerts)
@@ -407,7 +409,7 @@ func (h *PerformanceHandler) GetPerformanceAlerts(c *gin.Context) {
 	}
 
 	if err != nil {
-		h.logger.Error("Failed to get performance alerts", zap.Error(err))
+		logctx.From(c.Request.Context()).Error("Failed to get performance alerts", zap.Error(err))
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve alerts"})
 		return
 	}

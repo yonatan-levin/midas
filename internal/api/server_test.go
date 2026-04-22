@@ -19,10 +19,13 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/services/auth"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
 	"github.com/midas/dcf-valuation-api/internal/services/ratelimit"
@@ -424,41 +427,126 @@ func TestServer_securityHeadersMiddleware(t *testing.T) {
 }
 
 // ===================================================================
-// Group 5: requestIDMiddleware
+// Group 5: requestIDMiddleware (Phase R — consolidated implementation)
 // ===================================================================
 
-func TestServer_requestIDMiddleware(t *testing.T) {
+// newObserverServer creates a Server whose logger is backed by a zaptest/observer
+// core so tests can assert on emitted log entries.
+func newObserverServer(level zapcore.Level) (*Server, *observer.ObservedLogs) {
+	core, logs := observer.New(level)
 	s := newMinimalServer()
+	s.logger = zap.New(core)
+	return s, logs
+}
 
-	s.engine.Use(s.requestIDMiddleware())
-	s.engine.GET("/test", func(c *gin.Context) {
-		// Echo the request_id from context
-		reqID, _ := c.Get("request_id")
-		c.String(http.StatusOK, reqID.(string))
-	})
+func TestServer_requestIDMiddleware(t *testing.T) {
+	t.Run("generates UUID when no header provided", func(t *testing.T) {
+		s := newMinimalServer()
+		s.engine.Use(s.requestIDMiddleware())
+		s.engine.GET("/test", func(c *gin.Context) {
+			reqID, _ := c.Get("request_id")
+			c.String(http.StatusOK, reqID.(string))
+		})
 
-	t.Run("generates new ID when none provided", func(t *testing.T) {
 		w := performRequest(s.engine, http.MethodGet, "/test", nil)
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		responseID := w.Header().Get("X-Request-ID")
 		assert.NotEmpty(t, responseID, "should generate a request ID")
-		// Since O.6, IDs are UUID v4 — 36 chars in hyphenated form.
+		// UUID v4 hyphenated form is 36 characters
 		assert.Equal(t, 36, len(responseID), "generated ID should be a 36-character UUID v4")
 		assert.True(t, isValidRequestID(responseID), "generated ID must pass the request ID validator")
-		// Body should match the header
+		// Body should match the echoed header
 		assert.Equal(t, responseID, w.Body.String())
 	})
 
-	t.Run("uses provided X-Request-ID header", func(t *testing.T) {
+	t.Run("trusts valid client-supplied X-Request-ID", func(t *testing.T) {
+		s := newMinimalServer()
+		s.engine.Use(s.requestIDMiddleware())
+		s.engine.GET("/test", func(c *gin.Context) {
+			reqID, _ := c.Get("request_id")
+			c.String(http.StatusOK, reqID.(string))
+		})
+
 		customID := "my-custom-request-id-42"
 		w := performRequest(s.engine, http.MethodGet, "/test", map[string]string{
 			"X-Request-ID": customID,
 		})
 
 		assert.Equal(t, http.StatusOK, w.Code)
-		assert.Equal(t, customID, w.Header().Get("X-Request-ID"))
+		assert.Equal(t, customID, w.Header().Get("X-Request-ID"), "valid client ID must be echoed back")
 		assert.Equal(t, customID, w.Body.String())
+	})
+
+	t.Run("rejects malformed header with newline injection — generates UUID instead", func(t *testing.T) {
+		s := newMinimalServer()
+		s.engine.Use(s.requestIDMiddleware())
+		s.engine.GET("/test", func(c *gin.Context) {
+			reqID, _ := c.Get("request_id")
+			c.String(http.StatusOK, reqID.(string))
+		})
+
+		malformedID := "foo\nbar"
+		w := performRequest(s.engine, http.MethodGet, "/test", map[string]string{
+			"X-Request-ID": malformedID,
+		})
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		responseID := w.Header().Get("X-Request-ID")
+		// Malformed ID must be rejected; a fresh UUID must be generated
+		assert.NotEqual(t, malformedID, responseID, "malformed ID must be replaced")
+		assert.NotEmpty(t, responseID, "a replacement ID must be generated")
+		assert.True(t, isValidRequestID(responseID), "replacement ID must pass validator")
+	})
+
+	t.Run("rejects overlong header (>128 chars) — generates UUID instead", func(t *testing.T) {
+		s := newMinimalServer()
+		s.engine.Use(s.requestIDMiddleware())
+		s.engine.GET("/test", func(c *gin.Context) {
+			reqID, _ := c.Get("request_id")
+			c.String(http.StatusOK, reqID.(string))
+		})
+
+		overlongID := strings.Repeat("a", 129)
+		w := performRequest(s.engine, http.MethodGet, "/test", map[string]string{
+			"X-Request-ID": overlongID,
+		})
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		responseID := w.Header().Get("X-Request-ID")
+		assert.NotEqual(t, overlongID, responseID, "overlong ID must be replaced")
+		assert.Equal(t, 36, len(responseID), "replacement must be a UUID v4")
+	})
+
+	t.Run("context logger carries request_id field after middleware", func(t *testing.T) {
+		// Use an observer-backed logger so we can inspect emitted fields
+		s, logs := newObserverServer(zap.DebugLevel)
+		s.engine.Use(s.requestIDMiddleware())
+		s.engine.GET("/test", func(c *gin.Context) {
+			// Emit a log line via the context logger — it must carry request_id
+			logctx.From(c.Request.Context()).Info("test-log-line")
+			c.String(http.StatusOK, "ok")
+		})
+
+		w := performRequest(s.engine, http.MethodGet, "/test", nil)
+		require.Equal(t, http.StatusOK, w.Code)
+
+		rid := w.Header().Get("X-Request-ID")
+		require.NotEmpty(t, rid)
+
+		// Find the log entry emitted by the handler
+		entries := logs.FilterMessage("test-log-line").All()
+		require.Len(t, entries, 1, "handler should have emitted exactly one log line")
+
+		// Verify request_id field is present and matches the header
+		var foundRequestID string
+		for _, f := range entries[0].Context {
+			if f.Key == "request_id" {
+				foundRequestID = f.String
+				break
+			}
+		}
+		assert.Equal(t, rid, foundRequestID, "context logger must carry request_id matching X-Request-ID header")
 	})
 }
 
@@ -803,20 +891,203 @@ func TestServer_rateLimitMiddleware(t *testing.T) {
 }
 
 // ===================================================================
-// Group 9: loggingMiddleware
+// Group 9: accessLogMiddleware (Phase R — renamed from loggingMiddleware)
 // ===================================================================
 
-func TestServer_loggingMiddleware(t *testing.T) {
-	// The logging middleware uses gin.LoggerWithFormatter which writes to the
-	// zap logger. We verify that it can be created and used without panics.
-	s := newMinimalServer()
-	s.engine.Use(s.loggingMiddleware())
-	s.engine.GET("/test", func(c *gin.Context) {
-		c.String(http.StatusOK, "ok")
+func TestServer_accessLogMiddleware(t *testing.T) {
+	t.Run("emits one structured access line for normal requests", func(t *testing.T) {
+		s, logs := newObserverServer(zap.InfoLevel)
+		// requestIDMiddleware must run first so logctx is populated in context
+		s.engine.Use(s.requestIDMiddleware())
+		s.engine.Use(s.accessLogMiddleware())
+		s.engine.GET("/test", func(c *gin.Context) {
+			c.String(http.StatusOK, "ok")
+		})
+
+		w := performRequest(s.engine, http.MethodGet, "/test", nil)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		// Exactly one "access" info line must be emitted
+		entries := logs.FilterMessage("access").FilterLevelExact(zap.InfoLevel).All()
+		require.Len(t, entries, 1, "exactly one access log line expected")
+
+		entry := entries[0]
+		assertLogField(t, entry, "method", "GET")
+		assertLogField(t, entry, "path", "/test")
+		assert.Equal(t, int64(http.StatusOK), fieldInt(entry, "status"), "status field must match response code")
+		// request_id is set by requestIDMiddleware on the parent logger
+		assert.True(t, hasField(entry, "request_id"), "access log must carry request_id")
 	})
 
-	w := performRequest(s.engine, http.MethodGet, "/test", nil)
-	assert.Equal(t, http.StatusOK, w.Code)
+	t.Run("skips info-level for paths in AccessLogSkipPaths", func(t *testing.T) {
+		s, logs := newObserverServer(zap.InfoLevel)
+		// Add /metrics to skip paths
+		s.config.Logging.AccessLogSkipPaths = []string{"/metrics", "/health", "/ready"}
+		s.engine.Use(s.requestIDMiddleware())
+		s.engine.Use(s.accessLogMiddleware())
+		s.engine.GET("/metrics", func(c *gin.Context) {
+			c.String(http.StatusOK, "metrics")
+		})
+
+		w := performRequest(s.engine, http.MethodGet, "/metrics", nil)
+		assert.Equal(t, http.StatusOK, w.Code)
+
+		// No info-level access lines for skip-listed paths
+		infoEntries := logs.FilterMessage("access").FilterLevelExact(zap.InfoLevel).All()
+		assert.Len(t, infoEntries, 0, "skip-listed path must not produce info-level access log")
+	})
+
+	t.Run("includes error_code when respondWithError sets it", func(t *testing.T) {
+		s, logs := newObserverServer(zap.InfoLevel)
+		s.engine.Use(s.requestIDMiddleware())
+		s.engine.Use(s.accessLogMiddleware())
+		s.engine.GET("/err", func(c *gin.Context) {
+			s.respondWithError(c, http.StatusBadRequest, "INVALID_TICKER", "bad ticker")
+		})
+
+		w := performRequest(s.engine, http.MethodGet, "/err", nil)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+
+		entries := logs.FilterMessage("access").FilterLevelExact(zap.InfoLevel).All()
+		require.Len(t, entries, 1)
+
+		assert.True(t, hasField(entries[0], "error_code"), "access log must include error_code field")
+		assertLogField(t, entries[0], "error_code", "INVALID_TICKER")
+	})
+}
+
+// ===================================================================
+// Group 9b: panicHandler (Phase R — CustomRecovery)
+// ===================================================================
+
+func TestServer_panicHandler(t *testing.T) {
+	t.Run("recovered panic emits error log and access log with status 500, sharing request_id", func(t *testing.T) {
+		s, logs := newObserverServer(zap.DebugLevel)
+		// Match production order: requestID → accessLog → CustomRecovery → handler
+		// accessLog is OUTSIDE CustomRecovery so it reads the final status after recovery
+		s.engine.Use(s.requestIDMiddleware())
+		s.engine.Use(s.accessLogMiddleware())
+		s.engine.Use(gin.CustomRecovery(s.panicHandler))
+
+		// Register a test-only route that deliberately panics
+		s.engine.GET("/panic", func(c *gin.Context) {
+			panic("test panic value")
+		})
+
+		w := performRequest(s.engine, http.MethodGet, "/panic", nil)
+
+		// Client must receive a generic 500 — panic details must not leak
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		body := parseJSONBody(t, w)
+		assert.Equal(t, "INTERNAL", body["code"])
+		assert.Equal(t, "internal server error", body["detail"])
+
+		rid := w.Header().Get("X-Request-ID")
+		require.NotEmpty(t, rid, "X-Request-ID header must be present")
+
+		// Observer must have captured the "panic recovered" error log
+		panicEntries := logs.FilterMessage("panic recovered").FilterLevelExact(zap.ErrorLevel).All()
+		require.Len(t, panicEntries, 1, "panicHandler must emit exactly one error log")
+
+		// The panic log must carry request_id
+		assert.True(t, hasField(panicEntries[0], "request_id"), "panic log must carry request_id")
+		assertLogField(t, panicEntries[0], "request_id", rid)
+
+		// The access log must also carry request_id and status=500
+		accessEntries := logs.FilterMessage("access").All()
+		require.Len(t, accessEntries, 1, "exactly one access log line expected")
+		assertLogField(t, accessEntries[0], "request_id", rid)
+		assert.Equal(t, int64(http.StatusInternalServerError), fieldInt(accessEntries[0], "status"))
+	})
+}
+
+// ===================================================================
+// Group 9c: auth middleware logctx enrichment (Phase R.4.1)
+// ===================================================================
+
+func TestServer_authMiddleware_enrichesLogctx(t *testing.T) {
+	t.Run("after auth, context logger carries user_id and key_id", func(t *testing.T) {
+		repo := new(mockAuthRepo)
+		key := buildActiveAPIKey([]entities.Permission{entities.PermissionReadFairValue})
+		repo.On("GetKeyByHash", mock.Anything, mock.Anything).Return(key, nil)
+		repo.On("RecordUsage", mock.Anything, mock.Anything).Return(nil).Maybe()
+
+		s, logs := newObserverServer(zap.DebugLevel)
+		s.authService = auth.NewService(repo, zap.NewNop())
+
+		s.engine.Use(s.requestIDMiddleware())
+		s.engine.Use(s.authMiddleware())
+		s.engine.GET("/protected", func(c *gin.Context) {
+			// Emit a log line — it must carry request_id + user_id + key_id
+			logctx.From(c.Request.Context()).Info("handler-log-line")
+			c.String(http.StatusOK, "ok")
+		})
+
+		w := performRequest(s.engine, http.MethodGet, "/protected", map[string]string{
+			"X-API-Key": validAPIKey,
+		})
+		require.Equal(t, http.StatusOK, w.Code)
+
+		rid := w.Header().Get("X-Request-ID")
+		require.NotEmpty(t, rid)
+
+		// Find the handler-emitted log entry
+		entries := logs.FilterMessage("handler-log-line").All()
+		require.Len(t, entries, 1, "handler must emit exactly one log line")
+
+		entry := entries[0]
+		// Must carry all three correlation fields
+		assertLogField(t, entry, "request_id", rid)
+		assertLogField(t, entry, "user_id", key.UserID)
+		assertLogField(t, entry, "key_id", key.ID)
+
+		repo.AssertExpectations(t)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Log assertion helpers
+// ---------------------------------------------------------------------------
+
+// assertLogField checks that a log entry has a string field with the given value.
+func assertLogField(t *testing.T, entry observer.LoggedEntry, key, want string) {
+	t.Helper()
+	for _, f := range entry.Context {
+		if f.Key == key {
+			assert.Equal(t, want, f.String, "log field %q: got %q, want %q", key, f.String, want)
+			return
+		}
+	}
+	t.Errorf("log entry missing expected field %q; available fields: %v", key, fieldNames(entry))
+}
+
+// hasField reports whether the log entry contains a field with the given key.
+func hasField(entry observer.LoggedEntry, key string) bool {
+	for _, f := range entry.Context {
+		if f.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// fieldInt returns the integer value of a log field. Returns 0 if not found.
+func fieldInt(entry observer.LoggedEntry, key string) int64 {
+	for _, f := range entry.Context {
+		if f.Key == key {
+			return f.Integer
+		}
+	}
+	return 0
+}
+
+// fieldNames returns all field keys in a log entry (for error messages).
+func fieldNames(entry observer.LoggedEntry) []string {
+	names := make([]string, len(entry.Context))
+	for i, f := range entry.Context {
+		names[i] = f.Key
+	}
+	return names
 }
 
 // ===================================================================
@@ -1286,8 +1557,7 @@ func TestNewServer_RequestIDOnAllResponses(t *testing.T) {
 	s := newFullTestServer(t, cfg)
 
 	w := performRequest(s.engine, http.MethodGet, "/health", nil)
-	// The requestIDMiddleware is registered twice (global + setupMiddleware),
-	// but the header should still be present.
+	// requestIDMiddleware is registered once in setupMiddleware (consolidated in Phase R)
 	assert.NotEmpty(t, w.Header().Get("X-Request-ID"))
 }
 

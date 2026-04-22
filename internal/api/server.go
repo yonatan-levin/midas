@@ -7,6 +7,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"regexp"
+	"runtime/debug"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -20,6 +21,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/services/auth"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
 	"github.com/midas/dcf-valuation-api/internal/services/ratelimit"
@@ -31,7 +33,7 @@ import (
 // requestIDValidator is a precompiled regex that validates an incoming
 // X-Request-ID header value. The allowed character set is intentionally
 // conservative to prevent log-injection and header-injection attacks.
-// Consumed by Phase R's requestIDMiddleware to decide whether to accept or
+// Consumed by requestIDMiddleware to decide whether to accept or
 // replace a client-supplied request ID.
 //
 // This is an immutable sentinel (compiled once at package init), not mutable
@@ -86,11 +88,7 @@ func NewServer(
 		metricsService:   metricsService,
 	}
 
-	// Global middlewares
-	engine.Use(server.requestIDMiddleware())       // attach request ID to each request
-	engine.Use(server.securityHeadersMiddleware()) // basic security headers
-
-	// Setup middleware
+	// Setup all middleware in setupMiddleware (single source of truth for the chain)
 	server.setupMiddleware()
 
 	// Setup routes
@@ -131,29 +129,39 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// setupMiddleware configures middleware for the Gin engine
+// setupMiddleware configures the global middleware chain.
+// Order is intentional:
+//  1. requestIDMiddleware  — must be first: injects request_id + child logger into context
+//  2. securityHeadersMiddleware — sets security headers early so all responses carry them
+//  3. metrics.HTTPMetricsMiddleware — records latency/status counts
+//  4. accessLogMiddleware — OUTSIDE CustomRecovery so it always emits its line, even on panics.
+//     Because it wraps CustomRecovery, its c.Next() returns normally after recovery; by the
+//     time the deferred access log runs, the status is already 500 (set by panicHandler).
+//  5. gin.CustomRecovery — catches panics from handlers; logs with request_id; returns 500.
+//     Registered AFTER accessLog so it is on the INSIDE of the access log wrapper.
+//  6. CORS
+//  7. rateLimitMiddleware
 func (s *Server) setupMiddleware() {
-	// Request ID middleware
-	s.engine.Use(func(c *gin.Context) {
-		requestID := c.GetHeader("X-Request-ID")
-		if requestID == "" {
-			requestID = generateRequestID()
-		}
-		c.Set("request_id", requestID)
-		c.Header("X-Request-ID", requestID)
-		c.Next()
-	})
+	// 1. Request correlation — injects request_id into context logger; runs first
+	s.engine.Use(s.requestIDMiddleware())
 
-	// Metrics middleware - should be early in the chain
+	// 2. Security headers on every response
+	s.engine.Use(s.securityHeadersMiddleware())
+
+	// 3. Prometheus metrics (records HTTP request latency/status counts)
 	s.engine.Use(metrics.HTTPMetricsMiddleware(s.metricsService, s.logger))
 
-	// Recovery middleware
-	s.engine.Use(gin.Recovery())
+	// 4. Structured access log — registered BEFORE CustomRecovery so that when a panic
+	// occurs, CustomRecovery catches it (sets status 500), then returns normally to
+	// accessLogMiddleware's c.Next() call, which then emits the access line with
+	// the correct 500 status.
+	s.engine.Use(s.accessLogMiddleware())
 
-	// Logging middleware
-	s.engine.Use(s.loggingMiddleware())
+	// 5. Panic recovery — CustomRecovery logs with request_id from logctx; runs INSIDE
+	// the access log middleware wrapper so panics are caught before accessLog reads the status.
+	s.engine.Use(gin.CustomRecovery(s.panicHandler))
 
-	// CORS middleware
+	// 6. CORS
 	s.engine.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"}, // TODO: Configure appropriately for production
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -163,13 +171,13 @@ func (s *Server) setupMiddleware() {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	// Rate limiting middleware (applied globally)
+	// 7. Rate limiting (applied globally; uses api_key_info from context if present)
 	s.engine.Use(s.rateLimitMiddleware())
 }
 
 // setupRoutes configures all routes for the application
 func (s *Server) setupRoutes() {
-	// Temporary startup config echo for debugging
+	// Temporary startup config echo for debugging (non-request-path, uses s.logger directly)
 	s.logger.Info("Startup config",
 		zap.Bool("enable_swagger", s.config.EnableSwagger),
 		zap.String("db_driver", s.config.Database.Driver),
@@ -276,31 +284,100 @@ func (s *Server) Engine() *gin.Engine {
 
 // Middleware implementations
 
-// loggingMiddleware provides structured request logging
-func (s *Server) loggingMiddleware() gin.HandlerFunc {
-	return gin.LoggerWithFormatter(func(param gin.LogFormatterParams) string {
-		s.logger.Info("HTTP Request",
-			zap.String("method", param.Method),
-			zap.String("path", param.Path),
-			zap.Int("status", param.StatusCode),
-			zap.Duration("latency", param.Latency),
-			zap.String("client_ip", param.ClientIP),
-			zap.String("user_agent", param.Request.UserAgent()),
-		)
-		return ""
-	})
-}
-
-// requestIDMiddleware adds a unique request ID to each request
+// requestIDMiddleware is the single, canonical implementation for request correlation.
+// It runs first in the middleware chain and:
+//  1. Reads X-Request-ID from the incoming request.
+//  2. Trusts it if non-empty and isValidRequestID passes; otherwise generates a UUID v4.
+//  3. Echoes the ID back to the client via X-Request-ID response header.
+//  4. Stores the ID in the gin context (backward-compat key "request_id").
+//  5. Creates a child logger enriched with request_id and injects it into
+//     c.Request.Context() via logctx.Inject, so all downstream log sites
+//     (handlers, services, access log) share the same correlation ID.
 func (s *Server) requestIDMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		requestID := c.GetHeader("X-Request-ID")
-		if requestID == "" {
-			requestID = generateRequestID()
+		rid := c.GetHeader("X-Request-ID")
+		// Validate client-supplied ID — reject empty or unsafe values
+		if rid == "" || !isValidRequestID(rid) {
+			rid = generateRequestID()
 		}
-		c.Header("X-Request-ID", requestID)
-		c.Set("request_id", requestID)
+
+		// Echo the final ID back to the client
+		c.Header("X-Request-ID", rid)
+
+		// Backward-compat: store as gin context value for any code reading c.Get("request_id")
+		c.Set("request_id", rid)
+
+		// Build a child logger carrying request_id and inject into the request context.
+		// All downstream middleware and handlers should use logctx.From(c.Request.Context())
+		// so they automatically inherit this field.
+		child := s.logger.With(zap.String("request_id", rid))
+		ctx := logctx.Inject(c.Request.Context(), child)
+		c.Request = c.Request.WithContext(ctx)
+
 		c.Next()
+	}
+}
+
+// accessLogMiddleware emits one structured access-log line per request, after
+// the handler has returned (so it captures the final status code, latency, and
+// any error_code set by respondWithError or panicHandler).
+//
+// Paths listed in cfg.Logging.AccessLogSkipPaths (default: /metrics, /health,
+// /ready) are suppressed at Info level to reduce monitoring noise. They are
+// still emitted at Debug level so power users can see them via log-level config.
+//
+// The logger is read from the context AFTER c.Next() so it picks up any
+// enrichments added by downstream middleware (e.g. user_id / key_id from auth).
+func (s *Server) accessLogMiddleware() gin.HandlerFunc {
+	// Build skip-set once at middleware init time, not per request
+	skipPaths := make(map[string]struct{}, len(s.config.Logging.AccessLogSkipPaths))
+	for _, p := range s.config.Logging.AccessLogSkipPaths {
+		skipPaths[p] = struct{}{}
+	}
+
+	return func(c *gin.Context) {
+		start := time.Now()
+
+		// Run the full handler chain.
+		// CustomRecovery is registered AFTER (inner to) accessLogMiddleware, so any panic
+		// from a handler is caught by CustomRecovery before it propagates back here.
+		// This means c.Next() always returns normally, with the correct final status code.
+		c.Next()
+
+		// Read the enriched logger AFTER c.Next() — this captures any user_id/key_id
+		// that auth middleware may have injected into c.Request.Context() during the request.
+		logger := logctx.From(c.Request.Context())
+		path := c.Request.URL.Path
+
+		// Normalize bytes_out: c.Writer.Size() returns -1 when nothing was written
+		bytesOut := c.Writer.Size()
+		if bytesOut < 0 {
+			bytesOut = 0
+		}
+
+		// Core access log fields
+		fields := []zap.Field{
+			zap.String("method", c.Request.Method),
+			zap.String("path", path),
+			zap.String("route", c.FullPath()), // matched route template, e.g. "/api/v1/fair-value/:ticker"
+			zap.Int("status", c.Writer.Status()),
+			zap.Duration("latency", time.Since(start)),
+			zap.String("client_ip", c.ClientIP()),
+			zap.Int("bytes_out", bytesOut),
+		}
+
+		// Include error_code if respondWithError set it (used by downstream error analysis)
+		if errCode := c.GetString("error_code"); errCode != "" {
+			fields = append(fields, zap.String("error_code", errCode))
+		}
+
+		// Suppress info-level for skip-listed paths (probes, scrape endpoints)
+		if _, skip := skipPaths[path]; skip {
+			logger.Debug("access", fields...)
+			return
+		}
+
+		logger.Info("access", fields...)
 	}
 }
 
@@ -334,7 +411,8 @@ func (s *Server) rateLimitMiddleware() gin.HandlerFunc {
 		})
 
 		if err != nil {
-			s.logger.Error("Rate limit check failed", zap.Error(err))
+			// Log with request-scoped logger so the line carries request_id
+			logctx.From(c.Request.Context()).Error("Rate limit check failed", zap.Error(err))
 			// Allow request on error to prevent outage, but log for investigation
 			c.Next()
 			return
@@ -347,7 +425,8 @@ func (s *Server) rateLimitMiddleware() gin.HandlerFunc {
 		}
 
 		if !result.Allowed {
-			s.logger.Warn("Rate limit exceeded",
+			// Log with request-scoped logger so the line carries request_id
+			logctx.From(c.Request.Context()).Warn("Rate limit exceeded",
 				zap.String("identifier", identifier),
 				zap.String("type", string(limitType)),
 				zap.String("ip", c.ClientIP()),
@@ -395,7 +474,26 @@ func (s *Server) securityHeadersMiddleware() gin.HandlerFunc {
 	}
 }
 
-// authMiddleware provides API key authentication
+// panicHandler is the gin.CustomRecovery callback. It:
+//  1. Logs the panic value and full stack trace at Error level via the
+//     request-scoped logger (carries request_id automatically).
+//  2. Responds with a generic RFC 7807 500 error — the panic message is
+//     intentionally not exposed to the client so internals never leak.
+func (s *Server) panicHandler(c *gin.Context, err any) {
+	// Emit structured error with stack trace, correlated to the request
+	logctx.From(c.Request.Context()).Error("panic recovered",
+		zap.Any("panic", err),
+		zap.ByteString("stack", debug.Stack()),
+	)
+
+	// Respond with a generic 500 — do NOT include panic details in the response
+	s.respondWithError(c, http.StatusInternalServerError, "INTERNAL", "internal server error")
+}
+
+// authMiddleware provides API key authentication.
+// After successful validation it enriches the context logger with user_id and
+// key_id so all downstream log lines (handlers, services, access log) inherit
+// those fields automatically.
 func (s *Server) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Get API key from header
@@ -408,7 +506,8 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		// Validate API key using auth service
 		keyInfo, err := s.authService.ValidateKey(c.Request.Context(), apiKey)
 		if err != nil {
-			s.logger.Warn("API key validation failed",
+			// Log with request-scoped logger so the line carries request_id
+			logctx.From(c.Request.Context()).Warn("API key validation failed",
 				zap.Error(err),
 				zap.String("key_prefix", s.safeKeyPrefix(apiKey)),
 				zap.String("ip", c.ClientIP()),
@@ -428,9 +527,26 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		// Store key information in context for later use
+		// Store key information in context for later use by permission checks and rate limiter
 		c.Set("api_key_info", keyInfo)
 		c.Set("user_id", keyInfo.UserID)
+
+		// R.4.1: Enrich the context logger with user_id and key_id so that all
+		// downstream log lines — in handlers, services, and the access log —
+		// automatically carry these fields without extra plumbing.
+		enriched := logctx.From(c.Request.Context()).With(
+			zap.String("user_id", keyInfo.UserID),
+			zap.String("key_id", keyInfo.ID),
+		)
+		c.Request = c.Request.WithContext(logctx.Inject(c.Request.Context(), enriched))
+
+		// Capture a correlated child logger before spawning the goroutine.
+		// This preserves request_id + key_id on the async log line even though
+		// the goroutine runs with a background-derived context.
+		reqLogger := logctx.From(c.Request.Context()).With(
+			zap.String("async_task", "record_usage"),
+			zap.String("key_id", keyInfo.ID),
+		)
 
 		// Record usage asynchronously (don't block request)
 		go func() {
@@ -446,13 +562,12 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 			})
 
 			if err != nil {
-				s.logger.Error("Failed to record API usage", zap.Error(err))
+				reqLogger.Error("Failed to record API usage", zap.Error(err))
 			}
 		}()
 
-		s.logger.Debug("API key authenticated successfully",
-			zap.String("user_id", keyInfo.UserID),
-			zap.String("key_id", keyInfo.ID),
+		// Log successful auth with the now-enriched request-scoped logger
+		logctx.From(c.Request.Context()).Debug("API key authenticated successfully",
 			zap.Int("permissions", len(keyInfo.Permissions)),
 		)
 
@@ -485,8 +600,8 @@ func (s *Server) requirePermission(permission entities.Permission) gin.HandlerFu
 		}
 
 		if !hasPermission {
-			s.logger.Warn("Insufficient permissions",
-				zap.String("user_id", apiKeyInfo.UserID),
+			// Log with request-scoped logger so the line carries request_id, user_id, key_id
+			logctx.From(c.Request.Context()).Warn("Insufficient permissions",
 				zap.String("required_permission", string(permission)),
 				zap.Strings("user_permissions", s.permissionsToStrings(apiKeyInfo.Permissions)),
 			)
@@ -552,8 +667,13 @@ func (s *Server) permissionsToStrings(permissions []entities.Permission) []strin
 	return result
 }
 
-// respondWithError sends a standardized error response
+// respondWithError sends a standardized RFC 7807 Problem Details error response.
+// It also stores the error code in the gin context so accessLogMiddleware can
+// include it in the access log line without re-parsing the response body.
 func (s *Server) respondWithError(c *gin.Context, statusCode int, errorCode, message string) {
+	// Make error_code available to accessLogMiddleware for structured access logging
+	c.Set("error_code", errorCode)
+
 	// RFC 7807 Problem Details with project-specific extension field "code"
 	c.Header("Content-Type", "application/problem+json")
 	c.JSON(statusCode, gin.H{
@@ -578,8 +698,7 @@ func (s *Server) respondWithError(c *gin.Context, statusCode int, errorCode, mes
 //
 //	"550e8400-e29b-41d4-a716-446655440000"
 //
-// Phase R's requestIDMiddleware will use this when no valid X-Request-ID
-// header is provided by the client.
+// requestIDMiddleware uses this when no valid X-Request-ID header is provided.
 func generateRequestID() string {
 	return uuid.NewString()
 }
@@ -592,11 +711,6 @@ func generateRequestID() string {
 //   - Maximum length of 128 characters (prevents header-size abuse)
 //   - Only alphanumeric characters plus ".", "_", ":", "-"
 //     (excludes whitespace, control characters, and other injection vectors)
-//
-// Phase R will use this to decide whether to trust a client-supplied ID or
-// generate a fresh one.
-//
-//nolint:unused // wired by Phase R (R.1 requestIDMiddleware)
 func isValidRequestID(s string) bool {
 	return requestIDValidator.MatchString(s)
 }

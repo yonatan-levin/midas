@@ -12,11 +12,13 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/services/ratelimit"
 )
 
 // HealthHandler handles health check and metrics endpoints
 type HealthHandler struct {
+	// logger is retained for non-request contexts; request-path log sites use logctx.From(ctx)
 	logger         *zap.Logger
 	startTime      time.Time
 	db             *sqlx.DB
@@ -182,7 +184,7 @@ func (h *HealthHandler) DetailedHealthCheck(c *gin.Context) {
 		statusCode = http.StatusPartialContent
 	}
 
-	h.logger.Info("Detailed health check completed",
+	logctx.From(c.Request.Context()).Info("Detailed health check completed",
 		zap.String("status", overallStatus),
 		zap.Duration("duration", time.Since(startTime)))
 
@@ -253,7 +255,7 @@ func (h *HealthHandler) checkDatabase(ctx context.Context) HealthCheck {
 	if err := h.db.PingContext(ctx); err != nil {
 		status = "unhealthy"
 		message = "Database connection failed: " + err.Error()
-		h.logger.Error("Database health check failed", zap.Error(err))
+		logctx.From(ctx).Error("Database health check failed", zap.Error(err))
 	} else {
 		// Get database stats
 		dbStats := h.db.Stats()
@@ -313,7 +315,7 @@ func (h *HealthHandler) checkCache(ctx context.Context) HealthCheck {
 	if err := h.cache.Set(ctx, testKey, testValue, time.Minute); err != nil {
 		status = "unhealthy"
 		message = "Cache write operation failed: " + err.Error()
-		h.logger.Error("Cache health check write failed", zap.Error(err))
+		logctx.From(ctx).Error("Cache health check write failed", zap.Error(err))
 	} else {
 		var retrievedValue string
 		if err := h.cache.Get(ctx, testKey, &retrievedValue); err != nil {
@@ -326,7 +328,7 @@ func (h *HealthHandler) checkCache(ctx context.Context) HealthCheck {
 
 		// Clean up test key (best-effort)
 		if err := h.cache.Delete(ctx, testKey); err != nil {
-			h.logger.Warn("Health check cache cleanup failed", zap.Error(err))
+			logctx.From(ctx).Warn("Health check cache cleanup failed", zap.Error(err))
 		}
 	}
 

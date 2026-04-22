@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
 )
 
@@ -25,7 +26,8 @@ type ValuationCalculator interface {
 // FairValueHandler handles fair value related HTTP requests
 type FairValueHandler struct {
 	valuationService ValuationCalculator
-	logger           *zap.Logger
+	// logger is retained for non-request contexts; request-path log sites use logctx.From(ctx)
+	logger *zap.Logger
 }
 
 // NewFairValueHandler creates a new FairValueHandler instance
@@ -151,7 +153,7 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Processing fair value request",
+	logctx.From(c.Request.Context()).Info("Processing fair value request",
 		zap.String("ticker", ticker),
 		zap.Float64p("override_beta", overrideBeta),
 		zap.Float64p("override_rf", overrideRF))
@@ -168,7 +170,7 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 	// Calculate valuation
 	result, err := h.valuationService.CalculateValuation(c.Request.Context(), ticker, opts)
 	if err != nil {
-		h.logger.Error("Valuation calculation failed",
+		logctx.From(c.Request.Context()).Error("Valuation calculation failed",
 			zap.String("ticker", ticker),
 			zap.Error(err))
 
@@ -216,7 +218,7 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		SanityCheck:           result.SanityCheck,
 	}
 
-	h.logger.Info("Fair value calculation completed",
+	logctx.From(c.Request.Context()).Info("Fair value calculation completed",
 		zap.String("ticker", ticker),
 		zap.Float64("dcf_value", result.DCFValuePerShare),
 		zap.Float64("tangible_value", result.TangibleValuePerShare))
@@ -266,7 +268,7 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Processing bulk fair value request",
+	logctx.From(c.Request.Context()).Info("Processing bulk fair value request",
 		zap.Int("ticker_count", len(request.Tickers)),
 		zap.Strings("tickers", request.Tickers))
 
@@ -281,7 +283,7 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 
 		// Validate ticker format
 		if !isValidTicker(ticker) {
-			h.logger.Warn("Skipping invalid ticker in bulk request", zap.String("ticker", ticker))
+			logctx.From(c.Request.Context()).Warn("Skipping invalid ticker in bulk request", zap.String("ticker", ticker))
 			failures = append(failures, BulkFailure{
 				Ticker:    ticker,
 				ErrorCode: "INVALID_TICKER",
@@ -303,7 +305,7 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		// Calculate valuation for this ticker
 		result, err := h.valuationService.CalculateValuation(c.Request.Context(), ticker, opts)
 		if err != nil {
-			h.logger.Warn("Valuation failed for ticker in bulk request",
+			logctx.From(c.Request.Context()).Warn("Valuation failed for ticker in bulk request",
 				zap.String("ticker", ticker),
 				zap.Error(err))
 
@@ -348,7 +350,7 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		},
 	}
 
-	h.logger.Info("Bulk fair value calculation completed",
+	logctx.From(c.Request.Context()).Info("Bulk fair value calculation completed",
 		zap.Int("successful", successful),
 		zap.Int("failed", failed))
 
