@@ -2,7 +2,19 @@
 
 **Version:** 1.1
 **Date:** 2026-04-23 (v1.0 drafted 2026-04-22; v1.1 refinements R1/R2/R3 applied during execution kickoff)
-**Status:** Phase M COMPLETE (2026-04-23) — commits `2f95d12` (impl) + `2da7d7b` (spec-review fixes) + `52ad5ef` (quality-review fixes). Phases O + R + S landed earlier the same day. Phase U next (console polish + docker-compose cleanup). Three noted field-completeness follow-ups tracked in `docs/reviewer/M1`. Work continues on branch `feat/observability` in worktree `.worktrees/feat-observability`.
+**Status:** ALL PHASES COMPLETE (2026-04-23). Observability upgrade landed end-to-end on branch `feat/observability` (worktree `.worktrees/feat-observability`) across 19 commits. Final review + integration via `superpowers:finishing-a-development-branch` is the only remaining step. Three noted field-completeness follow-ups tracked in `docs/reviewer/M1`.
+
+**Phase commit index:**
+
+| Phase | Impl commit | Fix commits | Docs-sync commit |
+|-------|-------------|-------------|------------------|
+| O — Foundation | `4aebf74` | `1b72bb6` | `cd20001` |
+| R — Request correlation | `4819628` | `50fb241`, `f9f5634` | `b468d9b` |
+| S — Service-layer migration | `30425e7` | `7128c13` | `060ff6a` |
+| M — Calc tracing (12 stages) | `2f95d12` | `2da7d7b`, `52ad5ef` | `7b7625e` |
+| U — Docker/launch cleanup | `b729315` | — | (this commit) |
+
+The branch also includes `c2de2ba` (foundation spec + worktree gitignore).
 **Scope:** Make every HTTP request's full execution flow reconstructible from logs. Persist logs locally for development, rely on container log drivers in staging / production. Add calculation-level tracing so each DCF valuation's math can be inspected end-to-end.
 
 ---
