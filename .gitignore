@@ -170,6 +170,9 @@ temp/
 .claude/settings.local.json
 .cursor/hooks/.session-edits.json
 
+# Git worktrees (superpowers / feature-branch isolation)
+.worktrees/
+
 # Database files
 *.db
 *.sqlite
