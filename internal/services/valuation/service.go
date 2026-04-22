@@ -11,6 +11,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
@@ -38,6 +39,16 @@ type Service struct {
 	industryMultiples  *industryMultiplesConfig     // Phase 4: EV/EBITDA and P/E multiples for cross-checks
 	config             *config.Config
 	logger             *zap.Logger
+}
+
+// log returns the appropriate logger for the current execution context.
+// When ctx carries a request-scoped logger (injected by logctx middleware), that
+// logger is returned so all downstream log lines inherit request_id / user_id /
+// key_id. When the service is called from the scheduler or startup (plain
+// context.Background()), the fx singleton logger is returned as fallback so
+// structured logging is never silenced.
+func (s *Service) log(ctx context.Context) *zap.Logger {
+	return logctx.Or(ctx, s.logger)
 }
 
 // NewService creates a new valuation service
@@ -120,7 +131,7 @@ func (s *Service) SetYFinanceGateway(gw ports.YFinanceGateway) {
 // replace the corresponding values fetched from data sources.
 func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *ValuationOptions) (*entities.ValuationResult, error) {
 	start := time.Now()
-	s.logger.Info("Starting valuation calculation", zap.String("ticker", ticker))
+	s.log(ctx).Info("Starting valuation calculation", zap.String("ticker", ticker))
 
 	// Skip cache for requests with overrides — they represent ad-hoc user queries
 	// that should not pollute (or be served from) the default-parameter cache.
@@ -130,7 +141,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	if !hasOverrides {
 		var cachedResult entities.ValuationResult
 		if err := s.cache.Get(ctx, cacheKey, &cachedResult); err == nil {
-			s.logger.Info("Returning cached valuation", zap.String("ticker", ticker))
+			s.log(ctx).Info("Returning cached valuation", zap.String("ticker", ticker))
 			s.metricsService.RecordValuationRequest(ticker, "single", "cache_hit", time.Since(start))
 			return &cachedResult, nil
 		}
@@ -144,7 +155,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 
 	if err != nil || len(historicalData.Data) == 0 {
 		// No data in repository — use DataFetcher to retrieve from external APIs
-		s.logger.Info("No historical data in repository, fetching via DataFetcher", zap.String("ticker", ticker))
+		s.log(ctx).Info("No historical data in repository, fetching via DataFetcher", zap.String("ticker", ticker))
 
 		if s.dataFetcher == nil {
 			return nil, fmt.Errorf("%w: no historical data and data fetcher not configured for %s", ErrTickerNotFound, ticker)
@@ -192,7 +203,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 		marketData = fetchResult.MarketData
 		macroData = fetchResult.MacroData
 
-		s.logger.Info("Successfully fetched data via DataFetcher",
+		s.log(ctx).Info("Successfully fetched data via DataFetcher",
 			zap.String("ticker", ticker),
 			zap.Int("periods", len(historicalData.Data)),
 			zap.Bool("has_market_data", marketData != nil),
@@ -200,7 +211,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	} else if s.isFinancialDataIncomplete(historicalData) && s.dataFetcher != nil {
 		// Data exists in repo but is incomplete (missing FCF fields like D&A, CapEx, Cash).
 		// Re-fetch from SEC to get complete data, then persist the update.
-		s.logger.Info("Stored financial data incomplete (missing FCF fields), re-fetching from SEC",
+		s.log(ctx).Info("Stored financial data incomplete (missing FCF fields), re-fetching from SEC",
 			zap.String("ticker", ticker))
 
 		fetchResult, fetchErr := s.dataFetcher.Fetch(ctx, &entities.FetchRequest{Ticker: ticker})
@@ -216,16 +227,16 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 			// Persist the updated data so future requests don't re-fetch
 			if s.financialRepo != nil {
 				if storeErr := s.financialRepo.StoreHistorical(ctx, historicalData); storeErr != nil {
-					s.logger.Warn("Failed to persist re-fetched financial data",
+					s.log(ctx).Warn("Failed to persist re-fetched financial data",
 						zap.String("ticker", ticker), zap.Error(storeErr))
 				} else {
-					s.logger.Info("Persisted complete financial data to repository",
+					s.log(ctx).Info("Persisted complete financial data to repository",
 						zap.String("ticker", ticker),
 						zap.Int("periods", len(historicalData.Data)))
 				}
 			}
 		} else {
-			s.logger.Warn("Re-fetch failed or returned no data, using incomplete stored data with NOPAT fallback",
+			s.log(ctx).Warn("Re-fetch failed or returned no data, using incomplete stored data with NOPAT fallback",
 				zap.String("ticker", ticker))
 		}
 	}
@@ -234,14 +245,14 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	if marketData == nil {
 		marketData, err = s.marketRepo.GetLatest(ctx, ticker)
 		if err != nil {
-			s.logger.Warn("Failed to fetch market data from repository", zap.Error(err), zap.String("ticker", ticker))
+			s.log(ctx).Warn("Failed to fetch market data from repository", zap.Error(err), zap.String("ticker", ticker))
 			return nil, fmt.Errorf("failed to fetch market data: %w", err)
 		}
 	}
 	if macroData == nil {
 		macroData, err = s.macroRepo.GetLatest(ctx)
 		if err != nil {
-			s.logger.Warn("Failed to fetch macro data from repository", zap.Error(err), zap.String("ticker", ticker))
+			s.log(ctx).Warn("Failed to fetch macro data from repository", zap.Error(err), zap.String("ticker", ticker))
 			return nil, fmt.Errorf("failed to fetch macro data: %w", err)
 		}
 	}
@@ -254,11 +265,11 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 			var err error
 			cleaningResult, err = s.dataCleaner.CleanFinancialData(ctx, latest)
 			if err != nil {
-				s.logger.Warn("Data cleaning failed, using original data",
+				s.log(ctx).Warn("Data cleaning failed, using original data",
 					zap.Error(err),
 					zap.String("ticker", ticker))
 			} else {
-				s.logger.Info("Data cleaning applied successfully",
+				s.log(ctx).Info("Data cleaning applied successfully",
 					zap.String("ticker", ticker),
 					zap.Float64("quality_score", cleaningResult.QualityScore))
 				// Update historical data with cleaned data
@@ -266,7 +277,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 			}
 		}
 	} else {
-		s.logger.Info("DataCleaner service not available, using original data", zap.String("ticker", ticker))
+		s.log(ctx).Info("DataCleaner service not available, using original data", zap.String("ticker", ticker))
 	}
 
 	// Calculate valuation using potentially cleaned data, applying any user overrides
@@ -289,14 +300,14 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	// Only cache default (no-override) results to avoid cache poisoning
 	if !hasOverrides {
 		if err := s.cache.Set(ctx, cacheKey, result, s.config.Valuation.CacheTTL); err != nil {
-			s.logger.Warn("Failed to cache valuation result", zap.Error(err))
+			s.log(ctx).Warn("Failed to cache valuation result", zap.Error(err))
 		}
 	}
 
 	// Record successful valuation metrics
 	s.metricsService.RecordValuationRequest(ticker, "single", "success", time.Since(start))
 
-	s.logger.Info("Valuation calculation completed", zap.String("ticker", ticker), zap.Float64("dcf_value", result.DCFValuePerShare))
+	s.log(ctx).Info("Valuation calculation completed", zap.String("ticker", ticker), zap.Float64("dcf_value", result.DCFValuePerShare))
 	return result, nil
 }
 
@@ -389,7 +400,7 @@ func (s *Service) performValuation(
 		beta = wacc.RelleveredBeta(unlevered, latestFinancialData.TaxRate, debtEquityRatio)
 	}
 
-	s.logger.Debug("Beta adjustments applied",
+	s.log(ctx).Debug("Beta adjustments applied",
 		zap.String("ticker", historicalData.Ticker),
 		zap.Float64("raw_beta", rawBeta),
 		zap.Float64("adjusted_beta", beta))
@@ -399,7 +410,7 @@ func (s *Service) performValuation(
 	countryCode := GetCountryForTicker(historicalData.Ticker)
 	countryRiskPremium := GetCountryRiskPremium(s.countryRiskMap, countryCode)
 	if countryRiskPremium > 0 {
-		s.logger.Info("Country risk premium applied",
+		s.log(ctx).Info("Country risk premium applied",
 			zap.String("ticker", historicalData.Ticker),
 			zap.String("country", countryCode),
 			zap.Float64("crp", countryRiskPremium))
@@ -445,7 +456,7 @@ func (s *Service) performValuation(
 		if classifyErr == nil && classified != "" && classified != "NA" {
 			industryCode = classified
 		}
-		s.logger.Debug("Industry classification result",
+		s.log(ctx).Debug("Industry classification result",
 			zap.String("ticker", historicalData.Ticker),
 			zap.String("industry_code", industryCode))
 	}
@@ -477,7 +488,7 @@ func (s *Service) performValuation(
 			tangibleValuePerShare, sharesOutstanding, industryCode,
 		)
 		if errors.Is(altErr, errFallbackToDCF) {
-			s.logger.Info("Falling back to standard DCF after alternative model failure",
+			s.log(ctx).Info("Falling back to standard DCF after alternative model failure",
 				zap.String("ticker", historicalData.Ticker),
 				zap.String("primary_model", selectedModel.ModelType()))
 			dcfFallbackWarning = fmt.Sprintf("Primary model (%s) could not value this company; fell back to multi_stage_dcf", selectedModel.ModelType())
@@ -524,13 +535,13 @@ func (s *Service) performValuation(
 		dcfInputs.DepreciationAndAmortization = avgDA
 		dcfInputs.CapitalExpenditures = avgCapEx
 		dcfInputs.NetWorkingCapitalChange = nwcChange
-		s.logger.Info("Using true FCF calculation (smoothed over available periods)",
+		s.log(ctx).Info("Using true FCF calculation (smoothed over available periods)",
 			zap.String("ticker", historicalData.Ticker),
 			zap.Float64("avg_da", avgDA),
 			zap.Float64("avg_capex", avgCapEx),
 			zap.Float64("nwc_change", nwcChange))
 	} else {
-		s.logger.Info("Falling back to NOPAT-based FCF (D&A/CapEx unavailable)",
+		s.log(ctx).Info("Falling back to NOPAT-based FCF (D&A/CapEx unavailable)",
 			zap.String("ticker", historicalData.Ticker))
 	}
 	usingNOPATFallback := !dcfInputs.UseTrueFCF
@@ -541,7 +552,7 @@ func (s *Service) performValuation(
 		exitMultiple := LookupMultiple(s.industryMultiples.EVEBITDAMultiples, industryCode)
 		if exitMultiple > 0 {
 			dcfInputs.ExitMultiple = exitMultiple
-			s.logger.Debug("Exit multiple wired for terminal value averaging",
+			s.log(ctx).Debug("Exit multiple wired for terminal value averaging",
 				zap.String("ticker", historicalData.Ticker),
 				zap.String("industry", industryCode),
 				zap.Float64("exit_multiple", exitMultiple))
@@ -663,7 +674,7 @@ func (s *Service) performAlternativeValuation(
 	industryCode string,
 ) (*entities.ValuationResult, error) {
 
-	s.logger.Info("Using alternative valuation model",
+	s.log(ctx).Info("Using alternative valuation model",
 		zap.String("ticker", historicalData.Ticker),
 		zap.String("model_type", model.ModelType()),
 		zap.String("industry", industryCode))
@@ -687,7 +698,7 @@ func (s *Service) performAlternativeValuation(
 	modelResult, err := model.Calculate(ctx, modelInput)
 	if err != nil {
 		// Primary model failed — try fallback strategies before giving up
-		s.logger.Warn("Primary valuation model failed, attempting fallback",
+		s.log(ctx).Warn("Primary valuation model failed, attempting fallback",
 			zap.String("model", model.ModelType()),
 			zap.String("ticker", historicalData.Ticker),
 			zap.Error(err))
@@ -879,25 +890,25 @@ func (s *Service) getAnalystEstimates(ctx context.Context, ticker string) *ports
 	// Try cache first
 	var cached ports.YFinanceAnalystEstimates
 	if err := s.cache.Get(ctx, cacheKey, &cached); err == nil {
-		s.logger.Debug("Analyst estimates cache hit", zap.String("ticker", ticker))
+		s.log(ctx).Debug("Analyst estimates cache hit", zap.String("ticker", ticker))
 		return &cached
 	}
 
 	// Cache miss — fetch from Yahoo Finance
 	estimates, err := s.yfinanceGateway.GetAnalystEstimates(ctx, ticker)
 	if err != nil || estimates == nil {
-		s.logger.Debug("Failed to fetch analyst estimates, proceeding without",
+		s.log(ctx).Debug("Failed to fetch analyst estimates, proceeding without",
 			zap.String("ticker", ticker), zap.Error(err))
 		return nil
 	}
 
 	// Store in cache for future requests
 	if cacheErr := s.cache.Set(ctx, cacheKey, estimates, analystEstimateCacheTTL); cacheErr != nil {
-		s.logger.Warn("Failed to cache analyst estimates",
+		s.log(ctx).Warn("Failed to cache analyst estimates",
 			zap.String("ticker", ticker), zap.Error(cacheErr))
 	}
 
-	s.logger.Debug("Analyst estimates fetched and cached",
+	s.log(ctx).Debug("Analyst estimates fetched and cached",
 		zap.String("ticker", ticker),
 		zap.Int("analysts", estimates.NumberOfAnalysts))
 

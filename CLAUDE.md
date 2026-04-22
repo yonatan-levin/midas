@@ -53,6 +53,11 @@ docker-compose -f docker-compose.prod.yml up -d  # Production
 
 # Load testing
 go run ./scripts/load_tester.go -url http://localhost:8080 -key <API_KEY> -type single -concurrency 20 -duration 60s -rps 20
+
+# Observability lint guard (Phase S) — fails if request-path code uses singleton loggers
+# instead of logctx.Or(ctx, ...). Run before committing service/gateway changes.
+./scripts/lint-logs.sh           # Linux/macOS
+.\scripts\lint-logs.ps1          # Windows
 ```
 
 ## Architecture

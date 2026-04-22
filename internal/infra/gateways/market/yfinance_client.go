@@ -15,6 +15,7 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // errUnauthorized is a sentinel used to detect 401 responses for auth refresh.
@@ -81,7 +82,7 @@ func NewYFinanceClient(cfg *config.YFinanceConfig, logger *zap.Logger) *YFinance
 
 // GetQuote retrieves current quote data for a ticker
 func (c *YFinanceClient) GetQuote(ctx context.Context, ticker string) (*ports.YFinanceQuote, error) {
-	c.logger.Debug("Fetching quote", zap.String("ticker", ticker))
+	logctx.Or(ctx, c.logger).Debug("Fetching quote", zap.String("ticker", ticker))
 
 	// Yahoo Finance v7 API endpoint
 	endpoint := fmt.Sprintf("%s/v7/finance/quote", c.baseURL)
@@ -105,7 +106,7 @@ func (c *YFinanceClient) GetQuote(ctx context.Context, ticker string) (*ports.YF
 
 		// If we got a 401, invalidate auth so the next attempt uses fresh credentials
 		if _, ok := err.(*errUnauthorized); ok {
-			c.logger.Warn("Got 401 from Yahoo Finance, refreshing auth",
+			logctx.Or(ctx, c.logger).Warn("Got 401 from Yahoo Finance, refreshing auth",
 				zap.String("ticker", ticker),
 				zap.Int("attempt", attempt+1))
 			c.auth.Invalidate()
@@ -113,7 +114,7 @@ func (c *YFinanceClient) GetQuote(ctx context.Context, ticker string) (*ports.YF
 
 		if attempt < c.config.MaxRetries-1 {
 			backoff := time.Duration(attempt+1) * time.Second
-			c.logger.Warn("Quote request failed, retrying",
+			logctx.Or(ctx, c.logger).Warn("Quote request failed, retrying",
 				zap.String("ticker", ticker),
 				zap.Int("attempt", attempt+1),
 				zap.Duration("backoff", backoff),
@@ -137,7 +138,7 @@ func (c *YFinanceClient) GetQuote(ctx context.Context, ticker string) (*ports.YF
 	}
 
 	quote := result.QuoteResponse.Result[0]
-	c.logger.Debug("Successfully fetched quote",
+	logctx.Or(ctx, c.logger).Debug("Successfully fetched quote",
 		zap.String("ticker", ticker),
 		zap.Float64("price", quote.RegularMarketPrice))
 
@@ -150,7 +151,7 @@ func (c *YFinanceClient) GetBatchQuotes(ctx context.Context, tickers []string) (
 		return make(map[string]*ports.YFinanceQuote), nil
 	}
 
-	c.logger.Debug("Fetching batch quotes", zap.Strings("tickers", tickers))
+	logctx.Or(ctx, c.logger).Debug("Fetching batch quotes", zap.Strings("tickers", tickers))
 
 	// Yahoo Finance supports batch requests
 	endpoint := fmt.Sprintf("%s/v7/finance/quote", c.baseURL)
@@ -172,7 +173,7 @@ func (c *YFinanceClient) GetBatchQuotes(ctx context.Context, tickers []string) (
 		quotes[quote.Symbol] = &quote
 	}
 
-	c.logger.Info("Successfully fetched batch quotes",
+	logctx.Or(ctx, c.logger).Info("Successfully fetched batch quotes",
 		zap.Int("requested", len(tickers)),
 		zap.Int("received", len(quotes)))
 
@@ -181,7 +182,7 @@ func (c *YFinanceClient) GetBatchQuotes(ctx context.Context, tickers []string) (
 
 // GetKeyStatistics retrieves key statistics including beta and shares outstanding
 func (c *YFinanceClient) GetKeyStatistics(ctx context.Context, ticker string) (*ports.YFinanceKeyStats, error) {
-	c.logger.Debug("Fetching key statistics", zap.String("ticker", ticker))
+	logctx.Or(ctx, c.logger).Debug("Fetching key statistics", zap.String("ticker", ticker))
 
 	// Yahoo Finance v10 API endpoint for key statistics
 	endpoint := fmt.Sprintf("%s/v10/finance/quoteSummary/%s", c.baseURL, ticker)
@@ -235,7 +236,7 @@ func (c *YFinanceClient) GetKeyStatistics(ctx context.Context, ticker string) (*
 		}
 	}
 
-	c.logger.Debug("Successfully fetched key statistics",
+	logctx.Or(ctx, c.logger).Debug("Successfully fetched key statistics",
 		zap.String("ticker", ticker),
 		zap.Float64("beta", stats.Beta),
 		zap.Float64("shares_outstanding", stats.SharesOutstanding))
@@ -245,7 +246,7 @@ func (c *YFinanceClient) GetKeyStatistics(ctx context.Context, ticker string) (*
 
 // GetHistoricalPrices retrieves historical price data for beta calculation
 func (c *YFinanceClient) GetHistoricalPrices(ctx context.Context, ticker string, days int) ([]ports.YFinancePricePoint, error) {
-	c.logger.Debug("Fetching historical prices",
+	logctx.Or(ctx, c.logger).Debug("Fetching historical prices",
 		zap.String("ticker", ticker),
 		zap.Int("days", days))
 
@@ -292,7 +293,7 @@ func (c *YFinanceClient) GetHistoricalPrices(ctx context.Context, ticker string,
 		prices = append(prices, point)
 	}
 
-	c.logger.Info("Successfully fetched historical prices",
+	logctx.Or(ctx, c.logger).Info("Successfully fetched historical prices",
 		zap.String("ticker", ticker),
 		zap.Int("days_requested", days),
 		zap.Int("points_received", len(prices)))
@@ -525,7 +526,7 @@ type YFinanceValue struct {
 // GetAnalystEstimates retrieves analyst consensus growth estimates from the earningsTrend module.
 // Returns nil (not error) when no analyst data is available (micro-caps, foreign tickers).
 func (c *YFinanceClient) GetAnalystEstimates(ctx context.Context, ticker string) (*ports.YFinanceAnalystEstimates, error) {
-	c.logger.Debug("Fetching analyst estimates", zap.String("ticker", ticker))
+	logctx.Or(ctx, c.logger).Debug("Fetching analyst estimates", zap.String("ticker", ticker))
 
 	endpoint := fmt.Sprintf("%s/v10/finance/quoteSummary/%s", c.baseURL, ticker)
 
@@ -537,7 +538,7 @@ func (c *YFinanceClient) GetAnalystEstimates(ctx context.Context, ticker string)
 	// Reuse makeKeyStatsRequest but decode into EarningsTrend response
 	resp, err := c.makeEarningsTrendRequest(ctx, reqURL)
 	if err != nil {
-		c.logger.Warn("Failed to fetch analyst estimates, will use historical growth only",
+		logctx.Or(ctx, c.logger).Warn("Failed to fetch analyst estimates, will use historical growth only",
 			zap.String("ticker", ticker), zap.Error(err))
 		return nil, nil // Graceful degradation — not an error
 	}
@@ -577,7 +578,7 @@ func (c *YFinanceClient) GetAnalystEstimates(ctx context.Context, ticker string)
 		}
 	}
 
-	c.logger.Debug("Successfully fetched analyst estimates",
+	logctx.Or(ctx, c.logger).Debug("Successfully fetched analyst estimates",
 		zap.String("ticker", ticker),
 		zap.Int("analysts", estimates.NumberOfAnalysts),
 		zap.Float64("5y_growth", estimates.EarningsGrowth5Year))

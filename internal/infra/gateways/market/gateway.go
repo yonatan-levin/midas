@@ -11,6 +11,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // Gateway implements the market data gateway interface with fallback sources
@@ -50,17 +51,17 @@ func (g *Gateway) YFinanceClient() *YFinanceClient {
 
 // GetMarketData retrieves current market data for a ticker with fallback
 func (g *Gateway) GetMarketData(ctx context.Context, ticker string) (*entities.MarketData, error) {
-	g.logger.Debug("Fetching market data", zap.String("ticker", ticker))
+	logctx.Or(ctx, g.logger).Debug("Fetching market data", zap.String("ticker", ticker))
 
 	// Try yfinance first
 	if g.yfinance != nil {
 		marketData, err := g.getMarketDataFromYFinance(ctx, ticker)
 		if err == nil {
-			g.logger.Debug("Successfully fetched market data from yfinance",
+			logctx.Or(ctx, g.logger).Debug("Successfully fetched market data from yfinance",
 				zap.String("ticker", ticker))
 			return marketData, nil
 		}
-		g.logger.Warn("Failed to fetch from yfinance, trying fallback",
+		logctx.Or(ctx, g.logger).Warn("Failed to fetch from yfinance, trying fallback",
 			zap.String("ticker", ticker),
 			zap.Error(err))
 	}
@@ -85,7 +86,7 @@ func (g *Gateway) GetQuotes(ctx context.Context, tickers []string) (map[string]*
 
 // GetHistoricalPrices retrieves historical price data for a ticker
 func (g *Gateway) GetHistoricalPrices(ctx context.Context, ticker string, startDate, endDate time.Time) ([]*entities.PriceData, error) {
-	g.logger.Debug("Fetching historical prices",
+	logctx.Or(ctx, g.logger).Debug("Fetching historical prices",
 		zap.String("ticker", ticker),
 		zap.Time("start_date", startDate),
 		zap.Time("end_date", endDate))
@@ -127,7 +128,7 @@ func (g *Gateway) GetHistoricalPrices(ctx context.Context, ticker string, startD
 		result = append(result, priceData)
 	}
 
-	g.logger.Debug("Successfully fetched historical prices",
+	logctx.Or(ctx, g.logger).Debug("Successfully fetched historical prices",
 		zap.String("ticker", ticker),
 		zap.Int("price_points", len(result)))
 
@@ -140,7 +141,7 @@ func (g *Gateway) GetBatchMarketData(ctx context.Context, tickers []string) (map
 		return make(map[string]*entities.MarketData), nil
 	}
 
-	g.logger.Info("Fetching batch market data",
+	logctx.Or(ctx, g.logger).Info("Fetching batch market data",
 		zap.Strings("tickers", tickers),
 		zap.Int("count", len(tickers)))
 
@@ -154,7 +155,7 @@ func (g *Gateway) GetBatchMarketData(ctx context.Context, tickers []string) (map
 				results[ticker] = data
 			}
 		} else {
-			g.logger.Warn("Batch request failed, falling back to individual requests",
+			logctx.Or(ctx, g.logger).Warn("Batch request failed, falling back to individual requests",
 				zap.Error(err))
 		}
 	}
@@ -168,21 +169,21 @@ func (g *Gateway) GetBatchMarketData(ctx context.Context, tickers []string) (map
 	}
 
 	if len(failedTickers) > 0 {
-		g.logger.Debug("Fetching individual data for failed tickers",
+		logctx.Or(ctx, g.logger).Debug("Fetching individual data for failed tickers",
 			zap.Strings("failed_tickers", failedTickers))
 
 		for _, ticker := range failedTickers {
 			if data, err := g.GetMarketData(ctx, ticker); err == nil {
 				results[ticker] = data
 			} else {
-				g.logger.Warn("Failed to fetch market data for ticker",
+				logctx.Or(ctx, g.logger).Warn("Failed to fetch market data for ticker",
 					zap.String("ticker", ticker),
 					zap.Error(err))
 			}
 		}
 	}
 
-	g.logger.Info("Completed batch market data fetch",
+	logctx.Or(ctx, g.logger).Info("Completed batch market data fetch",
 		zap.Int("requested", len(tickers)),
 		zap.Int("successful", len(results)))
 
@@ -338,7 +339,7 @@ func (g *Gateway) calculateBetaFromHistoricalData(ctx context.Context, ticker st
 
 	// Sanity check: beta should typically be between -3 and 3
 	if beta < -3 || beta > 3 {
-		g.logger.Warn("Calculated beta is outside normal range",
+		logctx.Or(ctx, g.logger).Warn("Calculated beta is outside normal range",
 			zap.String("ticker", ticker),
 			zap.Float64("beta", beta))
 	}

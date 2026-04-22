@@ -234,7 +234,8 @@ func TestGateway_getTreasuryRatesFromConfig(t *testing.T) {
 		logger := zap.NewNop()
 		gateway := NewGateway(cfg, logger).(*Gateway)
 
-		rates := gateway.getTreasuryRatesFromConfig()
+		// Pass context.Background() — private helper now accepts ctx for log correlation.
+		rates := gateway.getTreasuryRatesFromConfig(context.Background())
 
 		require.NotNil(t, rates)
 		assert.Equal(t, 0.04, rates.Yield10Year)                  // Base rate
@@ -251,7 +252,7 @@ func TestGateway_getTreasuryRatesFromConfig(t *testing.T) {
 		logger := zap.NewNop()
 		gateway := NewGateway(cfg, logger).(*Gateway)
 
-		rates := gateway.getTreasuryRatesFromConfig()
+		rates := gateway.getTreasuryRatesFromConfig(context.Background())
 
 		require.NotNil(t, rates)
 		assert.Equal(t, 0.0, rates.Yield10Year)
@@ -267,7 +268,7 @@ func TestGateway_getTreasuryRatesFromConfig(t *testing.T) {
 		logger := zap.NewNop()
 		gateway := NewGateway(cfg, logger).(*Gateway)
 
-		rates := gateway.getTreasuryRatesFromConfig()
+		rates := gateway.getTreasuryRatesFromConfig(context.Background())
 
 		require.NotNil(t, rates)
 		assert.Equal(t, 0.15, rates.Yield10Year)

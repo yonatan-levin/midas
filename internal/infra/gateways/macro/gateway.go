@@ -15,6 +15,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // Gateway implements the MacroData gateway interface
@@ -44,26 +45,26 @@ func NewGateway(cfg *config.MacroConfig, logger *zap.Logger) ports.MacroDataGate
 
 // GetTreasuryRates retrieves current Treasury yield curve data
 func (g *Gateway) GetTreasuryRates(ctx context.Context) (*entities.TreasuryRates, error) {
-	g.logger.Debug("Fetching treasury rates")
+	logctx.Or(ctx, g.logger).Debug("Fetching treasury rates")
 
 	// If FRED API is enabled, try to fetch from FRED first
 	if g.config.FREDEnabled && g.config.FREDAPIKey != "" {
 		rates, err := g.getTreasuryRatesFromFRED(ctx)
 		if err == nil {
-			g.logger.Info("Successfully fetched treasury rates from FRED")
+			logctx.Or(ctx, g.logger).Info("Successfully fetched treasury rates from FRED")
 			return rates, nil
 		}
-		g.logger.Warn("Failed to fetch from FRED, falling back to config defaults",
+		logctx.Or(ctx, g.logger).Warn("Failed to fetch from FRED, falling back to config defaults",
 			zap.Error(err))
 	}
 
 	// Fallback to manual config settings as per user requirement
-	return g.getTreasuryRatesFromConfig(), nil
+	return g.getTreasuryRatesFromConfig(ctx), nil
 }
 
 // GetMarketRiskPremium retrieves the market risk premium
 func (g *Gateway) GetMarketRiskPremium(ctx context.Context) (float64, error) {
-	g.logger.Debug("Getting market risk premium")
+	logctx.Or(ctx, g.logger).Debug("Getting market risk premium")
 
 	// If FRED API is enabled, could potentially fetch historical market data
 	// nolint:staticcheck // placeholder until FRED integration is implemented
@@ -74,7 +75,7 @@ func (g *Gateway) GetMarketRiskPremium(ctx context.Context) (float64, error) {
 
 	// Use config-based default
 	mrp := g.config.ManualMarketRiskPremium
-	g.logger.Debug("Using config-based market risk premium",
+	logctx.Or(ctx, g.logger).Debug("Using config-based market risk premium",
 		zap.Float64("market_risk_premium", mrp))
 
 	return mrp, nil
@@ -82,20 +83,20 @@ func (g *Gateway) GetMarketRiskPremium(ctx context.Context) (float64, error) {
 
 // HealthCheck performs a health check on the macro data gateway
 func (g *Gateway) HealthCheck(ctx context.Context) error {
-	g.logger.Debug("Performing macro data gateway health check")
+	logctx.Or(ctx, g.logger).Debug("Performing macro data gateway health check")
 
 	// If FRED is enabled, test the connection
 	if g.config.FREDEnabled && g.config.FREDAPIKey != "" {
 		_, err := g.getTreasuryRatesFromFRED(ctx)
 		if err != nil {
-			g.logger.Warn("FRED API health check failed, but config fallback available",
+			logctx.Or(ctx, g.logger).Warn("FRED API health check failed, but config fallback available",
 				zap.Error(err))
 			// Don't fail health check if config fallback is available
 		}
 	}
 
 	// Always pass health check since config fallback is always available
-	g.logger.Debug("Macro data gateway health check passed")
+	logctx.Or(ctx, g.logger).Debug("Macro data gateway health check passed")
 	return nil
 }
 
@@ -122,7 +123,7 @@ func (g *Gateway) getTreasuryRatesFromFRED(ctx context.Context) (*entities.Treas
 	for seriesID, fieldName := range seriesMap {
 		value, err := g.getFREDSeries(ctx, seriesID)
 		if err != nil {
-			g.logger.Warn("Failed to fetch FRED series",
+			logctx.Or(ctx, g.logger).Warn("Failed to fetch FRED series",
 				zap.String("series_id", seriesID),
 				zap.Error(err))
 			continue
@@ -205,9 +206,10 @@ func (g *Gateway) getFREDSeries(ctx context.Context, seriesID string) (float64, 
 	return value, nil
 }
 
-// getTreasuryRatesFromConfig returns treasury rates using config defaults
-func (g *Gateway) getTreasuryRatesFromConfig() *entities.TreasuryRates {
-	g.logger.Info("Using config-based treasury rates fallback",
+// getTreasuryRatesFromConfig returns treasury rates using config defaults.
+// ctx is threaded through from the calling public method so logs inherit request correlation.
+func (g *Gateway) getTreasuryRatesFromConfig(ctx context.Context) *entities.TreasuryRates {
+	logctx.Or(ctx, g.logger).Info("Using config-based treasury rates fallback",
 		zap.Float64("manual_risk_free_rate", g.config.ManualRiskFreeRate))
 
 	// Use the manual risk-free rate for 10-year treasury and interpolate others

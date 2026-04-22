@@ -6,6 +6,8 @@ import (
 	"math"
 
 	"go.uber.org/zap"
+
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // Minimum spread between cost of equity and dividend growth rate.
@@ -85,7 +87,7 @@ func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 	if dividendGrowth >= costOfEquity {
 		originalGrowth := dividendGrowth
 		dividendGrowth = costOfEquity * ddmGrowthCapFraction
-		m.logger.Warn("Dividend growth exceeds cost of equity, capping",
+		logctx.Or(ctx, m.logger).Warn("Dividend growth exceeds cost of equity, capping",
 			zap.Float64("original_growth", originalGrowth),
 			zap.Float64("capped_growth", dividendGrowth))
 	}
@@ -147,7 +149,7 @@ func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 								impliedPBV, roeJustifiedPBV, ratio))
 					}
 				}
-				m.logger.Debug("P/BV cross-check",
+				logctx.Or(ctx, m.logger).Debug("P/BV cross-check",
 					zap.Float64("implied_pbv", impliedPBV),
 					zap.Float64("book_value_per_share", bookValuePerShare),
 					zap.Float64("roe", roe),
@@ -164,7 +166,7 @@ func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 		confidence = "low"
 	}
 
-	m.logger.Info("DDM valuation completed",
+	logctx.Or(ctx, m.logger).Info("DDM valuation completed",
 		zap.Float64("dps", dps),
 		zap.Float64("dividend_growth", dividendGrowth),
 		zap.Float64("cost_of_equity", costOfEquity),

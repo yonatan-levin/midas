@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // YFinanceAuth manages Yahoo Finance cookie + crumb authentication.
@@ -94,7 +96,7 @@ func (a *YFinanceAuth) isValid() bool {
 // fetchAuth performs the two-step cookie + crumb retrieval.
 // Caller must hold a.mu.
 func (a *YFinanceAuth) fetchAuth(ctx context.Context) error {
-	a.logger.Debug("Fetching new Yahoo Finance auth credentials",
+	logctx.Or(ctx, a.logger).Debug("Fetching new Yahoo Finance auth credentials",
 		zap.String("cookie_url", a.cookieURL),
 		zap.String("crumb_url", a.crumbURL))
 
@@ -114,7 +116,7 @@ func (a *YFinanceAuth) fetchAuth(ctx context.Context) error {
 	a.crumb = crumb
 	a.expiresAt = time.Now().Add(a.authTTL)
 
-	a.logger.Info("Yahoo Finance auth credentials obtained",
+	logctx.Or(ctx, a.logger).Info("Yahoo Finance auth credentials obtained",
 		zap.Int("cookies_count", len(cookies)),
 		zap.Time("expires_at", a.expiresAt))
 
@@ -144,7 +146,7 @@ func (a *YFinanceAuth) fetchCookies(ctx context.Context) ([]*http.Cookie, error)
 		return nil, fmt.Errorf("no cookies received from %s (status %d)", a.cookieURL, resp.StatusCode)
 	}
 
-	a.logger.Debug("Cookies obtained",
+	logctx.Or(ctx, a.logger).Debug("Cookies obtained",
 		zap.Int("count", len(cookies)),
 		zap.Int("status", resp.StatusCode))
 
@@ -186,7 +188,7 @@ func (a *YFinanceAuth) fetchCrumb(ctx context.Context, cookies []*http.Cookie) (
 		return "", fmt.Errorf("empty crumb received from %s", a.crumbURL)
 	}
 
-	a.logger.Debug("Crumb obtained", zap.String("crumb", crumb))
+	logctx.Or(ctx, a.logger).Debug("Crumb obtained", zap.String("crumb", crumb))
 
 	return crumb, nil
 }

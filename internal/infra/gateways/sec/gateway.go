@@ -9,6 +9,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // Gateway implements the SEC gateway interface
@@ -112,7 +113,7 @@ func (g *Gateway) NormalizeFinancialData(ctx context.Context, data *entities.Fin
 
 // GetFinancialDataForTicker fetches and parses financial data for a ticker
 func (g *Gateway) GetFinancialDataForTicker(ctx context.Context, ticker, cik string) (*entities.HistoricalFinancialData, error) {
-	g.logger.Info("Fetching financial data for ticker",
+	logctx.Or(ctx, g.logger).Info("Fetching financial data for ticker",
 		zap.String("ticker", ticker),
 		zap.String("cik", cik))
 
@@ -140,12 +141,12 @@ func (g *Gateway) GetFinancialDataForTicker(ctx context.Context, ticker, cik str
 	// in IndustryClassifier still works).
 	sicCode, sicErr := g.client.GetCompanySIC(ctx, cik)
 	if sicErr != nil {
-		g.logger.Debug("Could not fetch SIC code from submissions endpoint, proceeding without",
+		logctx.Or(ctx, g.logger).Debug("Could not fetch SIC code from submissions endpoint, proceeding without",
 			zap.String("ticker", ticker),
 			zap.Error(sicErr))
 	} else if sicCode != "" {
 		historical.SICCode = sicCode
-		g.logger.Debug("Extracted SIC code from SEC submissions",
+		logctx.Or(ctx, g.logger).Debug("Extracted SIC code from SEC submissions",
 			zap.String("ticker", ticker),
 			zap.String("sic_code", sicCode))
 	}
@@ -154,7 +155,7 @@ func (g *Gateway) GetFinancialDataForTicker(ctx context.Context, ticker, cik str
 	for period, data := range historical.Data {
 		normalized, err := g.parser.NormalizeFinancialData(ctx, data)
 		if err != nil {
-			g.logger.Warn("Failed to normalize data for period",
+			logctx.Or(ctx, g.logger).Warn("Failed to normalize data for period",
 				zap.String("ticker", ticker),
 				zap.String("period", period),
 				zap.Error(err))
@@ -163,7 +164,7 @@ func (g *Gateway) GetFinancialDataForTicker(ctx context.Context, ticker, cik str
 		historical.Data[period] = normalized
 	}
 
-	g.logger.Info("Successfully processed financial data",
+	logctx.Or(ctx, g.logger).Info("Successfully processed financial data",
 		zap.String("ticker", ticker),
 		zap.Int("periods", len(historical.Data)))
 

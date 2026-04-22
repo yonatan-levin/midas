@@ -7,6 +7,8 @@ import (
 	"os"
 
 	"go.uber.org/zap"
+
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // DefaultPFFOMultiple is the default P/FFO multiple for REITs when no sector-specific
@@ -205,7 +207,7 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 
 	if propertyGains == 0 {
 		// This is common and OK — just note it
-		m.logger.Debug("No property gains/losses data; FFO equals Net Income + D&A")
+		logctx.Or(ctx, m.logger).Debug("No property gains/losses data; FFO equals Net Income + D&A")
 	}
 
 	confidence := "medium"
@@ -223,7 +225,7 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 		nav := latest.OperatingIncome / m.navCapRate
 		navPerShare := nav / shares
 
-		m.logger.Debug("NAV cross-check",
+		logctx.Or(ctx, m.logger).Debug("NAV cross-check",
 			zap.Float64("noi_proxy", latest.OperatingIncome),
 			zap.Float64("cap_rate", m.navCapRate),
 			zap.Float64("nav_per_share", navPerShare),
@@ -240,7 +242,7 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 		}
 	}
 
-	m.logger.Info("FFO valuation completed",
+	logctx.Or(ctx, m.logger).Info("FFO valuation completed",
 		zap.Float64("net_income", netIncome),
 		zap.Float64("da", da),
 		zap.Float64("property_gains", propertyGains),

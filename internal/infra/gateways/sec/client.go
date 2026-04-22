@@ -18,6 +18,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // Client implements the SEC gateway interface
@@ -123,7 +124,7 @@ func (c *Client) GetCompanyFacts(ctx context.Context, cik string) (*ports.SECCom
 		return nil, errURL
 	}
 
-	c.logger.Debug("Fetching company facts",
+	logctx.Or(ctx, c.logger).Debug("Fetching company facts",
 		zap.String("cik", cik),
 		zap.String("url", urlStr))
 
@@ -139,7 +140,7 @@ func (c *Client) GetCompanyFacts(ctx context.Context, cik string) (*ports.SECCom
 
 		if attempt < c.config.MaxRetries-1 {
 			backoff := time.Duration(attempt+1) * c.config.RetryBackoffBase
-			c.logger.Warn("Request failed, retrying",
+			logctx.Or(ctx, c.logger).Warn("Request failed, retrying",
 				zap.String("cik", cik),
 				zap.Int("attempt", attempt+1),
 				zap.Duration("backoff", backoff),
@@ -155,7 +156,7 @@ func (c *Client) GetCompanyFacts(ctx context.Context, cik string) (*ports.SECCom
 	}
 
 	if err != nil {
-		c.logger.Error("Failed to fetch company facts after retries",
+		logctx.Or(ctx, c.logger).Error("Failed to fetch company facts after retries",
 			zap.String("cik", cik),
 			zap.Int("max_retries", c.config.MaxRetries),
 			zap.Error(err))
@@ -167,7 +168,7 @@ func (c *Client) GetCompanyFacts(ctx context.Context, cik string) (*ports.SECCom
 	for _, concepts := range facts.Facts {
 		totalConcepts += len(concepts)
 	}
-	c.logger.Info("Successfully fetched company facts",
+	logctx.Or(ctx, c.logger).Info("Successfully fetched company facts",
 		zap.String("cik", cik),
 		zap.String("entity_name", facts.EntityName),
 		zap.Int("taxonomy_count", len(facts.Facts)),
@@ -193,7 +194,7 @@ func (c *Client) GetCompanyConcepts(ctx context.Context, cik string, tag string)
 		return nil, errURL
 	}
 
-	c.logger.Debug("Fetching company concepts",
+	logctx.Or(ctx, c.logger).Debug("Fetching company concepts",
 		zap.String("cik", cik),
 		zap.String("tag", tag),
 		zap.String("url", urlStr))
@@ -210,7 +211,7 @@ func (c *Client) GetCompanyConcepts(ctx context.Context, cik string, tag string)
 
 		if attempt < c.config.MaxRetries-1 {
 			backoff := time.Duration(attempt+1) * c.config.RetryBackoffBase
-			c.logger.Warn("Concept request failed, retrying",
+			logctx.Or(ctx, c.logger).Warn("Concept request failed, retrying",
 				zap.String("cik", cik),
 				zap.String("tag", tag),
 				zap.Int("attempt", attempt+1),
@@ -227,7 +228,7 @@ func (c *Client) GetCompanyConcepts(ctx context.Context, cik string, tag string)
 	}
 
 	if err != nil {
-		c.logger.Error("Failed to fetch company concepts after retries",
+		logctx.Or(ctx, c.logger).Error("Failed to fetch company concepts after retries",
 			zap.String("cik", cik),
 			zap.String("tag", tag),
 			zap.Int("max_retries", c.config.MaxRetries),
@@ -235,7 +236,7 @@ func (c *Client) GetCompanyConcepts(ctx context.Context, cik string, tag string)
 		return nil, fmt.Errorf("failed to fetch company concepts for CIK %s, tag %s: %w", cik, tag, err)
 	}
 
-	c.logger.Info("Successfully fetched company concepts",
+	logctx.Or(ctx, c.logger).Info("Successfully fetched company concepts",
 		zap.String("cik", cik),
 		zap.String("tag", tag),
 		zap.String("entity_name", conceptResponse.EntityName))
@@ -252,7 +253,7 @@ func (c *Client) GetTickerCIKMapping(ctx context.Context) (map[string]string, er
 
 	url := c.config.TickerMappingURL
 
-	c.logger.Debug("Fetching ticker-CIK mapping", zap.String("url", url))
+	logctx.Or(ctx, c.logger).Debug("Fetching ticker-CIK mapping", zap.String("url", url))
 
 	var mapping map[string]string
 	var err error
@@ -266,7 +267,7 @@ func (c *Client) GetTickerCIKMapping(ctx context.Context) (map[string]string, er
 
 		if attempt < c.config.MaxRetries-1 {
 			backoff := time.Duration(attempt+1) * c.config.RetryBackoffBase
-			c.logger.Warn("Ticker mapping request failed, retrying",
+			logctx.Or(ctx, c.logger).Warn("Ticker mapping request failed, retrying",
 				zap.String("url", url),
 				zap.Int("attempt", attempt+1),
 				zap.Duration("backoff", backoff),
@@ -282,14 +283,14 @@ func (c *Client) GetTickerCIKMapping(ctx context.Context) (map[string]string, er
 	}
 
 	if err != nil {
-		c.logger.Error("Failed to fetch ticker-CIK mapping after retries",
+		logctx.Or(ctx, c.logger).Error("Failed to fetch ticker-CIK mapping after retries",
 			zap.String("url", url),
 			zap.Int("max_retries", c.config.MaxRetries),
 			zap.Error(err))
 		return nil, fmt.Errorf("failed to fetch ticker-CIK mapping: %w", err)
 	}
 
-	c.logger.Info("Successfully fetched ticker-CIK mapping",
+	logctx.Or(ctx, c.logger).Info("Successfully fetched ticker-CIK mapping",
 		zap.Int("mapping_count", len(mapping)))
 
 	return mapping, nil
@@ -501,7 +502,7 @@ func (c *Client) GetCompanySIC(ctx context.Context, cik string) (string, error) 
 	submissionsURL := fmt.Sprintf("%s://%s/submissions/%s.json",
 		c.normalizedBase.Scheme, c.normalizedBase.Host, formattedCIK)
 
-	c.logger.Debug("Fetching company SIC code from submissions endpoint",
+	logctx.Or(ctx, c.logger).Debug("Fetching company SIC code from submissions endpoint",
 		zap.String("cik", cik),
 		zap.String("url", submissionsURL))
 

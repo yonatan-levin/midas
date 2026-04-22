@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"go.uber.org/zap"
+
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // DefaultEVRevenueMultiple is the fallback EV/Revenue multiple when no sector-specific
@@ -119,7 +121,7 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 			fmt.Sprintf("Company has negative operating income (%.2f); standard DCF not applicable", baseOI))
 	}
 
-	m.logger.Info("Revenue multiple valuation completed",
+	logctx.Or(ctx, m.logger).Info("Revenue multiple valuation completed",
 		zap.Float64("revenue", revenue),
 		zap.Float64("multiple", multiple),
 		zap.String("industry", input.Industry),

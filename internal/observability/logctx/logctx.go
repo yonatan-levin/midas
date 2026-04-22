@@ -41,3 +41,26 @@ func From(ctx context.Context) *zap.Logger {
 	// opt-in: code that hasn't been wired yet simply produces no output.
 	return zap.NewNop()
 }
+
+// Or returns the logger injected into ctx if present; otherwise it returns
+// the provided fallback. This lets service methods that can be invoked from
+// BOTH the HTTP request path (where ctx carries a request-scoped logger) and
+// the scheduler / startup path (where it doesn't) emit structured logs in
+// both cases — correlated when called from a request, falling back to the
+// singleton logger otherwise.
+func Or(ctx context.Context, fallback *zap.Logger) *zap.Logger {
+	// If the context carries a logger, prefer it.
+	if ctx != nil {
+		if v := ctx.Value(loggerKey{}); v != nil {
+			if l, ok := v.(*zap.Logger); ok && l != nil {
+				return l
+			}
+		}
+	}
+
+	// Fall back; if fallback is also nil, return a nop so callers never panic.
+	if fallback == nil {
+		return zap.NewNop()
+	}
+	return fallback
+}
