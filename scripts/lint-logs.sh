@@ -40,7 +40,9 @@ SCAN_DIRS=(
 if ! command -v rg &>/dev/null; then
     echo "ERROR: ripgrep (rg) is required but not found."
     echo "  Install: brew install ripgrep  OR  apt-get install ripgrep"
-    exit 1
+    # Exit 2 (not 1) so CI can distinguish "dependency missing" from
+    # "lint violation detected" (which is exit 1). Matches lint-logs.ps1.
+    exit 2
 fi
 
 echo "lint-logs: scanning for unguarded singleton logger calls..."

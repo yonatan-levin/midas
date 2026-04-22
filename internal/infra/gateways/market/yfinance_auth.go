@@ -78,6 +78,11 @@ func (a *YFinanceAuth) ApplyCookies(req *http.Request) {
 }
 
 // Invalidate marks auth credentials as expired, forcing a refresh on next EnsureAuth call.
+//
+// Intentionally uses the singleton logger, not logctx.Or — Invalidate has no
+// ctx parameter and adding one would be a public API change for a method that
+// is mostly called from non-request paths (scheduler refresh). The surrounding
+// request-path methods correctly use logctx.Or.
 func (a *YFinanceAuth) Invalidate() {
 	a.mu.Lock()
 	defer a.mu.Unlock()

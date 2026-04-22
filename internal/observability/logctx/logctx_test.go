@@ -112,13 +112,12 @@ func TestLogctx_Or(t *testing.T) {
 	var nilCtx context.Context //nolint:staticcheck
 
 	tests := []struct {
-		name          string
-		ctx           context.Context
-		fallback      *zap.Logger
-		wantInjected  bool // true → returned logger routes to injectedLogs
-		wantFallback  bool // true → returned logger routes to fallbackLogs
-		wantNop       bool // true → neither observer should see entries (nop)
-		nilReturnSafe bool // returned logger must be non-nil
+		name         string
+		ctx          context.Context
+		fallback     *zap.Logger
+		wantInjected bool // true → returned logger routes to injectedLogs
+		wantFallback bool // true → returned logger routes to fallbackLogs
+		wantNop      bool // true → neither observer should see entries (nop)
 	}{
 		{
 			name:         "ctx_with_injected_logger_and_non_nil_fallback_returns_injected",
@@ -133,11 +132,10 @@ func TestLogctx_Or(t *testing.T) {
 			wantFallback: true,
 		},
 		{
-			name:          "ctx_without_logger_and_nil_fallback_returns_nop",
-			ctx:           ctxWithout,
-			fallback:      nil,
-			wantNop:       true,
-			nilReturnSafe: true,
+			name:     "ctx_without_logger_and_nil_fallback_returns_nop",
+			ctx:      ctxWithout,
+			fallback: nil,
+			wantNop:  true,
 		},
 		{
 			name:         "nil_ctx_and_non_nil_fallback_returns_fallback",
@@ -146,11 +144,10 @@ func TestLogctx_Or(t *testing.T) {
 			wantFallback: true,
 		},
 		{
-			name:          "nil_ctx_and_nil_fallback_returns_nop",
-			ctx:           nilCtx,
-			fallback:      nil,
-			wantNop:       true,
-			nilReturnSafe: true,
+			name:     "nil_ctx_and_nil_fallback_returns_nop",
+			ctx:      nilCtx,
+			fallback: nil,
+			wantNop:  true,
 		},
 	}
 

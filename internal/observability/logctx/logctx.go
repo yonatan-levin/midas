@@ -48,6 +48,13 @@ func From(ctx context.Context) *zap.Logger {
 // the scheduler / startup path (where it doesn't) emit structured logs in
 // both cases — correlated when called from a request, falling back to the
 // singleton logger otherwise.
+//
+// Intentionally does NOT delegate to From(ctx): From returns a freshly
+// allocated nop logger on miss, which Or would then discard in favour of the
+// caller's fallback. Inlining the lookup avoids that allocation on every call
+// on the hot path and keeps the fallback branch load-bearing — a future
+// refactor that rewrites this as `if l := From(ctx); ... ; return fallback`
+// would silently break the semantic (From's nop would preempt the fallback).
 func Or(ctx context.Context, fallback *zap.Logger) *zap.Logger {
 	// If the context carries a logger, prefer it.
 	if ctx != nil {
