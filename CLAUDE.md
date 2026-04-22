@@ -189,5 +189,7 @@ data/                   # SQLite database files (gitignored)
 - Redis is **optional** - the app falls back to in-memory cache if Redis is unavailable
 - Windows tests skip some E2E tests (gated by `E2E_LIVE=1`)
 - SEC API requires a valid `User-Agent` header with contact email
+- SEC EDGAR inconsistently serializes the `cik` field: numeric for some filers (e.g. AAPL: `320193`), zero-padded quoted string for others (e.g. XRTX: `"0001729214"`). Handled by `ports.FlexibleCIK` — do NOT change `SECCompanyFacts.CIK` back to `json.Number` or decode will fail for affected tickers
+- Tickers whose SEC response has no usable US-GAAP XBRL (foreign private issuers filing 20-F, some pre-revenue issuers) return `HTTP 422 INSUFFICIENT_DATA`, not `404 TICKER_NOT_FOUND`. Both `sec/client.go` (HTTP 404) and `sec/parser.go` (empty US-GAAP) wrap `ports.ErrCompanyFactsNotFound`; the valuation service classifies via `hasCompanyFactsNotFoundError`
 - SQLite driver is `github.com/mattn/go-sqlite3` (requires CGO)
 - The `config.env.example` file is blocked by a pre-read hook; get config info from `internal/config/config.go` defaults instead

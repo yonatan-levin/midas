@@ -110,13 +110,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Ticker not found
+          description: Ticker not present in SEC's ticker→CIK index (genuinely unknown symbol)
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: Insufficient data for valuation
+          description: Ticker resolves but cannot be valued — e.g. SEC has no usable US-GAAP XBRL facts (foreign private issuers, some pre-revenue issuers) or no model is applicable
           content:
             application/json:
               schema:

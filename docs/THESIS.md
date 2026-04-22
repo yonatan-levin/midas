@@ -69,13 +69,12 @@ These are known gaps from Phase 4 review. Scheduled for post-MVP cleanup.
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| W-2 | Warning | Regex compiled on every `Classify()` call — pre-compile at config load |
-| W-3 | Warning | Sub-industries parsed but never used in classification |
-| W-4 | Warning | `models/` package coverage at 79.9% (target: 90%) |
 | S-1 | Structural | Config file paths are relative to working directory (fragile in Docker) |
 | S-4 | Structural | Model constructors perform I/O (`os.ReadFile`) |
 
 **Full tracking:** `docs/reviewer/`
+
+W-1, W-2, W-3, W-4, and S-5 were resolved in commit `4d46142`; the corresponding files in `docs/reviewer/` are retained as historical records.
 
 ---
 

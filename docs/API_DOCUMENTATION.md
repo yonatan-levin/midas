@@ -368,8 +368,8 @@ curl -H "X-API-Key: <key>" \
 |--------|------|------|
 | 400 | `INVALID_TICKER` | Ticker format is invalid |
 | 400 | `INVALID_PARAMETER` | override_beta or override_rf out of range |
-| 404 | `TICKER_NOT_FOUND` | Ticker not found in any data source |
-| 422 | `INSUFFICIENT_DATA` | Not enough financial data for valuation |
+| 404 | `TICKER_NOT_FOUND` | Ticker is not present in SEC's ticker→CIK index (genuinely unknown symbol) |
+| 422 | `INSUFFICIENT_DATA` | Ticker exists but cannot be valued — e.g. SEC has no usable US-GAAP XBRL facts (common for foreign private issuers filing 20-F and some pre-revenue issuers), or fewer than the required financial periods |
 | 422 | `MODEL_NOT_APPLICABLE` | No valuation model can be applied |
 | 429 | `RATE_LIMIT_EXCEEDED` | Rate limit exceeded |
 | 500 | `CALCULATION_ERROR` | Internal calculation failure |
@@ -1114,8 +1114,8 @@ All error responses follow the [RFC 7807](https://tools.ietf.org/html/rfc7807) P
 | `INVALID_TICKER` | 400 | Ticker format is invalid (must be 1-5 alphanumeric chars) |
 | `INVALID_PARAMETER` | 400 | Query or body parameter is out of valid range |
 | `INVALID_REQUEST` | 400 | Request body doesn't match expected schema |
-| `TICKER_NOT_FOUND` | 404 | Ticker not found in any data source |
-| `INSUFFICIENT_DATA` | 422 | Not enough financial data to perform valuation |
+| `TICKER_NOT_FOUND` | 404 | Ticker is not present in SEC's ticker→CIK index (genuinely unknown symbol) |
+| `INSUFFICIENT_DATA` | 422 | Ticker resolves but cannot be valued: SEC has no usable US-GAAP XBRL facts (foreign private issuers, some pre-revenue issuers) or too few financial periods |
 | `MODEL_NOT_APPLICABLE` | 422 | No valuation model can be applied to this company |
 | `CALCULATION_ERROR` | 500 | Internal error during valuation calculation |
 | `RATE_LIMIT_EXCEEDED` | 429 | Rate limit exceeded (check Retry-After header) |
@@ -1350,6 +1350,7 @@ CGO_ENABLED=1 go build ./cmd/server
 - Verify the ticker exists in SEC EDGAR
 - Check that financial data is available (at least 2 periods)
 - Look for `INSUFFICIENT_DATA` or `MODEL_NOT_APPLICABLE` errors
+- `INSUFFICIENT_DATA` (422) with a `no US-GAAP XBRL facts` message indicates the ticker is real but SEC has no usable financial data — commonly foreign private issuers (e.g. Canadian pharmas filing 20-F) or early-stage pre-revenue companies. Not a bug; Midas cannot value these without a US-GAAP source.
 
 **Stale data warnings**
 - Run the scheduler (`SCHEDULER_ENABLED=true`) for automatic refresh
