@@ -56,6 +56,7 @@ go run ./scripts/load_tester.go -url http://localhost:8080 -key <API_KEY> -type 
 
 # Observability lint guard (Phase S) — fails if request-path code uses singleton loggers
 # instead of logctx.Or(ctx, ...). Run before committing service/gateway changes.
+# Requires ripgrep: `choco install ripgrep` (Windows) / `brew install ripgrep` / `apt-get install ripgrep`.
 ./scripts/lint-logs.sh           # Linux/macOS
 .\scripts\lint-logs.ps1          # Windows
 ```

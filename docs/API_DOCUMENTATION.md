@@ -1091,6 +1091,7 @@ Every HTTP request is correlated by a **UUIDv4 request ID** that flows through e
 - **Inbound:** If the client supplies `X-Request-ID` and the value matches `^[A-Za-z0-9_.:-]{1,128}$`, the API trusts and reuses it. Otherwise (missing, malformed, or overlong), a fresh UUIDv4 is generated. Malformed values are silently replaced — there is no 4xx for this.
 - **Propagation:** A child `zap.Logger` is built with `request_id` attached and injected into `context.Context`. Every handler and every request-path service uses `logctx.From(ctx)` rather than a singleton logger, so all log lines on that request automatically carry `request_id`, plus `user_id` / `key_id` after auth succeeds, plus any async-task fields for goroutine-borne logs.
 - **Outbound:** The effective ID is always echoed on the `X-Request-ID` response header, whether the client supplied it or the server generated it. On recovered panics, the access line and the `"panic recovered"` error line share the same `request_id`.
+- **Service + gateway depth:** Every service (`valuation`, `datacleaner`, `growth`, `datafetcher`) and gateway (`sec`, `market/yfinance`, `macro/fred`) emits its log lines through `logctx.Or(ctx, <fallback>)` — so a single `request_id` correlates a request all the way from the handler down to the outbound HTTP calls to SEC EDGAR, Yahoo Finance, and FRED. The same methods, when invoked from the scheduler (background context), fall back to the fx-provided singleton logger and still emit, just without request correlation.
 
 ### 10.4 Health Checks
 
