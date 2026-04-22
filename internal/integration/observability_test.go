@@ -78,6 +78,14 @@ func TestObservability_CalcTraces_ExactlyTwelvePerRequest(t *testing.T) {
 	projectRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
 	t.Chdir(projectRoot)
 
+	// Make the test's dependency on config/industry_multiples.json explicit.
+	// Without this file, the valuation service's industryMultiples is nil, the
+	// cross_check trace does NOT emit, and the assertion "exactly 12 calc
+	// entries" fails with a confusing count=11 message. A FileExists assertion
+	// up front turns that into a clear "missing config file" diagnostic.
+	require.FileExists(t, filepath.Join(projectRoot, "config", "industry_multiples.json"),
+		"cross_check emit depends on this config file")
+
 	// --- 1. Build the observer-backed logger (captures Info+ entries) ---
 	// zapcore.InfoLevel: Emitter logs at Info when TraceCalculations=true.
 	observerCore, observedLogs := observer.New(zapcore.InfoLevel)
