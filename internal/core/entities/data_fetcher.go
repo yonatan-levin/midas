@@ -58,12 +58,19 @@ type SourceInfo struct {
 	StatusCode int           `json:"status_code,omitempty"`
 }
 
-// FetchError represents an error from a specific data source
+// FetchError represents an error from a specific data source.
+//
+// RawErr preserves the original error value so upstream callers can use
+// errors.Is / errors.As to classify failure modes (e.g. distinguish
+// ports.ErrCompanyFactsNotFound from a generic SEC failure). It is tagged
+// json:"-" because errors are not round-trip serializable; the Message
+// field already carries the human-readable form for wire responses.
 type FetchError struct {
 	Source  DataSource `json:"source"`
 	Type    string     `json:"type"`
 	Message string     `json:"message"`
 	Code    string     `json:"code,omitempty"`
+	RawErr  error      `json:"-"`
 }
 
 // DataFetcherMetrics holds operational metrics

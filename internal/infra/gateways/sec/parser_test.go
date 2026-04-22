@@ -2,6 +2,7 @@ package sec
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -157,7 +158,11 @@ func TestParser_ParseFinancialData_NoValidData(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, historical)
-	assert.Contains(t, err.Error(), "no valid financial data found")
+	// ParseFinancialData wraps ports.ErrCompanyFactsNotFound when no period
+	// has usable US-GAAP data, so the valuation layer can classify this as
+	// ErrInsufficientData (→ HTTP 422) rather than ErrTickerNotFound (→ 404).
+	assert.True(t, errors.Is(err, ports.ErrCompanyFactsNotFound),
+		"parser must wrap ports.ErrCompanyFactsNotFound when all periods lack usable financials; got: %v", err)
 }
 
 func TestParser_NormalizeFinancialData_Success(t *testing.T) {

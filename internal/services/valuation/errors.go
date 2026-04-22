@@ -1,6 +1,11 @@
 package valuation
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/core/ports"
+)
 
 // Sentinel errors for the valuation service.
 // These allow callers (e.g., HTTP handlers) to classify failures
@@ -22,3 +27,17 @@ var (
 	// should continue with the standard DCF path.
 	errFallbackToDCF = errors.New("primary model failed; falling back to DCF")
 )
+
+// hasCompanyFactsNotFoundError returns true when any per-source FetchError in
+// the list wraps ports.ErrCompanyFactsNotFound. Used by the valuation service
+// to distinguish "ticker unknown" from "CIK resolved but SEC has no XBRL
+// facts" (foreign private issuers) when deciding between ErrTickerNotFound
+// (→ HTTP 404) and ErrInsufficientData (→ HTTP 422).
+func hasCompanyFactsNotFoundError(errs []entities.FetchError) bool {
+	for i := range errs {
+		if errors.Is(errs[i].RawErr, ports.ErrCompanyFactsNotFound) {
+			return true
+		}
+	}
+	return false
+}

@@ -3,6 +3,7 @@ package sec
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -177,7 +178,66 @@ func TestClient_GetCompanyFacts_NotFound(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, facts)
-	assert.Contains(t, err.Error(), "company facts not found (404)")
+	assert.True(t, errors.Is(err, ports.ErrCompanyFactsNotFound),
+		"GetCompanyFacts must wrap ports.ErrCompanyFactsNotFound on HTTP 404 so the valuation layer can classify foreign filers as 422 (INSUFFICIENT_DATA); got: %v", err)
+}
+
+// TestClient_GetCompanyFacts_QuotedCIK_XRTXShape reproduces the exact SEC
+// response shape that caused XRTX (XORTX Therapeutics, CIK 0001729214) to be
+// misclassified as HTTP 404. SEC serializes the `cik` field as a quoted
+// zero-padded string for this filer rather than a number, and the facts map
+// contains only the DEI taxonomy (no us-gaap).
+//
+// Regression guard: this test MUST pass without FlexibleCIK in place the
+// decode fails with `json: invalid number literal` because json.Number
+// refuses quoted input. If this test is ever deleted or weakened, the
+// original bug returns.
+func TestClient_GetCompanyFacts_QuotedCIK_XRTXShape(t *testing.T) {
+	// Raw JSON mirroring SEC's actual response for XRTX as of 2026-04-22.
+	// Note the quoted CIK ("0001729214") and DEI-only facts.
+	rawResponse := `{
+		"cik": "0001729214",
+		"entityName": "XORTX Therapeutics Inc.",
+		"facts": {
+			"dei": {
+				"EntityCommonStockSharesOutstanding": {
+					"label": "Entity Common Stock, Shares Outstanding",
+					"description": "",
+					"units": {
+						"shares": [
+							{"end": "2023-12-31", "val": 1234567, "accn": "x", "fy": 2023, "fp": "FY", "form": "20-F", "filed": "2024-03-15"}
+						]
+					}
+				}
+			}
+		}
+	}`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(rawResponse))
+	}))
+	defer server.Close()
+
+	cfg := &config.SECConfig{
+		BaseURL:          server.URL,
+		UserAgent:        "Test User Agent",
+		RateLimit:        10,
+		RequestTimeout:   30 * time.Second,
+		MaxRetries:       3,
+		RetryBackoffBase: time.Second,
+	}
+	client := NewClient(cfg, zap.NewNop())
+
+	facts, err := client.GetCompanyFacts(context.Background(), "0001729214")
+	require.NoError(t, err, "quoted CIK response must decode cleanly (regression of XRTX 404 bug)")
+	require.NotNil(t, facts)
+	assert.Equal(t, "0001729214", facts.CIK.String())
+	assert.Equal(t, "XORTX Therapeutics Inc.", facts.EntityName)
+	// DEI-only shape: valuation layer's HasMinimumData(1) will reject this,
+	// producing ErrInsufficientData → HTTP 422.
+	assert.Contains(t, facts.Facts, "dei")
+	assert.NotContains(t, facts.Facts, "us-gaap")
 }
 
 func TestClient_GetCompanyFacts_RateLimit(t *testing.T) {

@@ -3,10 +3,61 @@ package ports
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
+
+// FlexibleCIK is a CIK value that tolerates SEC EDGAR's inconsistent JSON
+// encoding: the same field can arrive as a JSON number (e.g. `320193`) or as
+// a zero-padded JSON string (e.g. `"0001729214"`) depending on the filer.
+// Typing the field as `json.Number` rejects the quoted form and fails decode
+// for affected tickers (observed in the wild for XRTX / XORTX Therapeutics).
+// Backing type is string so zero-value comparison against "" and use in log
+// fields work naturally; String() is preserved so existing call sites that
+// expect a .String() method keep working.
+type FlexibleCIK string
+
+// UnmarshalJSON accepts both JSON string and JSON number forms for CIK.
+// Tries string first because that is what SEC increasingly returns; falls
+// back to json.Number for legacy numeric encodings. Any other JSON shape
+// (bool, null, object, array) is rejected with a descriptive error.
+func (c *FlexibleCIK) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*c = FlexibleCIK(s)
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err == nil {
+		*c = FlexibleCIK(n.String())
+		return nil
+	}
+	return fmt.Errorf("cik: expected JSON string or number, got %s", string(data))
+}
+
+// String returns the underlying CIK value. Mirrors json.Number.String() so
+// existing callers (parser.go, gateway.go) continue to compile unchanged.
+func (c FlexibleCIK) String() string { return string(c) }
+
+// ErrCompanyFactsNotFound indicates SEC EDGAR has no *usable* US-GAAP XBRL
+// company facts for a given CIK. It covers two concrete scenarios that are
+// indistinguishable from Midas's perspective:
+//
+//  1. The `companyfacts/CIKxxxxxxxxxx.json` endpoint returns HTTP 404
+//     (genuinely unknown CIK, revoked registrants, some FPIs).
+//  2. The endpoint returns HTTP 200 but every period in the response lacks
+//     the minimum US-GAAP fields (Revenue / OperatingIncome / shares) — the
+//     shape Midas actually observes for clinical-stage biotechs, pre-revenue
+//     companies, and foreign private issuers whose 20-F filings only populate
+//     the `dei` taxonomy.
+//
+// Callers should use errors.Is to distinguish this from "ticker truly absent
+// from the SEC ticker→CIK index" so the HTTP layer can respond with 422
+// (INSUFFICIENT_DATA) instead of 404 (TICKER_NOT_FOUND).
+var ErrCompanyFactsNotFound = errors.New("no usable SEC XBRL company facts")
 
 // SECGateway defines the interface for SEC data retrieval
 type SECGateway interface {
@@ -53,7 +104,7 @@ type RetryPolicy interface {
 //
 // See: https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json
 type SECCompanyFacts struct {
-	CIK        json.Number                        `json:"cik"`
+	CIK        FlexibleCIK                        `json:"cik"`
 	EntityName string                             `json:"entityName"`
 	Facts      map[string]map[string]SECFactGroup `json:"facts"`
 	FilingDate time.Time                          `json:"-"` // Derived from facts

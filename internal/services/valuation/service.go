@@ -152,6 +152,13 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 
 		fetchResult, fetchErr := s.dataFetcher.Fetch(ctx, &entities.FetchRequest{Ticker: ticker})
 		if fetchErr != nil {
+			// Defensive: if a direct fetch error ever wraps ErrCompanyFactsNotFound
+			// (SEC CIK resolved but XBRL missing), classify as insufficient data
+			// rather than a generic 500. In the current flow CoordinateFetch
+			// never returns non-nil, so this branch is primarily future-proofing.
+			if errors.Is(fetchErr, ports.ErrCompanyFactsNotFound) {
+				return nil, fmt.Errorf("%w: no US-GAAP XBRL facts currently available for %s via SEC EDGAR", ErrInsufficientData, ticker)
+			}
 			return nil, fmt.Errorf("failed to fetch data via DataFetcher: %w", fetchErr)
 		}
 
@@ -170,6 +177,14 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 				Data:   map[string]*entities.FinancialData{periodKey: fetchResult.FinancialData},
 			}
 		} else {
+			// No data came back from any source. Distinguish "ticker truly
+			// unknown" (404) from "CIK resolved but SEC has no US-GAAP XBRL"
+			// (422), because the latter is common for foreign private issuers
+			// (20-F filers like Canadian pharmas) and deserves a clearer
+			// diagnostic than "ticker not found".
+			if hasCompanyFactsNotFoundError(fetchResult.Errors) {
+				return nil, fmt.Errorf("%w: no US-GAAP XBRL facts currently available for %s via SEC EDGAR", ErrInsufficientData, ticker)
+			}
 			return nil, fmt.Errorf("%w: DataFetcher returned no financial data for %s", ErrTickerNotFound, ticker)
 		}
 

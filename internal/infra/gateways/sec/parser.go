@@ -64,7 +64,14 @@ func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompany
 	}
 
 	if len(historical.Data) == 0 {
-		return nil, fmt.Errorf("no valid financial data found")
+		// Wrap the shared sentinel so the valuation service can classify this
+		// as ErrInsufficientData (→ HTTP 422) rather than ErrTickerNotFound
+		// (→ HTTP 404). Every period in the SEC response lacked the minimum
+		// US-GAAP fields (Revenue / OperatingIncome / shares), which for our
+		// purposes is equivalent to "SEC has no usable companyfacts" — common
+		// for clinical-stage biotechs, pre-revenue companies, and foreign
+		// private issuers whose 20-F filings are not tagged in US-GAAP.
+		return nil, fmt.Errorf("%w: no periods with usable US-GAAP financials", ports.ErrCompanyFactsNotFound)
 	}
 
 	p.logger.Info("Successfully parsed financial data",

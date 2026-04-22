@@ -188,12 +188,15 @@ func (dc *DataCoordinator) mergeSourceResult(result *entities.CoordinationResult
 		result.MacroData = srcResult.macroData
 	}
 
-	// Add errors
+	// Add errors — preserve the original error as RawErr so upstream callers
+	// can use errors.Is to classify (e.g. ports.ErrCompanyFactsNotFound for
+	// foreign private issuers that have no US-GAAP XBRL facts).
 	if srcResult.err != nil {
 		result.Errors = append(result.Errors, entities.FetchError{
 			Source:  srcResult.source,
 			Type:    "fetch_error",
 			Message: srcResult.err.Error(),
+			RawErr:  srcResult.err,
 		})
 	}
 }

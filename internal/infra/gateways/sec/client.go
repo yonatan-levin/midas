@@ -318,7 +318,7 @@ func (c *Client) makeRequest(ctx context.Context, url string) (*ports.SECCompany
 	case http.StatusOK:
 		// Success, continue to parse response
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("company facts not found (404)")
+		return nil, fmt.Errorf("%w (404)", ports.ErrCompanyFactsNotFound)
 	case http.StatusTooManyRequests:
 		return nil, fmt.Errorf("rate limited by SEC API (429)")
 	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:

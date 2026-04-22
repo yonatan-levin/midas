@@ -102,6 +102,7 @@ func (df *DataFetcher) Fetch(ctx context.Context, request *entities.FetchRequest
 			Source:  "coordinator",
 			Type:    "coordination_error",
 			Message: err.Error(),
+			RawErr:  err,
 		}}
 		df.updateMetrics(func(m *entities.DataFetcherMetrics) {
 			m.TotalErrors++
@@ -181,6 +182,7 @@ func (df *DataFetcher) BulkFetch(ctx context.Context, requests []*entities.Fetch
 						Source:  "bulk_fetch",
 						Type:    "fetch_error",
 						Message: err.Error(),
+						RawErr:  err,
 					}},
 				}
 			}
