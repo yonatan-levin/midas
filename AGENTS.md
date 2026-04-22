@@ -47,7 +47,9 @@ At the start of any work session, read these files in order. Stop at the first t
 | 14 | `docs/refactoring/valuation-engine-upgrade-spec.md` | Upgrade spec details |
 | 15 | `docs/reviewer/` | Tracked review follow-ups (S-1, S-4, W-2, W-3, W-4) |
 | 16 | `docs/bugs/` | Bug tracker |
-| 17 | `internal/services/<package>/` | Source code for the task at hand |
+| 17 | `docs/refactoring/observability-upgrade-spec.md` | In-flight observability upgrade (request correlation, file logging, calc tracing) |
+| 18 | `internal/observability/` | Cross-cutting logger plumbing: `logctx` (context-scoped logger) + `calclog` (calculation-stage trace emitter) |
+| 19 | `internal/services/<package>/` | Source code for the task at hand |
 
 ---
 

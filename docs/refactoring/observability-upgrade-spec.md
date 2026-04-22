@@ -2,7 +2,7 @@
 
 **Version:** 1.1
 **Date:** 2026-04-23 (v1.0 drafted 2026-04-22; v1.1 refinements R1/R2/R3 applied during execution kickoff)
-**Status:** Approved. Phase O in progress on branch `feat/observability` in worktree `.worktrees/feat-observability`.
+**Status:** Phase O COMPLETE (2026-04-23) — commits `4aebf74` + review-response `1b72bb6`. Phase R next. Work continues on branch `feat/observability` in worktree `.worktrees/feat-observability`.
 **Scope:** Make every HTTP request's full execution flow reconstructible from logs. Persist logs locally for development, rely on container log drivers in staging / production. Add calculation-level tracing so each DCF valuation's math can be inspected end-to-end.
 
 ---

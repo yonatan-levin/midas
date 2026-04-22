@@ -95,6 +95,9 @@ internal/
       models/           # Industry-specific models (DCF, DDM, FFO, Revenue Multiple)
     watchlist/          # Scheduler watchlist management
     alerting/           # Alert configuration
+  observability/        # Cross-cutting logger plumbing (added Phase O of observability upgrade)
+    logctx/             # Context-scoped logger inject/extract
+    calclog/            # Calculation-stage trace emitter (gated by logging.trace_calculations)
   integration/          # Integration tests
 pkg/
   finance/              # Shared financial calculation libraries
