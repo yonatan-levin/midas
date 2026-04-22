@@ -42,7 +42,7 @@ func BenchmarkService_CalculateValuation_SingleTicker(b *testing.B) {
 	}
 
 	// Create service
-	service := NewService(financialRepo, marketRepo, macroRepo, cache, mockDataCleaner, nil, mockMetrics, cfg, logger)
+	service := NewService(financialRepo, marketRepo, macroRepo, cache, mockDataCleaner, nil, mockMetrics, cfg, logger, nil)
 
 	// Setup test data
 	ctx := context.Background()
@@ -195,7 +195,7 @@ func benchmarkValuationService(b *testing.B, enableConcurrent bool) {
 		},
 	}
 
-	service := NewService(financialRepo, marketRepo, macroRepo, cache, mockDataCleaner, nil, mockMetrics, cfg, logger)
+	service := NewService(financialRepo, marketRepo, macroRepo, cache, mockDataCleaner, nil, mockMetrics, cfg, logger, nil)
 	ctx := context.Background()
 	ticker := "AAPL"
 

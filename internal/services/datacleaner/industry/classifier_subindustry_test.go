@@ -1,6 +1,7 @@
 package industry
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -48,7 +49,7 @@ func TestIndustryClassifier_Classify_SubIndustry(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := classifier.Classify(tt.sicCode, tt.naicsCode, tt.companyName)
+			result, err := classifier.Classify(context.Background(), tt.sicCode, tt.naicsCode, tt.companyName)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})

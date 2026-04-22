@@ -1,6 +1,7 @@
 package industry
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -296,17 +297,17 @@ func TestIndustryClassifier_Classify_ExactNameMatching(t *testing.T) {
 		},
 	}
 
-	result, err := classifier.Classify("", "", "American Tower Corp")
+	result, err := classifier.Classify(context.Background(), "", "", "American Tower Corp")
 	require.NoError(t, err)
 	assert.Equal(t, "REIT", result)
 
 	// Case-insensitive match
-	result, err = classifier.Classify("", "", "american tower corp")
+	result, err = classifier.Classify(context.Background(), "", "", "american tower corp")
 	require.NoError(t, err)
 	assert.Equal(t, "REIT", result)
 
 	// No match
-	result, err = classifier.Classify("", "", "Random Company")
+	result, err = classifier.Classify(context.Background(), "", "", "Random Company")
 	require.NoError(t, err)
 	assert.Equal(t, "NA", result)
 }
@@ -352,7 +353,7 @@ func TestIndustryClassifier_Classify_ShortKeywordBoundary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := classifier.Classify("", "", tt.companyName)
+			result, err := classifier.Classify(context.Background(), "", "", tt.companyName)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, result)
 		})
@@ -385,11 +386,11 @@ func TestIndustryClassifier_Classify_PatternMatching(t *testing.T) {
 		},
 	}
 
-	result, err := classifier.Classify("", "", "Big Oil and Gas Company")
+	result, err := classifier.Classify(context.Background(), "", "", "Big Oil and Gas Company")
 	require.NoError(t, err)
 	assert.Equal(t, "ENERGY", result)
 
-	result, err = classifier.Classify("", "", "National Petroleum Corp")
+	result, err = classifier.Classify(context.Background(), "", "", "National Petroleum Corp")
 	require.NoError(t, err)
 	assert.Equal(t, "ENERGY", result)
 }
@@ -402,7 +403,7 @@ func TestIndustryClassifier_Classify_NilCodesConfigError(t *testing.T) {
 		codesConfig:   nil, // not loaded
 	}
 
-	result, err := classifier.Classify("7372", "", "")
+	result, err := classifier.Classify(context.Background(), "7372", "", "")
 	assert.Error(t, err)
 	assert.Equal(t, "NA", result)
 	assert.Contains(t, err.Error(), "config not loaded")
@@ -449,7 +450,7 @@ func TestIndustryClassifier_Classify_PriorityOrderingDualKeywords(t *testing.T) 
 		},
 	}
 
-	result, err := classifier.Classify("", "", "Big Software Inc")
+	result, err := classifier.Classify(context.Background(), "", "", "Big Software Inc")
 	require.NoError(t, err)
 	assert.Equal(t, "TECH_SAAS", result, "higher priority mapping should win")
 }

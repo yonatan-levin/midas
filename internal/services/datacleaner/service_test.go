@@ -81,7 +81,7 @@ func testBasicCleaning(t *testing.T) {
 	ctx := context.Background()
 
 	// Create service
-	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
 	require.NoError(t, err, "Should create service without error")
 
 	// Create test financial data with known cleaning issues
@@ -117,7 +117,7 @@ func testIndustryCleaning(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
 	require.NoError(t, err)
 
 	// Test technology industry cleaning
@@ -159,7 +159,7 @@ func testQualityScoring(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
 	require.NoError(t, err)
 
 	// Test high-quality data
@@ -183,7 +183,7 @@ func testRiskFlagging(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
 	require.NoError(t, err)
 
 	// Create data with various risk factors
@@ -215,7 +215,7 @@ func testAuditTrail(t *testing.T) {
 	cfg.DataCleaner.EnableAuditTrail = true
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
 	require.NoError(t, err)
 
 	data := createTestFinancialDataWithIssues()
@@ -243,7 +243,7 @@ func testErrorHandling(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
 	require.NoError(t, err)
 
 	// Test with nil data
@@ -276,7 +276,7 @@ func testCaching(t *testing.T) {
 	cfg.DataCleaner.EnableCaching = true
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
 	require.NoError(t, err)
 
 	data := createTestFinancialDataWithIssues()
@@ -304,7 +304,7 @@ func testConcurrentCleaning(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
 
-	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{})
+	service, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
 	require.NoError(t, err)
 
 	// Test concurrent cleaning of different companies

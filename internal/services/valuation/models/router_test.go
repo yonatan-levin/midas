@@ -24,7 +24,8 @@ func newTestRouter() *ModelRouter {
 		NewRevenueMultipleModelWithMultiples(map[string]float64{"default": DefaultEVRevenueMultiple}, logger),
 		NewMultiStageDCFModel(logger),
 	}
-	return NewModelRouter(allModels, logger)
+	// nil calcEmitter — no calc traces in unit tests; they only fire in integration tests.
+	return NewModelRouter(allModels, logger, nil)
 }
 
 // TestModelRouter_SelectModel tests all routing scenarios
@@ -155,7 +156,7 @@ func TestModelRouter_SelectModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			model := router.SelectModel(tt.industry, tt.financials)
+			model := router.SelectModel(context.Background(), tt.industry, tt.financials)
 			require.NotNil(t, model, "model should not be nil")
 			assert.Equal(t, tt.expectedModel, model.ModelType())
 		})
@@ -164,9 +165,9 @@ func TestModelRouter_SelectModel(t *testing.T) {
 
 // TestModelRouter_SelectModel_NoModels tests behavior when no models are registered
 func TestModelRouter_SelectModel_NoModels(t *testing.T) {
-	router := NewModelRouter([]ValuationModel{}, testLogger())
+	router := NewModelRouter([]ValuationModel{}, testLogger(), nil)
 
-	model := router.SelectModel("TECH", &entities.FinancialData{
+	model := router.SelectModel(context.Background(), "TECH", &entities.FinancialData{
 		OperatingIncome: 1000,
 	})
 

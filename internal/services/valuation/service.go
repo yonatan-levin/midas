@@ -11,6 +11,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
@@ -39,6 +40,7 @@ type Service struct {
 	industryMultiples  *industryMultiplesConfig     // Phase 4: EV/EBITDA and P/E multiples for cross-checks
 	config             *config.Config
 	logger             *zap.Logger
+	calcEmitter        *calclog.Emitter // emits the 12 DCF stage traces (Phase M)
 }
 
 // log returns the appropriate logger for the current execution context.
@@ -51,7 +53,9 @@ func (s *Service) log(ctx context.Context) *zap.Logger {
 	return logctx.Or(ctx, s.logger)
 }
 
-// NewService creates a new valuation service
+// NewService creates a new valuation service.
+// calcEmitter is injected by the DI container and gates the 12 calculation stage
+// traces (Phase M). Pass nil only in tests that do not need calc tracing.
 func NewService(
 	financialRepo ports.FinancialDataRepository,
 	marketRepo ports.MarketDataRepository,
@@ -62,8 +66,10 @@ func NewService(
 	metricsService ports.MetricsService,
 	cfg *config.Config,
 	logger *zap.Logger,
+	calcEmitter *calclog.Emitter,
 ) *Service {
-	// Build growth estimator from valuation config
+	// Build growth estimator from valuation config.
+	// Pass calcEmitter so EstimateGrowthRates can emit stage-5 "growth" trace.
 	estimatorCfg := growthsvc.DefaultEstimatorConfig()
 	if cfg.Valuation.DCFMaxGrowthRate > 0 {
 		estimatorCfg.MaxGrowthRate = cfg.Valuation.DCFMaxGrowthRate
@@ -72,18 +78,21 @@ func NewService(
 		estimatorCfg.MinGrowthRate = cfg.Valuation.DCFMinGrowthRate
 	}
 
-	// Initialize industry classifier for SIC/NAICS-based model selection
+	// Initialize industry classifier for SIC/NAICS-based model selection.
+	// ctx is added to Classify (M.1) so the valuation service can emit stage-3
+	// "industry_classification" trace after the call returns.
 	classifier := industry.NewIndustryClassifier()
 
 	// Initialize model router with all available valuation models.
 	// Order matters: more specific models are listed first.
+	// Pass calcEmitter so SelectModel emits stage-4 "model_selection" trace.
 	allModels := []models.ValuationModel{
 		models.NewDDMModel(logger),
 		models.NewFFOModel(models.DefaultIndustryMultiplesPath, logger),
 		models.NewRevenueMultipleModel(models.DefaultIndustryMultiplesPath, logger),
 		models.NewMultiStageDCFModel(logger),
 	}
-	router := models.NewModelRouter(allModels, logger)
+	router := models.NewModelRouter(allModels, logger, calcEmitter)
 
 	// Phase 4: Load country risk premiums for international support.
 	// Graceful degradation: if config file is missing, all tickers get CRP = 0 (domestic US).
@@ -109,7 +118,7 @@ func NewService(
 		cache:              cache,
 		dataCleaner:        dataCleaner,
 		dataFetcher:        dataFetcher,
-		growthEstimator:    growthsvc.NewEstimator(estimatorCfg, logger),
+		growthEstimator:    growthsvc.NewEstimator(estimatorCfg, logger, calcEmitter),
 		metricsService:     metricsService,
 		modelRouter:        router,
 		industryClassifier: classifier,
@@ -117,6 +126,7 @@ func NewService(
 		industryMultiples:  indMultiples,
 		config:             cfg,
 		logger:             logger,
+		calcEmitter:        calcEmitter,
 	}
 }
 
@@ -257,6 +267,29 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 		}
 	}
 
+	// Stage 1 — "data_fetch" calc trace: emit which data sources were consulted and
+	// whether they succeeded. This always fires regardless of whether data came from
+	// the repository or the DataFetcher, giving operators full acquisition visibility.
+	if s.calcEmitter != nil {
+		sourcesTried := []string{"financial_repo", "market_repo", "macro_repo"}
+		sourcesOk := []string{}
+		if len(historicalData.Data) > 0 {
+			sourcesOk = append(sourcesOk, "financial_repo")
+		}
+		if marketData != nil {
+			sourcesOk = append(sourcesOk, "market_repo")
+		}
+		if macroData != nil {
+			sourcesOk = append(sourcesOk, "macro_repo")
+		}
+		s.calcEmitter.Emit(ctx, "data_fetch",
+			zap.String("ticker", ticker),
+			zap.Strings("sources_tried", sourcesTried),
+			zap.Strings("sources_ok", sourcesOk),
+			zap.Int64("duration_ms", time.Since(start).Milliseconds()),
+		)
+	}
+
 	// Apply data cleaning if service is available
 	var cleaningResult *entities.CleaningResult
 	if s.dataCleaner != nil {
@@ -308,6 +341,21 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	s.metricsService.RecordValuationRequest(ticker, "single", "success", time.Since(start))
 
 	s.log(ctx).Info("Valuation calculation completed", zap.String("ticker", ticker), zap.Float64("dcf_value", result.DCFValuePerShare))
+
+	// Stage 12 — "final" calc trace: emit the top-line DCF result so operators can
+	// verify the intrinsic value output and its quality metadata end-to-end.
+	if s.calcEmitter != nil {
+		s.calcEmitter.Emit(ctx, "final",
+			zap.String("ticker", ticker),
+			zap.Float64("dcf_per_share", result.DCFValuePerShare),
+			zap.Float64("tangible_per_share", result.TangibleValuePerShare),
+			zap.String("method", result.CalculationMethod),
+			zap.String("version", result.CalculationVersion),
+			zap.Float64("quality_score", result.DataQualityScore),
+			zap.Int("warnings_count", len(result.Warnings)),
+		)
+	}
+
 	return result, nil
 }
 
@@ -362,8 +410,9 @@ func (s *Service) performValuation(
 		sustainableGrowth = growth.CalculateSustainableGrowth(nopat, investedCapital, s.growthEstimator.Config().DefaultPayoutRatio)
 	}
 
-	// Produce multi-stage growth estimate (analyst + historical blend)
-	growthEstimate := s.growthEstimator.EstimateGrowthRates(analystData, historicalGrowth, sustainableGrowth)
+	// Produce multi-stage growth estimate (analyst + historical blend).
+	// ctx is passed through so EstimateGrowthRates can emit stage-5 "growth" trace.
+	growthEstimate := s.growthEstimator.EstimateGrowthRates(ctx, analystData, historicalGrowth, sustainableGrowth)
 
 	// Get the latest financial data for asset calculations
 	latestFinancialData, latestPeriod := historicalData.GetLatestPeriod()
@@ -387,8 +436,12 @@ func (s *Service) performValuation(
 	}
 
 	// Phase 4: Beta improvements — Blume adjustment + unlever/relever.
+	// Track each beta stage so we can include all values in the stage-6 "wacc" trace.
 	rawBeta := beta
-	beta = wacc.BlumeAdjustedBeta(beta)
+	blumeBeta := wacc.BlumeAdjustedBeta(beta)
+	beta = blumeBeta
+	unleveredBeta := blumeBeta // default: same as blume if no relever conditions met
+	releveredBeta := blumeBeta // default: same as blume if no relever conditions met
 
 	// Unlever beta to remove capital structure effect, then relever at current D/E.
 	// For a single company this is near-identity, but it normalizes extreme D/E betas
@@ -396,8 +449,9 @@ func (s *Service) performValuation(
 	marketEquity := marketData.CalculateMarketValue()
 	if marketEquity > 0 && latestFinancialData.InterestBearingDebt > 0 {
 		debtEquityRatio := latestFinancialData.InterestBearingDebt / marketEquity
-		unlevered := wacc.UnleveredBeta(beta, latestFinancialData.TaxRate, debtEquityRatio)
-		beta = wacc.RelleveredBeta(unlevered, latestFinancialData.TaxRate, debtEquityRatio)
+		unleveredBeta = wacc.UnleveredBeta(blumeBeta, latestFinancialData.TaxRate, debtEquityRatio)
+		releveredBeta = wacc.RelleveredBeta(unleveredBeta, latestFinancialData.TaxRate, debtEquityRatio)
+		beta = releveredBeta
 	}
 
 	s.log(ctx).Debug("Beta adjustments applied",
@@ -437,6 +491,24 @@ func (s *Service) performValuation(
 	s.metricsService.IncWACCCalculations()
 	s.metricsService.SetAverageWACC(waccResult.WACC)
 
+	// Stage 6 — "wacc" calc trace: emit every WACC component so operators can audit
+	// the cost-of-capital build-up (beta ladder, risk premiums, debt cost, final rate).
+	if s.calcEmitter != nil {
+		s.calcEmitter.Emit(ctx, "wacc",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Float64("rf", riskFreeRate),
+			zap.Float64("beta_raw", rawBeta),
+			zap.Float64("beta_blume", blumeBeta),
+			zap.Float64("beta_unlevered", unleveredBeta),
+			zap.Float64("beta_relevered", releveredBeta),
+			zap.Float64("erp", macroData.MarketRiskPremium),
+			zap.Float64("crp", countryRiskPremium),
+			zap.Float64("tax_rate", latestFinancialData.TaxRate),
+			zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
+			zap.Float64("wacc", waccResult.WACC),
+		)
+	}
+
 	// Use terminal growth from the growth estimate, with WACC safety guard
 	terminalGrowthRate := s.calculateTerminalGrowthRate(growthEstimate.SummaryGrowthRate(), waccResult.WACC)
 	growthEstimate.TerminalGrowthRate = terminalGrowthRate
@@ -452,13 +524,28 @@ func (s *Service) performValuation(
 		if companyName == "" {
 			companyName = historicalData.Ticker
 		}
-		classified, classifyErr := s.industryClassifier.Classify(historicalData.SICCode, "", companyName)
+		// ctx is passed through for future context-aware tracing inside Classify.
+		classified, classifyErr := s.industryClassifier.Classify(ctx, historicalData.SICCode, "", companyName)
 		if classifyErr == nil && classified != "" && classified != "NA" {
 			industryCode = classified
 		}
 		s.log(ctx).Debug("Industry classification result",
 			zap.String("ticker", historicalData.Ticker),
 			zap.String("industry_code", industryCode))
+	}
+
+	// Stage 3 — "industry_classification" calc trace: always emitted from here (not
+	// inside Classify) so only the valuation pipeline fires it once per valuation —
+	// avoids double-emission if Classify is also called from the datacleaner path.
+	if s.calcEmitter != nil {
+		s.calcEmitter.Emit(ctx, "industry_classification",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("sic", historicalData.SICCode),
+			zap.String("naics", ""),
+			zap.String("sector", industryCode),
+			zap.String("industry", industryCode),
+			zap.String("model_hint", industryCode),
+		)
 	}
 
 	// Resolve shares outstanding (needed by both DCF and alternative models)
@@ -474,8 +561,9 @@ func (s *Service) performValuation(
 		return nil, fmt.Errorf("%w: shares outstanding not available", ErrInsufficientData)
 	}
 
-	// Select the appropriate valuation model based on industry and financials
-	selectedModel := s.modelRouter.SelectModel(industryCode, latestFinancialData)
+	// Select the appropriate valuation model based on industry and financials.
+	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace.
+	selectedModel := s.modelRouter.SelectModel(ctx, industryCode, latestFinancialData)
 	var dcfFallbackWarning string
 
 	// If an alternative model (non-DCF) is selected, use it.
@@ -568,6 +656,50 @@ func (s *Service) performValuation(
 	s.metricsService.IncDCFCalculations()
 	s.metricsService.SetAverageGrowthRate(growthEstimate.SummaryGrowthRate())
 
+	// Stage 7 — "fcf_projection" calc trace: emit per-year growth rates and FCF
+	// projections so operators can audit the explicit forecast period.
+	if s.calcEmitter != nil {
+		fcfSeries := make([]float64, len(dcfResult.Projections))
+		for i, p := range dcfResult.Projections {
+			fcfSeries[i] = p.FreeCashFlow
+		}
+		s.calcEmitter.Emit(ctx, "fcf_projection",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Int("years", dcfResult.ProjectionYears),
+			zap.Float64s("growth_rates", growthEstimate.ProjectedGrowthRates),
+			zap.Float64s("fcf_series", fcfSeries),
+		)
+	}
+
+	// Stage 8 — "terminal_value" calc trace: emit terminal-value build-up so operators
+	// can see the Gordon Growth vs. exit-multiple averaging outcome.
+	if s.calcEmitter != nil {
+		// gordonTV = terminalYearFCF * (1 + tg) / (wacc - tg) before exit-multiple averaging.
+		// Re-derive it because dcf.Result only exposes the averaged TerminalValueNominal.
+		gordonTV := 0.0
+		if waccResult.WACC > terminalGrowthRate {
+			gordonTV = dcfResult.TerminalYearFCF * (1 + terminalGrowthRate) / (waccResult.WACC - terminalGrowthRate)
+		}
+		s.calcEmitter.Emit(ctx, "terminal_value",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Float64("gordon_tv", gordonTV),
+			zap.Float64("exit_multiple_tv", dcfResult.TerminalValueNominal-gordonTV), // zero when only Gordon used
+			zap.Float64("averaged_tv", dcfResult.TerminalValueNominal),
+			zap.Float64("terminal_growth", terminalGrowthRate),
+		)
+	}
+
+	// Stage 9 — "discount" calc trace: emit the PV of explicit period and terminal
+	// value to show how enterprise value is assembled from discounted cash flows.
+	if s.calcEmitter != nil {
+		s.calcEmitter.Emit(ctx, "discount",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Float64("pv_explicit", dcfResult.ExplicitPeriodValue),
+			zap.Float64("pv_terminal", dcfResult.TerminalValue),
+			zap.Float64("enterprise_value", dcfResult.EnterpriseValue),
+		)
+	}
+
 	// Equity value bridge: EV - Debt + Cash = Equity Value
 	equityValue := dcf.CalculateEquityValue(
 		dcfResult.EnterpriseValue,
@@ -575,6 +707,21 @@ func (s *Service) performValuation(
 		latestFinancialData.CashAndCashEquivalents,
 	)
 	dcfValuePerShare := equityValue / sharesOutstanding
+
+	// Stage 10 — "equity_bridge" calc trace: emit the bridge from enterprise value to
+	// per-share intrinsic value so operators can audit the equity conversion step.
+	if s.calcEmitter != nil {
+		s.calcEmitter.Emit(ctx, "equity_bridge",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Float64("cash", latestFinancialData.CashAndCashEquivalents),
+			zap.Float64("debt", latestFinancialData.InterestBearingDebt),
+			zap.Float64("minority_interest", 0), // TODO: add minority interest to FinancialData entity
+			zap.Float64("preferred", 0),         // TODO: add preferred equity to FinancialData entity
+			zap.Float64("equity_value", equityValue),
+			zap.Float64("diluted_shares", sharesOutstanding),
+			zap.Float64("per_share", dcfValuePerShare),
+		)
+	}
 
 	// Calculate data freshness score
 	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
@@ -647,6 +794,20 @@ func (s *Service) performValuation(
 			sectorPE, sectorEVEBITDA, sectorPFCF,
 		)
 		result.SanityCheck = sanity
+
+		// Stage 11 — "cross_check" calc trace: emit implied multiples vs. sector medians
+		// so operators can see whether the DCF output is in a reasonable range.
+		// Only emitted when industryMultiples is configured and the check actually ran.
+		if s.calcEmitter != nil {
+			s.calcEmitter.Emit(ctx, "cross_check",
+				zap.String("ticker", historicalData.Ticker),
+				zap.Float64("implied_pe", sanity.ImpliedPE),
+				zap.Float64("implied_ev_ebitda", sanity.ImpliedEVEBITDA),
+				zap.Float64("sector_median_pe", sanity.SectorMedianPE),
+				zap.Float64("sector_median_ev_ebitda", sanity.SectorMedianEVEBITDA),
+				zap.Strings("flags", sanity.Flags),
+			)
+		}
 
 		// Propagate sanity check flags as warnings for visibility in the API response
 		if !sanity.IsReasonable {

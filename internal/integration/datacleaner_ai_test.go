@@ -33,7 +33,7 @@ func TestDataCleaner_B3_ContingentLiabilities_AIEnabled(t *testing.T) {
 	mockAI := ai.NewMockAIService(&ai.AIServiceConfig{})
 
 	// Create DataCleaner service with AI enabled
-	dataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, mockAI)
+	dataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, mockAI, nil)
 	require.NoError(t, err, "Failed to create DataCleaner service with AI enabled")
 
 	ctx := context.Background()
@@ -110,7 +110,7 @@ func TestDataCleaner_B3_ContingentLiabilities_AIEnabled(t *testing.T) {
 		failingAI := &FailingAIService{}
 
 		// Create DataCleaner service with failing AI
-		failingDataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, failingAI)
+		failingDataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, failingAI, nil)
 		require.NoError(t, err, "Failed to create DataCleaner service with failing AI")
 
 		data := &entities.FinancialData{
@@ -184,7 +184,7 @@ func TestDataCleaner_B3_ContingentLiabilities_AIDisabled(t *testing.T) {
 	// Create mock AI service (but AI is disabled)
 	mockAI := ai.NewMockAIService(&ai.AIServiceConfig{})
 
-	dataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, mockAI)
+	dataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, mockAI, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()
@@ -307,7 +307,7 @@ func TestDataCleaner_B3_ContingentLiabilities_AIFailureScenarios(t *testing.T) {
 			failingAI := &FailingAIService{}
 
 			// Create DataCleaner service with failing AI
-			failingDataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, failingAI)
+			failingDataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, failingAI, nil)
 			require.NoError(t, err, "Failed to create DataCleaner service with failing AI")
 
 			data := &entities.FinancialData{

@@ -1,6 +1,7 @@
 package growth
 
 import (
+	"context"
 	"fmt"
 	"math"
 
@@ -8,6 +9,7 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	pkggrowth "github.com/midas/dcf-valuation-api/pkg/finance/growth"
 )
 
@@ -40,13 +42,15 @@ func DefaultEstimatorConfig() EstimatorConfig {
 // Estimator blends analyst consensus with historical growth to produce
 // per-year projected growth rates for the DCF model.
 type Estimator struct {
-	config EstimatorConfig
-	logger *zap.Logger
+	config      EstimatorConfig
+	logger      *zap.Logger
+	calcEmitter *calclog.Emitter // emits stage-5 "growth" trace per valuation
 }
 
 // NewEstimator creates a GrowthEstimator with the given config.
-func NewEstimator(cfg EstimatorConfig, logger *zap.Logger) *Estimator {
-	return &Estimator{config: cfg, logger: logger}
+// calcEmitter may be nil (nop path) — no panic occurs.
+func NewEstimator(cfg EstimatorConfig, logger *zap.Logger, calcEmitter *calclog.Emitter) *Estimator {
+	return &Estimator{config: cfg, logger: logger, calcEmitter: calcEmitter}
 }
 
 // Config returns the estimator's configuration.
@@ -56,10 +60,14 @@ func (e *Estimator) Config() EstimatorConfig {
 
 // EstimateGrowthRates produces a GrowthEstimate with per-year growth rates.
 //
+// ctx is used to emit stage-5 "growth" calc trace so it can be correlated with
+// the originating HTTP request via logctx.
+//
 // analystData may be nil (no analyst coverage).
 // historicalGrowth is from HistoricalFinancialData.CalculateAverageGrowthRate().
 // sustainableGrowth is from CalculateSustainableGrowth (ROIC × reinvestment).
 func (e *Estimator) EstimateGrowthRates(
+	ctx context.Context,
 	analystData *ports.YFinanceAnalystEstimates,
 	historicalGrowth *pkggrowth.CalculationResult,
 	sustainableGrowth float64,
@@ -127,6 +135,17 @@ func (e *Estimator) EstimateGrowthRates(
 		zap.Float64("stage1_rate", stage1Rate),
 		zap.Float64("terminal_rate", estimate.TerminalGrowthRate),
 		zap.Int("projection_years", totalYears))
+
+	// Stage 5 — "growth" calc trace: emit blended growth rates and their provenance so
+	// operators can audit how analyst vs. historical data influenced the projection.
+	if e.calcEmitter != nil {
+		e.calcEmitter.Emit(ctx, "growth",
+			zap.String("source", estimate.Source),
+			zap.Float64s("growth_rates", estimate.ProjectedGrowthRates),
+			zap.Float64("roic_ceiling", sustainableGrowth),
+			zap.String("sustainability", estimate.Confidence),
+		)
+	}
 
 	return estimate
 }

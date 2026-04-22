@@ -31,7 +31,7 @@ func TestDataCleaner_B3_ContingentLiabilities_BaselineNoAI(t *testing.T) {
 	// Create mock AI service for test (AI disabled by default)
 	mockAI := ai.NewMockAIService(&ai.AIServiceConfig{})
 
-	dataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, mockAI)
+	dataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, mockAI, nil)
 	require.NoError(t, err, "Failed to create DataCleaner service")
 
 	ctx := context.Background()
@@ -234,7 +234,7 @@ func TestDataCleaner_B3_IndustrySpecificProbabilities(t *testing.T) {
 	// Create mock AI service for test
 	mockAI := ai.NewMockAIService(&ai.AIServiceConfig{})
 
-	dataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, mockAI)
+	dataCleaner, err := datacleaner.NewDataCleanerService(testEnv.Config, mockAI, nil)
 	require.NoError(t, err)
 
 	ctx := context.Background()

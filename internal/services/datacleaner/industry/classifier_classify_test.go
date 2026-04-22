@@ -1,6 +1,7 @@
 package industry
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,7 +71,7 @@ func TestIndustryClassifier_Classify_SICCodeMatching(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			code, err := classifier.Classify(tt.sicCode, "", "")
+			code, err := classifier.Classify(context.Background(), tt.sicCode, "", "")
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, code)
 		})
@@ -120,7 +121,7 @@ func TestIndustryClassifier_Classify_NAICSCodeMatching(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			code, err := classifier.Classify("", tt.naicsCode, "")
+			code, err := classifier.Classify(context.Background(), "", tt.naicsCode, "")
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, code)
 		})
@@ -192,7 +193,7 @@ func TestIndustryClassifier_Classify_KeywordMatching(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			code, err := classifier.Classify("", "", tt.companyName)
+			code, err := classifier.Classify(context.Background(), "", "", tt.companyName)
 			require.NoError(t, err)
 			assert.Equal(t, tt.expected, code)
 		})
@@ -205,7 +206,7 @@ func TestIndustryClassifier_Classify_PriorityOrdering(t *testing.T) {
 
 	// SIC match should win over keyword match when both match different industries
 	// SIC 7372 = TECH (priority 100), keyword "bank" = FIN (priority 90)
-	code, err := classifier.Classify("7372", "", "Some Bank Software")
+	code, err := classifier.Classify(context.Background(), "7372", "", "Some Bank Software")
 	require.NoError(t, err)
 	assert.Equal(t, "TECH", code, "SIC match for TECH (priority 100) should win over keyword match for FIN")
 }
@@ -215,7 +216,7 @@ func TestIndustryClassifier_Classify_SICFallbackToNAICS(t *testing.T) {
 	classifier := newTestClassifier(t)
 
 	// SIC code doesn't match, but NAICS does
-	code, err := classifier.Classify("9999", "52211", "")
+	code, err := classifier.Classify(context.Background(), "9999", "52211", "")
 	require.NoError(t, err)
 	assert.Equal(t, "FIN", code, "Should fall back to NAICS matching when SIC doesn't match")
 }
@@ -227,7 +228,7 @@ func TestIndustryClassifier_Classify_ConfigNotLoaded(t *testing.T) {
 		codesConfig:   nil,
 	}
 
-	code, err := classifier.Classify("7372", "", "")
+	code, err := classifier.Classify(context.Background(), "7372", "", "")
 	assert.Error(t, err)
 	assert.Equal(t, "NA", code)
 	assert.Contains(t, err.Error(), "not loaded")

@@ -325,7 +325,7 @@ func createTestService() (*Service, *MockFinancialDataRepository, *MockMarketDat
 	}
 
 	// Use nil for DataFetcher in unit tests since we mock repository responses
-	service := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, metricsService, cfg, logger)
+	service := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, metricsService, cfg, logger, nil)
 
 	return service, financialRepo, marketRepo, macroRepo, cache, dataCleaner
 }
@@ -441,7 +441,7 @@ func TestService_CalculateValuation(t *testing.T) {
 				DataFetchTimeout:     30 * time.Second,
 			},
 		}
-		service := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, mockMetrics, cfg, logger)
+		service := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, mockMetrics, cfg, logger, nil)
 
 		// Setup expectations - cache miss first
 		cache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
@@ -499,7 +499,7 @@ func TestService_CalculateValuation(t *testing.T) {
 		}
 
 		// Create fresh service with new mocks
-		freshService := NewService(financialRepo, marketRepo, macroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger)
+		freshService := NewService(financialRepo, marketRepo, macroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger, nil)
 
 		cachedResult := &entities.ValuationResult{
 			Ticker:                "AAPL",
@@ -550,7 +550,7 @@ func TestService_CalculateValuation(t *testing.T) {
 				DataFetchTimeout:     30 * time.Second,
 			},
 		}
-		freshService := NewService(freshFinancialRepo, marketRepo, macroRepo, freshCache, freshDataCleaner, nil, mockMetrics, cfg, logger)
+		freshService := NewService(freshFinancialRepo, marketRepo, macroRepo, freshCache, freshDataCleaner, nil, mockMetrics, cfg, logger, nil)
 
 		// Setup expectations - cache miss, no data in repo
 		freshCache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
@@ -638,7 +638,7 @@ func TestService_CalculateValuation_NilDataCleaner(t *testing.T) {
 	}
 
 	// Create service with nil dataCleaner — this is the path we want to cover
-	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, nil, nil, freshMetrics, cfg, logger)
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, nil, nil, freshMetrics, cfg, logger, nil)
 
 	// Setup expectations: cache miss, then successful data retrieval
 	freshCache.On("Get", ctx, "valuation:v4:AAPL", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
@@ -692,7 +692,7 @@ func TestService_CalculateValuation_DataCleanerError(t *testing.T) {
 		},
 	}
 
-	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger)
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger, nil)
 
 	// DataCleaner returns an error — the service should log a warning and continue with original data
 	freshDataCleaner.On("CleanFinancialData", ctx, mock.AnythingOfType("*entities.FinancialData")).
@@ -748,7 +748,7 @@ func TestService_CalculateValuation_CacheSetFailure(t *testing.T) {
 		},
 	}
 
-	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger)
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger, nil)
 
 	// DataCleaner succeeds normally
 	cleaningResult := &entities.CleaningResult{
@@ -815,7 +815,7 @@ func TestService_performValuation(t *testing.T) {
 	metricsService.On("IncDCFCalculations").Return()
 	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
 
-	service := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, metricsService, cfg, logger)
+	service := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, metricsService, cfg, logger, nil)
 	historicalData, marketData, macroData := createTestData()
 
 	t.Run("successful valuation with good data", func(t *testing.T) {
@@ -1204,7 +1204,7 @@ func TestValuationWithCleaningIntegration(t *testing.T) {
 				DataFetchTimeout:     30 * time.Second,
 			},
 		}
-		service := NewService(mockFinancialRepo, mockMarketRepo, mockMacroRepo, mockCache, mockDataCleaner, nil, mockMetrics, cfg, zap.NewNop())
+		service := NewService(mockFinancialRepo, mockMarketRepo, mockMacroRepo, mockCache, mockDataCleaner, nil, mockMetrics, cfg, zap.NewNop(), nil)
 
 		// Verify DataCleaner is injected
 		assert.NotNil(t, service)
@@ -1242,6 +1242,7 @@ func TestValuationService_MetricsInstrumentation(t *testing.T) {
 		metricsService,
 		cfg,
 		logger,
+		nil, // calcEmitter nil in unit tests
 	)
 
 	// Setup test data
@@ -1397,6 +1398,7 @@ func TestNewValuationService(t *testing.T) {
 		mockMetrics,
 		cfg,
 		logger,
+		nil, // calcEmitter nil in unit tests
 	)
 
 	// Verify service was created successfully
@@ -1477,6 +1479,7 @@ func TestNewValuationService_WithFakeMetrics(t *testing.T) {
 		fakeMetrics,
 		cfg,
 		logger,
+		nil, // calcEmitter nil in unit tests
 	)
 
 	// Verify service was created successfully
@@ -1504,7 +1507,7 @@ func TestService_CalculateValuation_OverrideBeta(t *testing.T) {
 			DataFetchTimeout:     30 * time.Second,
 		},
 	}
-	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop(), nil)
 
 	// Low beta (0.5) should produce a lower WACC
 	lowBeta := 0.5
@@ -1541,7 +1544,7 @@ func TestService_CalculateValuation_OverrideRiskFree(t *testing.T) {
 			DataFetchTimeout:     30 * time.Second,
 		},
 	}
-	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop(), nil)
 
 	// Low risk-free rate (1%) should produce a lower WACC
 	lowRF := 0.01
@@ -1577,7 +1580,7 @@ func TestService_CalculateValuation_NilOptsDefaultBehavior(t *testing.T) {
 			DataFetchTimeout:     30 * time.Second,
 		},
 	}
-	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop(), nil)
 
 	// Two calls with nil opts should produce identical WACCs
 	result1, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
@@ -1606,7 +1609,7 @@ func TestService_CalculateValuation_TickerNotFoundSentinel(t *testing.T) {
 	}
 
 	// Service with nil DataFetcher — simulates missing data path
-	service := NewService(freshFinancialRepo, nil, nil, freshCache, nil, nil, freshMetrics, cfg, zap.NewNop())
+	service := NewService(freshFinancialRepo, nil, nil, freshCache, nil, nil, freshMetrics, cfg, zap.NewNop(), nil)
 
 	// Cache miss, then repo returns no data
 	freshCache.On("Get", ctx, "valuation:v4:XYZA1", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
@@ -1631,7 +1634,7 @@ func TestService_performValuation_InsufficientDataSentinel(t *testing.T) {
 			DataFetchTimeout:     30 * time.Second,
 		},
 	}
-	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop(), nil)
 
 	_, marketData, macroData := createTestData()
 
@@ -1672,7 +1675,7 @@ func TestService_CalculateValuation_OverridesSkipCache(t *testing.T) {
 		},
 	}
 
-	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger)
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger, nil)
 
 	// Repo returns data normally
 	freshFinancialRepo.On("GetHistorical", ctx, "AAPL", 10).Return(historicalData, nil)
@@ -1791,7 +1794,7 @@ func TestService_CalculateValuation_PerformValuationError(t *testing.T) {
 		},
 	}
 
-	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger)
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, freshCache, freshDataCleaner, nil, freshMetrics, cfg, logger, nil)
 
 	// Cache miss
 	freshCache.On("Get", ctx, "valuation:v4:BAD", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
@@ -1845,7 +1848,7 @@ func TestService_performValuation_WACCFailure(t *testing.T) {
 			DCFMinGrowthRate:         -0.3,
 		},
 	}
-	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, nil)
 
 	// Use a negative beta override to trigger WACC validation failure
 	negativeBeta := -1.0
@@ -1873,7 +1876,7 @@ func TestService_performValuation_SharesFallback(t *testing.T) {
 			DCFMinGrowthRate:         -0.3,
 		},
 	}
-	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, nil)
 
 	t.Run("uses diluted shares when available", func(t *testing.T) {
 		_, marketData, macroData := createTestData()
@@ -2168,7 +2171,7 @@ func TestService_performValuation_NegativeOperatingIncome(t *testing.T) {
 			DCFMinGrowthRate:         -0.3,
 		},
 	}
-	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, nil)
 
 	result, err := svc.performValuation(context.Background(), negativeOI, marketData, macroData, nil)
 	// Phase 3: negative OI now routes to revenue_multiple model instead of failing
@@ -2211,7 +2214,7 @@ func TestService_performValuation_TrueFCF(t *testing.T) {
 			DCFMinGrowthRate:         -0.3,
 		},
 	}
-	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, nil)
 
 	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil)
 	assert.NoError(t, err)
@@ -2236,7 +2239,7 @@ func TestService_performValuation_GrowthCapping(t *testing.T) {
 			DCFMinGrowthRate:         -0.1,
 		},
 	}
-	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, nil)
 
 	// Create data with extreme growth (OI jumps 5x in 2 years → ~124% CAGR)
 	_, marketData, macroData := createTestData()
@@ -2400,7 +2403,7 @@ func TestService_CalculateValuation_DataFetcherPath(t *testing.T) {
 	}
 
 	// Create service with DataFetcher (not nil) and nil DataCleaner
-	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, serviceCache, nil, dataFetcher, freshMetrics, cfg, logger)
+	service := NewService(freshFinancialRepo, freshMarketRepo, freshMacroRepo, serviceCache, nil, dataFetcher, freshMetrics, cfg, logger, nil)
 
 	// Prepare test data that the gateways will return
 	historicalData := &entities.HistoricalFinancialData{
@@ -2549,7 +2552,7 @@ func TestService_CalculateValuation_DataFetcherFetchFails(t *testing.T) {
 		},
 	}
 
-	service := NewService(freshFinancialRepo, nil, nil, serviceCache, nil, dataFetcher, freshMetrics, cfg, logger)
+	service := NewService(freshFinancialRepo, nil, nil, serviceCache, nil, dataFetcher, freshMetrics, cfg, logger, nil)
 
 	// Cache miss
 	serviceCache.On("Get", ctx, "valuation:v4:UNKNOWN", mock.AnythingOfType("*entities.ValuationResult")).Return(errors.New("cache miss"))
@@ -2657,7 +2660,7 @@ func TestService_performValuation_FINZeroDPS_FallbackToDCF(t *testing.T) {
 			DCFMinGrowthRate:         -0.3,
 		},
 	}
-	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, nil)
 
 	result, err := svc.performValuation(context.Background(), finData, marketData, macroData, nil)
 
@@ -2697,7 +2700,7 @@ func TestService_performValuation_FINNegativeOI_FallbackToRevMultiple(t *testing
 			DCFMinGrowthRate:         -0.3,
 		},
 	}
-	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger)
+	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, nil)
 
 	_, marketData, macroData := createTestData()
 	historicalData := &entities.HistoricalFinancialData{
@@ -3008,9 +3011,9 @@ func TestService_performValuation_NegativeOI_ErrModelNotApplicable(t *testing.T)
 	// model can handle the negative OI, and DCF requires positive OI
 	emptyRouter := models.NewModelRouter([]models.ValuationModel{
 		models.NewMultiStageDCFModel(zap.NewNop()),
-	}, zap.NewNop())
+	}, zap.NewNop(), nil)
 
-	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop(), nil)
 	service.modelRouter = emptyRouter
 
 	_, marketData, macroData := createTestData()
@@ -3063,7 +3066,7 @@ func TestService_performValuation_WithExitMultiple(t *testing.T) {
 		},
 	}
 
-	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop(), nil)
 
 	// Inject industry multiples with EV/EBITDA and P/E data for sanity checks
 	service.industryMultiples = &industryMultiplesConfig{
@@ -3105,7 +3108,7 @@ func TestService_performValuation_DDMFallbackToDCF(t *testing.T) {
 		},
 	}
 
-	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop())
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop(), nil)
 
 	_, marketData, macroData := createTestData()
 

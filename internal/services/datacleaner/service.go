@@ -6,9 +6,12 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/adjustments"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
@@ -28,10 +31,12 @@ type service struct {
 	cacheMu            sync.RWMutex
 	stats              entities.CleaningStats
 	statsMu            sync.RWMutex
+	calcEmitter        *calclog.Emitter // emits stage-2 "data_clean_summary" trace per clean call
 }
 
-// NewDataCleanerService creates a new DataCleaner service instance
-func NewDataCleanerService(cfg *config.Config, aiSvc ai.AIService) (DataCleanerService, error) {
+// NewDataCleanerService creates a new DataCleaner service instance.
+// calcEmitter may be nil (nop path) — no panic occurs.
+func NewDataCleanerService(cfg *config.Config, aiSvc ai.AIService, calcEmitter *calclog.Emitter) (DataCleanerService, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("configuration cannot be nil")
 	}
@@ -88,6 +93,7 @@ func NewDataCleanerService(cfg *config.Config, aiSvc ai.AIService) (DataCleanerS
 		industryClassifier: industry.NewIndustryClassifier(),
 		flagEvaluator:      flagEvaluator,
 		cache:              make(map[string]*entities.CleaningResult),
+		calcEmitter:        calcEmitter,
 		stats: entities.CleaningStats{
 			QualityDistribution: make(map[entities.QualityGrade]int),
 			CommonAdjustments:   make(map[string]int),
@@ -215,6 +221,18 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 
 	// Update statistics
 	s.updateStats(result)
+
+	// Stage 2 — "data_clean_summary" calc trace: emit cleaning outcome so operators
+	// can audit how many adjustments and flags were applied for this ticker.
+	if s.calcEmitter != nil {
+		s.calcEmitter.Emit(ctx, "data_clean_summary",
+			zap.String("ticker", data.Ticker),
+			zap.Int("adjustments_count", len(result.Adjustments)),
+			zap.Int("flags_count", len(result.Flags)),
+			zap.Float64("quality_score", result.QualityScore),
+			zap.String("quality_grade", result.QualityGrade),
+		)
+	}
 
 	return result, nil
 }

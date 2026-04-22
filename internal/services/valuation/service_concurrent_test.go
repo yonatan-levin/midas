@@ -37,7 +37,7 @@ func TestService_ConcurrentDataFetch(t *testing.T) {
 	}
 
 	// Create service
-	service := NewService(financialRepo, marketRepo, macroRepo, cache, mockDataCleaner, nil, mockMetrics, cfg, logger)
+	service := NewService(financialRepo, marketRepo, macroRepo, cache, mockDataCleaner, nil, mockMetrics, cfg, logger, nil)
 
 	ctx := context.Background()
 
@@ -209,7 +209,7 @@ func benchmarkServiceWithConfig(b *testing.B, enableConcurrent bool) {
 		},
 	}
 
-	service := NewService(financialRepo, marketRepo, macroRepo, cache, mockDataCleaner, nil, mockMetrics, cfg, logger)
+	service := NewService(financialRepo, marketRepo, macroRepo, cache, mockDataCleaner, nil, mockMetrics, cfg, logger, nil)
 	ctx := context.Background()
 
 	// Setup test data - same as test above with 3 years

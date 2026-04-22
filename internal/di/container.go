@@ -549,8 +549,8 @@ func NewRateLimiterService(cache ports.CacheRepository, logger *zap.Logger) *rat
 	return limiter
 }
 
-func NewDataCleanerService(cfg *config.Config, logger *zap.Logger, aiSvc aiSvc.AIService) (datacleaner.DataCleanerService, error) {
-	return datacleaner.NewDataCleanerService(cfg, aiSvc)
+func NewDataCleanerService(cfg *config.Config, logger *zap.Logger, aiSvc aiSvc.AIService, calcEmitter *calclog.Emitter) (datacleaner.DataCleanerService, error) {
+	return datacleaner.NewDataCleanerService(cfg, aiSvc, calcEmitter)
 }
 
 func NewValuationService(
@@ -564,6 +564,7 @@ func NewValuationService(
 	metricsService *metrics.Service,
 	cfg *config.Config,
 	logger *zap.Logger,
+	calcEmitter *calclog.Emitter,
 ) *valuation.Service {
 	svc := valuation.NewService(
 		financialRepo,
@@ -575,6 +576,7 @@ func NewValuationService(
 		metricsService,
 		cfg,
 		logger,
+		calcEmitter,
 	)
 
 	// Wire YFinanceGateway for analyst consensus estimates.

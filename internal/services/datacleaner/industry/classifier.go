@@ -1,6 +1,7 @@
 package industry
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -243,6 +244,10 @@ func compilePatternRegexes(patterns []string) []*regexp.Regexp {
 //  1. Parent industry match (TECH, FIN, HEALTH, etc.) — by priority
 //  2. Sub-industry refinement within the matched parent (TECH_SAAS, FIN_IB, etc.)
 //
+// ctx is accepted for future context-aware tracing; it is not used internally but
+// allows callers (e.g. valuation.Service) to emit a correlated calc trace after
+// this call returns.
+//
 // Matchers are evaluated in order:
 //  1. SIC code (exact or range match)
 //  2. NAICS code (prefix match)
@@ -252,7 +257,7 @@ func compilePatternRegexes(patterns []string) []*regexp.Regexp {
 //
 // Returns the most specific industry code string (e.g., "TECH_SAAS" if sub-industry
 // matches, else "TECH"), or the default code ("NA") when no match is found.
-func (ic *IndustryClassifier) Classify(sicCode string, naicsCode string, companyName string) (string, error) {
+func (ic *IndustryClassifier) Classify(_ context.Context, sicCode string, naicsCode string, companyName string) (string, error) {
 	if ic.codesConfig == nil {
 		return "NA", fmt.Errorf("industry codes config not loaded")
 	}

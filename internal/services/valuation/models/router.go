@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 )
 
 // ValuationModel defines the interface for industry-specific valuation models.
@@ -58,20 +59,26 @@ type ModelResult struct {
 // ModelRouter selects the appropriate valuation model based on industry classification
 // and financial characteristics of the company.
 type ModelRouter struct {
-	models []ValuationModel
-	logger *zap.Logger
+	models      []ValuationModel
+	logger      *zap.Logger
+	calcEmitter *calclog.Emitter // emits stage-4 "model_selection" trace per valuation
 }
 
 // NewModelRouter creates a ModelRouter with the given set of models.
 // Models are checked in order, so register them from most specific to most general.
-func NewModelRouter(models []ValuationModel, logger *zap.Logger) *ModelRouter {
+// calcEmitter may be nil (nop path) — no panic occurs.
+func NewModelRouter(models []ValuationModel, logger *zap.Logger, calcEmitter *calclog.Emitter) *ModelRouter {
 	return &ModelRouter{
-		models: models,
-		logger: logger,
+		models:      models,
+		logger:      logger,
+		calcEmitter: calcEmitter,
 	}
 }
 
 // SelectModel determines the best valuation model for the given company.
+//
+// ctx is used to emit the stage-4 "model_selection" calc trace so it can be
+// correlated with the originating HTTP request via logctx.
 //
 // Selection logic (in priority order):
 //  1. Financial industry (FIN prefix) -> DDM model
@@ -80,7 +87,7 @@ func NewModelRouter(models []ValuationModel, logger *zap.Logger) *ModelRouter {
 //  4. Default -> Multi-stage DCF model
 //
 // If the selected model does not support the industry, falls back to DCF.
-func (r *ModelRouter) SelectModel(industry string, financials *entities.FinancialData) ValuationModel {
+func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financials *entities.FinancialData) ValuationModel {
 	upperIndustry := strings.ToUpper(industry)
 
 	// Rule 1: Financial companies use Dividend Discount Model
@@ -88,6 +95,7 @@ func (r *ModelRouter) SelectModel(industry string, financials *entities.Financia
 		if model := r.findModel("ddm"); model != nil {
 			r.logger.Info("Selected DDM model for financial company",
 				zap.String("industry", industry))
+			r.emitModelSelection(ctx, "ddm", "FIN prefix matched — financial company uses DDM")
 			return model
 		}
 	}
@@ -98,6 +106,7 @@ func (r *ModelRouter) SelectModel(industry string, financials *entities.Financia
 		if model := r.findModel("ffo"); model != nil {
 			r.logger.Info("Selected FFO model for REIT",
 				zap.String("industry", industry))
+			r.emitModelSelection(ctx, "ffo", "REIT or RESTATE matched — REIT uses FFO model")
 			return model
 		}
 	}
@@ -113,6 +122,7 @@ func (r *ModelRouter) SelectModel(industry string, financials *entities.Financia
 				r.logger.Info("Selected Revenue Multiple model for negative OI company",
 					zap.String("industry", industry),
 					zap.Float64("operating_income", financials.OperatingIncome))
+				r.emitModelSelection(ctx, "revenue_multiple", "negative or zero operating income — revenue multiple model")
 				return model
 			}
 		}
@@ -120,6 +130,7 @@ func (r *ModelRouter) SelectModel(industry string, financials *entities.Financia
 
 	// Rule 4: Default to multi-stage DCF
 	if model := r.findModel("multi_stage_dcf"); model != nil {
+		r.emitModelSelection(ctx, "dcf", "default — multi-stage DCF for profitable company")
 		return model
 	}
 
@@ -127,10 +138,23 @@ func (r *ModelRouter) SelectModel(industry string, financials *entities.Financia
 	if len(r.models) > 0 {
 		r.logger.Warn("No DCF model found, using first available model",
 			zap.String("model_type", r.models[0].ModelType()))
+		r.emitModelSelection(ctx, r.models[0].ModelType(), "absolute fallback — no DCF model registered")
 		return r.models[0]
 	}
 
 	return nil
+}
+
+// emitModelSelection emits stage-4 "model_selection" trace. Centralised helper
+// so each early-return branch above only calls one line.
+func (r *ModelRouter) emitModelSelection(ctx context.Context, modelChosen, reason string) {
+	if r.calcEmitter == nil {
+		return
+	}
+	r.calcEmitter.Emit(ctx, "model_selection",
+		zap.String("model_chosen", modelChosen),
+		zap.String("reason", reason),
+	)
 }
 
 // findModel returns the first model with the given type identifier.
