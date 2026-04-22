@@ -15,6 +15,16 @@ echo -e "${GREEN}DCF Valuation API - Local Staging Environment${NC}"
 echo -e "${GREEN}============================================${NC}"
 echo ""
 
+# Phase U observability guard: in staging, the logging file sink must be
+# disabled — container log drivers are the source of truth. Refuse to launch
+# if the current .env is asking for file-based logging.
+if [ -f ".env" ] && grep -qE '^LOGGING_FILE_ENABLED=true' .env 2>/dev/null; then
+    echo -e "${RED}ERROR: LOGGING_FILE_ENABLED=true detected in .env for a staging launch.${NC}"
+    echo -e "${RED}  Staging and production rely on container log drivers (stdout capture).${NC}"
+    echo -e "${RED}  Either remove the override or set LOGGING_FILE_ENABLED=false.${NC}"
+    exit 1
+fi
+
 # Check if .env exists, if not create from example
 if [ ! -f ".env" ]; then
     echo -e "${YELLOW}Creating .env file from config.env.example...${NC}"

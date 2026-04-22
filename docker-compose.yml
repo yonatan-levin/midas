@@ -57,7 +57,9 @@ services:
     volumes:
       # Data persistence
       - dcf_data:/app/data
-      - dcf_logs:/app/logs
+      # Logs are emitted to stdout only — Docker's json-file log driver captures them.
+      # Use `docker logs <container>` or ship via a log driver (loki/fluent/etc.).
+      # No bind mount for /app/logs (removed in Phase U of the observability upgrade).
       # Configuration (for development - mount local config)
       - ./config:/app/config:ro
       - ./docs:/app/docs:ro
@@ -113,9 +115,6 @@ volumes:
   dcf_data:
     driver: local
     name: dcf_valuation_data
-  dcf_logs:
-    driver: local
-    name: dcf_valuation_logs
   redis_data:
     driver: local
     name: dcf_redis_data

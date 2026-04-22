@@ -14,6 +14,16 @@ Write-Host "DCF Valuation API - Local Staging Environment" -ForegroundColor $Gre
 Write-Host "============================================" -ForegroundColor $Green
 Write-Host ""
 
+# Phase U observability guard: in staging, the logging file sink must be
+# disabled — container log drivers are the source of truth. Refuse to launch
+# if the current .env is asking for file-based logging.
+if ((Test-Path ".env") -and (Select-String -Path ".env" -Pattern '^LOGGING_FILE_ENABLED=true' -Quiet)) {
+    Write-Host "ERROR: LOGGING_FILE_ENABLED=true detected in .env for a staging launch." -ForegroundColor $Red
+    Write-Host "  Staging and production rely on container log drivers (stdout capture)." -ForegroundColor $Red
+    Write-Host "  Either remove the override or set LOGGING_FILE_ENABLED=false." -ForegroundColor $Red
+    exit 1
+}
+
 # Check if .env exists, if not create from example
 if (-not (Test-Path ".env")) {
     Write-Host "Creating .env file from config.env.example..." -ForegroundColor $Yellow

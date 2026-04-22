@@ -65,7 +65,10 @@ COPY ./docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Create necessary directories
-RUN mkdir -p /app/data /app/logs \
+# Note: /app/logs is intentionally NOT created — the container emits logs only
+# to stdout in staging/production (captured by Docker's log driver). A file
+# sink is only for local dev with LOGGING_FILE_ENABLED=true.
+RUN mkdir -p /app/data \
     && chown -R appuser:appuser /app
 
 # Switch to non-root user

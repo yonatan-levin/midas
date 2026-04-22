@@ -67,8 +67,10 @@ services:
       - ENABLE_METRICS=true
       - METRICS_PORT=9090
     volumes:
-      # Logs for production monitoring
-      - dcf_logs:/app/logs
+      # Logs: stdout only; captured by Docker's log driver. Do NOT bind-mount
+      # /app/logs in production — the app's file sink is disabled by default
+      # when ENVIRONMENT=production (Phase O of the observability upgrade) and
+      # container log drivers are the source of truth.
       # Read-only config mount
       - ./config:/app/config:ro
     networks:
@@ -179,9 +181,6 @@ services:
 
 # Named volumes for data persistence
 volumes:
-  dcf_logs:
-    driver: local
-    name: dcf_valuation_logs_prod
   letsencrypt:
     driver: local
     name: dcf_letsencrypt
