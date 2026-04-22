@@ -119,6 +119,7 @@ data/                   # SQLite database files (gitignored)
 - **No globals** - All state managed through DI container
 - **Interface-first** - All external dependencies defined as interfaces in `internal/core/ports/`
 - **Structured logging** - Use `go.uber.org/zap` exclusively, never `log` or `fmt.Println`
+- **Request-path logs via `logctx.From(ctx)`** - Any log line emitted during an HTTP request must go through `internal/observability/logctx.From(ctx)` so it inherits `request_id` (and `user_id`/`key_id` post-auth). Reserve the fx-provided singleton `*zap.Logger` for startup, shutdown, scheduler, and other non-request contexts.
 - **Error wrapping** - Use `fmt.Errorf("context: %w", err)` for error chains
 - **Context propagation** - All service/repository methods accept `context.Context` as first parameter
 - **RFC 7807** - Error responses follow Problem Details format

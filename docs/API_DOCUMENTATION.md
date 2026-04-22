@@ -1050,29 +1050,47 @@ Available at `GET /metrics` (no auth). Key metrics include:
 
 ### 10.2 Structured Logging
 
-All logs are structured JSON via `go.uber.org/zap`:
+All logs are structured via `go.uber.org/zap`. The logger is composed from two cores — stdout (always) and an optional rotating file sink — using `zapcore.NewTee`. Output format is controlled per environment.
+
+**Format selection (`logging.format` / `LOGGING_FORMAT`):**
+
+| Environment | Default format | Rationale |
+|-------------|----------------|-----------|
+| `development` | `console` | Colored, aligned, human-readable for `tail -f` |
+| `staging`, `production` | `json` | Machine-parseable; Docker's log driver captures stdout |
+
+**File sink (`logging.file.*`):** Disabled by default in `staging` / `production`. Enabled by default in `development` (`./logs/midas.log`, rotated by size via `lumberjack`). Containers should rely on the orchestrator's log driver; enabling the file sink in production is intentional opt-in only.
+
+**Access log — one line per HTTP request (post-handler):**
 
 ```json
 {
+  "ts": "2026-04-23T06:14:02.138Z",
   "level": "info",
-  "ts": "2025-08-13T22:15:34.402Z",
-  "caller": "api/server.go:123",
-  "msg": "request completed",
+  "msg": "access",
+  "request_id": "7f9b3e0a-5c18-4b81-9c55-4a2e6b7d0a11",
+  "user_id": "u_47",
+  "key_id": "k_3",
   "method": "GET",
   "path": "/api/v1/fair-value/AAPL",
+  "route": "/api/v1/fair-value/:ticker",
   "status": 200,
-  "latency": "1.234s",
+  "latency": "487ms",
   "client_ip": "192.168.1.1",
-  "request_id": "abc-123-def"
+  "user_agent": "midas-sdk/1.0",
+  "bytes_out": 2184
 }
 ```
 
-### 10.3 Request Tracing
+`user_id` / `key_id` are present only on authenticated routes. `route` is `"(unmatched)"` for 404s. On `respondWithError`, an additional `error_code` field carries the RFC 7807 extension value (e.g. `"INVALID_TICKER"`). Paths listed in `logging.access_log_skip_paths` (default `/metrics`, `/health`, `/ready`) emit at `debug` level instead of `info`.
 
-Every request receives a unique `X-Request-ID` header (auto-generated or passed through from the client). This ID is:
-- Logged with every related log entry
-- Returned in the response headers
-- Stored in the audit log for compliance
+### 10.3 Request Tracing (`X-Request-ID`)
+
+Every HTTP request is correlated by a **UUIDv4 request ID** that flows through every downstream log line.
+
+- **Inbound:** If the client supplies `X-Request-ID` and the value matches `^[A-Za-z0-9_.:-]{1,128}$`, the API trusts and reuses it. Otherwise (missing, malformed, or overlong), a fresh UUIDv4 is generated. Malformed values are silently replaced — there is no 4xx for this.
+- **Propagation:** A child `zap.Logger` is built with `request_id` attached and injected into `context.Context`. Every handler and every request-path service uses `logctx.From(ctx)` rather than a singleton logger, so all log lines on that request automatically carry `request_id`, plus `user_id` / `key_id` after auth succeeds, plus any async-task fields for goroutine-borne logs.
+- **Outbound:** The effective ID is always echoed on the `X-Request-ID` response header, whether the client supplied it or the server generated it. On recovered panics, the access line and the `"panic recovered"` error line share the same `request_id`.
 
 ### 10.4 Health Checks
 
