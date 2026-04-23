@@ -98,8 +98,66 @@ This requires a coordinated change across entity, gateway, cleaner, and math lay
 
 ---
 
+---
+
+## M-1e — `NewLogger` file sink fails silently on unwritable path
+
+When `logging.file.enabled=true` and `logging.file.path` points at a non-existent directory or an unwritable location, `lumberjack.Logger` lazily fails on first write — it silently drops the line. The stdout core keeps working, so the server remains operational, but operators enabling file logging on a misconfigured path get zero signal that file logs are being lost.
+
+### Proposed fix
+
+In `internal/di/container.go NewLogger`, before registering the file core, proactively verify the directory exists (or can be created) and the file is writable. On probe failure, log a warning to the stdout core and skip the file core — fall back cleanly to stdout-only. Sketch:
+
+```go
+if cfg.Logging.File.Enabled {
+    if err := os.MkdirAll(filepath.Dir(cfg.Logging.File.Path), 0o755); err != nil {
+        // Build a temporary stdout-only logger to emit the warning
+        stdoutOnly := zap.New(stdoutCore, zap.AddCaller())
+        stdoutOnly.Warn("logging.file.enabled=true but directory is unwritable; falling back to stdout-only",
+            zap.String("path", cfg.Logging.File.Path), zap.Error(err))
+    } else {
+        fileWriter := &lumberjack.Logger{...}
+        ...
+        cores = append(cores, fileCore)
+    }
+}
+```
+
+### Required test
+
+`TestNewLogger_FileSinkProbeFailure`: set `File.Path` to a guaranteed-unwritable path (e.g. `/proc/1/nope/x.log` on Linux or a path inside a nonexistent drive on Windows), call `NewLogger`, capture stdout, assert:
+- no error returned
+- one warning line emitted containing the phrase "falling back to stdout-only"
+- the returned logger's core is stdout-only (the tee does not include a file core)
+
+### Why deferred
+
+Deferred from the QA validation cycle because it's a resilience improvement, not a correctness bug. Existing behavior is acceptable (server stays up, stdout logs keep flowing); the fix adds operator-visibility for a misconfiguration case. Scope-correct for a small cleanup PR after the observability branch lands.
+
+---
+
+## M-1f — `requestIDMiddleware` control-character injection test gap
+
+`TestServer_requestIDMiddleware` covers newline (`\n`) and overlength (129 chars) injection cases. It does NOT explicitly exercise `\x00` (NUL), `\x7f` (DEL), `\t` (tab), or space characters. The regex `^[A-Za-z0-9_.:-]{1,128}$` structurally blocks all of them, so this is a test-coverage gap, not a functional bug.
+
+### Proposed fix
+
+Add three sub-cases to the existing injection table test:
+
+```go
+{name: "rejects NUL byte", header: "foo\x00bar", wantGenerated: true},
+{name: "rejects tab char",  header: "foo\tbar",  wantGenerated: true},
+{name: "rejects space",     header: "foo bar",   wantGenerated: true},
+```
+
+### Why deferred
+
+30-second fix but not blocking. The regex proves the rejection is total; the missing cases just make the test exhaustive.
+
+---
+
 ## Tracked when
 
-- Review: Phase M code-quality review + final integration-gate review, 2026-04-23.
-- Raised by: REVIEWER subagent during subagent-driven-development flow.
+- Review: Phase M code-quality review + final integration-gate review + QA validation cycle, 2026-04-23.
+- Raised by: REVIEWER + QA subagents during subagent-driven-development flow.
 - Related spec decisions: D7 / R1 in `docs/refactoring/observability-upgrade-spec.md`.
