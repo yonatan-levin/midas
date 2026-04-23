@@ -8,6 +8,7 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // ValuationModel defines the interface for industry-specific valuation models.
@@ -93,7 +94,7 @@ func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financia
 	// Rule 1: Financial companies use Dividend Discount Model
 	if strings.HasPrefix(upperIndustry, "FIN") {
 		if model := r.findModel("ddm"); model != nil {
-			r.logger.Info("Selected DDM model for financial company",
+			logctx.Or(ctx, r.logger).Info("Selected DDM model for financial company",
 				zap.String("industry", industry))
 			r.emitModelSelection(ctx, "ddm", "FIN prefix matched — financial company uses DDM")
 			return model
@@ -104,7 +105,7 @@ func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financia
 	// Match both "REIT" and the config's "RESTATE" (Real Estate) code
 	if upperIndustry == "REIT" || upperIndustry == "RESTATE" {
 		if model := r.findModel("ffo"); model != nil {
-			r.logger.Info("Selected FFO model for REIT",
+			logctx.Or(ctx, r.logger).Info("Selected FFO model for REIT",
 				zap.String("industry", industry))
 			r.emitModelSelection(ctx, "ffo", "REIT or RESTATE matched — REIT uses FFO model")
 			return model
@@ -119,7 +120,7 @@ func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financia
 		}
 		if baseOI <= 0 {
 			if model := r.findModel("revenue_multiple"); model != nil {
-				r.logger.Info("Selected Revenue Multiple model for negative OI company",
+				logctx.Or(ctx, r.logger).Info("Selected Revenue Multiple model for negative OI company",
 					zap.String("industry", industry),
 					zap.Float64("operating_income", financials.OperatingIncome))
 				r.emitModelSelection(ctx, "revenue_multiple", "negative or zero operating income — revenue multiple model")
@@ -136,7 +137,7 @@ func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financia
 
 	// Absolute fallback: return the first available model
 	if len(r.models) > 0 {
-		r.logger.Warn("No DCF model found, using first available model",
+		logctx.Or(ctx, r.logger).Warn("No DCF model found, using first available model",
 			zap.String("model_type", r.models[0].ModelType()))
 		r.emitModelSelection(ctx, r.models[0].ModelType(), "absolute fallback — no DCF model registered")
 		return r.models[0]

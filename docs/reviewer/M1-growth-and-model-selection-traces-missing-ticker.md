@@ -78,8 +78,28 @@ Add `ExitMultipleTV float64` to `dcf.Result` in `pkg/finance/dcf/dcf.go` — a o
 
 ---
 
+---
+
+## M-1d — `equity_bridge` trace omits `minority_interest` and `preferred`
+
+The spec field table for `equity_bridge` lists `ticker, cash, debt, minority_interest, preferred, equity_value, diluted_shares, per_share`. The `FinancialData` entity does not currently carry `minority_interest` or `preferred_equity` fields, so the emit omits both rather than emitting a hardcoded 0 that would mislead downstream log consumers.
+
+### Proposed fix
+
+- Extend `internal/core/entities/financial_data.go` with `MinorityInterest float64` and `PreferredEquity float64`.
+- Update the SEC gateway to populate them from the right XBRL tags (`us-gaap:MinorityInterest`, `us-gaap:PreferredStockValue`, or the fact-tag equivalents).
+- Update the datacleaner normalisation to carry the values through.
+- Update `dcf.CalculateEquityValue` to subtract them alongside debt, if the current equation doesn't already.
+- Add the two fields to the `equity_bridge` emit.
+
+### Why deferred
+
+This requires a coordinated change across entity, gateway, cleaner, and math layers — not a trace-only change. It belongs in an "equity bridge completeness" ticket, not in Phase M's observability scope.
+
+---
+
 ## Tracked when
 
-- Review: Phase M code-quality review, 2026-04-23.
+- Review: Phase M code-quality review + final integration-gate review, 2026-04-23.
 - Raised by: REVIEWER subagent during subagent-driven-development flow.
 - Related spec decisions: D7 / R1 in `docs/refactoring/observability-upgrade-spec.md`.

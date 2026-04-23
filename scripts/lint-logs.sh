@@ -16,10 +16,10 @@
 #   - internal/services/metrics/            (Phase T migration)
 #   - internal/services/ratelimit/          (Phase T migration)
 #   - internal/services/datacleaner/ai/     (Phase T migration)
-#   - internal/services/valuation/models/router.go
-#       SelectModel has no ctx parameter — tracked concern for Phase M
 #   - internal/services/growth/estimator.go
-#       EstimateGrowthRates has no ctx parameter — tracked concern for Phase M
+#       1 singleton-logger call (line 130 area) is kept for back-compat with
+#       pre-Phase-M callers that still invoke EstimateGrowthRates without ctx.
+#       Full migration tracked in docs/reviewer/M1.
 #
 # Usage: ./scripts/lint-logs.sh
 #        (run from repo root)
@@ -65,7 +65,6 @@ OUTPUT=$(rg \
     --glob '!internal/services/metrics/**' \
     --glob '!internal/services/ratelimit/**' \
     --glob '!internal/services/datacleaner/ai/**' \
-    --glob '!internal/services/valuation/models/router.go' \
     --glob '!internal/services/growth/estimator.go' \
     "${PATTERN}" \
     "${SCAN_DIRS[@]}" 2>&1)

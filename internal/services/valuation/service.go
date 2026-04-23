@@ -738,13 +738,15 @@ func (s *Service) performValuation(
 
 	// Stage 10 — "equity_bridge" calc trace: emit the bridge from enterprise value to
 	// per-share intrinsic value so operators can audit the equity conversion step.
+	// `minority_interest` and `preferred` are intentionally omitted: the
+	// FinancialData entity does not yet carry those fields, and emitting a
+	// hardcoded zero would lie to downstream log analysis. When the entity
+	// gains them, add the two fields here.
 	if s.calcEmitter != nil {
 		s.calcEmitter.Emit(ctx, "equity_bridge",
 			zap.String("ticker", historicalData.Ticker),
 			zap.Float64("cash", latestFinancialData.CashAndCashEquivalents),
 			zap.Float64("debt", latestFinancialData.InterestBearingDebt),
-			zap.Float64("minority_interest", 0), // TODO: add minority interest to FinancialData entity
-			zap.Float64("preferred", 0),         // TODO: add preferred equity to FinancialData entity
 			zap.Float64("equity_value", equityValue),
 			zap.Float64("diluted_shares", sharesOutstanding),
 			zap.Float64("per_share", dcfValuePerShare),

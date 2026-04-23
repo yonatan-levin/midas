@@ -15,10 +15,9 @@
 #   - internal/services/metrics/            (Phase T migration)
 #   - internal/services/ratelimit/          (Phase T migration)
 #   - internal/services/datacleaner/ai/     (Phase T migration)
-#   - internal/services/valuation/models/router.go
-#       SelectModel has no ctx parameter — tracked concern for Phase M
 #   - internal/services/growth/estimator.go
-#       EstimateGrowthRates has no ctx parameter — tracked concern for Phase M
+#       1 singleton-logger call kept for back-compat with pre-Phase-M callers.
+#       Full migration tracked in docs/reviewer/M1.
 #
 # Usage: .\scripts\lint-logs.ps1
 #        (run from repo root)
@@ -55,7 +54,6 @@ $Whitelist = @(
     "!internal/services/metrics/**",
     "!internal/services/ratelimit/**",
     "!internal/services/datacleaner/ai/**",
-    "!internal/services/valuation/models/router.go",
     "!internal/services/growth/estimator.go"
 )
 
