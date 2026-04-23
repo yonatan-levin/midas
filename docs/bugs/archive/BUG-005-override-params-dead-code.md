@@ -42,3 +42,13 @@ curl -H "X-API-Key: <key>" "http://localhost:8080/api/v1/fair-value/AAPL?overrid
 - [ ] `override_rf=0.03` vs `override_rf=0.06` changes the WACC
 - [ ] Without overrides, behavior is unchanged
 - [ ] Existing tests still pass
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED
+- **Fix commit**: `9841939` ("Fix 9 bugs: real-world valuations working end-to-end")
+- **Evidence inspected**:
+  - `internal/services/valuation/options.go:5-7` — new `ValuationOptions` struct with `*float64` `OverrideBeta` / `OverrideRiskFree`
+  - `internal/services/valuation/service.go:121` — `CalculateValuation(ctx, ticker, opts *ValuationOptions)` accepts options; `service.go:127` detects overrides for cache-bypass; `service.go:370-371` applies `OverrideBeta` during WACC computation
+  - `internal/api/v1/handlers/fair_value.go:135-162` — handler parses `override_beta` / `override_rf` and forwards them via `&valuation.ValuationOptions{...}`
+  - `internal/services/valuation/service_test.go:1487-1557` — `TestService_CalculateValuation_OverrideBeta` and `OverrideRiskFree` tests prove differing overrides produce differing WACC

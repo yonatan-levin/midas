@@ -37,3 +37,13 @@ curl -X POST -H "X-API-Key: <key>" -H "Content-Type: application/json" \
 - [ ] Each failure has ticker, error_code, and human-readable message
 - [ ] Partial success still returns 200 with both results and failures
 - [ ] All-failures returns appropriate status code (not 200 with empty results)
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED
+- **Fix commit**: `9841939` ("Fix 9 bugs: real-world valuations working end-to-end")
+- **Evidence inspected**:
+  - `internal/api/v1/handlers/fair_value.go:67-80` — `BulkFailure{Ticker, ErrorCode, Message}` and `BulkFairValueResponse.Failures` added
+  - `internal/api/v1/handlers/fair_value.go:355-366` — status-code switch: `200 OK` on all-success, `207 Multi-Status` on partial, `422 Unprocessable Entity` when all fail
+  - `internal/api/v1/handlers/fair_value.go:371-397` — `classifyBulkError` maps sentinel errors to `TICKER_NOT_FOUND` / `INSUFFICIENT_DATA` / `MODEL_NOT_APPLICABLE` / `CALCULATION_ERROR`
+  - `internal/api/v1/handlers/fair_value_test.go:599,671` — bulk tests assert per-ticker `Failures[].ErrorCode`

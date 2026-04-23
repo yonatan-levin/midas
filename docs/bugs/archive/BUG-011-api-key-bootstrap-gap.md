@@ -66,3 +66,12 @@ go run ./cmd/seed-demo-key -db ./data/midas.db
 - [ ] Existing `read:fair_value` functionality is not regressed
 - [ ] Auth service tests pass
 - [ ] Hash in migration matches the raw key (verified via `cmd/hash-key`)
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED
+- **Fix commits**: `7eaa488` (seed + migration permission expansion) and `08cf32e` (`cmd/migrate` prints the demo key and migration idempotency)
+- **Evidence inspected**:
+  - `cmd/seed-demo-key/main.go:60-66` — grants `PermissionReadFairValue`, `PermissionReadHealth`, `PermissionReadMetrics`, `PermissionManageKeys`, `PermissionAdmin`
+  - `migrations/0001_seed_demo_key.sql:16,25` — seeded permissions JSON is `["read:fair_value","read:health","read:metrics","manage:keys","admin:all"]` (INSERT and idempotent UPDATE both)
+  - `cmd/migrate/main.go:108-113` — prints the demo API key (`dcf_demo_...`) and example `X-API-Key` header after applying migrations

@@ -103,10 +103,21 @@ A single-model-per-industry approach misses this diversity. The fallback chain h
 
 ## Acceptance Criteria
 
-- [ ] FIN company with zero DPS gets a valuation (not an error)
-- [ ] Fallback model is logged as a warning in the API response
-- [ ] `calculation_method` reflects the actual model used (not the one that failed)
-- [ ] Test: SQ (FIN, zero DPS, positive OI) → multi_stage_dcf fallback
-- [ ] Test: AFRM (FIN, zero DPS, negative OI) → revenue_multiple fallback
-- [ ] Test: JPM (FIN, positive DPS) → DDM (no fallback needed)
-- [ ] Test: standard company → DCF directly (no routing change)
+- [x] FIN company with zero DPS gets a valuation (not an error)
+- [x] Fallback model is logged as a warning in the API response
+- [x] `calculation_method` reflects the actual model used (not the one that failed)
+- [x] Test: SQ (FIN, zero DPS, positive OI) → multi_stage_dcf fallback
+- [x] Test: AFRM (FIN, zero DPS, negative OI) → revenue_multiple fallback
+- [x] Test: JPM (FIN, positive DPS) → DDM (no fallback needed)
+- [x] Test: standard company → DCF directly (no routing change)
+
+## Resolution (verified 2026-04-23)
+
+- **Classification:** RESOLVED
+- **Commits:** `01f4db0` "Fix Phase 3 follow-ups: repo persistence, model fallback chain, reviewer nits" (commit message: "S-5: Model fallback chain when primary model fails: DDM fails + positive OI → falls back to standard DCF path; DDM fails + negative OI → falls back to revenue_multiple; errFallbackToDCF sentinel replaces (nil, nil) convention"). Status header in the doc itself was already updated to "Resolved (2026-04-19)".
+- **Evidence:**
+  - `internal/services/valuation/errors.go:25-28` — new unexported sentinel `errFallbackToDCF` wraps the fallback signal.
+  - `internal/services/valuation/service.go:467-489` — `performAlternativeValuation` is invoked for non-DCF primary models; if it returns `errFallbackToDCF`, the code continues into the standard DCF path and attaches a warning via `dcfFallbackWarning`.
+  - `service.go:687-708` (`performAlternativeValuation`) — on primary-model error, branches on `effectiveOI(latestFinancialData)`: positive OI returns `errFallbackToDCF` (→ DCF fallback); non-positive OI constructs a `RevenueMultipleModelWithMultiples(nil, ...)` as a last-resort fallback and appends a warning identifying which primary failed.
+  - `service.go:605-607` — fallback warning propagated as `result.Warnings` in the API response so clients see which model was used.
+- **Verification:** Read the fallback chain end-to-end in `service.go` and confirmed the sentinel plumbing in `errors.go`. The three fallback paths (DDM→DCF, DDM→RevenueMultiple, FFO→any) all route through the same mechanism.

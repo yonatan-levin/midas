@@ -221,3 +221,12 @@ This bug depends on BUG-001 and BUG-002 being fixed first — if SEC data can't 
 - Comment in `service.go:91`: "DataFetcher should have populated the database" — confirms the original design intent
 - Clean Architecture principle: the service layer orchestrates, infrastructure adapters persist
 - Hexagonal Architecture: ports (interfaces) define the contract, adapters (repositories) implement storage
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED (architecture pivoted to Option B — valuation service consumes `FetchResult` directly)
+- **Fix commit**: `9841939` ("Fix 9 bugs: real-world valuations working end-to-end")
+- **Evidence inspected**:
+  - `internal/services/valuation/service.go:153-213` — `s.dataFetcher.Fetch` result is now consumed directly (`fetchResult.HistoricalData`, `fetchResult.FinancialData`, `fetchResult.MarketData`, `fetchResult.MacroData`); the value is no longer discarded with `_`
+  - Grep in `internal/services/datafetcher/` for `financialRepo|marketRepo|macroRepo|StoreHistorical` returns zero matches, confirming the DataFetcher never owned persistence — the valuation pipeline was refactored to use the in-memory result as the source of truth instead
+  - Result: end-to-end valuations now complete without relying on the financial repository being pre-populated

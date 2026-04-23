@@ -36,3 +36,13 @@ Use typed sentinel errors instead of fragile string matching. Define `ErrTickerN
 - [ ] `GET /fair-value/XYZA1` returns HTTP 404 with `TICKER_NOT_FOUND` code
 - [ ] `GET /fair-value/AAPL` still returns HTTP 200 (no regression)
 - [ ] Error response follows RFC 7807 format
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED
+- **Fix commits**: `9841939` (sentinel errors introduced), later refined by `e1c9f1f` (XRTX/foreign-issuer 422 path)
+- **Evidence inspected**:
+  - `internal/services/valuation/errors.go:14-23` — exports `ErrTickerNotFound`, `ErrInsufficientData`, `ErrModelNotApplicable` sentinels
+  - `internal/services/valuation/service.go:150,188` — wraps `ErrTickerNotFound` when SEC has no data at all; wraps `ErrInsufficientData` at `service.go:160,186` when US-GAAP XBRL is missing
+  - `internal/services/valuation/service_test.go:1593-1620` — `TestService_CalculateValuation_TickerNotFound` asserts `errors.Is(err, ErrTickerNotFound)`
+  - Handler uses `errors.Is()` (via `classifyBulkError` in `fair_value.go:371-397`) — no more fragile `strings.Contains` on "not found"

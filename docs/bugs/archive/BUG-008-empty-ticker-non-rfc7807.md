@@ -37,3 +37,11 @@ Replace the inline response with a call to `respondWithError` using the same for
 - [ ] `GET /fair-value/` returns RFC 7807 format with type, title, status, detail, instance
 - [ ] Status code is 400
 - [ ] Error code is INVALID_TICKER
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED
+- **Fix commit**: `9841939` ("Fix 9 bugs: real-world valuations working end-to-end")
+- **Evidence inspected**:
+  - `internal/api/server.go:189-192` — inline `gin.H{}` replaced with `s.respondWithError(c, http.StatusBadRequest, "INVALID_TICKER", "Ticker parameter is required")`, giving the RFC 7807 shape produced by the same helper used elsewhere
+  - `internal/api/server_test.go:986-1010,1358-1364` — tests verify the empty-ticker path returns 400 with `code: INVALID_TICKER` in RFC 7807 form

@@ -30,5 +30,12 @@ Option A is recommended for now — the hardcoded routing is clear and maintaina
 
 ## Acceptance Criteria
 
-- [ ] Either remove `SupportsIndustry` from interface, or wire it into routing logic
-- [ ] All existing routing tests still pass
+- [x] Either remove `SupportsIndustry` from interface, or wire it into routing logic
+- [x] All existing routing tests still pass
+
+## Resolution (verified 2026-04-23)
+
+- **Classification:** RESOLVED
+- **Commits:** `4d46142` "Resolve reviewer Tier 1+2 follow-ups: W-1, W-2, W-3, W-4, S-5"
+- **Evidence:** `internal/services/valuation/models/router.go:12-22` — the `ValuationModel` interface is now pared down to `Calculate()` and `ModelType()`; `SupportsIndustry()` has been removed. The routing comment explicitly states "Routing is performed by ModelRouter.SelectModel based on industry + financials, not by self-declaration from the models themselves." Grep confirms no call sites for `SupportsIndustry` remain in the codebase (only historical references in docs/spec).
+- **Verification:** Read `router.go` at HEAD and grepped the repo for `SupportsIndustry` — confirmed Option A (remove from interface) was chosen.

@@ -41,6 +41,18 @@ func (c *IndustryClassifier) Classify(sicCode, naicsCode, companyName string) (s
 
 ## Acceptance Criteria
 
-- [ ] Sub-industry classification produces codes like `TECH_SAAS`, `FIN_IB`, `HEALTH_BIOTECH`
-- [ ] Revenue multiple model uses sub-industry-specific multiples when available
-- [ ] Tests verify sub-industry matching from keywords and SIC codes
+- [x] Sub-industry classification produces codes like `TECH_SAAS`, `FIN_IB`, `HEALTH_BIOTECH`
+- [x] Revenue multiple model uses sub-industry-specific multiples when available
+- [x] Tests verify sub-industry matching from keywords and SIC codes
+
+## Resolution (verified 2026-04-23)
+
+- **Classification:** RESOLVED
+- **Commits:** `4d46142` "Resolve reviewer Tier 1+2 follow-ups: W-1, W-2, W-3, W-4, S-5"
+- **Evidence:**
+  - `internal/services/datacleaner/industry/classifier.go:273-310` (`Classify`) now runs a two-pass algorithm: Pass 1 finds the best parent by priority, Pass 2 delegates to `classifySubIndustry` to refine.
+  - `classifier.go:349-367` (`classifySubIndustry`) — walks the matched parent's `SubIndustries` slice and returns sub-codes like `TECH_SAAS`, `FIN_IB`, or `HEALTH_BIOTECH` when any of SIC/NAICS/keyword/pattern matchers fire.
+  - `internal/services/valuation/models/revenue_multiple.go:142-169` (`getMultiple`) uses longest-prefix-match on `m.multiples` so sub-industry codes like `TECH_SAAS` (8.0x) take precedence over parent `TECH` (5.0x) when present in the config map.
+  - `config/industry_multiples.json:13-29` (`ev_revenue_multiples`) ships concrete sub-industry keys: `TECH_SAAS: 8.0`, `TECH_AI: 10.0`, `HEALTH_BIOTECH: 6.0`, `HEALTH_PHARMA: 4.0`.
+  - `classifier_subindustry_test.go` exists and asserts sub-industry matching across keyword and SIC paths.
+- **Verification:** Read the full two-pass `Classify` implementation, confirmed `classifySubIndustry` is wired in, and inspected the config JSON plus the dedicated sub-industry test file.

@@ -216,3 +216,13 @@ Expected output: TotalAssets > 0 (usually works), Revenue = 0 (concept name mism
 - Microsoft uses `RevenueFromContractWithCustomerExcludingAssessedTax` (not `Revenues`)
 - Microsoft uses `OperatingIncomeLoss` (not `OperatingIncome`)
 - Shares are in `dei` taxonomy: `EntityCommonStockSharesOutstanding`
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED (Option A — coordinator calls the full parser)
+- **Fix commit**: `9841939` ("Fix 9 bugs: real-world valuations working end-to-end")
+- **Evidence inspected**:
+  - `internal/services/datafetcher/coordinator.go:204-253` — `fetchSECData` now resolves ticker->CIK and calls `dc.secGateway.GetFinancialDataForTicker(ctx, ticker, identifier)`, returning `*entities.HistoricalFinancialData` with all FY periods and normalized fields
+  - `internal/services/datafetcher/coordinator.go:141` — `coordinateConcurrent` stores into `result.historicalData` (multi-period), not a single `FinancialData`
+  - `internal/services/valuation/service.go:166-178` — valuation service prefers `fetchResult.HistoricalData` over the single-period fallback
+  - `internal/services/datafetcher/coordinator_test.go:38,77` — tests exercise `fetchSECData` + `fakeSECGateway.GetFinancialDataForTicker`

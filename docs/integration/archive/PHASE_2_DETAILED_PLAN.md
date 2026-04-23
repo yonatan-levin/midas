@@ -531,4 +531,19 @@ Each completed sub-task should be verified with:
 
 ---
 
-This detailed plan provides the AI agent with clear, actionable steps while maintaining the project's high standards for code quality, security, and production readiness. 
+This detailed plan provides the AI agent with clear, actionable steps while maintaining the project's high standards for code quality, security, and production readiness.
+
+---
+
+## Archived (verified 2026-04-23)
+
+**Classification:** OBSOLETE / COMPLETED
+
+**Reason:** Phase 2 (Docker, auth, rate-limiting, health, Prometheus) shipped with v0.9.0-rc1 and all three tasks are marked ✅ COMPLETED in the header. A separate retrospective `PHASE_2_COMPLETION_SUMMARY.md` captures the actual outcome and is kept in the main folder.
+
+**Superseded by:** `docs/integration/PHASE_2_COMPLETION_SUMMARY.md` (retrospective kept in place) and `docs/THESIS.md` (current version status).
+
+**Evidence inspected:**
+- Multi-stage Dockerfile, `docker-compose.yml`, and `docker-compose.prod.yml` exist.
+- `internal/services/auth/` with bcrypt-hashed API keys and `internal/services/ratelimit/` with Redis backend + memory fallback.
+- `/health`, `/metrics`, Prometheus instrumentation live in `internal/api/v1/handlers/` and `internal/services/metrics/`. 

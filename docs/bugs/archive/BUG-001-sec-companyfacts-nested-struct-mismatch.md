@@ -173,3 +173,13 @@ Option A is simpler and directly models the real API structure. Option B is more
 
 - SEC EDGAR CompanyFacts API: `https://data.sec.gov/api/xbrl/companyfacts/CIK0000789019.json`
 - SEC API documentation: `https://www.sec.gov/edgar/sec-api-documentation`
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED
+- **Fix commits**: `9841939` ("Fix 9 bugs: real-world valuations working end-to-end"), later hardened by `e1c9f1f` (CIK polymorphism via `FlexibleCIK`)
+- **Evidence inspected**:
+  - `internal/core/ports/gateways.go:106-110` — `SECCompanyFacts.Facts` is now `map[string]map[string]SECFactGroup` (taxonomy -> concept -> factGroup), matching real SEC payload shape
+  - `internal/core/ports/gateways.go:13-43` — `FlexibleCIK` handles both numeric and zero-padded-string CIK forms
+  - `internal/core/ports/cik_test.go:17,92` — `TestFlexibleCIK_UnmarshalJSON` and `TestFlexibleCIK_DecodesRealSECCompanyFactsShape` guard both forms and the full shape
+  - Coordinator now delegates to `secGateway.GetFinancialDataForTicker`, running the full nested parser (`internal/services/datafetcher/coordinator.go:243`)

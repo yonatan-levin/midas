@@ -97,3 +97,12 @@ Fixed in Phase 1.1 of the valuation engine upgrade. `growth.CapGrowthRateWithBou
 - Config defaults: `dcf_max_growth_rate: 0.5`, `dcf_min_growth_rate: -0.3` (config.go:279-280)
 - JNJ's high growth likely due to the 2023 Kenvue spin-off or acquisition activity causing a revenue discontinuity
 - Standard DCF practice: growth rates above GDP+inflation (3-5%) for terminal value, and above 30-40% for explicit forecast, should raise red flags
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED (already marked so in the report; independent re-check confirmed)
+- **Fix commit**: `66ece97` ("Phase 2: Multi-stage growth model with analyst consensus blending") — introduced `growth.CapGrowthRateWithBounds`
+- **Evidence inspected**:
+  - `pkg/finance/growth/growth.go` — `CapGrowthRateWithBounds(growthRate, minRate, maxRate float64)` exists and is referenced throughout the multi-stage pipeline
+  - `internal/services/valuation/service_test.go:322-323,807-808,1670-1671,1789-1790,1844-1845,1872-1873,2167` — multiple test cases thread `DCFMaxGrowthRate: 0.5` and `DCFMinGrowthRate: -0.3` through the valuation config, exercising the capping path
+  - Spec at `docs/refactoring/valuation-engine-upgrade-spec.md:332-345,578` documents the rollout

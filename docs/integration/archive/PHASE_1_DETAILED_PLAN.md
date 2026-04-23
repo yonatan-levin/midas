@@ -187,3 +187,18 @@
 - Finance/DCF: **95.9%**
 
 **🎯 COMPREHENSIVE TEST COVERAGE ESTABLISHED**: All major modules now have robust test suites with extensive edge case coverage, property-based tests for financial calculations, and comprehensive error handling validation, ensuring production readiness. 
+
+---
+
+## Archived (verified 2026-04-23)
+
+**Classification:** OBSOLETE / COMPLETED
+
+**Reason:** Phase 1 (DataFetcher integration, ValuationService integration, 90%+ coverage) was declared complete in Jan–Jul 2025 and all sub-tasks are marked `[x]`. The described modules (`datafetcher/coordinator.go`, `datafetcher/validator.go`, `valuation/service.go` with DataCleaner DI) all exist in the current tree and have been substantially extended since.
+
+**Superseded by:** `docs/THESIS.md` (current phase status). For historic coverage numbers, the contents of this file remain if someone ever needs to trace back.
+
+**Evidence inspected:**
+- `internal/services/datafetcher/coordinator.go` and `validator.go` exist.
+- `internal/services/valuation/service.go` invokes DataCleaner via DI.
+- `docs/THESIS.md` reports the engine is at CalculationVersion 4.0 with phases 0-4 built on top of this MVP foundation.

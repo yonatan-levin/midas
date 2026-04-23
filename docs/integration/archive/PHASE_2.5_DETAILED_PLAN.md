@@ -112,3 +112,19 @@ This plan is ready for your review. Before proceeding to code, do you approve? A
 ⁵ **Task 2.5.2 Step 7 Completion (2025-08-11)**: Added live E2E tests `internal/integration/e2e_live_test.go` for AAPL/MSFT/TSLA. Tests run against real external APIs when `E2E_LIVE=1` and are skipped on Windows. Local integration tests (`service_test.go`) use a mock SEC server and deterministic seeds so they pass reliably on Windows while exercising the full middleware and DI stack.
 
 ⁶ **Task 2.5.2 Steps 4–5 Completion (2025-08-11)**: Achieved deterministic Windows-safe integration test suite. Added `api_contract_fuzz_test.go` to assert no 5xx on invalid inputs; raised `internal/integration` coverage to 95.9% via targeted tests for `createTestConfig*`, `SetupDatabase/SeedTestData`, and mock SEC endpoints. Introduced OS-specific Redis setup (Windows → in-memory fallback) to avoid Docker dependency locally. Full `go test ./...` passes; lint clean.
+
+---
+
+## Archived (verified 2026-04-23)
+
+**Classification:** OBSOLETE / COMPLETED
+
+**Reason:** Phase 2.5 was the MVP end-to-end validation & release-candidate gate. It produced v0.9.0-rc1 (tagged). Every task parent `[ ]` visible is followed by `[X]` sub-tasks in the footnotes; the shipping gate closed and the product has since moved on to Phases 0-4 of the valuation-engine upgrade.
+
+**Superseded by:** `docs/THESIS.md` (version and phase status). Artifacts produced by this plan that still live as references — `docs/integration/PERF_BASELINE.md`, `docs/openapi.yaml`, `scripts/smoke.*`, `scripts/contract_fuzz.*`, `migrations/0001_*.sql`, `migrations/0002_*.sql` — remain in the main tree.
+
+**Evidence inspected:**
+- `scripts/launch_staging.sh`, `scripts/smoke.sh`, `scripts/contract_fuzz.ps1` all present.
+- `migrations/0001_seed_demo_key.sql`, `0002_seed_demo_data.sql` present.
+- `internal/integration/e2e_live_test.go`, `api_contract_fuzz_test.go`, `openapi_test.go` present.
+- `docs/openapi.yaml` present; `/docs/openapi.yaml` served when `ENABLE_SWAGGER=true`.

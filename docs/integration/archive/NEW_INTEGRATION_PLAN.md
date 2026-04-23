@@ -235,6 +235,21 @@ Successfully achieved major test coverage improvements across 6 modules with **t
 
 [¹⁰] **PHASE 3 COMPLETE** - AI Integration, Scheduler & Final Polish: **Task 3.1 (AI Integration)**: External API support, graceful degradation, comprehensive testing. **Task 3.2 (Scheduler)**: DB-driven watchlist, configuration support, integration tests. **Task 3.3 (Polish)**: OpenAPI endpoint tests ✅ PASSING, contract fuzzing validation ✅ VERIFIED, **96% test coverage achieved** ✅ EXCEEDS TARGET, comprehensive rollback documentation ✅ COMPLETE. All linting issues resolved. **Minor Note**: 1 AI mock service test fails due to user reverting key name from "contingent_liability" to "contingent_liability_estimate" - non-blocking issue. Complete file coverage: AI services, scheduler components, DI wiring, configuration management, extensive test suites. Production-ready AI enhancement and automated data ingestion capabilities delivered with full rollback support and quality gates met.
 
+---
+
+## Archived (verified 2026-04-23)
+
+**Classification:** OBSOLETE / COMPLETED
+
+**Reason:** This is the Jan–Aug 2025 MVP integration plan. Every phase (1, 2, 2.5, 3) and every task within it is marked complete or has a completion footnote. The entire plan has been executed and the product moved past it (v0.9.0-rc1 shipped and the valuation-engine upgrade Phases 0-4 have since completed). A few Phase 2.5 checkboxes show `[ ]` in the header but the child sub-tasks are all `[X]`, so the unchecked parents are stale markdown rather than open work.
+
+**Superseded by:** `docs/THESIS.md` is the canonical product-direction/phase-status doc for the current engine. The per-phase detail plans (`PHASE_1_DETAILED_PLAN.md`, `PHASE_2_DETAILED_PLAN.md`, `PHASE_2.5_DETAILED_PLAN.md`, `PHASE_3_DETAILED_PLAN.md`) have been archived alongside this one.
+
+**Evidence inspected:**
+- `docs/THESIS.md` "Current State" section confirms MVP at v0.9.0-rc1 and Phases 0-4 complete.
+- All claimed services exist: `internal/services/datacleaner/ai/`, `internal/services/scheduler/`, `internal/services/watchlist/`, `/docs/openapi.yaml`.
+- Mentioned Docker, auth, rate-limiting, metrics infrastructure is in place per CLAUDE.md architecture section.
+
 [⁹] Perf baseline doc added at `docs/PERF_BASELINE.md` with local run instructions and targets; created `docs/MVP_CHECKLIST.md` to gate v0.9.0-rc1 readiness. Contract fuzz tests added to prevent 5xx on invalid inputs; server now responds with RFC 7807 problem JSON for errors. Static OpenAPI added at `docs/openapi.yaml` and served at `/docs/openapi.yaml`.
 
 [¹¹] **PERFORMANCE OPTIMIZATION COMPLETED (14/08/2025)**: Comprehensive performance analysis and optimization implementation with TDD approach. **Key Results**: (1) Implemented configurable concurrent I/O operations in ValuationService with `VALUATION_ENABLE_CONCURRENT_DATA_FETCH` flag; (2) Validated Go compiler optimization patterns - synthetic benchmarks showed pointer passing can be slower due to escape analysis, reinforcing need for real-world `pprof` analysis; (3) Implemented parallel data cleaning pipeline with stages running concurrently; (4) Created extensive benchmark infrastructure for struct passing, pipeline execution, and HTTP endpoints. **Critical Insights**: Parallelization overhead exceeds benefits for ultra-fast operations (<250ns), Go's escape analysis is extremely sophisticated, and synthetic benchmarks can be misleading - real workload profiling with `pprof` is essential. Added `pprof` integration, performance configuration flags, and baseline measurement infrastructure. **Files Modified**: `internal/services/valuation/service.go` (concurrent data fetch), `internal/services/datacleaner/pipeline.go` (parallel stages), `config.env.example` (perf flags), plus comprehensive benchmark test suites.

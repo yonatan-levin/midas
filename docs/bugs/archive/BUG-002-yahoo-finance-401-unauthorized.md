@@ -174,3 +174,12 @@ type YFinanceAuth struct {
 - `yfinance` Python library auth implementation: `github.com/ranaroussi/yfinance` (see `base.py` for cookie/crumb flow)
 - Financial Modeling Prep API: `https://financialmodelingprep.com/developer/docs/`
 - RapidAPI Yahoo Finance: `https://rapidapi.com/sparior/api/yahoo-finance15`
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED
+- **Fix commit**: `9841939` ("Fix 9 bugs: real-world valuations working end-to-end")
+- **Evidence inspected**:
+  - `internal/infra/gateways/market/yfinance_auth.go` — new `YFinanceAuth` manager implements cookie+crumb flow (`fc.yahoo.com` session cookie + `query2.finance.yahoo.com/v1/test/getcrumb` token) with mutex-protected refresh
+  - `internal/infra/gateways/market/yfinance_auth_test.go` — covers the auth flow including concurrent refresh
+  - `internal/infra/gateways/market/yfinance_client.go` — requests now attach the cookie and `&crumb=` query param

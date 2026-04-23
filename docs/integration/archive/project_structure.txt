@@ -152,3 +152,19 @@ KEY FEATURES:
 - Background job scheduling for data fetching.
 
 The project is actively developed, with a clear separation of concerns that supports maintainability and future expansion.
+
+---
+
+## Archived (verified 2026-04-23)
+
+**Classification:** STALE SNAPSHOT
+
+**Reason:** This is a point-in-time `tree`-style dump from Sept 2025. Drift since: it does not reference services added later (`growth/`, `alerting/`, `watchlist/`, `valuation/models/`, `valuation/adr.go`, `valuation/crosscheck.go`) nor `pkg/finance/growth/`, nor the `docs/refactoring/`, `docs/reviewer/`, `docs/bugs/` subdirectories that were introduced during the Phase 0-4 upgrade. The authoritative architecture summary now lives inline in `CLAUDE.md` and is refreshed as the tree changes.
+
+**Superseded by:** `CLAUDE.md` "Architecture" section (directory tree + conventions) and `docs/THESIS.md` (product direction). Neither requires manual regeneration.
+
+**Evidence inspected:**
+- `internal/services/growth/`, `internal/services/alerting/`, `internal/services/watchlist/` exist in repo but not in this doc.
+- `internal/services/valuation/models/` exists but not listed.
+- `pkg/finance/growth/` exists but not listed.
+- `CLAUDE.md` has the current, authoritative layout.

@@ -29,3 +29,10 @@ Delete the `CachedDataResult` struct definition. Also clean up related cache sta
 - [ ] `CachedDataResult` struct removed from `data_fetcher.go`
 - [ ] `go build ./...` passes
 - [ ] No references to `CachedDataResult` in any `.go` file
+
+## Resolution (verified 2026-04-23)
+
+- **Classification**: RESOLVED
+- **Fix commit**: `9841939` ("Fix 9 bugs: real-world valuations working end-to-end" — commit message line: "BUG-009: Removed unused CachedDataResult and DataFetcher cache layer")
+- **Evidence inspected**:
+  - Grep for `CachedDataResult` under `internal/` returns zero matches on master HEAD; the only remaining references are in this bug report and in the `.worktrees/feat-observability/` checkout (an orphaned worktree, not part of master)

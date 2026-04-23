@@ -36,5 +36,16 @@ for _, k := range keys {
 
 ## Acceptance Criteria
 
-- [ ] Longest prefix match wins deterministically
-- [ ] Test with overlapping prefixes returns the most specific one
+- [x] Longest prefix match wins deterministically
+- [x] Test with overlapping prefixes returns the most specific one
+
+## Resolution (verified 2026-04-23)
+
+- **Classification:** RESOLVED
+- **Commits:** `4d46142` "Resolve reviewer Tier 1+2 follow-ups: W-1, W-2, W-3, W-4, S-5" (and earlier `ed9cf63` which first introduced longest-prefix logic).
+- **Evidence:**
+  - `internal/services/valuation/models/revenue_multiple.go:142-169` (`getMultiple`) — iterates all map keys, keeps only the longest one whose `strings.HasPrefix(upper, code)` is true via `len(code) > len(bestKey)`. Map-iteration order no longer leaks into results because every key is inspected and the longest wins.
+  - `internal/services/valuation/crosscheck.go:128-152` (`LookupMultiple`) — same longest-prefix-match algorithm, shared by sanity-check and exit-multiple lookups.
+  - Test: `internal/services/valuation/models/revenue_multiple_test.go:238-260` (`TestRevenueMultipleModel_GetMultiple_LongestPrefixWinsDeterministic`) runs the lookup 100 times with `HEALTH` + `HEALTH_BIOTECH` in the map to prove determinism against Go's randomized map iteration.
+  - Test: `internal/services/valuation/crosscheck_test.go:230+` (`TestLookupMultiple`) covers the shared LookupMultiple.
+- **Verification:** Read both `getMultiple` and `LookupMultiple` implementations, confirmed identical longest-prefix pattern, and inspected the 100-iteration determinism test.
