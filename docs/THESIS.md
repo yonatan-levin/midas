@@ -65,7 +65,7 @@ Quality bar: **fintech-platform-grade accuracy**, not a personal script.
 
 ## Known Follow-Ups (Tracked, Not Blocking)
 
-These are known gaps from Phase 4 review. Scheduled for post-MVP cleanup.
+Pre-MVP phase-4 review items:
 
 | ID | Severity | Description |
 |----|----------|-------------|
@@ -74,6 +74,13 @@ These are known gaps from Phase 4 review. Scheduled for post-MVP cleanup.
 | W-4 | Warning | `models/` package coverage at 79.9% (target: 90%) |
 | S-1 | Structural | Config file paths are relative to working directory (fragile in Docker) |
 | S-4 | Structural | Model constructors perform I/O (`os.ReadFile`) |
+
+Observability-upgrade review/QA items (filed 2026-04-23):
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| M-1 (a–f) | Minor | Calc-trace field-completeness: growth/model_selection miss `ticker`; classifier returns single code instead of sector split; `dcf.Result` doesn't expose `ExitMultipleTV`; NewLogger file sink should probe-and-warn on unwritable path; requestID injection test doesn't cover NUL/tab/space |
+| PREX-1 | Major | **Pre-existing bug (not introduced by observability upgrade)** — `internal/services/metrics/service.go:107` uses `promauto.Factory{}` zero value when no custom registry is provided; custom metrics are never registered with `prometheus.DefaultGatherer`, so `/metrics` shows only Go runtime metrics in production. Fix: `factory = promauto.With(prometheus.DefaultRegisterer)`. |
 
 **Full tracking:** `docs/reviewer/`
 

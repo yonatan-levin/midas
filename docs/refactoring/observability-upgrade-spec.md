@@ -2,7 +2,7 @@
 
 **Version:** 1.1
 **Date:** 2026-04-23 (v1.0 drafted 2026-04-22; v1.1 refinements R1/R2/R3 applied during execution kickoff)
-**Status:** ALL PHASES COMPLETE (2026-04-23). Observability upgrade landed end-to-end on branch `feat/observability` (worktree `.worktrees/feat-observability`) across 19 commits. Final review + integration via `superpowers:finishing-a-development-branch` is the only remaining step. Three noted field-completeness follow-ups tracked in `docs/reviewer/M1`.
+**Status:** ALL PHASES COMPLETE (2026-04-23). Observability upgrade landed end-to-end on branch `feat/observability` (worktree `.worktrees/feat-observability`). Final integration review + QA validation (A1–A7) passed. Ready to merge into `master`.
 
 **Phase commit index:**
 
@@ -12,9 +12,21 @@
 | R — Request correlation | `4819628` | `50fb241`, `f9f5634` | `b468d9b` |
 | S — Service-layer migration | `30425e7` | `7128c13` | `060ff6a` |
 | M — Calc tracing (12 stages) | `2f95d12` | `2da7d7b`, `52ad5ef` | `7b7625e` |
-| U — Docker/launch cleanup | `b729315` | — | (this commit) |
+| U — Docker/launch cleanup | `b729315` | — | `8416f9d` |
+
+Post-phase-U clean-up commits on the branch:
+
+| Commit | Purpose |
+|--------|---------|
+| `91ca728` | Final integration-review I-1 + I-2 fixes (router.go logctx migration, equity_bridge hardcoded-zero cleanup, lint whitelist trim) |
+| `5cc2f5c` | File QA-discovered follow-ups as docs/reviewer entries (PREX-1, M-1e, M-1f) |
 
 The branch also includes `c2de2ba` (foundation spec + worktree gitignore).
+
+**Follow-ups filed during this work (not blocking merge):**
+
+- `docs/reviewer/M1-growth-and-model-selection-traces-missing-ticker.md` — M-1a through M-1f. Calc-trace field-completeness items (growth + model_selection miss `ticker`; industry_classification could surface a richer sector split; terminal_value can't emit raw `exit_multiple_tv` without extending `dcf.Result`; NewLogger file sink should probe-and-warn on unwritable path; requestIDMiddleware injection test could exercise control chars).
+- `docs/reviewer/PREX1-custom-prometheus-metrics-never-registered.md` — **Pre-existing bug** (confirmed zero diff in `internal/services/metrics/` against master) discovered during QA validation. The `/metrics` endpoint shows only Go runtime metrics because `promauto.Factory{}` zero value has a nil registerer. Filed separately because it predates this branch.
 **Scope:** Make every HTTP request's full execution flow reconstructible from logs. Persist logs locally for development, rely on container log drivers in staging / production. Add calculation-level tracing so each DCF valuation's math can be inspected end-to-end.
 
 ---
