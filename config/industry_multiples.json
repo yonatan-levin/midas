@@ -3,12 +3,12 @@
   "description": "Industry-specific valuation multiples for alternative models (DDM, FFO, Revenue Multiple) and exit-multiple terminal value cross-check. Values represent sector median multiples derived from market data.",
   "reit_pffo_multiples": {
     "default": 15.0,
-    "residential": 18.0,
-    "industrial": 22.0,
-    "office": 12.0,
-    "retail_reit": 13.0,
-    "healthcare_reit": 14.0,
-    "data_center": 25.0
+    "RESIDENTIAL": 18.0,
+    "INDUSTRIAL": 22.0,
+    "OFFICE": 12.0,
+    "RETAIL_REIT": 13.0,
+    "HEALTHCARE_REIT": 14.0,
+    "DATA_CENTER": 25.0
   },
   "ev_revenue_multiples": {
     "default": 2.0,
@@ -63,12 +63,12 @@
   },
   "reit_cap_rates": {
     "default": 0.06,
-    "residential": 0.05,
-    "industrial": 0.055,
-    "office": 0.07,
-    "retail_reit": 0.065,
-    "healthcare_reit": 0.06,
-    "data_center": 0.045
+    "RESIDENTIAL": 0.05,
+    "INDUSTRIAL": 0.055,
+    "OFFICE": 0.07,
+    "RETAIL_REIT": 0.065,
+    "HEALTHCARE_REIT": 0.06,
+    "DATA_CENTER": 0.045
   },
   "sector_median_pfcf": {
     "default": 22.0,

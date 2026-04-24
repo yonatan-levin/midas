@@ -192,7 +192,7 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 			ratio := valuePerShare / navPerShare
 			if ratio > thresholds.DeviationHigh || ratio < thresholds.DeviationLow {
 				warnings = append(warnings,
-					fmt.Sprintf("P/FFO value ($%.2f) diverges from NAV cross-check ($%.2f/share, cap rate %.1f%%); ratio=%.2fx",
+					fmt.Sprintf("P/FFO value ($%.4g) diverges from NAV cross-check ($%.4g/share, cap rate %.1f%%); ratio=%.2fx",
 						valuePerShare, navPerShare, m.navCapRate*100, ratio))
 			}
 		}

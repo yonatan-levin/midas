@@ -18,12 +18,6 @@ const DeviationThresholdHigh = thresholds.DeviationHigh
 // DeviationThresholdLow re-exports thresholds.DeviationLow (see above).
 const DeviationThresholdLow = thresholds.DeviationLow
 
-// Unexported aliases preserved for backward compatibility within the package.
-const (
-	deviationThresholdHigh = thresholds.DeviationHigh
-	deviationThresholdLow  = thresholds.DeviationLow
-)
-
 // FlagDivergence returns a formatted flag string when the implied multiple
 // deviates from the sector median by more than 2x or less than 0.5x.
 // Returns ("", false) when the inputs are insufficient or the ratio is within bounds.
@@ -159,13 +153,4 @@ func LookupMultiple(multiples map[string]float64, industry string) float64 {
 	}
 
 	return 0
-}
-
-// isDeviationReasonable checks if the ratio between implied and median is within bounds.
-func isDeviationReasonable(implied, median float64) bool {
-	if median <= 0 || implied <= 0 {
-		return true
-	}
-	ratio := implied / median
-	return ratio >= deviationThresholdLow && ratio <= deviationThresholdHigh
 }

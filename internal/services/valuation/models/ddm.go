@@ -100,9 +100,15 @@ func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 
 	warnings := []string{}
 
+	// Compute ROE once — reused by the ROE sanity check and the P/BV cross-check (V4.1-N7).
+	hasROE := latest.StockholdersEquity > 0 && latest.NetIncome > 0
+	var roe float64
+	if hasROE {
+		roe = latest.NetIncome / latest.StockholdersEquity
+	}
+
 	// Validate ROE reasonableness for financials
-	if latest.StockholdersEquity > 0 && latest.NetIncome > 0 {
-		roe := latest.NetIncome / latest.StockholdersEquity
+	if hasROE {
 		if roe < 0.05 {
 			warnings = append(warnings, fmt.Sprintf("Low ROE (%.1f%%) may indicate stressed financials", roe*100))
 		}
@@ -125,32 +131,41 @@ func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 	// P/BV cross-check: implied P/BV (DDM value / book value per share) vs
 	// ROE-justified P/BV (= (ROE - g) / (CoE - g)). Flags >2x or <0.5x divergence
 	// as a signal that the DDM value may be inconsistent with fundamentals.
-	if latest.StockholdersEquity > 0 && input.SharesOutstanding > 0 && latest.NetIncome > 0 {
-		bookValuePerShare := latest.StockholdersEquity / input.SharesOutstanding
-		if bookValuePerShare > 0 {
-			impliedPBV := valuePerShare / bookValuePerShare
-			roe := latest.NetIncome / latest.StockholdersEquity
-
-			coeMinusG := costOfEquity - dividendGrowth
-			roeMinusG := roe - dividendGrowth
-			if coeMinusG > ddmDenominatorEpsilon && roeMinusG > 0 {
-				roeJustifiedPBV := roeMinusG / coeMinusG
-				if roeJustifiedPBV > 0 && impliedPBV > 0 {
-					ratio := impliedPBV / roeJustifiedPBV
-					if ratio > thresholds.DeviationHigh || ratio < thresholds.DeviationLow {
-						warnings = append(warnings,
-							fmt.Sprintf("Implied P/BV (%.2fx) diverges from ROE-justified P/BV (%.2fx); ratio=%.2fx",
-								impliedPBV, roeJustifiedPBV, ratio))
-					}
-				}
-				logctx.Or(ctx, m.logger).Debug("P/BV cross-check",
-					zap.Float64("implied_pbv", impliedPBV),
-					zap.Float64("book_value_per_share", bookValuePerShare),
-					zap.Float64("roe", roe),
-					zap.Float64("dividend_growth", dividendGrowth))
-			}
+	// Flattened with early-return guards (V4.1-N4).
+	pbvCheck := func() {
+		if !hasROE || input.SharesOutstanding <= 0 {
+			return
 		}
+		bookValuePerShare := latest.StockholdersEquity / input.SharesOutstanding
+		if bookValuePerShare <= 0 {
+			return
+		}
+		impliedPBV := valuePerShare / bookValuePerShare
+		coeMinusG := costOfEquity - dividendGrowth
+		if coeMinusG <= ddmDenominatorEpsilon {
+			return
+		}
+		roeMinusG := roe - dividendGrowth
+		if roeMinusG <= 0 {
+			return
+		}
+		roeJustifiedPBV := roeMinusG / coeMinusG
+		if roeJustifiedPBV <= 0 || impliedPBV <= 0 {
+			return
+		}
+		ratio := impliedPBV / roeJustifiedPBV
+		if ratio > thresholds.DeviationHigh || ratio < thresholds.DeviationLow {
+			warnings = append(warnings,
+				fmt.Sprintf("Implied P/BV (%.2fx) diverges from ROE-justified P/BV (%.2fx); ratio=%.2fx",
+					impliedPBV, roeJustifiedPBV, ratio))
+		}
+		logctx.Or(ctx, m.logger).Debug("P/BV cross-check",
+			zap.Float64("implied_pbv", impliedPBV),
+			zap.Float64("book_value_per_share", bookValuePerShare),
+			zap.Float64("roe", roe),
+			zap.Float64("dividend_growth", dividendGrowth))
 	}
+	pbvCheck()
 
 	confidence := "medium"
 	if len(warnings) == 0 && dividendGrowth > 0 {

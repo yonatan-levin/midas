@@ -258,26 +258,5 @@ func TestLookupMultiple(t *testing.T) {
 	}
 }
 
-func TestIsDeviationReasonable(t *testing.T) {
-	tests := []struct {
-		name     string
-		implied  float64
-		median   float64
-		expected bool
-	}{
-		{name: "Ratio 1.0 is reasonable", implied: 20.0, median: 20.0, expected: true},
-		{name: "Ratio 0.5 (boundary) is reasonable", implied: 10.0, median: 20.0, expected: true},
-		{name: "Ratio 2.0 (boundary) is reasonable", implied: 40.0, median: 20.0, expected: true},
-		{name: "Ratio 2.1 is unreasonable", implied: 42.0, median: 20.0, expected: false},
-		{name: "Ratio 0.4 is unreasonable", implied: 8.0, median: 20.0, expected: false},
-		{name: "Zero median is always reasonable", implied: 20.0, median: 0.0, expected: true},
-		{name: "Zero implied is always reasonable", implied: 0.0, median: 20.0, expected: true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := isDeviationReasonable(tt.implied, tt.median)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
+// TestIsDeviationReasonable was removed with the isDeviationReasonable helper
+// (V4.1-N5). The same semantics are exercised through FlagDivergence tests.

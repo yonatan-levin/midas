@@ -73,14 +73,14 @@ type ValuationResult struct {
 // SanityCheck contains cross-check multiples that compare the DCF-implied valuation
 // against sector median multiples. Flags divergences > 2x or < 0.5x sector median.
 type SanityCheck struct {
-	ImpliedPE            float64  `json:"implied_pe"`              // DCF value / EPS
-	SectorMedianPE       float64  `json:"sector_median_pe"`        // Sector median P/E ratio
-	ImpliedEVEBITDA      float64  `json:"implied_ev_ebitda"`       // DCF enterprise value / EBITDA
-	SectorMedianEVEBITDA float64  `json:"sector_median_ev_ebitda"` // Sector median EV/EBITDA
-	ImpliedPFCF          float64  `json:"implied_pfcf"`            // DCF value per share / FCF per share
-	SectorMedianPFCF     float64  `json:"sector_median_pfcf"`      // Sector median P/FCF ratio
-	IsReasonable         bool     `json:"is_reasonable"`           // True if implied multiples are within 0.5x-2x of sector medians
-	Flags                []string `json:"flags,omitempty"`         // Specific warnings about divergences
+	ImpliedPE            float64  `json:"implied_pe"`                   // DCF value / EPS
+	SectorMedianPE       float64  `json:"sector_median_pe"`             // Sector median P/E ratio
+	ImpliedEVEBITDA      float64  `json:"implied_ev_ebitda"`            // DCF enterprise value / EBITDA
+	SectorMedianEVEBITDA float64  `json:"sector_median_ev_ebitda"`      // Sector median EV/EBITDA
+	ImpliedPFCF          float64  `json:"implied_pfcf,omitempty"`       // DCF value per share / FCF per share (omitted when zero FCF)
+	SectorMedianPFCF     float64  `json:"sector_median_pfcf,omitempty"` // Sector median P/FCF ratio (omitted when unknown)
+	IsReasonable         bool     `json:"is_reasonable"`                // True if implied multiples are within 0.5x-2x of sector medians
+	Flags                []string `json:"flags,omitempty"`              // Specific warnings about divergences
 }
 
 // DCFProjection represents the detailed cash flow projections

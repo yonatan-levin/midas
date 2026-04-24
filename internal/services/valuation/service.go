@@ -859,7 +859,10 @@ func (s *Service) performValuation(
 		ebitda := latestFinancialData.OperatingIncome + latestFinancialData.DepreciationAndAmortization
 
 		// Calculate FCF per share for P/FCF cross-check.
-		// FCF = NetIncome + D&A - CapEx (simplified owner earnings approach).
+		// Simplified FCF = NetIncome + D&A - CapEx. This intentionally omits
+		// NWC change and uses NetIncome rather than NOPAT (the DCF engine's
+		// "true FCF" definition), so ImpliedPFCF is a sanity-check proxy,
+		// not the same FCF number driving the DCF itself.
 		fcfPerShare := 0.0
 		fcf := latestFinancialData.NetIncome + latestFinancialData.DepreciationAndAmortization - latestFinancialData.CapitalExpenditures
 		if fcf > 0 && sharesOutstanding > 0 {
