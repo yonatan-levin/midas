@@ -36,6 +36,88 @@ func NewFairValueHandler(valuationService ValuationCalculator, logger *zap.Logge
 	}
 }
 
+// Industry exposes both industry classifications the engine computes on every
+// fair-value request: the SIC-derived label (canonical, used for valuation
+// model selection) and the balance-sheet heuristic label (used by the
+// datacleaner's industry-specific rule loader). Consumers can compare the two
+// via the Match flag to surface classification drift.
+// @Description Dual industry classification (SIC + heuristic) with a Match flag
+type Industry struct {
+	SICCode       string `json:"sic_code,omitempty" example:"3674"`                         // Raw SIC code from SEC (may be empty if SEC data lacked it)
+	SIC           string `json:"sic,omitempty" example:"MFG"`                               // SIC-derived industry label from IndustryClassifier.Classify
+	HeuristicCode string `json:"heuristic_code,omitempty" example:"45"`                     // GICS sector code from IndustryClassifier.ClassifyIndustry
+	HeuristicName string `json:"heuristic_name,omitempty" example:"Information Technology"` // GICS sector name
+	Match         bool   `json:"match" example:"true"`                                      // true when SIC and heuristic agree per the canonical mapping
+}
+
+// sicToGICS is the canonical mapping from SIC-classifier labels (as emitted by
+// IndustryClassifier.Classify per config/datacleaner/industry_codes.json) to
+// the set of GICS sector codes considered a "match". Keys here MUST correspond
+// to the `code` fields in industry_codes.json — any divergence silently
+// demotes every ticker in that sector to Match=false. The MFG -> {"20", "45"}
+// multi-map is deliberate: semiconductors/hardware return SIC "MFG"
+// (manufacturing) but GICS "45" (Information Technology), and that pairing is
+// a legitimate match rather than classifier drift. Same rationale for
+// RETAIL -> {"25", "30"} (grocery retailers) and CONS -> {"30", "25"}.
+// Any combination outside this table — or a missing value on either side —
+// yields Match=false (conservative, preferring false negatives over false
+// positives as drift signals).
+var sicToGICS = map[string]map[string]bool{
+	"TECH":    {"45": true},             // Information Technology
+	"MFG":     {"20": true, "45": true}, // Industrials OR Info Tech (semi/hardware mfrs)
+	"RETAIL":  {"25": true, "30": true}, // Consumer Discretionary OR Consumer Staples (grocery)
+	"UTIL":    {"55": true},             // Utilities
+	"FIN":     {"40": true},             // Financials (B-1 fix: was incorrectly "FINL")
+	"HEALTH":  {"35": true},             // Health Care
+	"ENERGY":  {"10": true},             // Energy
+	"RESTATE": {"60": true},             // Real Estate
+	"TELECOM": {"50": true},             // Communication Services
+	"TRANS":   {"20": true},             // Industrials (transportation)
+	"CONS":    {"30": true, "25": true}, // Consumer Staples primary, Discretionary secondary
+}
+
+// matchSICToGICS returns true when the SIC-derived label and the heuristic
+// GICS code agree per the sicToGICS table. Empty inputs are never a match.
+// Sub-industry refinements (TECH_SAAS, HEALTH_BIOTECH, FIN_IB, …) produced by
+// classifier Pass 2 are normalized to their parent prefix before lookup, so
+// "TECH_SAAS" vs "45" matches just like "TECH" vs "45" would.
+func matchSICToGICS(sicLabel, gicsCode string) bool {
+	if sicLabel == "" || gicsCode == "" {
+		return false
+	}
+	// Sub-industries (TECH_SAAS, HEALTH_BIOTECH, …) are equivalent to their
+	// parent for match purposes. Take the parent prefix before lookup.
+	if i := strings.IndexByte(sicLabel, '_'); i >= 0 {
+		sicLabel = sicLabel[:i]
+	}
+	allowed, ok := sicToGICS[sicLabel]
+	if !ok {
+		return false
+	}
+	return allowed[gicsCode]
+}
+
+// buildIndustryFromResult constructs the Industry response object from the
+// classification fields plumbed onto ValuationResult. Returns nil when the
+// engine produced no classification signal at all, so the response's
+// omitempty-tagged Industry field disappears entirely.
+func buildIndustryFromResult(result *entities.ValuationResult) *Industry {
+	if result == nil {
+		return nil
+	}
+	if result.SICCodeRaw == "" && result.IndustrySIC == "" &&
+		result.IndustryHeuristicCode == "" && result.IndustryHeuristicName == "" {
+		return nil
+	}
+	return &Industry{
+		SICCode:       result.SICCodeRaw,
+		SIC:           result.IndustrySIC,
+		HeuristicCode: result.IndustryHeuristicCode,
+		HeuristicName: result.IndustryHeuristicName,
+		Match:         matchSICToGICS(result.IndustrySIC, result.IndustryHeuristicCode),
+	}
+}
+
 // FairValueResponse represents the response structure for fair value requests
 // @Description Fair value calculation response with intrinsic valuation metrics
 type FairValueResponse struct {
@@ -54,6 +136,7 @@ type FairValueResponse struct {
 	CalculationVersion    string                `json:"calculation_version,omitempty" example:"4.0"`            // Engine version that produced this result
 	Warnings              []string              `json:"warnings,omitempty"`                                     // Data quality or assumption warnings
 	SanityCheck           *entities.SanityCheck `json:"sanity_check,omitempty"`                                 // Multiples cross-check against sector medians
+	Industry              *Industry             `json:"industry,omitempty"`                                     // Dual industry classification (SIC + heuristic) for drift detection
 }
 
 // BulkFairValueRequest represents the request structure for bulk fair value requests
@@ -214,6 +297,7 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		CalculationVersion:    result.CalculationVersion,
 		Warnings:              result.Warnings,
 		SanityCheck:           result.SanityCheck,
+		Industry:              buildIndustryFromResult(result),
 	}
 
 	h.logger.Info("Fair value calculation completed",
@@ -331,6 +415,7 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 			CalculationVersion:    result.CalculationVersion,
 			Warnings:              result.Warnings,
 			SanityCheck:           result.SanityCheck,
+			Industry:              buildIndustryFromResult(result),
 		}
 
 		results = append(results, response)

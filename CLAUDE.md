@@ -166,12 +166,18 @@ data/                   # SQLite database files (gitignored)
 | `internal/services/growth/estimator.go` | Multi-stage growth estimation with analyst/historical blending |
 | `internal/services/datafetcher/coordinator.go` | Multi-source data fetching |
 | `internal/services/datacleaner/service.go` | Financial data normalization |
+| `internal/services/datacleaner/industry/classifier.go` | Dual classifier: SIC-based `Classify` (model router) + balance-sheet `ClassifyIndustry` (cleaning rules) |
+| `internal/services/datacleaner/industry/classifier_regressions_test.go` | AMD retail-misclassification regression pins (semi basket + sentinel branches) |
+| `internal/api/v1/handlers/fair_value.go` | Fair-value handler; owns `FairValueResponse`, `Industry` struct, and the canonical SIC→GICS mapping |
 | `internal/infra/gateways/market/yfinance_auth.go` | Yahoo Finance cookie+crumb auth manager |
 | `internal/infra/database/schema.sql` | Database schema |
 | `config/country_risk.json` | Damodaran country risk premiums (30+ countries) |
 | `config/industry_multiples.json` | Sector median P/E, EV/EBITDA, EV/Revenue, P/FFO multiples |
+| `config/datacleaner/industry_codes.json` | SIC/NAICS/keyword → industry-label mappings; source of truth for what `Classify` emits |
 | `docs/openapi.yaml` | OpenAPI 3.0 specification |
 | `docs/refactoring/valuation-engine-upgrade-spec.md` | Full upgrade spec: multi-stage growth, industry models, international |
+| `docs/refactoring/industry-classification-unification-spec.md` | Planned SIC-only classification refactor (heuristic retirement) |
+| `docs/superpowers/specs/2026-04-23-industry-in-response-design.md` | Design spec for the `industry` response field (dual SIC + heuristic with Match flag) |
 | `docs/reviewer/` | Tracked follow-up items from code review (D1, D2, B2, W1-W5, S1-S5) |
 | `config.env.example` | Environment variable template |
 
@@ -193,3 +199,5 @@ data/                   # SQLite database files (gitignored)
 - Tickers whose SEC response has no usable US-GAAP XBRL (foreign private issuers filing 20-F, some pre-revenue issuers) return `HTTP 422 INSUFFICIENT_DATA`, not `404 TICKER_NOT_FOUND`. Both `sec/client.go` (HTTP 404) and `sec/parser.go` (empty US-GAAP) wrap `ports.ErrCompanyFactsNotFound`; the valuation service classifies via `hasCompanyFactsNotFoundError`
 - SQLite driver is `github.com/mattn/go-sqlite3` (requires CGO)
 - The `config.env.example` file is blocked by a pre-read hook; get config info from `internal/config/config.go` defaults instead
+- **Two parallel industry classifiers today** — `Classify(sic, …)` drives the valuation model router and is the canonical label; `ClassifyIndustry(ticker, data)` is a balance-sheet heuristic that drives industry-specific datacleaner rules. They can disagree on the same ticker. The `FairValueResponse.Industry` field surfaces both plus a `match` flag. Do NOT refactor `getIndustryCode` in `datacleaner/service.go` to prefer SIC — that's tracked as the unification refactor in `docs/refactoring/industry-classification-unification-spec.md` and is out of scope for incidental changes
+- **`sicToGICS` map in `fair_value.go` keys MUST match `config/datacleaner/industry_codes.json`** `code` fields one-to-one. The classifier emits labels like `FIN` (not `FINL`), plus sub-industry codes `TECH_SAAS`, `HEALTH_BIOTECH`, etc. A mismatch silently demotes entire sectors to `match: false`. Add new top-level labels to both the map and `matchSICToGICS`'s normalization logic simultaneously

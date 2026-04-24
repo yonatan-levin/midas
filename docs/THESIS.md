@@ -71,8 +71,11 @@ These are known gaps from Phase 4 review. Scheduled for post-MVP cleanup.
 |----|----------|-------------|
 | S-1 | Structural | Config file paths are relative to working directory (fragile in Docker) |
 | S-4 | Structural | Model constructors perform I/O (`os.ReadFile`) |
+| IC-1 | Architectural | SIC-only industry classification unification — retire the balance-sheet `ClassifyIndustry` heuristic in favor of SIC-based `Classify` everywhere. Tracked in `docs/refactoring/industry-classification-unification-spec.md`. |
+| IC-2 | Data | Owned-store retailers (TGT, HD, COST, LOW) misclassified as Industrials by heuristic — `isRetailCompany` rejects tickers with tangibles > 70% and intangibles < 10%. See `docs/FEEDBACK-LOG.md` 2026-04-24. |
+| IC-3 | Data | Some tickers (e.g., AMD) arrive at the heuristic with `ResearchAndDevelopment = 0` despite SEC XBRL having it — `isTechnologyCompany` misses them, fall through to Industrials. XBRL tag extraction investigation required. See `docs/FEEDBACK-LOG.md` 2026-04-24. |
 
-**Full tracking:** `docs/reviewer/`
+**Full tracking:** `docs/reviewer/` for S-*; `docs/FEEDBACK-LOG.md` for IC-*.
 
 W-1, W-2, W-3, W-4, and S-5 were resolved in commit `4d46142`; the corresponding files in `docs/reviewer/` are retained as historical records.
 
@@ -110,3 +113,4 @@ No commitment yet — listed for future prioritization:
 | Date | Change |
 |------|--------|
 | 2026-04-18 | Initial file. Promoted content from `.claude/.../memory/project_upgrade_status.md`, `project_midas_overview.md`, `user_role.md`. |
+| 2026-04-23 | Added IC-1/IC-2/IC-3 follow-ups tracking industry-classification unification and two live-QA data gaps (owned-store retail misclassification, missing R&D for some semiconductor filings). Context: AMD retail-misclassification hotfix + Industry-in-response feature. |

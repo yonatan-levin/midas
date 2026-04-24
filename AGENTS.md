@@ -45,9 +45,11 @@ At the start of any work session, read these files in order. Stop at the first t
 | 12 | `docs/API_DOCUMENTATION.md` | Full API reference, valuation engine internals, config, deployment |
 | 13 | `docs/openapi.yaml` | Machine-readable API contract |
 | 14 | `docs/refactoring/valuation-engine-upgrade-spec.md` | Upgrade spec details |
-| 15 | `docs/reviewer/` | Tracked review follow-ups (S-1, S-4, W-2, W-3, W-4) |
-| 16 | `docs/bugs/` | Bug tracker |
-| 17 | `internal/services/<package>/` | Source code for the task at hand |
+| 15 | `docs/refactoring/industry-classification-unification-spec.md` | Planned SIC-only classification refactor (heuristic retirement) |
+| 16 | `docs/superpowers/specs/` | Per-feature design specs (chronological by date) |
+| 17 | `docs/reviewer/` | Tracked review follow-ups (S-1, S-4, W-2, W-3, W-4) |
+| 18 | `docs/bugs/` | Bug tracker |
+| 19 | `internal/services/<package>/` | Source code for the task at hand |
 
 ---
 
@@ -147,3 +149,4 @@ Cursor auto-discovers rules from `.cursor/rules/` only. Since the canonical loca
 |------|--------|
 | 2026-04-18 | Initial file. Established loading order inspired by OpenClaw's agent context model. |
 | 2026-04-19 | Moved rules from `.cursor/rules/` to `agents/rules/` (tool-neutral). Updated `load-rules.js` hook paths. Tier 3 now references new canonical location. |
+| 2026-04-23 | Added Tier 4 entries for `docs/refactoring/industry-classification-unification-spec.md` and `docs/superpowers/specs/` (per-feature design specs). Reflects the AMD retail-misclassification hotfix + Industry-in-response feature shipped 2026-04-23/24. |

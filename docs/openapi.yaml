@@ -196,6 +196,37 @@ components:
       in: header
       name: X-API-Key
   schemas:
+    Industry:
+      type: object
+      description: |
+        Dual industry classification — both the SIC-derived label (used
+        internally to select the valuation model) and the balance-sheet
+        heuristic label (used by the datacleaner). The `match` flag is true
+        when the two classifiers agree per the canonical SIC -> GICS mapping,
+        and false otherwise. A false match signals potential classifier drift
+        worth investigating; see
+        docs/superpowers/specs/2026-04-23-industry-in-response-design.md.
+      properties:
+        sic_code:
+          type: string
+          description: Raw SIC code from SEC (omitted if unavailable)
+          example: "3674"
+        sic:
+          type: string
+          description: SIC-derived industry label (TECH, MFG, RETAIL, UTIL, FINL, HEALTH, NA)
+          example: "MFG"
+        heuristic_code:
+          type: string
+          description: GICS sector code from the balance-sheet heuristic classifier
+          example: "45"
+        heuristic_name:
+          type: string
+          description: Human-readable GICS sector name
+          example: "Information Technology"
+        match:
+          type: boolean
+          description: True when SIC and heuristic agree per the canonical mapping
+          example: true
     FairValueResponse:
       type: object
       properties:
@@ -221,6 +252,8 @@ components:
           format: float
         data_quality_grade:
           type: string
+        industry:
+          $ref: '#/components/schemas/Industry'
     BulkFairValueRequest:
       type: object
       required: [tickers]

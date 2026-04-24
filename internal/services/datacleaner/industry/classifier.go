@@ -138,6 +138,24 @@ type IndustryCharacteristics struct {
 // Override via dependency injection for testability.
 const DefaultIndustryCodesPath = "./config/datacleaner/industry_codes.json"
 
+// Heuristic classification thresholds shared across the predicate functions in
+// this file. Centralized so tuning stays consistent between the tech detector
+// and the retail-exclusion guards.
+const (
+	// retailRnDCeilingPctRevenue — R&D-to-revenue above this excludes retail.
+	// Retailers do not run R&D labs; anything above 5% signals tech/growth.
+	retailRnDCeilingPctRevenue = 0.05
+
+	// retailSBCCeilingPctRevenue — SBC-to-revenue above this excludes retail.
+	// Retailers pay cash, not equity; anything above 5% signals tech/growth.
+	retailSBCCeilingPctRevenue = 0.05
+
+	// techSBCFloorPctRevenue — SBC-to-revenue above this signals tech.
+	// Kept numerically equal to the retail SBC ceiling so the two heuristics
+	// partition cleanly: if SBC excludes retail, it also qualifies tech.
+	techSBCFloorPctRevenue = 0.05
+)
+
 // NewIndustryClassifier creates a new industry classifier with default configurations
 func NewIndustryClassifier() *IndustryClassifier {
 	classifier := &IndustryClassifier{
@@ -427,14 +445,18 @@ func (ic *IndustryClassifier) ClassifyIndustry(ticker string, data *entities.Fin
 		return nil, fmt.Errorf("financial data is required for industry classification")
 	}
 
-	// Retail sector detection (check before technology to avoid misclassification)
-	if ic.isRetailCompany(data) {
-		return ic.sectorConfigs["25"], nil // Consumer Discretionary sector
-	}
-
-	// Technology sector detection
+	// Technology sector detection runs FIRST.
+	// Ordering matters: tech companies (especially fabless semiconductors with acquired IP)
+	// can legitimately have 10-30% inventory ratios and >10% intangibles, which otherwise
+	// trip the retail heuristic. By checking tech first we ensure R&D/SBC-heavy issuers
+	// are caught before the coarser retail balance-sheet signals are evaluated.
 	if ic.isTechnologyCompany(ticker, data) {
 		return ic.sectorConfigs["45"], nil // Technology sector
+	}
+
+	// Retail sector detection
+	if ic.isRetailCompany(data) {
+		return ic.sectorConfigs["25"], nil // Consumer Discretionary sector
 	}
 
 	// Manufacturing sector detection
@@ -627,7 +649,7 @@ func (ic *IndustryClassifier) isTechnologyCompany(ticker string, data *entities.
 	// High stock-based compensation
 	if data.Revenue > 0 && data.StockBasedCompensation > 0 {
 		stockCompRatio := data.StockBasedCompensation / data.Revenue
-		if stockCompRatio > 0.05 { // >5% stock compensation
+		if stockCompRatio > techSBCFloorPctRevenue {
 			return true
 		}
 	}
@@ -672,8 +694,30 @@ func (ic *IndustryClassifier) isManufacturingCompany(data *entities.FinancialDat
 	return false
 }
 
-// isRetailCompany detects retail companies
+// isRetailCompany detects retail companies.
+//
+// Early-return guards run before any balance-sheet matching so that tech
+// companies with moderate inventory + substantial intangibles (e.g. fabless
+// semiconductors post-acquisition) can never match the retail profile:
+//   - Retailers do not run >5% R&D-to-revenue. Tech does (AMD ~25%).
+//   - Retailers do not have tech-level SBC-to-revenue. Tech does (AMD ~8%).
 func (ic *IndustryClassifier) isRetailCompany(data *entities.FinancialData) bool {
+	// R&D guard: retailers do not run R&D labs — anything above the ceiling
+	// signals tech/growth and excludes retail classification.
+	if data.Revenue > 0 && data.ResearchAndDevelopment > 0 {
+		if data.ResearchAndDevelopment/data.Revenue > retailRnDCeilingPctRevenue {
+			return false
+		}
+	}
+
+	// SBC guard: retailers pay cash, not equity — SBC above the ceiling signals
+	// a tech/growth issuer, never a traditional retailer.
+	if data.Revenue > 0 && data.StockBasedCompensation > 0 {
+		if data.StockBasedCompensation/data.Revenue > retailSBCCeilingPctRevenue {
+			return false
+		}
+	}
+
 	// High inventory turnover characteristics
 	if data.TotalAssets > 0 && data.Inventory > 0 {
 		inventoryRatio := data.Inventory / data.TotalAssets
