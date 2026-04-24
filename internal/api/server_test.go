@@ -520,6 +520,39 @@ func TestServer_requestIDMiddleware(t *testing.T) {
 		assert.Equal(t, 36, len(responseID), "replacement must be a UUID v4")
 	})
 
+	// M-1f: the validator regex ^[A-Za-z0-9_.:-]{1,128}$ structurally blocks
+	// every control character; these subcases pin the NUL, tab, and space
+	// paths so the coverage gap flagged during observability-QA is closed.
+	injectionCases := []struct {
+		name   string
+		header string
+	}{
+		{"rejects NUL byte injection", "foo\x00bar"},
+		{"rejects tab character", "foo\tbar"},
+		{"rejects space character", "foo bar"},
+	}
+	for _, ic := range injectionCases {
+		t.Run(ic.name+" — generates UUID instead", func(t *testing.T) {
+			s := newMinimalServer()
+			s.engine.Use(s.requestIDMiddleware())
+			s.engine.GET("/test", func(c *gin.Context) {
+				reqID, _ := c.Get("request_id")
+				c.String(http.StatusOK, reqID.(string))
+			})
+
+			w := performRequest(s.engine, http.MethodGet, "/test", map[string]string{
+				"X-Request-ID": ic.header,
+			})
+
+			assert.Equal(t, http.StatusOK, w.Code)
+			responseID := w.Header().Get("X-Request-ID")
+			assert.NotEqual(t, ic.header, responseID, "rejected input must be replaced")
+			assert.NotEmpty(t, responseID, "a replacement ID must be generated")
+			assert.Equal(t, 36, len(responseID), "replacement must be a UUID v4")
+			assert.True(t, isValidRequestID(responseID), "replacement must pass validator")
+		})
+	}
+
 	t.Run("context logger carries request_id field after middleware", func(t *testing.T) {
 		// Use an observer-backed logger so we can inspect emitted fields
 		s, logs := newObserverServer(zap.DebugLevel)

@@ -81,6 +81,9 @@ func NewModelRouter(models []ValuationModel, logger *zap.Logger, calcEmitter *ca
 // ctx is used to emit the stage-4 "model_selection" calc trace so it can be
 // correlated with the originating HTTP request via logctx.
 //
+// ticker is emitted on the calc trace so the "model_selection" entry is
+// self-describing (addresses M-1a); callers pass the valuation target's ticker.
+//
 // Selection logic (in priority order):
 //  1. Financial industry (FIN prefix) -> DDM model
 //  2. REIT industry -> FFO model
@@ -88,7 +91,7 @@ func NewModelRouter(models []ValuationModel, logger *zap.Logger, calcEmitter *ca
 //  4. Default -> Multi-stage DCF model
 //
 // If the selected model does not support the industry, falls back to DCF.
-func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financials *entities.FinancialData) ValuationModel {
+func (r *ModelRouter) SelectModel(ctx context.Context, ticker, industry string, financials *entities.FinancialData) ValuationModel {
 	upperIndustry := strings.ToUpper(industry)
 
 	// Rule 1: Financial companies use Dividend Discount Model
@@ -96,7 +99,7 @@ func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financia
 		if model := r.findModel("ddm"); model != nil {
 			logctx.Or(ctx, r.logger).Info("Selected DDM model for financial company",
 				zap.String("industry", industry))
-			r.emitModelSelection(ctx, "ddm", "FIN prefix matched — financial company uses DDM")
+			r.emitModelSelection(ctx, ticker, "ddm", "FIN prefix matched — financial company uses DDM")
 			return model
 		}
 	}
@@ -107,7 +110,7 @@ func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financia
 		if model := r.findModel("ffo"); model != nil {
 			logctx.Or(ctx, r.logger).Info("Selected FFO model for REIT",
 				zap.String("industry", industry))
-			r.emitModelSelection(ctx, "ffo", "REIT or RESTATE matched — REIT uses FFO model")
+			r.emitModelSelection(ctx, ticker, "ffo", "REIT or RESTATE matched — REIT uses FFO model")
 			return model
 		}
 	}
@@ -123,7 +126,7 @@ func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financia
 				logctx.Or(ctx, r.logger).Info("Selected Revenue Multiple model for negative OI company",
 					zap.String("industry", industry),
 					zap.Float64("operating_income", financials.OperatingIncome))
-				r.emitModelSelection(ctx, "revenue_multiple", "negative or zero operating income — revenue multiple model")
+				r.emitModelSelection(ctx, ticker, "revenue_multiple", "negative or zero operating income — revenue multiple model")
 				return model
 			}
 		}
@@ -131,7 +134,7 @@ func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financia
 
 	// Rule 4: Default to multi-stage DCF
 	if model := r.findModel("multi_stage_dcf"); model != nil {
-		r.emitModelSelection(ctx, "dcf", "default — multi-stage DCF for profitable company")
+		r.emitModelSelection(ctx, ticker, "dcf", "default — multi-stage DCF for profitable company")
 		return model
 	}
 
@@ -139,7 +142,7 @@ func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financia
 	if len(r.models) > 0 {
 		logctx.Or(ctx, r.logger).Warn("No DCF model found, using first available model",
 			zap.String("model_type", r.models[0].ModelType()))
-		r.emitModelSelection(ctx, r.models[0].ModelType(), "absolute fallback — no DCF model registered")
+		r.emitModelSelection(ctx, ticker, r.models[0].ModelType(), "absolute fallback — no DCF model registered")
 		return r.models[0]
 	}
 
@@ -148,11 +151,12 @@ func (r *ModelRouter) SelectModel(ctx context.Context, industry string, financia
 
 // emitModelSelection emits stage-4 "model_selection" trace. Centralised helper
 // so each early-return branch above only calls one line.
-func (r *ModelRouter) emitModelSelection(ctx context.Context, modelChosen, reason string) {
+func (r *ModelRouter) emitModelSelection(ctx context.Context, ticker, modelChosen, reason string) {
 	if r.calcEmitter == nil {
 		return
 	}
 	r.calcEmitter.Emit(ctx, "model_selection",
+		zap.String("ticker", ticker),
 		zap.String("model_chosen", modelChosen),
 		zap.String("reason", reason),
 	)

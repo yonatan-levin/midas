@@ -156,7 +156,7 @@ func TestModelRouter_SelectModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			model := router.SelectModel(context.Background(), tt.industry, tt.financials)
+			model := router.SelectModel(context.Background(), "TEST", tt.industry, tt.financials)
 			require.NotNil(t, model, "model should not be nil")
 			assert.Equal(t, tt.expectedModel, model.ModelType())
 		})
@@ -167,7 +167,7 @@ func TestModelRouter_SelectModel(t *testing.T) {
 func TestModelRouter_SelectModel_NoModels(t *testing.T) {
 	router := NewModelRouter([]ValuationModel{}, testLogger(), nil)
 
-	model := router.SelectModel(context.Background(), "TECH", &entities.FinancialData{
+	model := router.SelectModel(context.Background(), "TEST", "TECH", &entities.FinancialData{
 		OperatingIncome: 1000,
 	})
 

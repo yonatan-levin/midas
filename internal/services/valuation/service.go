@@ -440,7 +440,8 @@ func (s *Service) performValuation(
 
 	// Produce multi-stage growth estimate (analyst + historical blend).
 	// ctx is passed through so EstimateGrowthRates can emit stage-5 "growth" trace.
-	growthEstimate := s.growthEstimator.EstimateGrowthRates(ctx, analystData, historicalGrowth, sustainableGrowth)
+	// Ticker is threaded in so the emitted trace carries it self-describingly (M-1a).
+	growthEstimate := s.growthEstimator.EstimateGrowthRates(ctx, historicalData.Ticker, analystData, historicalGrowth, sustainableGrowth)
 
 	// Get the latest financial data for asset calculations
 	latestFinancialData, latestPeriod := historicalData.GetLatestPeriod()
@@ -622,8 +623,9 @@ func (s *Service) performValuation(
 	}
 
 	// Select the appropriate valuation model based on industry and financials.
-	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace.
-	selectedModel := s.modelRouter.SelectModel(ctx, industryCode, latestFinancialData)
+	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace;
+	// ticker is threaded in so that trace entry carries it self-describingly (M-1a).
+	selectedModel := s.modelRouter.SelectModel(ctx, historicalData.Ticker, industryCode, latestFinancialData)
 	var dcfFallbackWarning string
 
 	// If an alternative model (non-DCF) is selected, use it.

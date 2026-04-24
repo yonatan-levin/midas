@@ -2,11 +2,22 @@
 
 This file aggregates three small field-completeness items from Phase M code review that were deferred because the cleanest fix touches out-of-scope code (`pkg/finance/*`) or requires a richer classifier return type.
 
+**Status summary (as of 2026-04-24):**
+
+| Sub-item | Status |
+|----------|--------|
+| M-1a (ticker on growth + model_selection traces) | **RESOLVED** 2026-04-24 |
+| M-1b (richer industry classification trace) | Open — needs classifier v2 refactor |
+| M-1c (raw exit_multiple_tv on terminal_value trace) | Open — needs `pkg/finance/dcf` touch |
+| M-1d (minority_interest + preferred on equity_bridge) | Open — needs entity schema extension |
+| M-1e (NewLogger file-sink probe-and-warn) | Open — resilience improvement |
+| M-1f (control-char injection test subcases) | **RESOLVED** 2026-04-24 |
+
 ---
 
 ## M-1a — `growth` and `model_selection` calc traces miss the `ticker` field
 
-**Status:** Noted during Phase M spec review (2026-04-23); not blocking Phase M completion.
+**Status:** RESOLVED 2026-04-24. `EstimateGrowthRates` and `SelectModel` now take a `ticker string` parameter and emit it on the `growth` / `model_selection` calc traces. Test callers updated to pass `"TEST"`; the live call sites in `valuation/service.go performValuation` pass `historicalData.Ticker`.
 **Severity:** Low (field completeness; correlation already available via `request_id`).
 
 ## Context
@@ -137,6 +148,8 @@ Deferred from the QA validation cycle because it's a resilience improvement, not
 ---
 
 ## M-1f — `requestIDMiddleware` control-character injection test gap
+
+**Status:** RESOLVED 2026-04-24. Three sub-cases added to `TestServer_requestIDMiddleware` (NUL byte, tab, space). The validator regex `^[A-Za-z0-9_.:-]{1,128}$` structurally blocks all three; the new cases pin that guarantee explicitly.
 
 `TestServer_requestIDMiddleware` covers newline (`\n`) and overlength (129 chars) injection cases. It does NOT explicitly exercise `\x00` (NUL), `\x7f` (DEL), `\t` (tab), or space characters. The regex `^[A-Za-z0-9_.:-]{1,128}$` structurally blocks all of them, so this is a test-coverage gap, not a functional bug.
 

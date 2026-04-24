@@ -63,11 +63,15 @@ func (e *Estimator) Config() EstimatorConfig {
 // ctx is used to emit stage-5 "growth" calc trace so it can be correlated with
 // the originating HTTP request via logctx.
 //
+// ticker is emitted on the calc trace so the "growth" entry is self-describing
+// (addresses M-1a); callers pass the valuation target's ticker.
+//
 // analystData may be nil (no analyst coverage).
 // historicalGrowth is from HistoricalFinancialData.CalculateAverageGrowthRate().
 // sustainableGrowth is from CalculateSustainableGrowth (ROIC × reinvestment).
 func (e *Estimator) EstimateGrowthRates(
 	ctx context.Context,
+	ticker string,
 	analystData *ports.YFinanceAnalystEstimates,
 	historicalGrowth *pkggrowth.CalculationResult,
 	sustainableGrowth float64,
@@ -140,6 +144,7 @@ func (e *Estimator) EstimateGrowthRates(
 	// operators can audit how analyst vs. historical data influenced the projection.
 	if e.calcEmitter != nil {
 		e.calcEmitter.Emit(ctx, "growth",
+			zap.String("ticker", ticker),
 			zap.String("source", estimate.Source),
 			zap.Float64s("growth_rates", estimate.ProjectedGrowthRates),
 			zap.Float64("roic_ceiling", sustainableGrowth),

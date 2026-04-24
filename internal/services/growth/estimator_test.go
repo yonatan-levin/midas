@@ -27,7 +27,7 @@ func TestEstimator_NoAnalystData_UsesHistorical(t *testing.T) {
 		IsReliable:  true,
 	}
 
-	result := e.EstimateGrowthRates(context.Background(), nil, historical, 0)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", nil, historical, 0)
 
 	assert.Equal(t, "historical_only", result.Source)
 	assert.Equal(t, 0.12, result.HistoricalCAGR)
@@ -67,7 +67,7 @@ func TestEstimator_HighAnalystCoverage(t *testing.T) {
 		IsReliable:  true,
 	}
 
-	result := e.EstimateGrowthRates(context.Background(), analyst, historical, 0)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", analyst, historical, 0)
 
 	assert.Equal(t, "analyst_blend", result.Source)
 	assert.Equal(t, "high", result.Confidence)
@@ -89,7 +89,7 @@ func TestEstimator_LowAnalystCoverage(t *testing.T) {
 		GrowthRate: 0.10,
 	}
 
-	result := e.EstimateGrowthRates(context.Background(), analyst, historical, 0)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", analyst, historical, 0)
 
 	assert.Equal(t, "low", result.Confidence)
 	// With 2 analysts: 40% analyst (30%) + 60% historical (10%) = 18%
@@ -108,7 +108,7 @@ func TestEstimator_MediumAnalystCoverage(t *testing.T) {
 		GrowthRate: 0.10,
 	}
 
-	result := e.EstimateGrowthRates(context.Background(), analyst, historical, 0)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", analyst, historical, 0)
 
 	assert.Equal(t, "medium", result.Confidence)
 	// With 5 analysts: 60% analyst (20%) + 40% historical (10%) = 16%
@@ -124,7 +124,7 @@ func TestEstimator_ROICSustainabilityCeiling(t *testing.T) {
 	}
 
 	// ROIC-sustainable growth is only 10%
-	result := e.EstimateGrowthRates(context.Background(), nil, historical, 0.10)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", nil, historical, 0.10)
 
 	// Stage 1 rate should be blended down: (30% + 10%) / 2 = 20%
 	assert.InDelta(t, 0.20, result.ProjectedGrowthRates[0], 0.001)
@@ -139,7 +139,7 @@ func TestEstimator_GrowthRateCapping(t *testing.T) {
 		GrowthRate: 0.80, // 80% — exceeds max of 50%
 	}
 
-	result := e.EstimateGrowthRates(context.Background(), nil, historical, 0)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", nil, historical, 0)
 
 	// Should be capped to max 50%
 	assert.InDelta(t, 0.50, result.ProjectedGrowthRates[0], 0.001)
@@ -152,7 +152,7 @@ func TestEstimator_NegativeGrowth(t *testing.T) {
 		GrowthRate: -0.10, // declining company
 	}
 
-	result := e.EstimateGrowthRates(context.Background(), nil, historical, 0)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", nil, historical, 0)
 
 	// Stage 1 uses -10%
 	assert.InDelta(t, -0.10, result.ProjectedGrowthRates[0], 0.001)
@@ -172,7 +172,7 @@ func TestEstimator_DivergenceWarning(t *testing.T) {
 		GrowthRate: 0.05, // 5% historical — 8x divergence
 	}
 
-	result := e.EstimateGrowthRates(context.Background(), analyst, historical, 0)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", analyst, historical, 0)
 
 	// Should have a divergence warning
 	hasWarning := false
@@ -191,7 +191,7 @@ func TestEstimator_ThreeStageDecay(t *testing.T) {
 		GrowthRate: 0.20, // 20% growth
 	}
 
-	result := e.EstimateGrowthRates(context.Background(), nil, historical, 0)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", nil, historical, 0)
 
 	// Verify monotonic decay through stages
 	for i := 1; i < len(result.ProjectedGrowthRates); i++ {
@@ -214,7 +214,7 @@ func TestEstimator_AnalystGrowthFromRevenueEstimates(t *testing.T) {
 		GrowthRate: 0.10,
 	}
 
-	result := e.EstimateGrowthRates(context.Background(), analyst, historical, 0)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", analyst, historical, 0)
 
 	// Analyst growth derived from revenue: (120000-100000)/100000 = 0.20
 	// With 8 analysts: 60% × 20% + 40% × 10% = 16%
@@ -225,7 +225,7 @@ func TestEstimator_AnalystGrowthFromRevenueEstimates(t *testing.T) {
 func TestEstimator_NilHistorical(t *testing.T) {
 	e := newTestEstimator()
 
-	result := e.EstimateGrowthRates(context.Background(), nil, nil, 0)
+	result := e.EstimateGrowthRates(context.Background(), "TEST", nil, nil, 0)
 
 	assert.Equal(t, "historical_only", result.Source)
 	assert.Equal(t, 0.0, result.HistoricalCAGR)
