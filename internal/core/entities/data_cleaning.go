@@ -205,7 +205,8 @@ type CleaningResult struct {
 
 	// Industry analysis
 	IndustryCode     string `json:"industry_code"`
-	IndustrySpecific bool   `json:"industry_specific"` // Whether industry rules were applied
+	SectorName       string `json:"sector_name,omitempty"` // Human-readable GICS sector name resolved from IndustryCode (e.g. "Information Technology")
+	IndustrySpecific bool   `json:"industry_specific"`     // Whether industry rules were applied
 
 	// AI analysis metadata (Phase 3)
 	AIMetadata map[string]string `json:"ai_metadata,omitempty"` // AI service metadata and confidence scores

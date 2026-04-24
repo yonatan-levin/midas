@@ -58,6 +58,16 @@ type ValuationResult struct {
 	// Phase 4: Multiples sanity cross-check comparing DCF-implied multiples
 	// against sector medians. Nil when cross-check data is unavailable.
 	SanityCheck *SanityCheck `json:"sanity_check,omitempty"`
+
+	// Industry classification metadata — both the SIC-derived label (used
+	// internally to select the valuation model) and the balance-sheet
+	// heuristic label (used by the datacleaner's rule loader). Surfacing
+	// both lets API consumers detect classifier drift; see
+	// docs/superpowers/specs/2026-04-23-industry-in-response-design.md.
+	SICCodeRaw            string `json:"sic_code_raw,omitempty"`            // Raw SIC code from SEC (may be empty)
+	IndustrySIC           string `json:"industry_sic,omitempty"`            // Canonical SIC-derived label from IndustryClassifier.Classify: "TECH", "MFG", "RETAIL", "UTIL", "FIN", "HEALTH", "ENERGY", "RESTATE", "TELECOM", "TRANS", "CONS", "NA" (or sub-industries like "TECH_SAAS")
+	IndustryHeuristicCode string `json:"industry_heuristic_code,omitempty"` // GICS sector code from the balance-sheet heuristic (e.g. "45")
+	IndustryHeuristicName string `json:"industry_heuristic_name,omitempty"` // Human-readable GICS sector name (e.g. "Information Technology")
 }
 
 // SanityCheck contains cross-check multiples that compare the DCF-implied valuation

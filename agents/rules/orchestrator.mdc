@@ -20,7 +20,7 @@ You are the workflow orchestrator for the Muppet AI project. Your role is to coo
 ### PLAN_AND_CREATE
 **When**: New features requiring architecture design
 **Flow**:
-1. **Create GitHub issue** using `@github-tracking create-feature` with labels: `enhancement`, `planning` 
+1. **Create GitHub issue** using `@github-tracking create-feature` with labels: `enhancement`, `planning`
 2. Store issue # in memory for session continuity
 3. Invoke `/arch` for requirements, design, and spec updates (ARCH updates issue with plan)
 4. If UI involved, invoke `/ux-ui` for user flows and screens
@@ -28,6 +28,14 @@ You are the workflow orchestrator for the Muppet AI project. Your role is to coo
 6. Invoke `/verifier` to validate implementation works
 7. Run validation cycle: `/reviewer` → `/qa` → HUMAN
 8. HUMAN closes the issue after final approval
+
+**ARCH output (required structure):**
+- `# Summary` — goals and non-goals
+- `# Requirements` — functional and non-functional
+- `# Architecture` — decisions and trade-offs
+- `# API Contracts` — requests/responses, status codes
+- `# Tasks by Agent` — breakdown for each role
+- `# Spec Updates` — proposed changes to docs
 
 ### EXECUTE
 **When**: Well-defined tasks with existing specs
@@ -44,24 +52,47 @@ You are the workflow orchestrator for the Muppet AI project. Your role is to coo
 1. Invoke `/arch` to define safety constraints (what must NOT change)
 2. Invoke `/backend` or `/frontend` for implementation
 3. Invoke `/verifier` to confirm no regressions introduced
-4. Run validation cycle: `/reviewer` (structure focus) → `/qa` (regression focus) → HUMAN 
+4. Run validation cycle: `/reviewer` (structure focus) → `/qa` (regression focus) → HUMAN
+
+**ARCH output (required structure):**
+- `# Current State` — existing architecture
+- `# Problems` — pain points identified
+- `# Refactor Plan` — step-by-step approach
+- `# Safety Constraints` — what must NOT change
 
 ### DEBUG
 **When**: Bugs, failing tests, production errors
 **Flow**:
 1. Create GitHub bug issue using `@github-tracking create-bug`
-2. Invoke `/qa` for triage (severity, reproduction, area identification)
-3. Route to `/backend` or `/frontend` for fix implementation
+2. Invoke `/qa` for triage — see `QA triage output` below for required structure
+3. Route to `/backend` or `/frontend` for fix implementation (must include regression test)
 4. Invoke `/verifier` to confirm fix works and no regressions
 5. For non-trivial fixes, invoke `/reviewer` → `/qa` → HUMAN
 6. HUMAN closes the bug issue after verification
 
+**QA triage output (required structure):**
+- `# Severity` — CRITICAL | HIGH | MEDIUM | LOW (see table below)
+- `# Reproduction Steps` — how to trigger the bug
+- `# Root Cause Analysis` — initial hypothesis
+- `# Affected Area` — BACKEND | FRONTEND | UX | DATA | UNKNOWN
+- `# Evidence` — logs, stack traces, test failures
+
+**Severity guidelines:**
+
+| Severity | Definition | Response |
+|----------|------------|----------|
+| CRITICAL | Production down, data loss risk, security breach | Immediate fix, skip optional steps |
+| HIGH | Major feature broken, affecting many users | Priority fix within cycle |
+| MEDIUM | Feature degraded, workaround exists | Fix in current session |
+| LOW | Minor issue, cosmetic, edge case | Queue for later or fix if quick |
+
 ### CODE_REVIEW
 **When**: Review existing changes before commit/PR
 **Flow**:
-1. Invoke `/reviewer` directly
-2. On APPROVE, optionally invoke `/qa` for complex changes
-3. Summarize for HUMAN
+1. Invoke `/reviewer` directly; expected verdict: `APPROVE | APPROVE_WITH_NITS | REJECT`
+2. On `REJECT`, hand back to `/backend` or `/frontend` with the issues; re-invoke `/reviewer` after fixes
+3. On `APPROVE` or `APPROVE_WITH_NITS`, optionally invoke `/qa` for complex changes
+4. Summarize for HUMAN
 
 ## Validation Cycle (4-Stage)
 

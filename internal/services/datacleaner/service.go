@@ -148,11 +148,22 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 		QualityThreshold: s.config.MinQualityScore,
 	}
 
+	// Resolve the human-readable GICS sector name for the classified industry
+	// code so it flows through to the API response surface. Kept defensive:
+	// absence of a config entry simply leaves the name empty.
+	var sectorName string
+	if cleaningCtx.IndustryCode != "" && s.industryClassifier != nil {
+		if sc, ok := s.industryClassifier.GetSectorConfig(cleaningCtx.IndustryCode); ok && sc != nil {
+			sectorName = sc.SectorName
+		}
+	}
+
 	// Initialize result
 	result := &entities.CleaningResult{
 		Success:          false,
 		Timestamp:        startTime,
 		IndustryCode:     cleaningCtx.IndustryCode,
+		SectorName:       sectorName,
 		IndustrySpecific: false,
 		Adjustments:      make([]entities.Adjustment, 0),
 		Flags:            make([]entities.Flag, 0),

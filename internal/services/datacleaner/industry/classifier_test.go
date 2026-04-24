@@ -101,12 +101,24 @@ func TestIndustryClassifier_ClassifyIndustry_Manufacturing(t *testing.T) {
 func TestIndustryClassifier_ClassifyIndustry_Retail(t *testing.T) {
 	classifier := NewIndustryClassifier()
 
+	// Unambiguous retailer profile (think Target, Macy's):
+	//   - High inventory: 22% of total assets
+	//   - Tangible assets ~65% of total (stores, warehouses, fixtures)
+	//   - Modest intangibles (~5% — brand value only, no acquired IP)
+	//   - Zero R&D: retailers do not run R&D labs
+	//   - Near-zero stock-based comp (< 1% of revenue): retailers pay cash
+	//
+	// This profile must NOT trip the isTechnologyCompany guard (no R&D, no SBC,
+	// intangibles well below the 15% tech threshold) and must match the retail
+	// predicate's inventory + tangibles branch.
 	data := &entities.FinancialData{
-		TotalAssets:      1000000000, // $1B assets
-		TangibleAssets:   600000000,  // $600M tangible (60% - asset-light)
-		IntangibleAssets: 200000000,  // $200M intangibles (20% - brand value)
-		Inventory:        200000000,  // $200M inventory (20%)
-		Revenue:          2000000000, // $2B revenue
+		TotalAssets:            1_000_000_000, // $1B assets
+		Inventory:              220_000_000,   // $220M inventory (22%)
+		TangibleAssets:         650_000_000,   // $650M tangible (65%)
+		IntangibleAssets:       50_000_000,    // $50M intangibles (5% — brand only)
+		Revenue:                2_000_000_000, // $2B revenue
+		ResearchAndDevelopment: 0,             // Retailers don't run R&D
+		StockBasedCompensation: 10_000_000,    // $10M SBC (0.5% of revenue)
 	}
 
 	sectorConfig, err := classifier.ClassifyIndustry("RETAIL", data)

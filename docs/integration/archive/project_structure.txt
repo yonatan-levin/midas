@@ -1,0 +1,170 @@
+MIDAS PROJECT STRUCTURE
+========================
+
+Project: Midas - Financial Technology Platform
+Language: Go (Golang)
+Architecture: Clean Architecture with Dependency Injection
+
+This document outlines the structure of the Midas project, a Go-based financial technology platform. It follows Clean Architecture principles to ensure a separation of concerns, making the system maintainable, scalable, and testable.
+
+ROOT DIRECTORY
+├── Dockerfile                  # Defines the Docker image for the application.
+├── README.md                   # Main project documentation.
+├── docker-compose.yml          # Docker Compose setup for development environments.
+├── docker-compose.prod.yml     # Docker Compose setup for production environments.
+├── go.mod                      # Go module file, defining project dependencies.
+├── go.sum                      # Checksums for Go module dependencies.
+├── go.work                     # Go workspace file for multi-module projects.
+├── go.work.sum                 # Checksums for Go workspace modules.
+├── config.env.example          # Example environment variables file.
+├── .github/                    # CI/CD workflows for GitHub Actions.
+│   └── workflows/
+│       ├── ci.yml              # Main CI pipeline (lint, test, build).
+│       ├── contract-fuzz.yml   # Fuzz testing for API contracts.
+│       ├── e2e-live.yml        # End-to-end tests against live dependencies.
+│       └── performance-testing.yml # Performance testing workflow.
+
+ENTRY POINTS
+├── cmd/                        # Application entry points (main packages).
+│   ├── apply-schema/           # Applies the database schema.
+│   │   └── main.go
+│   ├── hash-key/               # Utility to hash an API key.
+│   │   └── main.go
+│   ├── migrate/                # Runs database migrations.
+│   │   └── main.go
+│   ├── seed-demo-key/          # Seeds a demo API key into the database.
+│   │   └── main.go
+│   └── server/                 # Main application entry point for the API server.
+│       └── main.go
+
+CONFIGURATION
+├── config/                     # Static configuration files.
+│   ├── alerting/               # Configuration for performance and error alerting.
+│   │   ├── alert_rules.yaml
+│   │   └── notification_channels.yaml
+│   ├── datacleaner/            # Rules and schemas for the data cleaning service.
+│   │   ├── industry/           # Industry-specific cleaning rules.
+│   │   ├── flag_conditions.json
+│   │   ├── ...
+│   └── performance/            # Configuration for performance benchmarking.
+│       └── benchmark_config.json
+
+DATA STORAGE
+├── data/                       # Local data storage.
+│   └── midas.db                # SQLite database file for local development.
+└── migrations/                 # Database migration scripts.
+    ├── 0001_seed_demo_key.sql
+    └── 0002_seed_demo_data.sql
+
+DOCUMENTATION
+├── docs/                       # Project documentation.
+│   ├── integration/            # High-level design and integration plans.
+│   │   ├── NEW_INTEGRATION_PLAN.md
+│   │   ├── ...
+│   └── openapi.yaml            # OpenAPI (Swagger) specification for the API.
+
+CORE APPLICATION (CLEAN ARCHITECTURE)
+├── internal/                   # All core application source code.
+│
+│   ├── api/                    # API Layer: Handles HTTP requests and responses.
+│   │   ├── server.go           # Gin server setup, middleware, and route registration.
+│   │   └── v1/                 # Version 1 of the API.
+│   │       └── handlers/       # HTTP handlers for API endpoints.
+│   │           ├── fair_value.go
+│   │           ├── health.go
+│   │           └── ...
+│   │
+│   ├── config/                 # Configuration loading and management (Viper).
+│   │   └── config.go
+│   │
+│   ├── core/                   # Domain Layer: Core business logic, entities, and interfaces.
+│   │   ├── constants/          # Application-wide constants.
+│   │   ├── entities/           # Domain models and business objects (e.g., FinancialData, Valuation).
+│   │   └── ports/              # Interfaces defining contracts for external layers (repositories, gateways).
+│   │
+│   ├── di/                     # Dependency Injection setup (Uber Fx).
+│   │   └── container.go        # Wires together all application components.
+│   │
+│   ├── infra/                  # Infrastructure Layer: Implements interfaces defined in the core layer to interact with external systems like databases, caches, and external APIs.
+│   │   ├── database/           # Database schema.
+│   │   │   └── schema.sql
+│   │   ├── gateways/           # Clients for external APIs (SEC, Market Data, Macro).
+│   │   │   ├── sec/
+│   │   │   └── ...
+│   │   ├── repositories/       # Data access layer implementations.
+│   │   │   ├── cache/          # Caching implementations (Redis, in-memory).
+│   │   │   └── sqlite/         # SQLite repository implementations.
+│   │   └── resilience/         # Resilience patterns (e.g., Circuit Breaker, Retry).
+│   │
+│   ├── integration/            # Integration tests for the application.
+│   │   ├── api_routes_test.go  # Tests API routes and middleware.
+│   │   ├── datacleaner_ai_test.go # E2E tests for the data cleaner with AI.
+│   │   └── service_test.go     # Tests interactions between different services.
+│   │
+│   └── services/               # Application Layer: Implements use cases by orchestrating domain logic.
+│       ├── alerting/           # Service for performance and error alerting.
+│       ├── auth/               # Authentication and authorization service.
+│       ├── datacleaner/        # Service for cleaning and normalizing financial data.
+│       ├── datafetcher/        # Service for fetching data from external sources.
+│       ├── metrics/            # Service for collecting and exposing application metrics.
+│       ├── ratelimit/          # Service for API rate limiting.
+│       ├── scheduler/          # Service for scheduling background jobs.
+│       ├── valuation/          # Core valuation service (DCF, etc.).
+│       └── watchlist/          # Service for managing user watchlists.
+│
+SHARED PACKAGES
+├── pkg/                        # Reusable packages with no dependency on the internal application code.
+│   └── finance/                # Pure financial calculation libraries.
+│       ├── dcf/                # Discounted Cash Flow calculations.
+│       ├── growth/             # Growth rate calculations.
+│       ├── leases/             # Lease liability estimations.
+│       └── wacc/               # Weighted Average Cost of Capital calculations.
+│
+PERFORMANCE & TESTING
+├── performance/                # Performance testing results and baselines.
+│   ├── baselines/
+│   └── results/
+├── scripts/                    # Utility and helper scripts for development.
+│   ├── benchmark_runner.go     # Runs performance benchmarks.
+│   ├── load_tester.go          # K6 load testing script entrypoint.
+│   └── ...
+└── testdata/                   # Test data used in unit and integration tests.
+    └── CIK-example-2016onwards.json
+
+ARCHITECTURE SUMMARY
+====================
+
+This Go-based financial technology platform follows Clean Architecture principles:
+
+1.  **Domain Layer** (internal/core/): Contains business entities and interfaces, independent of other layers.
+2.  **Application Layer** (internal/services/): Implements use cases and business logic, orchestrating domain objects.
+3.  **Infrastructure Layer** (internal/infra/): Implements interfaces defined in the core layer to interact with external systems like databases, caches, and external APIs.
+4.  **API Layer** (internal/api/): Exposes the application's functionality via a RESTful API.
+5.  **Dependency Injection** (internal/di/): Wires all components together, promoting loose coupling and testability.
+
+KEY FEATURES:
+- Financial data processing and cleaning with an extensible rule engine and AI integration.
+- Core financial valuation models (DCF, WACC, Growth).
+- Integration with external data sources (SEC EDGAR, Market Data APIs).
+- Caching (Redis) and resilience patterns (Circuit Breaker, Retry).
+- Comprehensive testing suite including unit, integration, performance, and fuzz tests.
+- CI/CD pipelines for automated testing and deployment.
+- Background job scheduling for data fetching.
+
+The project is actively developed, with a clear separation of concerns that supports maintainability and future expansion.
+
+---
+
+## Archived (verified 2026-04-23)
+
+**Classification:** STALE SNAPSHOT
+
+**Reason:** This is a point-in-time `tree`-style dump from Sept 2025. Drift since: it does not reference services added later (`growth/`, `alerting/`, `watchlist/`, `valuation/models/`, `valuation/adr.go`, `valuation/crosscheck.go`) nor `pkg/finance/growth/`, nor the `docs/refactoring/`, `docs/reviewer/`, `docs/bugs/` subdirectories that were introduced during the Phase 0-4 upgrade. The authoritative architecture summary now lives inline in `CLAUDE.md` and is refreshed as the tree changes.
+
+**Superseded by:** `CLAUDE.md` "Architecture" section (directory tree + conventions) and `docs/THESIS.md` (product direction). Neither requires manual regeneration.
+
+**Evidence inspected:**
+- `internal/services/growth/`, `internal/services/alerting/`, `internal/services/watchlist/` exist in repo but not in this doc.
+- `internal/services/valuation/models/` exists but not listed.
+- `pkg/finance/growth/` exists but not listed.
+- `CLAUDE.md` has the current, authoritative layout.

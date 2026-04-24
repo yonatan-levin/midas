@@ -184,6 +184,8 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 			return nil, fmt.Errorf("failed to fetch data via DataFetcher: %w", fetchErr)
 		}
 
+		fmt.Println("fetchResult for ticker", ticker, fetchResult)
+
 		// Use multi-period historical data if available (from full SEC parser)
 		if fetchResult.HistoricalData != nil && len(fetchResult.HistoricalData.Data) > 0 {
 			historicalData = fetchResult.HistoricalData
@@ -349,6 +351,11 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 		result.CleaningFlags = cleaningResult.Flags
 		result.CleaningAdjustments = cleaningResult.Adjustments
 		// Note: CleaningReport would need the full report structure to be implemented
+
+		// W-1: heuristic GICS classification is now populated inside
+		// performValuation via ClassifyIndustry (guaranteed-GICS output),
+		// independent of cleaningResult.IndustryCode which may be any upstream
+		// string. See docs/superpowers/specs/2026-04-23-industry-in-response-design.md.
 	}
 
 	// Only cache default (no-override) results to avoid cache poisoning
@@ -536,8 +543,12 @@ func (s *Service) performValuation(
 
 	// --- Phase 3: Industry-aware model selection ---
 	// Classify industry using IndustryClassifier (SIC/NAICS/keyword matching).
-	// The IndustryCode on the financial data may already be populated from upstream.
+	// The IndustryCode on the financial data may already be populated from
+	// upstream; only invoke the classifier when it hasn't been, to avoid the
+	// per-request CPU cost on the hot path (B-2: restores pre-feature gate).
 	industryCode := latestFinancialData.IndustryCode
+	var sicLabel string
+
 	if industryCode == "" && s.industryClassifier != nil {
 		// Use SIC code and company name from SEC data for classification.
 		// Falls back to ticker if company name unavailable.
@@ -550,9 +561,35 @@ func (s *Service) performValuation(
 		if classifyErr == nil && classified != "" && classified != "NA" {
 			industryCode = classified
 		}
-		s.log(ctx).Debug("Industry classification result",
-			zap.String("ticker", historicalData.Ticker),
-			zap.String("industry_code", industryCode))
+	}
+
+	// sicLabel reflects whatever value the router actually uses, so the API
+	// response surface and the model-router are consistent. If upstream
+	// pre-populated industryCode, we report that; if we classified just now,
+	// we report the classifier output. Empty string (and "NA") flow through
+	// and simply produce an omitempty-dropped field in the response.
+	// See docs/superpowers/specs/2026-04-23-industry-in-response-design.md.
+	sicLabel = industryCode
+
+	// Request-correlated Debug log (uses logctx.Or so request_id flows through when
+	// the call path is HTTP; falls back to singleton on scheduler/startup paths).
+	s.log(ctx).Debug("Industry classification result",
+		zap.String("ticker", historicalData.Ticker),
+		zap.String("industry_code", industryCode),
+		zap.String("sic_label", sicLabel))
+
+	// W-1: heuristic (balance-sheet) classification is resolved by calling
+	// ClassifyIndustry directly, not by reading cleaningResult.IndustryCode.
+	// This guarantees IndustryHeuristicCode/Name are always GICS (matching the
+	// field documentation) rather than "whatever the upstream pipeline coughed
+	// up". On error or nil result the fields stay empty and the response's
+	// omitempty-tagged Industry sub-fields drop.
+	var heuristicCode, heuristicName string
+	if s.industryClassifier != nil {
+		if sectorConfig, classifyErr := s.industryClassifier.ClassifyIndustry(historicalData.Ticker, latestFinancialData); classifyErr == nil && sectorConfig != nil {
+			heuristicCode = sectorConfig.SectorCode
+			heuristicName = sectorConfig.SectorName
+		}
 	}
 
 	// Stage 3 — "industry_classification" calc trace: always emitted from here (not
@@ -606,6 +643,14 @@ func (s *Service) performValuation(
 		} else if altErr != nil {
 			return nil, altErr
 		} else {
+			// Attach SIC classification metadata on the alt-model path too, so
+			// the response exposes it regardless of which valuation model ran.
+			altResult.SICCodeRaw = historicalData.SICCode
+			altResult.IndustrySIC = sicLabel
+			// W-1: heuristic GICS plumbing is also attached on the alt-model
+			// path so the API surface is identical across model selections.
+			altResult.IndustryHeuristicCode = heuristicCode
+			altResult.IndustryHeuristicName = heuristicName
 			return altResult, nil
 		}
 	}
@@ -783,6 +828,15 @@ func (s *Service) performValuation(
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     "multi_stage_dcf",
 		CalculationVersion:    "4.0",
+		// Industry metadata for the API response surface. Both the SIC label
+		// and the heuristic GICS code/name flow through the valuation service
+		// directly — see spec 2026-04-23-industry-in-response-design.md.
+		// Heuristic values come from ClassifyIndustry (not cleaningResult.IndustryCode)
+		// to guarantee GICS semantics per W-1.
+		SICCodeRaw:            historicalData.SICCode,
+		IndustrySIC:           sicLabel,
+		IndustryHeuristicCode: heuristicCode,
+		IndustryHeuristicName: heuristicName,
 	}
 
 	if usingNOPATFallback {

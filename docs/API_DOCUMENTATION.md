@@ -342,6 +342,13 @@ curl -H "X-API-Key: <key>" \
     "implied_p_fcf": 22.1,
     "is_reasonable": true,
     "flags": []
+  },
+  "industry": {
+    "sic_code": "3571",
+    "sic": "MFG",
+    "heuristic_code": "45",
+    "heuristic_name": "Information Technology",
+    "match": true
   }
 }
 ```
@@ -361,6 +368,45 @@ curl -H "X-API-Key: <key>" \
 | `data_quality_grade` | Letter grade: A (90+), B (80+), C (70+), D (60+), F (<60) |
 | `calculation_method` | Model used: `multi_stage_dcf`, `ddm`, `ffo`, `revenue_multiple` |
 | `sanity_check` | Cross-validation against sector median multiples |
+| `industry` | Dual industry classification (SIC + heuristic) — see [Industry Classification](#421-industry-classification) |
+
+##### 4.2.1 Industry Classification
+
+The `industry` object exposes both classifiers the engine runs on every request:
+
+| Sub-field | Source | Description |
+|-----------|--------|-------------|
+| `sic_code` | SEC filing header | Raw SIC code (e.g., `3674` for semiconductors) |
+| `sic` | `IndustryClassifier.Classify` | High-level label from SIC code + company name: `TECH`, `MFG`, `RETAIL`, `UTIL`, `FIN`, `HEALTH`, `ENERGY`, `RESTATE`, `TELECOM`, `TRANS`, `CONS`, or sub-industry refinements like `TECH_SAAS`, `HEALTH_BIOTECH`, `FIN_IB` |
+| `heuristic_code` | `IndustryClassifier.ClassifyIndustry` | GICS sector code from balance-sheet ratios: `45` (IT), `25` (Consumer Discretionary), `20` (Industrials), `35` (Health Care), `55` (Utilities), `40` (Financials), `50` (Communication Services), `60` (Real Estate), `30` (Consumer Staples), `10` (Energy) |
+| `heuristic_name` | `IndustryClassifier.ClassifyIndustry` | Human-readable GICS sector name |
+| `match` | Computed in handler | `true` when `sic` and `heuristic_code` agree per a canonical SIC→GICS mapping (sub-industries normalize to their parent); `false` signals classification drift |
+
+**Canonical match mapping** (handler-owned):
+
+| `sic` label | Matching `heuristic_code` values |
+|-------------|----------------------------------|
+| `TECH` | `45` |
+| `MFG` | `20`, `45` (semiconductors and hardware mfrs are both Industrials *and* IT — deliberate multi-map) |
+| `RETAIL` | `25`, `30` (grocery/staples retailers) |
+| `UTIL` | `55` |
+| `FIN` | `40` |
+| `HEALTH` | `35` |
+| `ENERGY` | `10` |
+| `RESTATE` | `60` |
+| `TELECOM` | `50` |
+| `TRANS` | `20` |
+| `CONS` | `30`, `25` |
+
+Sub-industry codes (`TECH_SAAS`, `HEALTH_BIOTECH`, …) normalize to their parent prefix for match computation.
+
+**Known classifier gaps** (tracked in `docs/refactoring/industry-classification-unification-spec.md`):
+
+- **Financials** (`sic = "FIN"`): `ClassifyIndustry` has no GICS-40 config and defaults to `20` → `match: false` for banks like JPM. Not drift — a known heuristic config gap.
+- **Owned-store retailers** (Target, Home Depot, Costco, Lowe's): the heuristic's retail predicate rejects retailers with tangibles > 70% and intangibles < 10%, so they fall through to Industrials (`heuristic_code = "20"`) → `match: false`. Tracked as a 2026-04-24 FEEDBACK-LOG entry.
+- **Missing R&D data** (AMD and similar): when the datacleaner pipeline doesn't populate `ResearchAndDevelopment`, `isTechnologyCompany` returns false and the ticker drops to `heuristic_code = "20"` Industrials. `sic = "MFG"` multi-maps to `{20, 45}`, so `match: true` **still** — but the Industrials label is misleading.
+
+The feature's purpose is drift detection. When `match: false`, consult the gaps above; it may be a known classifier limitation rather than a real disagreement. The long-term plan (tracked in `docs/refactoring/industry-classification-unification-spec.md`) is to unify on SIC alone and retire the heuristic.
 
 **Error Responses:**
 
@@ -368,8 +414,8 @@ curl -H "X-API-Key: <key>" \
 |--------|------|------|
 | 400 | `INVALID_TICKER` | Ticker format is invalid |
 | 400 | `INVALID_PARAMETER` | override_beta or override_rf out of range |
-| 404 | `TICKER_NOT_FOUND` | Ticker not found in any data source |
-| 422 | `INSUFFICIENT_DATA` | Not enough financial data for valuation |
+| 404 | `TICKER_NOT_FOUND` | Ticker is not present in SEC's ticker→CIK index (genuinely unknown symbol) |
+| 422 | `INSUFFICIENT_DATA` | Ticker exists but cannot be valued — e.g. SEC has no usable US-GAAP XBRL facts (common for foreign private issuers filing 20-F and some pre-revenue issuers), or fewer than the required financial periods |
 | 422 | `MODEL_NOT_APPLICABLE` | No valuation model can be applied |
 | 429 | `RATE_LIMIT_EXCEEDED` | Rate limit exceeded |
 | 500 | `CALCULATION_ERROR` | Internal calculation failure |
@@ -1162,8 +1208,8 @@ All error responses follow the [RFC 7807](https://tools.ietf.org/html/rfc7807) P
 | `INVALID_TICKER` | 400 | Ticker format is invalid (must be 1-5 alphanumeric chars) |
 | `INVALID_PARAMETER` | 400 | Query or body parameter is out of valid range |
 | `INVALID_REQUEST` | 400 | Request body doesn't match expected schema |
-| `TICKER_NOT_FOUND` | 404 | Ticker not found in any data source |
-| `INSUFFICIENT_DATA` | 422 | Not enough financial data to perform valuation |
+| `TICKER_NOT_FOUND` | 404 | Ticker is not present in SEC's ticker→CIK index (genuinely unknown symbol) |
+| `INSUFFICIENT_DATA` | 422 | Ticker resolves but cannot be valued: SEC has no usable US-GAAP XBRL facts (foreign private issuers, some pre-revenue issuers) or too few financial periods |
 | `MODEL_NOT_APPLICABLE` | 422 | No valuation model can be applied to this company |
 | `CALCULATION_ERROR` | 500 | Internal error during valuation calculation |
 | `RATE_LIMIT_EXCEEDED` | 429 | Rate limit exceeded (check Retry-After header) |
@@ -1398,6 +1444,7 @@ CGO_ENABLED=1 go build ./cmd/server
 - Verify the ticker exists in SEC EDGAR
 - Check that financial data is available (at least 2 periods)
 - Look for `INSUFFICIENT_DATA` or `MODEL_NOT_APPLICABLE` errors
+- `INSUFFICIENT_DATA` (422) with a `no US-GAAP XBRL facts` message indicates the ticker is real but SEC has no usable financial data — commonly foreign private issuers (e.g. Canadian pharmas filing 20-F) or early-stage pre-revenue companies. Not a bug; Midas cannot value these without a US-GAAP source.
 
 **Stale data warnings**
 - Run the scheduler (`SCHEDULER_ENABLED=true`) for automatic refresh

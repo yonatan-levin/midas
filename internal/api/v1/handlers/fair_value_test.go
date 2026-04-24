@@ -18,6 +18,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
 )
 
@@ -692,4 +693,302 @@ func extractErrorCode(typeURI string) string {
 		return typeURI
 	}
 	return parts[len(parts)-1]
+}
+
+// ---- Tests for Industry field on FairValueResponse (design spec 2026-04-23) ----
+//
+// These tests drive the additive Industry response-surface change. They assert
+// the handler surfaces both the SIC-derived classification (used for valuation
+// model selection) and the balance-sheet-heuristic classification (used by the
+// datacleaner), with a Match flag when the two classifiers agree per the
+// canonical SIC -> GICS mapping table in the spec.
+//
+// The mapping table is:
+//   "TECH"   -> {"45"}
+//   "MFG"    -> {"20", "45"}   // semiconductors/hardware are MFG by SIC, IT by GICS
+//   "RETAIL" -> {"25"}
+//   "UTIL"   -> {"55"}
+//   "FINL"   -> {"40"}
+//   "HEALTH" -> {"35"}
+
+// industryResultFor builds a ValuationResult populated with the industry
+// classification fields under test. All other fields come from
+// sampleValuationResult so existing assertions keep working.
+func industryResultFor(ticker, sicRaw, sic, heurCode, heurName string) *entities.ValuationResult {
+	r := sampleValuationResult(ticker)
+	r.SICCodeRaw = sicRaw
+	r.IndustrySIC = sic
+	r.IndustryHeuristicCode = heurCode
+	r.IndustryHeuristicName = heurName
+	return r
+}
+
+// TestFairValueResponse_Industry_BothPresent verifies both labels surface and
+// Match=true when the SIC label ("TECH") cleanly maps to the heuristic GICS
+// code ("45" — Information Technology).
+func TestFairValueResponse_Industry_BothPresent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockSvc := new(mockValuationService)
+	mockSvc.On("CalculateValuation", mock.Anything, "AAPL", (*valuation.ValuationOptions)(nil)).
+		Return(industryResultFor("AAPL", "7372", "TECH", "45", "Information Technology"), nil)
+
+	handler := newTestFairValueHandler(mockSvc)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/v1/fair-value/AAPL", nil)
+	c.Params = gin.Params{{Key: "ticker", Value: "AAPL"}}
+	handler.GetFairValue(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp FairValueResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Industry, "Industry field should be present")
+	assert.Equal(t, "7372", resp.Industry.SICCode)
+	assert.Equal(t, "TECH", resp.Industry.SIC)
+	assert.Equal(t, "45", resp.Industry.HeuristicCode)
+	assert.Equal(t, "Information Technology", resp.Industry.HeuristicName)
+	assert.True(t, resp.Industry.Match, "TECH->45 is a canonical match")
+
+	mockSvc.AssertExpectations(t)
+}
+
+// TestFairValueResponse_Industry_ClassifierMismatch verifies Match=false when
+// the two classifiers disagree (SIC says manufacturing, heuristic says
+// consumer discretionary). This is the drift-detection case.
+func TestFairValueResponse_Industry_ClassifierMismatch(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockSvc := new(mockValuationService)
+	mockSvc.On("CalculateValuation", mock.Anything, "AMD", (*valuation.ValuationOptions)(nil)).
+		Return(industryResultFor("AMD", "3674", "MFG", "25", "Consumer Discretionary"), nil)
+
+	handler := newTestFairValueHandler(mockSvc)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/v1/fair-value/AMD", nil)
+	c.Params = gin.Params{{Key: "ticker", Value: "AMD"}}
+	handler.GetFairValue(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp FairValueResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Industry)
+	assert.Equal(t, "3674", resp.Industry.SICCode)
+	assert.Equal(t, "MFG", resp.Industry.SIC)
+	assert.Equal(t, "25", resp.Industry.HeuristicCode)
+	assert.Equal(t, "Consumer Discretionary", resp.Industry.HeuristicName)
+	assert.False(t, resp.Industry.Match, "MFG does not map to GICS 25")
+
+	mockSvc.AssertExpectations(t)
+}
+
+// TestFairValueResponse_Industry_MissingSIC verifies that a missing SIC code
+// (common for foreign private issuers) still surfaces the heuristic label,
+// with Match=false (can't match one-sided data — conservative).
+func TestFairValueResponse_Industry_MissingSIC(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockSvc := new(mockValuationService)
+	mockSvc.On("CalculateValuation", mock.Anything, "FOO", (*valuation.ValuationOptions)(nil)).
+		Return(industryResultFor("FOO", "", "", "45", "Information Technology"), nil)
+
+	handler := newTestFairValueHandler(mockSvc)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/v1/fair-value/FOO", nil)
+	c.Params = gin.Params{{Key: "ticker", Value: "FOO"}}
+	handler.GetFairValue(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp FairValueResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Industry)
+	assert.Empty(t, resp.Industry.SICCode, "SICCode omitted when SEC data lacks SIC")
+	assert.Empty(t, resp.Industry.SIC, "SIC label omitted when no raw SIC is available")
+	assert.Equal(t, "45", resp.Industry.HeuristicCode)
+	assert.Equal(t, "Information Technology", resp.Industry.HeuristicName)
+	assert.False(t, resp.Industry.Match, "one-sided classification cannot match")
+
+	mockSvc.AssertExpectations(t)
+}
+
+// TestFairValueResponse_Industry_SemiHybrid verifies that the MFG -> {20, 45}
+// hybrid mapping correctly reports Match=true for semiconductor/hardware
+// manufacturers (SIC "MFG" + GICS "45" Information Technology).
+func TestFairValueResponse_Industry_SemiHybrid(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockSvc := new(mockValuationService)
+	mockSvc.On("CalculateValuation", mock.Anything, "AMD", (*valuation.ValuationOptions)(nil)).
+		Return(industryResultFor("AMD", "3674", "MFG", "45", "Information Technology"), nil)
+
+	handler := newTestFairValueHandler(mockSvc)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/v1/fair-value/AMD", nil)
+	c.Params = gin.Params{{Key: "ticker", Value: "AMD"}}
+	handler.GetFairValue(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp FairValueResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Industry)
+	assert.Equal(t, "3674", resp.Industry.SICCode)
+	assert.Equal(t, "MFG", resp.Industry.SIC)
+	assert.Equal(t, "45", resp.Industry.HeuristicCode)
+	assert.Equal(t, "Information Technology", resp.Industry.HeuristicName)
+	assert.True(t, resp.Industry.Match,
+		"MFG -> {20, 45} hybrid mapping: semiconductors are MFG by SIC, IT by GICS")
+
+	mockSvc.AssertExpectations(t)
+}
+
+// TestFairValueResponse_Industry_RealClassifier drives the real
+// IndustryClassifier (not a stub) with SIC codes that actually land in the
+// production config and asserts Match=true against the heuristic GICS codes
+// those profiles produce. This is the regression sentinel for:
+//   - B-1 part 1: the "FINL" typo — the classifier emits "FIN", and a typo
+//     in sicToGICS silently demoted every bank to Match=false.
+//   - B-1 part 2: sub-industry labels like "TECH_SAAS" must normalize to
+//     parent "TECH" before the map lookup, or software issuers silently
+//     miss their canonical match.
+//
+// Stub-based tests that inject hand-picked label strings (TECH, MFG…) cannot
+// catch either of these — by construction, the stub always matches the map.
+// Only a test that goes through the real classifier exposes spec-vs-reality
+// gaps.
+func TestFairValueResponse_Industry_RealClassifier(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Real IndustryClassifier with the production industry_codes.json loaded
+	// explicitly — NewIndustryClassifier's default path is relative to cwd,
+	// which differs across packages. Mirror the pattern from
+	// internal/services/datacleaner/industry/classifier_classify_test.go.
+	classifier := industry.NewIndustryClassifier()
+	configPaths := []string{
+		"../../../../config/datacleaner/industry_codes.json",
+		"./config/datacleaner/industry_codes.json",
+	}
+	var loaded bool
+	for _, p := range configPaths {
+		if err := classifier.LoadIndustryCodesConfig(p); err == nil {
+			loaded = true
+			break
+		}
+	}
+	require.True(t, loaded, "industry_codes.json must load for this integration test")
+
+	tests := []struct {
+		name             string
+		ticker           string
+		sicCode          string
+		companyName      string // optional — feeds into keyword match for sub-industry refinement
+		heurCode         string
+		heurName         string
+		expectMatch      bool
+		acceptableLabels []string // sicLabel set accepted (parent + any sub-industry refinement)
+		matchExplanation string
+	}{
+		{
+			name:             "semiconductor_MFG_to_GICS_45",
+			ticker:           "AMD",
+			sicCode:          "3674", // in the 2000-3999 MFG range
+			heurCode:         "45",
+			heurName:         "Information Technology",
+			expectMatch:      true,
+			acceptableLabels: []string{"MFG"}, // MFG has no sub-industries in config
+			matchExplanation: "semiconductor: SIC MFG + GICS 45 is a canonical hybrid match",
+		},
+		{
+			name:             "commercial_bank_FIN_to_GICS_40",
+			ticker:           "JPM",
+			sicCode:          "6020", // explicit FIN entry
+			heurCode:         "40",
+			heurName:         "Financials",
+			expectMatch:      true,
+			acceptableLabels: []string{"FIN"},
+			matchExplanation: "commercial bank: SIC FIN + GICS 40; regression sentinel for B-1 FINL/FIN typo",
+		},
+		{
+			name:             "prepackaged_software_TECH_to_GICS_45",
+			ticker:           "MSFT",
+			sicCode:          "7372", // explicit TECH entry; SIC-only path → parent "TECH"
+			heurCode:         "45",
+			heurName:         "Information Technology",
+			expectMatch:      true,
+			acceptableLabels: []string{"TECH", "TECH_SAAS"}, // either parent or sub-industry is valid
+			matchExplanation: "software parent: SIC TECH + GICS 45",
+		},
+		{
+			name:             "saas_subindustry_normalizes_to_TECH_parent",
+			ticker:           "CRM",
+			sicCode:          "7372",            // TECH parent
+			companyName:      "Salesforce SaaS", // triggers TECH_SAAS sub-industry refinement
+			heurCode:         "45",
+			heurName:         "Information Technology",
+			expectMatch:      true,
+			acceptableLabels: []string{"TECH_SAAS"}, // must be the sub-industry code
+			matchExplanation: "SaaS: SIC TECH_SAAS must normalize to TECH parent for GICS 45 match; regression sentinel for sub-industry normalization",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Drive the real classifier with optional company name to exercise
+			// the sub-industry refinement path.
+			// ctx param added in Phase M (observability); harmless in tests.
+			sicLabel, classifyErr := classifier.Classify(context.Background(), tc.sicCode, "", tc.companyName)
+			require.NoError(t, classifyErr)
+			assert.Contains(t, tc.acceptableLabels, sicLabel,
+				"real classifier produced label %q; acceptable set %v",
+				sicLabel, tc.acceptableLabels)
+
+			// Build the mock valuation result using the label the classifier
+			// actually produced, not a hand-picked string. This is what makes
+			// the test a true integration check for the handler↔classifier
+			// contract.
+			mockSvc := new(mockValuationService)
+			mockSvc.On("CalculateValuation", mock.Anything, tc.ticker, (*valuation.ValuationOptions)(nil)).
+				Return(industryResultFor(tc.ticker, tc.sicCode, sicLabel, tc.heurCode, tc.heurName), nil)
+
+			handler := newTestFairValueHandler(mockSvc)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest("GET", "/api/v1/fair-value/"+tc.ticker, nil)
+			c.Params = gin.Params{{Key: "ticker", Value: tc.ticker}}
+			handler.GetFairValue(c)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			var resp FairValueResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+			require.NotNil(t, resp.Industry)
+			assert.Equal(t, tc.sicCode, resp.Industry.SICCode)
+			assert.Equal(t, sicLabel, resp.Industry.SIC)
+			assert.Equal(t, tc.heurCode, resp.Industry.HeuristicCode)
+			assert.Equal(t, tc.heurName, resp.Industry.HeuristicName)
+			assert.Equal(t, tc.expectMatch, resp.Industry.Match, tc.matchExplanation)
+
+			mockSvc.AssertExpectations(t)
+		})
+	}
+}
+
+// TestBuildIndustryFromResult_NilResult verifies the helper returns nil for a
+// nil ValuationResult — the handler relies on this so `omitempty` drops the
+// field entirely when the engine produced no classification signal.
+func TestBuildIndustryFromResult_NilResult(t *testing.T) {
+	assert.Nil(t, buildIndustryFromResult(nil))
+}
+
+// TestBuildIndustryFromResult_AllFieldsEmpty verifies the helper returns nil
+// when a ValuationResult has no classification data populated at all.
+// Prevents an empty `{match: false}` object from leaking into responses.
+func TestBuildIndustryFromResult_AllFieldsEmpty(t *testing.T) {
+	assert.Nil(t, buildIndustryFromResult(&entities.ValuationResult{}))
 }
