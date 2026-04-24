@@ -154,10 +154,42 @@ func TestHealthCheck(t *testing.T) {
 
 func TestGetRegistry(t *testing.T) {
 	logger := zap.NewNop()
-	service := NewService(logger) // Use default service to test global registry
+	// GetRegistry returns prometheus.DefaultRegisterer regardless of how the
+	// service was constructed, so a custom-registry service is fine here.
+	service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 
 	registry := service.GetRegistry()
 	assert.NotNil(t, registry)
+}
+
+// TestMetricsService_RegistryReceivesMetrics pins PREX-1: NewService must
+// register Midas metrics on the service-owned registry so promhttp.HandlerFor
+// (wired in server.go) can surface them on /metrics. Pre-fix, promauto.Factory{}
+// (zero value, nil registerer) silently dropped every registration and the
+// /metrics endpoint returned only Go runtime data.
+//
+// We assert by gathering directly from the service's registry rather than
+// DefaultGatherer — Midas deliberately avoids the global registerer to keep
+// metric names (e.g. "go_info") from colliding with the standard Go
+// collectors.
+func TestMetricsService_RegistryReceivesMetrics(t *testing.T) {
+	logger := zap.NewNop()
+	svc := NewService(logger)
+	svc.RecordHTTPRequest("GET", "/api/v1/fair-value/:ticker", 200, 100*time.Millisecond, 1024)
+
+	families, err := svc.GetRegistry().Gather()
+	if err != nil {
+		t.Fatalf("registry.Gather error: %v", err)
+	}
+
+	found := false
+	for _, f := range families {
+		if f.GetName() == "http_requests_total" {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found, "http_requests_total must be registered on the service registry")
 }
 
 // Benchmark test for metrics recording performance

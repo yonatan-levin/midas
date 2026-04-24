@@ -75,21 +75,38 @@ type Service struct {
 	dbConnectionsIdle  prometheus.Gauge
 	dbConnectionsOpen  prometheus.Gauge
 	dbQueryDuration    *prometheus.HistogramVec
+
+	// Service-owned Prometheus registry. Not nil after construction.
+	// Exposed via GetRegistry() so server.go serves /metrics from this
+	// registry (not prometheus.DefaultRegisterer), avoiding collisions
+	// with Go runtime collectors (e.g. Midas defines its own "go_info"
+	// gauge, PREX-1).
+	registry *prometheus.Registry
 }
 
-// NewService creates a new metrics service with Prometheus metrics
+// NewService creates a new metrics service with Prometheus metrics registered
+// on a fresh per-service registry. Prior behavior (pre-PREX-1 fix) relied on
+// promauto.Factory{} (zero value) which silently dropped every registration
+// — /metrics served only Go runtime data. Every Midas-specific series was
+// missing.
 func NewService(logger *zap.Logger) *Service {
 	return NewServiceWithRegistry(logger, nil)
 }
 
-// NewServiceWithRegistry creates a new metrics service with a custom registry (for testing)
+// NewServiceWithRegistry creates a new metrics service. If registry is nil,
+// a fresh *prometheus.Registry is allocated and owned by the service.
+// Callers that need to share a registry (rare) pass one in.
 func NewServiceWithRegistry(logger *zap.Logger, registry *prometheus.Registry) *Service {
+	if registry == nil {
+		registry = prometheus.NewRegistry()
+	}
 	s := &Service{
 		logger:    logger,
 		startTime: time.Now(),
 		state: &MetricsState{
 			uniqueTickers: make(map[string]bool),
 		},
+		registry: registry,
 	}
 
 	s.initMetrics(registry)
@@ -97,15 +114,12 @@ func NewServiceWithRegistry(logger *zap.Logger, registry *prometheus.Registry) *
 	return s
 }
 
-// initMetrics initializes all Prometheus metrics with an optional custom registry
-func (s *Service) initMetrics(customRegistry *prometheus.Registry) {
-	// Use custom registry for testing or default for production
-	var factory promauto.Factory
-	if customRegistry != nil {
-		factory = promauto.With(customRegistry)
-	} else {
-		factory = promauto.Factory{}
-	}
+// initMetrics initializes all Prometheus metrics on the service-owned registry.
+// All registrations are via promauto.With(registry) so construction-time
+// registration failures surface immediately instead of being silently dropped
+// (PREX-1). The registry is guaranteed non-nil by NewServiceWithRegistry.
+func (s *Service) initMetrics(registry *prometheus.Registry) {
+	factory := promauto.With(registry)
 
 	// HTTP Metrics
 	s.httpRequestsTotal = factory.NewCounterVec(
@@ -476,8 +490,12 @@ func (s *Service) UpdateSystemMetrics() {
 }
 
 // GetRegistry returns the default Prometheus registry
+// GetRegistry returns the service-owned Prometheus registry holding all
+// Midas-specific metrics. The /metrics HTTP handler serves from this
+// registry (see internal/api/server.go), isolated from prometheus.Default
+// Registerer so no collision with Go runtime collectors.
 func (s *Service) GetRegistry() *prometheus.Registry {
-	return prometheus.DefaultRegisterer.(*prometheus.Registry)
+	return s.registry
 }
 
 // getMetricsCount returns the total number of metrics registered

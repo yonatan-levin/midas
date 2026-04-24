@@ -189,8 +189,13 @@ func (s *Server) setupRoutes() {
 	s.engine.GET("/ready", s.readinessCheck)
 	s.engine.GET("/version", s.versionInfo)
 
-	// Prometheus metrics endpoint (no authentication required for monitoring)
-	s.engine.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	// Prometheus metrics endpoint (no authentication required for monitoring).
+	// Serves the service-owned registry (PREX-1) so Midas metrics are surfaced
+	// without colliding with Prometheus's default Go-runtime collectors.
+	s.engine.GET("/metrics", gin.WrapH(promhttp.HandlerFor(
+		s.metricsService.GetRegistry(),
+		promhttp.HandlerOpts{},
+	)))
 
 	// Optional pprof endpoints for performance profiling (dev/staging only)
 	if s.config.EnablePprof {

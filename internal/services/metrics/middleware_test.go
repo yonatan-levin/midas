@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap/zaptest"
 )
@@ -90,7 +91,7 @@ func TestNormalizeEndpoint(t *testing.T) {
 func TestValuationMetricsWrapper(t *testing.T) {
 	t.Run("new_wrapper_creation", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		service := NewService(logger)
+		service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 
 		wrapper := NewValuationMetricsWrapper(service, logger)
 		assert.NotNil(t, wrapper)
@@ -100,7 +101,7 @@ func TestValuationMetricsWrapper(t *testing.T) {
 
 	t.Run("successful_operation_tracking", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		service := NewService(logger)
+		service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 		wrapper := NewValuationMetricsWrapper(service, logger)
 
 		executed := false
@@ -117,7 +118,7 @@ func TestValuationMetricsWrapper(t *testing.T) {
 
 	t.Run("error_operation_tracking", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		service := NewService(logger)
+		service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 		wrapper := NewValuationMetricsWrapper(service, logger)
 
 		testError := errors.New("valuation failed")
@@ -289,7 +290,7 @@ func TestContains(t *testing.T) {
 func TestDataFetchMetricsWrapper(t *testing.T) {
 	t.Run("new_wrapper_creation", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		service := NewService(logger)
+		service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 
 		wrapper := NewDataFetchMetricsWrapper(service, logger)
 		assert.NotNil(t, wrapper)
@@ -299,7 +300,7 @@ func TestDataFetchMetricsWrapper(t *testing.T) {
 
 	t.Run("wrap_sec_fetch_success", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		service := NewService(logger)
+		service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 		wrapper := NewDataFetchMetricsWrapper(service, logger)
 
 		executed := false
@@ -316,7 +317,7 @@ func TestDataFetchMetricsWrapper(t *testing.T) {
 
 	t.Run("wrap_sec_fetch_error", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		service := NewService(logger)
+		service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 		wrapper := NewDataFetchMetricsWrapper(service, logger)
 
 		testError := errors.New("SEC API error")
@@ -332,7 +333,7 @@ func TestDataFetchMetricsWrapper(t *testing.T) {
 
 	t.Run("wrap_market_fetch", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		service := NewService(logger)
+		service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 		wrapper := NewDataFetchMetricsWrapper(service, logger)
 
 		operation := func() error {
@@ -345,7 +346,7 @@ func TestDataFetchMetricsWrapper(t *testing.T) {
 
 	t.Run("wrap_macro_fetch", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		service := NewService(logger)
+		service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 		wrapper := NewDataFetchMetricsWrapper(service, logger)
 
 		operation := func() error {
@@ -358,7 +359,7 @@ func TestDataFetchMetricsWrapper(t *testing.T) {
 
 	t.Run("record_data_fetch_timing", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		service := NewService(logger)
+		service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 		wrapper := NewDataFetchMetricsWrapper(service, logger)
 
 		// Test normal timing
@@ -373,7 +374,7 @@ func TestDataFetchMetricsWrapper(t *testing.T) {
 func TestMiddlewareComponents(t *testing.T) {
 	t.Run("valuation_wrapper_creation", func(t *testing.T) {
 		logger := zaptest.NewLogger(t)
-		service := NewService(logger)
+		service := NewServiceWithRegistry(logger, prometheus.NewRegistry())
 
 		wrapper := NewValuationMetricsWrapper(service, logger)
 		assert.NotNil(t, wrapper)
