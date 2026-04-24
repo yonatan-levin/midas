@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -104,9 +105,10 @@ func (m *mockCacheStore) Delete(ctx context.Context, key string) error {
 // Test helpers
 // ---------------------------------------------------------------------------
 
-func init() {
+func TestMain(m *testing.M) {
 	// Prevent Gin debug logs from polluting test output
 	gin.SetMode(gin.TestMode)
+	os.Exit(m.Run())
 }
 
 // newMinimalServer creates a Server with only the fields needed for most tests.
@@ -741,7 +743,18 @@ func TestServer_rateLimitMiddleware(t *testing.T) {
 		errorObj, ok := body["error"].(map[string]interface{})
 		require.True(t, ok)
 		assert.Equal(t, "RATE_LIMIT_EXCEEDED", errorObj["code"])
-		assert.NotNil(t, body["rate_limit"])
+		assert.Equal(t, "Rate limit exceeded", errorObj["message"])
+		assert.Equal(t, "rate_limit_error", errorObj["type"])
+
+		rateLimitObj, ok := body["rate_limit"].(map[string]interface{})
+		require.True(t, ok, "rate_limit must be a JSON object")
+		assert.Contains(t, rateLimitObj, "remaining")
+		assert.Contains(t, rateLimitObj, "reset_time")
+		assert.Contains(t, rateLimitObj, "retry_after")
+
+		assert.NotEmpty(t, body["timestamp"], "timestamp must be present")
+		assert.Equal(t, "/test", body["path"])
+		assert.Equal(t, http.MethodGet, body["method"])
 	})
 
 	t.Run("rate limit error allows request through gracefully", func(t *testing.T) {

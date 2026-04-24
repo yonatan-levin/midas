@@ -128,7 +128,7 @@ For valuations where the P/FCF cross-check is skipped (zero FCF or zero sector m
 
 ---
 
-### V4.1-N10: SIC cache empty-string sentinel
+### V4.1-N10: SIC cache empty-string sentinel — **WON'T FIX** (2026-04-23)
 
 **Location:** `internal/infra/gateways/sec/client.go:478`
 
@@ -137,6 +137,8 @@ For valuations where the P/FCF cross-check is skipped (zero FCF or zero sector m
 **Fix:** Either add a comment clarifying the intent, or use a sentinel struct `type sicEntry struct { code string; fetched bool }`.
 
 **Effort:** ~10 min (skip-worthy — reviewer noted "current behavior is correct").
+
+**Resolution:** Closed as WON'T FIX. Reviewer explicitly flagged this as skip-worthy ("current behavior is correct"), and a `sync.Map.Load` second-return-value already distinguishes "never fetched" from "cached empty" for any caller that needs the distinction. The ergonomic win from a sentinel struct does not justify the `sync.Map` key-type change across call sites.
 
 ---
 

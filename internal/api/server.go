@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	_ "net/http/pprof"
@@ -116,19 +117,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// setupMiddleware configures middleware for the Gin engine
+// setupMiddleware configures middleware for the Gin engine.
+// Request ID + security headers are registered globally in NewServer.
 func (s *Server) setupMiddleware() {
-	// Request ID middleware
-	s.engine.Use(func(c *gin.Context) {
-		requestID := c.GetHeader("X-Request-ID")
-		if requestID == "" {
-			requestID = generateRequestID()
-		}
-		c.Set("request_id", requestID)
-		c.Header("X-Request-ID", requestID)
-		c.Next()
-	})
-
 	// Metrics middleware - should be early in the chain
 	s.engine.Use(metrics.HTTPMetricsMiddleware(s.metricsService, s.logger))
 
@@ -400,12 +391,12 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 			)
 
 			// Determine specific error response
-			switch err {
-			case auth.ErrKeyNotFound:
+			switch {
+			case errors.Is(err, auth.ErrKeyNotFound):
 				s.respondWithError(c, http.StatusUnauthorized, "AUTH_002", "Invalid API key")
-			case auth.ErrKeyExpired:
+			case errors.Is(err, auth.ErrKeyExpired):
 				s.respondWithError(c, http.StatusUnauthorized, "AUTH_003", "API key has expired")
-			case auth.ErrKeyInactive:
+			case errors.Is(err, auth.ErrKeyInactive):
 				s.respondWithError(c, http.StatusUnauthorized, "AUTH_004", "API key is inactive")
 			default:
 				s.respondWithError(c, http.StatusInternalServerError, "AUTH_005", "Authentication service error")
