@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/thresholds"
 )
 
 // DefaultPFFOMultiple is the default P/FFO multiple for REITs when no sector-specific
@@ -20,13 +21,6 @@ const DefaultREITCapRate = 0.06
 
 // DefaultIndustryMultiplesPath is the default path to the industry multiples config file.
 const DefaultIndustryMultiplesPath = "./config/industry_multiples.json"
-
-// NAV divergence thresholds — kept in sync with valuation.DeviationThreshold{High,Low}.
-// Declared locally because the models package cannot import its parent valuation package.
-const (
-	navDeviationThresholdHigh = 2.0
-	navDeviationThresholdLow  = 0.5
-)
 
 // FFOModel implements the Funds From Operations model for REITs.
 //
@@ -234,7 +228,7 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 		// Flag if P/FFO value diverges significantly from NAV per share
 		if navPerShare > 0 {
 			ratio := valuePerShare / navPerShare
-			if ratio > navDeviationThresholdHigh || ratio < navDeviationThresholdLow {
+			if ratio > thresholds.DeviationHigh || ratio < thresholds.DeviationLow {
 				warnings = append(warnings,
 					fmt.Sprintf("P/FFO value ($%.2f) diverges from NAV cross-check ($%.2f/share, cap rate %.1f%%); ratio=%.2fx",
 						valuePerShare, navPerShare, m.navCapRate*100, ratio))

@@ -7,22 +7,21 @@ import (
 	"strings"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/thresholds"
 )
 
-// DeviationThresholdHigh is the upper bound multiplier. DCF-implied multiples
-// above 2x the sector median are flagged. Exported for use by other valuation
-// models (FFO NAV, DDM P/BV) to keep a single source of truth.
-const DeviationThresholdHigh = 2.0
+// DeviationThresholdHigh re-exports thresholds.DeviationHigh so external
+// callers that read valuation.DeviationThresholdHigh keep compiling.
+// New code should import the thresholds package directly.
+const DeviationThresholdHigh = thresholds.DeviationHigh
 
-// DeviationThresholdLow is the lower bound multiplier. DCF-implied multiples
-// below 0.5x the sector median are flagged. Exported for use by other valuation
-// models.
-const DeviationThresholdLow = 0.5
+// DeviationThresholdLow re-exports thresholds.DeviationLow (see above).
+const DeviationThresholdLow = thresholds.DeviationLow
 
 // Unexported aliases preserved for backward compatibility within the package.
 const (
-	deviationThresholdHigh = DeviationThresholdHigh
-	deviationThresholdLow  = DeviationThresholdLow
+	deviationThresholdHigh = thresholds.DeviationHigh
+	deviationThresholdLow  = thresholds.DeviationLow
 )
 
 // FlagDivergence returns a formatted flag string when the implied multiple
@@ -123,8 +122,11 @@ func LoadIndustryMultiples(path string) (*industryMultiplesConfig, error) {
 }
 
 // LookupMultiple finds the appropriate multiple for an industry code.
-// Tries exact match first, then longest prefix match, then default.
-// Longest-prefix-match avoids nondeterminism from Go's random map iteration order.
+// Tries exact match first, then longest prefix match at an underscore
+// boundary, then default. Requiring a `code+"_"` boundary prevents
+// "TECHNOLOGY" from silently matching key "TECH" when new codes are added
+// to the config. Longest-prefix-match avoids nondeterminism from Go's
+// random map iteration order.
 func LookupMultiple(multiples map[string]float64, industry string) float64 {
 	upper := strings.ToUpper(industry)
 
@@ -135,9 +137,15 @@ func LookupMultiple(multiples map[string]float64, industry string) float64 {
 	bestKey := ""
 	bestVal := 0.0
 	for code, val := range multiples {
-		if code != "default" && strings.HasPrefix(upper, code) && len(code) > len(bestKey) {
-			bestKey = code
-			bestVal = val
+		if code == "default" {
+			continue
+		}
+		// Match must end at the string end or an underscore.
+		if upper == code || strings.HasPrefix(upper, code+"_") {
+			if len(code) > len(bestKey) {
+				bestKey = code
+				bestVal = val
+			}
 		}
 	}
 	if bestKey != "" {

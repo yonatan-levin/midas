@@ -139,8 +139,9 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 }
 
 // getMultiple returns the EV/Revenue multiple for the given industry code.
-// Falls back to the default multiple if no industry-specific multiple is configured.
-// Uses longest-prefix-match to avoid nondeterminism from Go's random map iteration.
+// Falls back to the default multiple if no industry-specific multiple is
+// configured. Uses longest-prefix-match at an underscore boundary to avoid
+// "TECHNOLOGY" silently matching "TECH" (same fix as crosscheck.LookupMultiple).
 func (m *RevenueMultipleModel) getMultiple(industry string) float64 {
 	upper := strings.ToUpper(industry)
 
@@ -149,13 +150,19 @@ func (m *RevenueMultipleModel) getMultiple(industry string) float64 {
 		return multiple
 	}
 
-	// Longest prefix match (e.g., "TECH_SAAS_CLOUD" matches "TECH_SAAS" over "TECH")
+	// Longest prefix match at an underscore boundary
+	// (e.g., "TECH_SAAS_CLOUD" matches "TECH_SAAS" over "TECH").
 	bestKey := ""
 	bestVal := 0.0
 	for code, multiple := range m.multiples {
-		if code != "default" && strings.HasPrefix(upper, code) && len(code) > len(bestKey) {
-			bestKey = code
-			bestVal = multiple
+		if code == "default" {
+			continue
+		}
+		if upper == code || strings.HasPrefix(upper, code+"_") {
+			if len(code) > len(bestKey) {
+				bestKey = code
+				bestVal = multiple
+			}
 		}
 	}
 	if bestKey != "" {

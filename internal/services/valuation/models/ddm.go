@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/thresholds"
 )
 
 // Minimum spread between cost of equity and dividend growth rate.
@@ -17,13 +18,6 @@ const ddmDenominatorEpsilon = 0.005
 // Fraction of cost of equity to cap dividend growth at when g >= CoE.
 // Keeps the model numerically stable for companies with temporarily high growth.
 const ddmGrowthCapFraction = 0.7
-
-// DDM P/BV divergence thresholds — kept in sync with valuation.DeviationThreshold{High,Low}.
-// Declared locally because the models package cannot import its parent valuation package.
-const (
-	ddmPBVDeviationHigh = 2.0
-	ddmPBVDeviationLow  = 0.5
-)
 
 // DDMModel implements the Gordon Growth / Dividend Discount Model for financial companies.
 //
@@ -143,7 +137,7 @@ func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 				roeJustifiedPBV := roeMinusG / coeMinusG
 				if roeJustifiedPBV > 0 && impliedPBV > 0 {
 					ratio := impliedPBV / roeJustifiedPBV
-					if ratio > ddmPBVDeviationHigh || ratio < ddmPBVDeviationLow {
+					if ratio > thresholds.DeviationHigh || ratio < thresholds.DeviationLow {
 						warnings = append(warnings,
 							fmt.Sprintf("Implied P/BV (%.2fx) diverges from ROE-justified P/BV (%.2fx); ratio=%.2fx",
 								impliedPBV, roeJustifiedPBV, ratio))
