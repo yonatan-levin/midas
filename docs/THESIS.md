@@ -65,26 +65,28 @@ Quality bar: **fintech-platform-grade accuracy**, not a personal script.
 
 ## Known Follow-Ups (Tracked, Not Blocking)
 
-Pre-MVP phase-4 review items:
+Classifier / data-quality items (separate track — `docs/refactoring/industry-classification-unification-spec.md` + `docs/FEEDBACK-LOG.md`):
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| S-1 | Structural | Config file paths are relative to working directory (fragile in Docker) |
-| S-4 | Structural | Model constructors perform I/O (`os.ReadFile`) |
-| IC-1 | Architectural | SIC-only industry classification unification — retire the balance-sheet `ClassifyIndustry` heuristic in favor of SIC-based `Classify` everywhere. Tracked in `docs/refactoring/industry-classification-unification-spec.md`. |
-| IC-2 | Data | Owned-store retailers (TGT, HD, COST, LOW) misclassified as Industrials by heuristic — `isRetailCompany` rejects tickers with tangibles > 70% and intangibles < 10%. See `docs/FEEDBACK-LOG.md` 2026-04-24. |
-| IC-3 | Data | Some tickers (e.g., AMD) arrive at the heuristic with `ResearchAndDevelopment = 0` despite SEC XBRL having it — `isTechnologyCompany` misses them, fall through to Industrials. XBRL tag extraction investigation required. See `docs/FEEDBACK-LOG.md` 2026-04-24. |
+| IC-1 | Architectural | SIC-only industry classification unification — retire the balance-sheet `ClassifyIndustry` heuristic in favor of SIC-based `Classify` everywhere. |
+| IC-2 | Data | Owned-store retailers (TGT, HD, COST, LOW) misclassified as Industrials by heuristic — `isRetailCompany` rejects tickers with tangibles > 70% and intangibles < 10%. |
+| IC-3 | Data | Some tickers (e.g., AMD) arrive at the heuristic with `ResearchAndDevelopment = 0` despite SEC XBRL having it — `isTechnologyCompany` misses them, fall through to Industrials. XBRL tag extraction investigation required. |
 
-Observability-upgrade review/QA items (filed 2026-04-23):
+Observability M-1 sub-items still open after the 2026-04-24 sweep (a + f were resolved; each of the below needs dedicated design work, not cleanup-sweep scope):
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| M-1 (a–f) | Minor | Calc-trace field-completeness: growth/model_selection miss `ticker`; classifier returns single code instead of sector split; `dcf.Result` doesn't expose `ExitMultipleTV`; NewLogger file sink should probe-and-warn on unwritable path; requestID injection test doesn't cover NUL/tab/space |
-| PREX-1 | Major | **Pre-existing bug (not introduced by observability upgrade)** — `internal/services/metrics/service.go:107` uses `promauto.Factory{}` zero value when no custom registry is provided; custom metrics are never registered with `prometheus.DefaultGatherer`, so `/metrics` shows only Go runtime metrics in production. Fix: `factory = promauto.With(prometheus.DefaultRegisterer)`. |
+| M-1b | Architectural | Richer `industry_classification` trace — classifier v2 return-type change. |
+| M-1c | Structural | Raw `exit_multiple_tv` on `terminal_value` trace — one-field addition to `dcf.Result` (blocked by `pkg/finance` purity policy R1). |
+| M-1d | Data | `equity_bridge` missing `minority_interest` + `preferred` — coordinated entity/gateway/cleaner/math extension. |
+| M-1e | Resilience | `NewLogger` file-sink fails silently on unwritable path — add probe-and-warn with fallback to stdout-only. |
 
-**Full tracking:** `docs/reviewer/` for S-*, M-1, PREX-1; `docs/FEEDBACK-LOG.md` for IC-*.
+**Sweep of 2026-04-24** closed 12 reviewer items in one session: Q-1/Q-2/Q-3/Y-2 (landed earlier as `a7626f0`), D-1, D-2, B-2, S-1, S-4, V4.1 (N1–N11), PREX-1, M-1a, M-1f. Reviewer docs moved to `docs/reviewer/archive/`.
 
-W-1, W-2, W-3, W-4, and S-5 were resolved in commit `4d46142`; the corresponding files in `docs/reviewer/` are retained as historical records.
+**Full tracking:** `docs/reviewer/` for open items (M-1 parent doc), `docs/reviewer/archive/` for resolved history, `docs/FEEDBACK-LOG.md` for IC-*.
+
+W-1..W-5 and S-2/S-3/S-5 were resolved in earlier commits (`4d46142`, `01f4db0`); the corresponding files in `docs/reviewer/archive/` are retained as historical records.
 
 ---
 
