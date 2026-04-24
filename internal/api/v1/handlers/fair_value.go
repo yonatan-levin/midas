@@ -488,18 +488,20 @@ func classifyBulkError(ticker string, err error) BulkFailure {
 
 // sendError sends an RFC 7807 compliant error response, consistent with
 // the server.go respondWithError format (code, timestamp, method fields).
+// Uses the ErrorResponse struct (not gin.H) so field additions stay
+// compile-checked and the timestamp is explicitly RFC 3339.
 func (h *FairValueHandler) sendError(c *gin.Context, status int, errorType, title, detail string, ctx map[string]interface{}) {
 	c.Header("Content-Type", "application/problem+json")
-	c.JSON(status, gin.H{
-		"type":      "https://problems.midas.dev/" + errorType,
-		"title":     title,
-		"status":    status,
-		"detail":    detail,
-		"instance":  c.Request.URL.Path,
-		"context":   ctx,
-		"code":      errorType,
-		"timestamp": time.Now().UTC(),
-		"method":    c.Request.Method,
+	c.JSON(status, ErrorResponse{
+		Type:      "https://problems.midas.dev/" + errorType,
+		Title:     title,
+		Status:    status,
+		Detail:    detail,
+		Instance:  c.Request.URL.Path,
+		Context:   ctx,
+		Code:      errorType,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Method:    c.Request.Method,
 	})
 	c.Abort()
 }
