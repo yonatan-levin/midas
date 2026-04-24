@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 
 	"go.uber.org/zap"
 
+	configfs "github.com/midas/dcf-valuation-api/config"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/thresholds"
 )
@@ -18,9 +18,6 @@ const DefaultPFFOMultiple = 15.0
 
 // DefaultREITCapRate is the default capitalization rate for NAV cross-check (6%).
 const DefaultREITCapRate = 0.06
-
-// DefaultIndustryMultiplesPath is the default path to the industry multiples config file.
-const DefaultIndustryMultiplesPath = "./config/industry_multiples.json"
 
 // FFOModel implements the Funds From Operations model for REITs.
 //
@@ -38,15 +35,15 @@ type FFOModel struct {
 	logger       *zap.Logger
 }
 
-// NewFFOModel creates a new FFO model with P/FFO multiple and NAV cap rate
-// loaded from the given config path. If configPath is empty, uses DefaultIndustryMultiplesPath.
-// The config file is read ONCE — both fields are parsed from a single read.
-func NewFFOModel(configPath string, logger *zap.Logger) *FFOModel {
-	if configPath == "" {
-		configPath = DefaultIndustryMultiplesPath
-	}
-	multiple, capRate := loadFFOConfig(configPath)
-
+// NewFFOModel creates a new FFO model reading the P/FFO multiple and NAV
+// cap rate from the embedded industry_multiples.json (see config/configfs).
+// No filesystem I/O — safe in any working directory and in any deployment
+// target (Docker, standalone binary, tests).
+//
+// NAV cross-check is enabled by default with the embedded cap rate. To
+// disable NAV cross-check pass `NewFFOModelWithConfig(multiple, 0, logger)`.
+func NewFFOModel(logger *zap.Logger) *FFOModel {
+	multiple, capRate := loadFFOConfig()
 	return &FFOModel{
 		pffoMultiple: multiple,
 		navCapRate:   capRate,
@@ -56,6 +53,7 @@ func NewFFOModel(configPath string, logger *zap.Logger) *FFOModel {
 
 // NewFFOModelWithConfig creates an FFO model with explicit P/FFO multiple and
 // NAV cap rate. Used for testing and when config is provided externally.
+// Pass 0 for navCapRate to disable the NAV cross-check.
 func NewFFOModelWithConfig(pffoMultiple, navCapRate float64, logger *zap.Logger) *FFOModel {
 	return &FFOModel{
 		pffoMultiple: pffoMultiple,
@@ -64,20 +62,22 @@ func NewFFOModelWithConfig(pffoMultiple, navCapRate float64, logger *zap.Logger)
 	}
 }
 
-// NewFFOModelWithMultiple creates an FFO model with an explicit P/FFO multiple,
-// defaulting the NAV cap rate. Kept for backward compatibility with existing tests.
+// NewFFOModelWithMultiple creates an FFO model with an explicit P/FFO multiple
+// and the default NAV cap rate (DefaultREITCapRate = 6%). NAV cross-check is
+// enabled by default; use NewFFOModelWithConfig(multiple, 0, logger) to
+// disable it. Kept for backward compatibility with existing tests.
 func NewFFOModelWithMultiple(pffoMultiple float64, logger *zap.Logger) *FFOModel {
 	return NewFFOModelWithConfig(pffoMultiple, DefaultREITCapRate, logger)
 }
 
-// loadFFOConfig reads the industry multiples file ONCE and returns both the
-// P/FFO multiple and the NAV cap rate. Falls back to defaults on any error.
-// This replaces two separate file reads in the constructor.
-func loadFFOConfig(path string) (pffoMultiple, navCapRate float64) {
+// loadFFOConfig reads the embedded industry_multiples.json ONCE and returns
+// both the P/FFO multiple and the NAV cap rate. Falls back to defaults on any
+// error. Consolidates the three separate loaders that existed pre-V4.1-N2.
+func loadFFOConfig() (pffoMultiple, navCapRate float64) {
 	pffoMultiple = DefaultPFFOMultiple
 	navCapRate = DefaultREITCapRate
 
-	data, err := os.ReadFile(path)
+	data, err := configfs.Read("industry_multiples.json")
 	if err != nil {
 		return pffoMultiple, navCapRate
 	}
@@ -97,44 +97,6 @@ func loadFFOConfig(path string) (pffoMultiple, navCapRate float64) {
 		navCapRate = v
 	}
 	return pffoMultiple, navCapRate
-}
-
-// loadPFFOMultiple returns only the P/FFO multiple from the config file.
-// Thin wrapper preserved for backward compatibility with existing tests.
-func loadPFFOMultiple(path string) (float64, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read industry multiples config: %w", err)
-	}
-	var cfg struct {
-		REITPFFOMultiples map[string]float64 `json:"reit_pffo_multiples"`
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return 0, fmt.Errorf("failed to parse industry multiples config: %w", err)
-	}
-	if v, ok := cfg.REITPFFOMultiples["default"]; ok {
-		return v, nil
-	}
-	return 0, fmt.Errorf("no default P/FFO multiple found in config")
-}
-
-// loadREITCapRate returns only the REIT cap rate from the config file.
-// Thin wrapper preserved for backward compatibility with existing tests.
-func loadREITCapRate(path string) (float64, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read industry multiples config: %w", err)
-	}
-	var cfg struct {
-		REITCapRates map[string]float64 `json:"reit_cap_rates"`
-	}
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return 0, fmt.Errorf("failed to parse industry multiples config: %w", err)
-	}
-	if v, ok := cfg.REITCapRates["default"]; ok {
-		return v, nil
-	}
-	return 0, fmt.Errorf("no default REIT cap rate found in config")
 }
 
 // ModelType returns the model identifier.

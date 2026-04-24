@@ -3,9 +3,9 @@ package valuation
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
+	configfs "github.com/midas/dcf-valuation-api/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/thresholds"
 )
@@ -106,11 +106,13 @@ type industryMultiplesConfig struct {
 	REITCapRates       map[string]float64 `json:"reit_cap_rates"`
 }
 
-// LoadIndustryMultiples loads all sector multiples from a single config file read.
-func LoadIndustryMultiples(path string) (*industryMultiplesConfig, error) {
-	data, err := os.ReadFile(path)
+// LoadIndustryMultiples parses the embedded industry_multiples.json. The
+// path parameter is deprecated and ignored — kept so existing call sites
+// that still pass a path keep compiling. Pass "" for new call sites.
+func LoadIndustryMultiples(_ string) (*industryMultiplesConfig, error) {
+	data, err := configfs.Read("industry_multiples.json")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read industry multiples config: %w", err)
+		return nil, fmt.Errorf("failed to read embedded industry multiples config: %w", err)
 	}
 
 	var cfg industryMultiplesConfig

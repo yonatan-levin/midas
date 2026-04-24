@@ -89,8 +89,8 @@ func NewService(
 	// Pass calcEmitter so SelectModel emits stage-4 "model_selection" trace.
 	allModels := []models.ValuationModel{
 		models.NewDDMModel(logger),
-		models.NewFFOModel(models.DefaultIndustryMultiplesPath, logger),
-		models.NewRevenueMultipleModel(models.DefaultIndustryMultiplesPath, logger),
+		models.NewFFOModel(logger),
+		models.NewRevenueMultipleModel(logger),
 		models.NewMultiStageDCFModel(logger),
 	}
 	router := models.NewModelRouter(allModels, logger, calcEmitter)
@@ -106,7 +106,7 @@ func NewService(
 
 	// Phase 4: Load industry multiples for exit-multiple TV and sanity cross-checks.
 	// Graceful degradation: if missing, exit-multiple and cross-checks are skipped.
-	indMultiples, imErr := LoadIndustryMultiples(models.DefaultIndustryMultiplesPath)
+	indMultiples, imErr := LoadIndustryMultiples("")
 	if imErr != nil {
 		logger.Warn("Industry multiples config unavailable, exit-multiple TV and cross-checks disabled",
 			zap.Error(imErr))

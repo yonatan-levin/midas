@@ -2956,39 +2956,20 @@ func TestLoadCountryRiskPremiums_MissingFile(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to read")
 }
 
-// TestLoadIndustryMultiples_ValidFile tests loading industry multiples from valid JSON
-func TestLoadIndustryMultiples_ValidFile(t *testing.T) {
-	tmpFile := t.TempDir() + "/industry_multiples.json"
-	content := `{
-		"ev_ebitda_multiples": {"TECH": 18.0, "FIN": 10.0, "default": 12.0},
-		"sector_median_pe": {"TECH": 25.0, "FIN": 12.0, "default": 16.0}
-	}`
-	err := os.WriteFile(tmpFile, []byte(content), 0644)
+// TestLoadIndustryMultiples_UsesEmbed verifies LoadIndustryMultiples reads
+// from the embedded industry_multiples.json. Replaces the legacy tmpfile-path
+// tests (Valid/InvalidJSON/MissingFile) that exercised os.ReadFile branches
+// no longer possible with embed. The missing-path branch is exercised by
+// configfs.TestRead_MissingFile; the path parameter of LoadIndustryMultiples
+// is now deprecated and ignored.
+func TestLoadIndustryMultiples_UsesEmbed(t *testing.T) {
+	cfg, err := LoadIndustryMultiples("")
 	require.NoError(t, err)
-
-	cfg, err := LoadIndustryMultiples(tmpFile)
-	require.NoError(t, err)
-	assert.NotNil(t, cfg)
+	require.NotNil(t, cfg)
+	// Values from config/industry_multiples.json at the time of the sweep.
 	assert.Equal(t, 18.0, cfg.EVEBITDAMultiples["TECH"])
-	assert.Equal(t, 25.0, cfg.SectorMedianPE["TECH"])
-}
-
-// TestLoadIndustryMultiples_InvalidJSON tests loading industry multiples from invalid JSON
-func TestLoadIndustryMultiples_InvalidJSON(t *testing.T) {
-	tmpFile := t.TempDir() + "/bad_multiples.json"
-	err := os.WriteFile(tmpFile, []byte("not valid json"), 0644)
-	require.NoError(t, err)
-
-	_, err = LoadIndustryMultiples(tmpFile)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse")
-}
-
-// TestLoadIndustryMultiples_MissingFile tests loading industry multiples from non-existent file
-func TestLoadIndustryMultiples_MissingFile(t *testing.T) {
-	_, err := LoadIndustryMultiples("/nonexistent/path/multiples.json")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to read")
+	assert.Equal(t, 28.0, cfg.SectorMedianPE["TECH"])
+	assert.Equal(t, 15.0, cfg.REITPFFOMultiples["default"])
 }
 
 // TestLookupMultiple_NoDefaultAndNoMatch tests LookupMultiple when there is no default key

@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"go.uber.org/zap"
 
+	configfs "github.com/midas/dcf-valuation-api/config"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
@@ -31,22 +31,14 @@ type RevenueMultipleModel struct {
 	logger    *zap.Logger
 }
 
-// NewRevenueMultipleModel creates a new Revenue Multiple model.
-// Loads sector multiples from the given config path. If configPath is empty, uses DefaultIndustryMultiplesPath.
-func NewRevenueMultipleModel(configPath string, logger *zap.Logger) *RevenueMultipleModel {
-	if configPath == "" {
-		configPath = DefaultIndustryMultiplesPath
-	}
-	multiples := map[string]float64{
-		"default": DefaultEVRevenueMultiple,
-	}
-
-	// Attempt to load multiples from config
-	configMultiples, err := loadEVRevenueMultiples(configPath)
-	if err == nil && len(configMultiples) > 0 {
+// NewRevenueMultipleModel creates a new Revenue Multiple model. Loads sector
+// multiples from the embedded industry_multiples.json (see config/configfs).
+// No filesystem I/O — safe in any working directory and any deployment.
+func NewRevenueMultipleModel(logger *zap.Logger) *RevenueMultipleModel {
+	multiples := map[string]float64{"default": DefaultEVRevenueMultiple}
+	if configMultiples, err := loadEVRevenueMultiples(); err == nil && len(configMultiples) > 0 {
 		multiples = configMultiples
 	}
-
 	return &RevenueMultipleModel{
 		multiples: multiples,
 		logger:    logger.Named("revenue-multiple-model"),
@@ -177,11 +169,12 @@ func (m *RevenueMultipleModel) getMultiple(industry string) float64 {
 	return DefaultEVRevenueMultiple
 }
 
-// loadEVRevenueMultiples loads EV/Revenue multiples from the industry multiples config file.
-func loadEVRevenueMultiples(path string) (map[string]float64, error) {
-	data, err := os.ReadFile(path)
+// loadEVRevenueMultiples loads EV/Revenue multiples from the embedded
+// industry_multiples.json.
+func loadEVRevenueMultiples() (map[string]float64, error) {
+	data, err := configfs.Read("industry_multiples.json")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read industry multiples config: %w", err)
+		return nil, fmt.Errorf("failed to read embedded industry multiples config: %w", err)
 	}
 
 	var cfg struct {

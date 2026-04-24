@@ -2,7 +2,6 @@ package models
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -310,34 +309,14 @@ func TestRevenueMultipleModel_Calculate_PositiveOI(t *testing.T) {
 	assert.Len(t, result.Warnings, 2)
 }
 
-// TestLoadEVRevenueMultiples_ValidFile tests loading EV/Revenue multiples from a temp file
-func TestLoadEVRevenueMultiples_ValidFile(t *testing.T) {
-	tmpFile := t.TempDir() + "/industry_multiples.json"
-	content := `{"ev_revenue_multiples": {"default": 2.5, "TECH": 6.0, "HEALTH": 3.5}}`
-	err := os.WriteFile(tmpFile, []byte(content), 0644)
+// TestLoadEVRevenueMultiples_UsesEmbed verifies loadEVRevenueMultiples reads
+// from the embedded industry_multiples.json. Replaces the legacy tmpfile-path
+// tests that exercised os.ReadFile error branches no longer possible with
+// embed; the missing-file branch is covered by configfs.TestRead_MissingFile.
+func TestLoadEVRevenueMultiples_UsesEmbed(t *testing.T) {
+	multiples, err := loadEVRevenueMultiples()
 	require.NoError(t, err)
-
-	multiples, err := loadEVRevenueMultiples(tmpFile)
-	require.NoError(t, err)
-	assert.Equal(t, 2.5, multiples["default"])
-	assert.Equal(t, 6.0, multiples["TECH"])
-	assert.Equal(t, 3.5, multiples["HEALTH"])
-}
-
-// TestLoadEVRevenueMultiples_InvalidJSON tests loading from invalid JSON
-func TestLoadEVRevenueMultiples_InvalidJSON(t *testing.T) {
-	tmpFile := t.TempDir() + "/bad.json"
-	err := os.WriteFile(tmpFile, []byte("{invalid json}"), 0644)
-	require.NoError(t, err)
-
-	_, err = loadEVRevenueMultiples(tmpFile)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse")
-}
-
-// TestLoadEVRevenueMultiples_MissingFile tests loading from non-existent file
-func TestLoadEVRevenueMultiples_MissingFile(t *testing.T) {
-	_, err := loadEVRevenueMultiples("/nonexistent/path/file.json")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to read")
+	// Values from config/industry_multiples.json at the time of the sweep.
+	assert.Equal(t, 2.0, multiples["default"])
+	assert.Equal(t, 5.0, multiples["TECH"])
 }

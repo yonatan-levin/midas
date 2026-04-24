@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	configfs "github.com/midas/dcf-valuation-api/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
 
@@ -157,20 +158,41 @@ const (
 	techSBCFloorPctRevenue = 0.05
 )
 
-// NewIndustryClassifier creates a new industry classifier with default configurations
+// NewIndustryClassifier creates a new industry classifier with configurations
+// loaded from the embedded config/datacleaner/industry_codes.json (see
+// config/configfs). No filesystem I/O in production — safe in any working
+// directory.
+//
+// Tests that need a custom override call LoadIndustryCodesConfig with a path.
 func NewIndustryClassifier() *IndustryClassifier {
 	classifier := &IndustryClassifier{
 		sectorConfigs: make(map[string]*SectorConfig),
 	}
 
-	// Load default sector configurations (for datacleaner thresholds)
 	classifier.loadDefaultConfigurations()
 
-	// Attempt to load industry codes config for SIC/NAICS classification.
-	// Gracefully degrade if the file is not found — keyword matching still works.
-	_ = classifier.LoadIndustryCodesConfig(DefaultIndustryCodesPath)
+	// Gracefully degrade if the embed read fails — keyword-only matching
+	// still works. In practice the embed is always present in the binary.
+	_ = classifier.loadEmbeddedIndustryCodes()
 
 	return classifier
+}
+
+// loadEmbeddedIndustryCodes reads datacleaner/industry_codes.json from the
+// compiled-in configfs and populates the classifier's codesConfig. Kept
+// private so tests keep using the explicit-path LoadIndustryCodesConfig.
+func (ic *IndustryClassifier) loadEmbeddedIndustryCodes() error {
+	data, err := configfs.Read("datacleaner/industry_codes.json")
+	if err != nil {
+		return fmt.Errorf("failed to read embedded industry codes config: %w", err)
+	}
+	var cfg industryCodesConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return fmt.Errorf("failed to parse industry codes config: %w", err)
+	}
+	compileCodesConfig(&cfg)
+	ic.codesConfig = &cfg
+	return nil
 }
 
 // LoadIndustryCodesConfig loads the industry_codes.json file for SIC/NAICS/keyword classification.

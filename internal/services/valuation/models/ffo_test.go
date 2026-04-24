@@ -2,7 +2,6 @@ package models
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -456,108 +455,15 @@ func TestFFOModel_Calculate_NAVCrossCheck_ZeroOI(t *testing.T) {
 	}
 }
 
-// TestLoadREITCapRate_ValidFile tests loading cap rate from config
-func TestLoadREITCapRate_ValidFile(t *testing.T) {
-	tmpFile := t.TempDir() + "/industry_multiples.json"
-	content := `{"reit_cap_rates": {"default": 0.065, "office": 0.07}}`
-	err := os.WriteFile(tmpFile, []byte(content), 0644)
-	require.NoError(t, err)
-
-	capRate, err := loadREITCapRate(tmpFile)
-	require.NoError(t, err)
-	assert.InDelta(t, 0.065, capRate, 0.001)
-}
-
-// TestLoadREITCapRate_MissingFile tests cap rate loading from non-existent file
-func TestLoadREITCapRate_MissingFile(t *testing.T) {
-	_, err := loadREITCapRate("/nonexistent/path/file.json")
-	assert.Error(t, err)
-}
-
-// TestLoadREITCapRate_NoDefaultKey tests when config has no default cap rate
-func TestLoadREITCapRate_NoDefaultKey(t *testing.T) {
-	tmpFile := t.TempDir() + "/no_default.json"
-	content := `{"reit_cap_rates": {"office": 0.07}}`
-	err := os.WriteFile(tmpFile, []byte(content), 0644)
-	require.NoError(t, err)
-
-	_, err = loadREITCapRate(tmpFile)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no default")
-}
-
-// TestLoadPFFOMultiple_ValidFile tests loading P/FFO multiple from a valid temp config file
-func TestLoadPFFOMultiple_ValidFile(t *testing.T) {
-	// Create a temporary config file with valid JSON
-	tmpFile := t.TempDir() + "/industry_multiples.json"
-	content := `{"reit_pffo_multiples": {"default": 18.5, "residential": 20.0}}`
-	err := os.WriteFile(tmpFile, []byte(content), 0644)
-	require.NoError(t, err)
-
-	multiple, err := loadPFFOMultiple(tmpFile)
-	require.NoError(t, err)
-	assert.InDelta(t, 18.5, multiple, 0.001)
-}
-
-// TestLoadPFFOMultiple_InvalidJSON tests loading P/FFO multiple from invalid JSON
-func TestLoadPFFOMultiple_InvalidJSON(t *testing.T) {
-	tmpFile := t.TempDir() + "/bad.json"
-	err := os.WriteFile(tmpFile, []byte("not valid json"), 0644)
-	require.NoError(t, err)
-
-	_, err = loadPFFOMultiple(tmpFile)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse")
-}
-
-// TestLoadPFFOMultiple_MissingFile tests loading P/FFO multiple from non-existent file
-func TestLoadPFFOMultiple_MissingFile(t *testing.T) {
-	_, err := loadPFFOMultiple("/nonexistent/path/file.json")
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to read")
-}
-
-// TestLoadPFFOMultiple_NoDefaultKey tests loading when the config has no "default" key
-func TestLoadPFFOMultiple_NoDefaultKey(t *testing.T) {
-	tmpFile := t.TempDir() + "/no_default.json"
-	content := `{"reit_pffo_multiples": {"residential": 20.0}}`
-	err := os.WriteFile(tmpFile, []byte(content), 0644)
-	require.NoError(t, err)
-
-	_, err = loadPFFOMultiple(tmpFile)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "no default P/FFO multiple")
-}
-
-// TestLoadFFOConfig_ValidFile verifies loadFFOConfig returns both values from a single read.
-func TestLoadFFOConfig_ValidFile(t *testing.T) {
-	tmpFile := t.TempDir() + "/industry_multiples.json"
-	content := `{"reit_pffo_multiples": {"default": 17.0}, "reit_cap_rates": {"default": 0.055}}`
-	err := os.WriteFile(tmpFile, []byte(content), 0644)
-	require.NoError(t, err)
-
-	pffo, capRate := loadFFOConfig(tmpFile)
-	assert.InDelta(t, 17.0, pffo, 0.001)
-	assert.InDelta(t, 0.055, capRate, 0.0001)
-}
-
-// TestLoadFFOConfig_MissingFile falls back to defaults on missing config.
-func TestLoadFFOConfig_MissingFile(t *testing.T) {
-	pffo, capRate := loadFFOConfig("/nonexistent/path/file.json")
-	assert.InDelta(t, DefaultPFFOMultiple, pffo, 0.001)
-	assert.InDelta(t, DefaultREITCapRate, capRate, 0.0001)
-}
-
-// TestLoadFFOConfig_PartialConfig returns defaults for missing keys and loaded values for present keys.
-func TestLoadFFOConfig_PartialConfig(t *testing.T) {
-	tmpFile := t.TempDir() + "/industry_multiples.json"
-	content := `{"reit_pffo_multiples": {"default": 19.0}}` // no cap rates
-	err := os.WriteFile(tmpFile, []byte(content), 0644)
-	require.NoError(t, err)
-
-	pffo, capRate := loadFFOConfig(tmpFile)
-	assert.InDelta(t, 19.0, pffo, 0.001)
-	assert.InDelta(t, DefaultREITCapRate, capRate, 0.0001, "cap rate should fall back to default")
+// TestLoadFFOConfig_UsesEmbed verifies loadFFOConfig returns the values from
+// the embedded industry_multiples.json. Replaces the legacy tmpfile + path
+// tests (TestLoadPFFOMultiple_*, TestLoadREITCapRate_*, TestLoadFFOConfig_*)
+// that exercised os.ReadFile error paths no longer possible with embed.
+func TestLoadFFOConfig_UsesEmbed(t *testing.T) {
+	pffo, capRate := loadFFOConfig()
+	// Embedded default per config/industry_multiples.json.
+	assert.InDelta(t, 15.0, pffo, 0.001)
+	assert.InDelta(t, 0.06, capRate, 0.0001)
 }
 
 // TestNewFFOModelWithConfig verifies the explicit-config constructor wires both fields.
