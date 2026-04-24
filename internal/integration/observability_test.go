@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -76,15 +77,25 @@ func TestObservability_CalcTraces_ExactlyTwelvePerRequest(t *testing.T) {
 	_, thisFile, _, _ := runtime.Caller(0)
 	// thisFile is internal/integration/observability_test.go — two levels up is the project root.
 	projectRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
-	t.Chdir(projectRoot)
 
-	// Make the test's dependency on config/industry_multiples.json explicit.
-	// Without this file, the valuation service's industryMultiples is nil, the
-	// cross_check trace does NOT emit, and the assertion "exactly 12 calc
-	// entries" fails with a confusing count=11 message. A FileExists assertion
-	// up front turns that into a clear "missing config file" diagnostic.
-	require.FileExists(t, filepath.Join(projectRoot, "config", "industry_multiples.json"),
-		"cross_check emit depends on this config file")
+	// The test's default cwd is the package directory (internal/integration/).
+	// Several components use hardcoded relative paths from that cwd:
+	//   - datacleaner RulesPath: "../../config/datacleaner/rules.json" (resolved
+	//     via createTestConfig OR explicit override below)
+	//   - SetupDatabase schema: "../../internal/infra/database/schema.sql"
+	//   - valuation.NewService: "./config/industry_multiples.json" (hardcoded
+	//     DefaultIndustryMultiplesPath — cannot be overridden via cfg)
+	//
+	// The first two resolve naturally from the default cwd. The third requires
+	// creating ./config/industry_multiples.json in the test's cwd. We do that
+	// below with cleanup so the source tree stays clean after the test.
+	srcMultiples := filepath.Join(projectRoot, "config", "industry_multiples.json")
+	require.FileExists(t, srcMultiples, "cross_check emit depends on this config file")
+	require.NoError(t, os.MkdirAll("./config", 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll("./config") })
+	multiplesBytes, err := os.ReadFile(srcMultiples)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile("./config/industry_multiples.json", multiplesBytes, 0o644))
 
 	// --- 1. Build the observer-backed logger (captures Info+ entries) ---
 	// zapcore.InfoLevel: Emitter logs at Info when TraceCalculations=true.
@@ -102,6 +113,14 @@ func TestObservability_CalcTraces_ExactlyTwelvePerRequest(t *testing.T) {
 	cfg.Macro.FREDEnabled = false
 	cfg.Macro.ManualRiskFreeRate = 0.04
 	cfg.Macro.ManualMarketRiskPremium = 0.05
+
+	// Datacleaner config paths in createTestConfig are `../../config/datacleaner/...`,
+	// relative to the test package directory. The t.Chdir(projectRoot) above would
+	// break that resolution (../../config becomes one level above the repo).
+	// Rewrite them to absolute paths anchored at projectRoot so both the chdir'd
+	// industry_multiples.json path AND the datacleaner rules path resolve.
+	cfg.DataCleaner.RulesPath = filepath.Join(projectRoot, "config", "datacleaner", "rules.json")
+	cfg.DataCleaner.IndustryRulesPath = filepath.Join(projectRoot, "config", "datacleaner", "industry")
 
 	// --- 3. Wire the full DI graph, replacing the default logger with the observer ---
 	var (
