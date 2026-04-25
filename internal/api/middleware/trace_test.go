@@ -468,6 +468,76 @@ func TestTrace_NoBundleSink_WhenDisabled(t *testing.T) {
 	assert.Empty(t, entries, "no bundle dir when artifact store disabled")
 }
 
+// TestTrace_HostStreamHasRequestIDExactlyOnce pins the fix for REVIEWER
+// finding 2026-04-25 (HIGH): the previous workaround re-applied request_id
+// via .With() AFTER WrapCore, which routed request_id through both the
+// BundleSink (good — JSONL needed it) AND the wrapped core's internal
+// With-state (bad — request_id was already there from requestIDMiddleware).
+// zap's JSON encoder does NOT dedupe duplicate field keys, so every host log
+// line emitted during a traced request carried "request_id" twice. The fix
+// passes request_id as a baseField directly to NewBundleSink, bypassing the
+// wrapped core's .With() chain entirely.
+//
+// This test would have FAILED on commit 5 (with the duplicate). It MUST
+// PASS post-fix on commit 6.
+func TestTrace_HostStreamHasRequestIDExactlyOnce(t *testing.T) {
+	root := t.TempDir()
+
+	// Observer captures every entry the wrapped core sees, including its
+	// accumulated With-state via Entry.Context.
+	core, recorded := observer.New(zapcore.DebugLevel)
+	// Bake request_id into the request-scoped logger BEFORE trace middleware
+	// runs — this mirrors what the real requestIDMiddleware does in
+	// internal/api/middleware/request_id.go.
+	requestID := "req-no-dup"
+	baseLogger := zap.New(core).With(zap.String("request_id", requestID))
+
+	r := gin.New()
+	r.Use(requestIDStub(requestID))
+	// Inject the request-scoped logger so trace.go's logctx.From picks it up.
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), baseLogger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	// ?trace=1 installs the BundleSink wrapper — this is the path that used
+	// to double-up request_id.
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{Enabled: true, RootPath: root, QueueSize: 64},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// Emit one log line through the request-scoped logger so it goes
+		// through the BundleSink-wrapped core.
+		l := logctx.From(c.Request.Context())
+		l.Info("handler.work", zap.String("phase", "compute"))
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x?trace=1", nil)
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	allEntries := recorded.All()
+	require.NotEmpty(t, allEntries, "observer must receive at least one entry")
+
+	// For every entry the wrapped core saw, count how many times "request_id"
+	// appears in its accumulated context. Pre-fix this was 2 for entries
+	// emitted via the request-scoped logger; post-fix it MUST be exactly 1.
+	for i, e := range allEntries {
+		count := 0
+		for _, f := range e.Context {
+			if f.Key == "request_id" {
+				count++
+			}
+		}
+		assert.Equalf(t, 1, count,
+			"entry %d (%q) must carry request_id EXACTLY once; got %d in fields=%v",
+			i, e.Message, count, e.Context)
+	}
+}
+
 // TestTrace_NarrateEmitterAlwaysOnContext — even with no trace flag and no
 // bundle, downstream code must be able to call narrate.From(ctx) safely.
 func TestTrace_NarrateEmitterAlwaysOnContext(t *testing.T) {

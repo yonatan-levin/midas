@@ -316,6 +316,84 @@ func TestBundleSink_Write_PropagatesWrappedError(t *testing.T) {
 	assert.True(t, os.IsNotExist(err), "no tee when wrapped Write fails")
 }
 
+// TestBundleSink_BaseFieldsInJSONL pins the new constructor contract:
+// fields supplied via NewBundleSink(..., baseFields...) must appear in the
+// JSONL tee output WITHOUT having been routed through the wrapped core's
+// .With() chain. This is the mechanism that lets the trace middleware
+// inject request_id into 99-narrate.jsonl without producing a duplicate
+// "request_id" key in the host log stream (REVIEWER finding 2026-04-25).
+func TestBundleSink_BaseFieldsInJSONL(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root, QueueSize: 64}
+	b, err := artifact.OpenBundle(cfg, "rid-base-fields", "AAPL", artifact.TriggerHeader)
+	require.NoError(t, err)
+
+	wrapped, recorded := observer.New(zapcore.InfoLevel)
+	// Inject request_id as a baseline field — must NOT trigger any .With()
+	// call on the wrapped core.
+	sink := artifact.NewBundleSink(wrapped, b, zap.String("request_id", "req_TEST"))
+	logger := zap.New(sink)
+
+	logger.Info("phase",
+		zap.String("event", "narrate"),
+		zap.String("phase", "test"),
+	)
+
+	require.NoError(t, b.Close())
+
+	// JSONL tee must carry request_id from the baseFields.
+	body, err := os.ReadFile(filepath.Join(b.Root(), "99-narrate.jsonl"))
+	require.NoError(t, err)
+	lines := splitJSONLines(string(body))
+	require.Len(t, lines, 1)
+
+	var entry map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &entry))
+	assert.Equal(t, "req_TEST", entry["request_id"],
+		"baseFields must populate the JSONL encoder context")
+	assert.Equal(t, "test", entry["phase"])
+	assert.Equal(t, "narrate", entry["event"])
+
+	// And the wrapped core must NOT have seen request_id added to its
+	// internal state — only the call-site fields should be visible there.
+	require.Equal(t, 1, recorded.Len())
+	wrappedFields := recorded.All()[0].Context
+	for _, f := range wrappedFields {
+		if f.Key == "request_id" {
+			t.Fatalf("baseFields must NOT propagate to wrapped core's With-state; "+
+				"got duplicate request_id field in host log stream: %v", wrappedFields)
+		}
+	}
+}
+
+// TestBundleSink_BaseFieldsAliasingProtection ensures the constructor copies
+// the supplied baseFields slice — mutating the caller's slice or appending
+// via subsequent .With() calls must not bleed into the original baseFields.
+func TestBundleSink_BaseFieldsAliasingProtection(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root, QueueSize: 64}
+	b, err := artifact.OpenBundle(cfg, "rid-alias", "AAPL", artifact.TriggerHeader)
+	require.NoError(t, err)
+
+	wrapped, _ := observer.New(zapcore.InfoLevel)
+	caller := []zapcore.Field{zap.String("request_id", "req_orig")}
+	sink := artifact.NewBundleSink(wrapped, b, caller...)
+
+	// Mutate the caller's slice — sink must be unaffected.
+	caller[0] = zap.String("request_id", "req_HIJACKED")
+
+	logger := zap.New(sink)
+	logger.Info("phase", zap.String("event", "narrate"), zap.String("phase", "test"))
+	require.NoError(t, b.Close())
+
+	body, err := os.ReadFile(filepath.Join(b.Root(), "99-narrate.jsonl"))
+	require.NoError(t, err)
+	var entry map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(splitJSONLines(string(body))[0]), &entry))
+	assert.Equal(t, "req_orig", entry["request_id"],
+		"sink must defensively copy baseFields so caller mutations do not bleed in")
+}
+
 // splitJSONLines splits on \n and drops empty lines.
 func splitJSONLines(s string) []string {
 	raw := strings.Split(strings.TrimSpace(s), "\n")

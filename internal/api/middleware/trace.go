@@ -99,27 +99,23 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 			// (spec §7.1 + §7.3). We wrap the request-scoped logger (which
 			// already carries request_id baked into its core's With-state)
 			// — wrapping the singleton would lose that correlation in the
-			// host log stream.
+			// host log stream. The wrapper is transparent for non-narrate
+			// Info+ entries so existing log output is unaffected.
 			//
-			// Subtlety: zap's Core.Write only receives call-site fields, not
-			// the wrapped core's With-state, so the BundleSink can't see
-			// request_id from the wrapped core's internal state. We
-			// re-attach request_id via .With() AFTER wrapping so the
-			// BundleSink.With path captures it into its own fields slice
-			// and includes it in the JSONL tee. The host log stream remains
-			// unaffected — the wrapped core de-duplicates fields under the
-			// hood (same key written twice picks the last write, which is
-			// identical to the first, so no observable change).
-			//
-			// The wrapper is transparent for non-narrate Info+ entries so
-			// existing log output is unaffected. Bundle handle lifetime is
-			// bounded by the deferred bundle.Close() below; the wrapper
-			// stops writing once the bundle is closed (AppendStream is
-			// no-op past Close).
+			// request_id is passed as a baseline field directly to
+			// NewBundleSink (NOT via post-wrap .With(...)). zap's Core.Write
+			// only receives call-site fields, so the sink would otherwise be
+			// blind to the request_id already baked into the wrapped core's
+			// internal state. Going through .With() to re-attach it would
+			// also re-apply request_id to the wrapped core, producing a
+			// duplicate "request_id" field on every host log line (zap's
+			// JSON encoder does NOT dedupe duplicate keys; see REVIEWER
+			// finding 2026-04-25). Passing baseFields to the sink injects
+			// the correlation field into the sink's encoder context only.
 			base := logctx.From(c.Request.Context())
 			wrapped := base.WithOptions(zap.WrapCore(func(c zapcore.Core) zapcore.Core {
-				return artifact.NewBundleSink(c, bundle)
-			})).With(zap.String("request_id", requestID))
+				return artifact.NewBundleSink(c, bundle, zap.String("request_id", requestID))
+			}))
 			ctx = logctx.Inject(ctx, wrapped)
 		}
 		c.Request = c.Request.WithContext(ctx)

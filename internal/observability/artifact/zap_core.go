@@ -35,11 +35,23 @@ type BundleSink struct {
 // NewBundleSink wraps the given core with bundle-tee behaviour. The wrapped
 // core's Sync() is called when the wrapper's Sync() is called. Bundle stream
 // files are flushed + closed by Bundle.Close(), not by Sync().
-func NewBundleSink(wrapped zapcore.Core, bundle *Bundle) zapcore.Core {
+//
+// baseFields populates the sink's encoder context WITHOUT going through the
+// wrapped core's .With() chain. Use this to inject correlation fields like
+// request_id that the wrapped core already has internally but that the sink
+// otherwise can't see (zap's Core.Write only receives call-site fields, not
+// the accumulated With-state). Going through .With() instead would re-apply
+// the field to the wrapped core's internal state too, producing duplicate
+// keys in the host log stream — zap's JSON encoder does NOT dedupe.
+func NewBundleSink(wrapped zapcore.Core, bundle *Bundle, baseFields ...zapcore.Field) zapcore.Core {
+	// Copy to avoid aliasing the caller's slice — later With() calls on the
+	// sink would otherwise mutate the caller's backing array.
+	fields := append([]zapcore.Field{}, baseFields...)
 	return &BundleSink{
 		Core:    wrapped,
 		bundle:  bundle,
 		encoder: newJSONEncoder(),
+		fields:  fields,
 	}
 }
 
