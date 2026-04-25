@@ -73,18 +73,13 @@ Classifier / data-quality items (separate track — `docs/refactoring/industry-c
 | IC-2 | Data | Owned-store retailers (TGT, HD, COST, LOW) misclassified as Industrials by heuristic — `isRetailCompany` rejects tickers with tangibles > 70% and intangibles < 10%. |
 | IC-3 | Data | Some tickers (e.g., AMD) arrive at the heuristic with `ResearchAndDevelopment = 0` despite SEC XBRL having it — `isTechnologyCompany` misses them, fall through to Industrials. XBRL tag extraction investigation required. |
 
-Observability M-1 sub-items still open after the 2026-04-24 sweep (a + f were resolved; each of the below needs dedicated design work, not cleanup-sweep scope):
+**Sweep of 2026-04-24/25** closed all open reviewer items across two sessions:
+- 2026-04-24 (12 items): Q-1/Q-2/Q-3/Y-2 (landed earlier as `a7626f0`), D-1, D-2, B-2, S-1, S-4, V4.1 (N1–N11), PREX-1, M-1a, M-1f.
+- 2026-04-25 (4 items + post-validation hotfix): M-1b (richer `industry_classification` trace), M-1c (raw `exit_multiple_tv` on terminal_value), M-1d (MinorityInterest + PreferredEquity end-to-end including SQLite persistence), M-1e (NewLogger probe-and-warn). Hotfix `fb01061` closed the validation-cycle BLOCKERs (persistence layer + service-level test).
 
-| ID | Severity | Description |
-|----|----------|-------------|
-| M-1b | Architectural | Richer `industry_classification` trace — classifier v2 return-type change. |
-| M-1c | Structural | Raw `exit_multiple_tv` on `terminal_value` trace — one-field addition to `dcf.Result` (blocked by `pkg/finance` purity policy R1). |
-| M-1d | Data | `equity_bridge` missing `minority_interest` + `preferred` — coordinated entity/gateway/cleaner/math extension. |
-| M-1e | Resilience | `NewLogger` file-sink fails silently on unwritable path — add probe-and-warn with fallback to stdout-only. |
+`docs/reviewer/` now contains only `archive/`. Next time an issue surfaces, file a new doc there.
 
-**Sweep of 2026-04-24** closed 12 reviewer items in one session: Q-1/Q-2/Q-3/Y-2 (landed earlier as `a7626f0`), D-1, D-2, B-2, S-1, S-4, V4.1 (N1–N11), PREX-1, M-1a, M-1f. Reviewer docs moved to `docs/reviewer/archive/`.
-
-**Full tracking:** `docs/reviewer/` for open items (M-1 parent doc), `docs/reviewer/archive/` for resolved history, `docs/FEEDBACK-LOG.md` for IC-*.
+**Full tracking:** `docs/reviewer/archive/` for resolved history, `docs/FEEDBACK-LOG.md` for IC-*.
 
 W-1..W-5 and S-2/S-3/S-5 were resolved in earlier commits (`4d46142`, `01f4db0`); the corresponding files in `docs/reviewer/archive/` are retained as historical records.
 
@@ -104,6 +99,12 @@ W-1..W-5 and S-2/S-3/S-5 were resolved in earlier commits (`4d46142`, `01f4db0`)
 |------------|-----------|---------------|
 | **Observability upgrade** — request correlation via context-scoped logger, file logging in local dev only, 12-stage DCF calc tracing, docker-compose cleanup | 2026-04-23 (all 5 phases) | `feat/observability` · `docs/refactoring/observability-upgrade-spec.md` |
 
+## In Flight
+
+| Initiative | Status | Spec |
+|------------|--------|------|
+| **Observability narrative + artifact capture** — Tier-1 narrate stream (one Info line per pipeline phase, 17 phases, closed `outcome` enum + free-text `notes`), Tier-2 Debug-tracer convention (`trace.<area>.<op>`), Tier-3 per-request artifact bundle (raw + parsed payloads, before/after pipeline snapshots, manifest with schema versions and git SHA). Manual-trigger only in Phase 1 (`?trace=1` / `X-Midas-Trace: 1`); auto-on-error / auto-on-quality-flag / always-on / replay tooling all explicitly deferred to Phase 2. | DESIGN — Phase 1 scoped 2026-04-25 | `docs/refactoring/observability-narrative-and-artifacts-spec.md` |
+
 ## Next Candidate Work (Ranked)
 
 No commitment yet — listed for future prioritization:
@@ -112,6 +113,7 @@ No commitment yet — listed for future prioritization:
 2. **Close the W-4 coverage gap** — bring `models/` to 90%+.
 3. **Fix S-1/S-4** — make config loading robust for Docker deployments.
 4. **Sector-specific validation sets** — test bank valuations against known bank valuations, REIT valuations against REIT benchmarks, etc.
+5. **Observability narrative & artifacts — Phase 2** — auto-trigger bundle capture on errors, on data-quality flags, and an "always-on" debugging knob; replay tooling. Tracked in §13 of the Phase-1 spec; promote to `docs/reviewer/` items at the time Phase 1 merges.
 
 ---
 
