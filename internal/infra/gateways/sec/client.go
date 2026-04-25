@@ -1,6 +1,7 @@
 package sec
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
@@ -124,7 +126,9 @@ func (c *Client) GetCompanyFacts(ctx context.Context, cik string) (*ports.SECCom
 		return nil, errURL
 	}
 
-	logctx.Or(ctx, c.logger).Debug("Fetching company facts",
+	// Tier-2 trace: input + output + elapsed for the SEC fetch hot path.
+	startFetch := time.Now()
+	logctx.Or(ctx, c.logger).Debug("trace.gateway.sec.fetch",
 		zap.String("cik", cik),
 		zap.String("url", urlStr))
 
@@ -173,6 +177,21 @@ func (c *Client) GetCompanyFacts(ctx context.Context, cik string) (*ports.SECCom
 		zap.String("entity_name", facts.EntityName),
 		zap.Int("taxonomy_count", len(facts.Facts)),
 		zap.Int("concept_count", totalConcepts))
+
+	// Tier-3 artifact bundle: snapshot the parsed struct. Raw bytes are
+	// written by makeRequest via the bundle hook on the response body.
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "fetch.sec", "05-fetch-sec.parsed.json", facts)
+		b.AddSchemaVersion("SECCompanyFacts", 3)
+	}
+
+	// Tier-2 trace exit line: outcome + elapsed + size.
+	logctx.Or(ctx, c.logger).Debug("trace.gateway.sec.parse",
+		zap.String("cik", cik),
+		zap.Int("taxonomies", len(facts.Facts)),
+		zap.Int("concepts", totalConcepts),
+		zap.Duration("elapsed", time.Since(startFetch)),
+	)
 
 	return facts, nil
 }
@@ -329,11 +348,33 @@ func (c *Client) makeRequest(ctx context.Context, url string) (*ports.SECCompany
 		return nil, fmt.Errorf("SEC API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Tier-3 artifact bundle: TeeReader the response body so reads dual-stream
+	// into both the JSON decoder AND a per-request raw-bytes capture buffer.
+	// Buffer is bounded by the SEC response size (~6 MB for AAPL); the SEC
+	// API's standard limits make OOM impossible in practice.
+	body := resp.Body
+	var rawBuf *bytes.Buffer
+	if b := artifact.From(ctx); b != nil {
+		rawBuf = &bytes.Buffer{}
+		body = io.NopCloser(io.TeeReader(resp.Body, rawBuf))
+	}
+
 	// Parse the JSON response
 	var facts ports.SECCompanyFacts
-	if err := json.NewDecoder(resp.Body).Decode(&facts); err != nil {
+	if err := json.NewDecoder(body).Decode(&facts); err != nil {
 
 		return nil, fmt.Errorf("failed to decode SEC response: %w", err)
+	}
+
+	// Now that decoding has fully drained the TeeReader, push the captured
+	// raw bytes into the bundle. Redaction runs first so any sensitive fields
+	// in the payload are scrubbed before disk write. The SEC payload is pure
+	// public XBRL — redactor will normally find nothing to redact.
+	if rawBuf != nil {
+		raw, redacted := artifact.RedactJSONBytes(rawBuf.Bytes())
+		if b := artifact.From(ctx); b != nil {
+			b.SnapshotRaw(ctx, "fetch.sec", "05-fetch-sec.raw.json", raw, redacted)
+		}
 	}
 
 	// Validate the response

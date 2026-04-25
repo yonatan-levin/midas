@@ -12,7 +12,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
+	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
 )
 
@@ -216,6 +218,16 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		return
 	}
 
+	// Stamp the ticker on the request-scoped narrate emitter so every
+	// downstream Emit call (auth.resolved already fired with no ticker;
+	// everything from here on does) carries it as a standard field. Also
+	// stamp the bundle so its manifest reflects the parsed ticker.
+	em := narrate.From(c.Request.Context())
+	em.WithTicker(ticker)
+	if b := artifact.From(c.Request.Context()); b != nil {
+		b.SetTicker(ticker)
+	}
+
 	// Parse and validate query parameters
 	overrideBeta := parseFloatParam(c, "override_beta")
 	overrideRF := parseFloatParam(c, "override_rf")
@@ -250,9 +262,38 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		}
 	}
 
+	// Tier-1 narrate: handler.entry. The "options" field reports which
+	// overrides the user supplied so the per-request story shows whether
+	// this was a default-parameter call or an ad-hoc tweak.
+	overridesApplied := []string{}
+	if overrideBeta != nil {
+		overridesApplied = append(overridesApplied, "beta")
+	}
+	if overrideRF != nil {
+		overridesApplied = append(overridesApplied, "rf")
+	}
+	em.Emit(c.Request.Context(), narrate.PhaseHandlerEntry, narrate.OutcomeOK, "",
+		zap.Strings("options", overridesApplied),
+	)
+
+	// Tier-3 artifact bundle: snapshot the parsed handler input so the
+	// bundle pins exactly what overrides this request used.
+	if b := artifact.From(c.Request.Context()); b != nil {
+		b.Snapshot(c.Request.Context(), "handler.entry", "02-handler-options.json", map[string]any{
+			"ticker":        ticker,
+			"override_beta": overrideBeta,
+			"override_rf":   overrideRF,
+		})
+	}
+
 	// Calculate valuation
 	result, err := h.valuationService.CalculateValuation(c.Request.Context(), ticker, opts)
 	if err != nil {
+		// Tier-1 narrate: valuation.computed with outcome=error so the per-
+		// request story shows the failure even when the engine returns
+		// before any of the lower-level emissions could fire.
+		em.Emit(c.Request.Context(), narrate.PhaseValuationComputed, narrate.OutcomeError, err.Error())
+
 		logctx.From(c.Request.Context()).Error("Valuation calculation failed",
 			zap.String("ticker", ticker),
 			zap.Error(err))
@@ -300,6 +341,22 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		Warnings:              result.Warnings,
 		SanityCheck:           result.SanityCheck,
 		Industry:              buildIndustryFromResult(result),
+	}
+
+	// Tier-1 narrate: valuation.computed success line. Carries the headline
+	// numbers so the per-request story ends with the actual fair-value output.
+	em.Emit(c.Request.Context(), narrate.PhaseValuationComputed, narrate.OutcomeOK, "",
+		zap.String("model", result.CalculationMethod),
+		zap.Float64("fair_value_per_share", result.DCFValuePerShare),
+		zap.Float64("tangible_value_per_share", result.TangibleValuePerShare),
+	)
+
+	// Tier-3 artifact bundle: snapshot the final response body. This is the
+	// canonical "what we sent back to the client" record — invaluable when
+	// a downstream consumer reports an unexpected number weeks later.
+	if b := artifact.From(c.Request.Context()); b != nil {
+		b.Snapshot(c.Request.Context(), "response.sent", "17-response.json", &response)
+		b.AddSchemaVersion("FairValueResponse", 1)
 	}
 
 	logctx.From(c.Request.Context()).Info("Fair value calculation completed",

@@ -6,8 +6,11 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 )
 
 // DataCoordinator handles multi-source data fetching coordination
@@ -36,7 +39,13 @@ func NewDataCoordinator(
 	}
 }
 
-// CoordinateFetch orchestrates data fetching from multiple sources
+// CoordinateFetch orchestrates data fetching from multiple sources.
+//
+// On exit, emits the Tier-1 narrate summary line `fetch.fanout` per spec §5
+// row 6 with sources_attempted/ok/fallback/error counts and total elapsed.
+// Per-source narrate lines (fetch.sec / fetch.market / fetch.macro) are
+// emitted alongside the summary so a reader can see both the fan-out totals
+// and the per-source detail in the same request stream.
 func (dc *DataCoordinator) CoordinateFetch(ctx context.Context, request *entities.FetchRequest) (*entities.CoordinationResult, error) {
 	if request == nil {
 		return nil, fmt.Errorf("fetch request cannot be nil")
@@ -49,11 +58,114 @@ func (dc *DataCoordinator) CoordinateFetch(ctx context.Context, request *entitie
 		sources = []entities.DataSource{entities.SECSource, entities.MarketSource, entities.MacroSource}
 	}
 
+	fanoutStart := time.Now()
+	var (
+		result *entities.CoordinationResult
+		err    error
+	)
 	if dc.config.ConcurrentFetching {
-		return dc.coordinateConcurrent(ctx, request, sources)
+		result, err = dc.coordinateConcurrent(ctx, request, sources)
+	} else {
+		result, err = dc.coordinateSequential(ctx, request, sources)
 	}
 
-	return dc.coordinateSequential(ctx, request, sources)
+	// Emit the fan-out summary narrate line. Counts reflect the per-source
+	// outcomes after merge — see narratePerSource for individual lines.
+	dc.narrateFanout(ctx, sources, result, time.Since(fanoutStart))
+
+	return result, err
+}
+
+// narrateFanout emits the Tier-1 `fetch.fanout` summary line plus one
+// per-source line for every source that was attempted. The per-source lines
+// fire here (rather than inside fetchFromSource) so they always appear after
+// the gateway returns and before the response is finalised — keeping the
+// narrate stream temporally ordered.
+func (dc *DataCoordinator) narrateFanout(ctx context.Context, sources []entities.DataSource, result *entities.CoordinationResult, elapsed time.Duration) {
+	if result == nil {
+		return
+	}
+
+	// Tally outcomes.
+	attempted := len(sources)
+	ok := 0
+	fallbackCount := 0
+	errCount := 0
+
+	// Build a quick lookup of which sources errored.
+	errored := make(map[entities.DataSource]string, len(result.Errors))
+	for _, e := range result.Errors {
+		errored[e.Source] = e.Message
+	}
+
+	em := narrate.From(ctx)
+	for _, src := range sources {
+		// Per-source narrate. Phase mapping comes from the spec's closed enum.
+		phase := perSourcePhase(src)
+		if phase == "" {
+			continue
+		}
+		var (
+			outcome narrate.Outcome
+			notes   string
+		)
+		if msg, bad := errored[src]; bad {
+			outcome = narrate.OutcomeError
+			notes = msg
+			errCount++
+		} else {
+			outcome = narrate.OutcomeOK
+			ok++
+		}
+
+		// Per-source elapsed comes from SourceInfo if present.
+		var srcMs int64
+		if info, has := result.SourceMetadata[src]; has {
+			srcMs = info.Duration.Milliseconds()
+		}
+		em.Emit(ctx, phase, outcome, notes,
+			zap.String("source", string(src)),
+			zap.Int64("elapsed_ms", srcMs),
+		)
+	}
+
+	// Roll up to the fan-out summary. Outcome enum:
+	//   ok      — every source returned without error
+	//   partial — at least one source error but at least one ok
+	//   error   — every source failed
+	var fanOutcome narrate.Outcome
+	switch {
+	case errCount == 0:
+		fanOutcome = narrate.OutcomeOK
+	case ok == 0:
+		fanOutcome = narrate.OutcomeError
+	default:
+		fanOutcome = narrate.OutcomePartial
+	}
+
+	em.Emit(ctx, narrate.PhaseFetchFanout, fanOutcome, "",
+		zap.Int("sources_attempted", attempted),
+		zap.Int("sources_ok", ok),
+		zap.Int("sources_fallback", fallbackCount),
+		zap.Int("sources_error", errCount),
+		zap.Int64("total_elapsed_ms", elapsed.Milliseconds()),
+	)
+}
+
+// perSourcePhase maps internal DataSource enums to the closed-enum narrate
+// phases. Returns empty for unknown sources so they are silently skipped
+// (defensive — should never happen in practice).
+func perSourcePhase(src entities.DataSource) narrate.Phase {
+	switch src {
+	case entities.SECSource:
+		return narrate.PhaseFetchSEC
+	case entities.MarketSource:
+		return narrate.PhaseFetchMarket
+	case entities.MacroSource:
+		return narrate.PhaseFetchMacro
+	default:
+		return ""
+	}
 }
 
 // coordinateConcurrent fetches data from multiple sources concurrently

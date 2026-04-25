@@ -1,6 +1,7 @@
 package market
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
@@ -82,7 +84,11 @@ func NewYFinanceClient(cfg *config.YFinanceConfig, logger *zap.Logger) *YFinance
 
 // GetQuote retrieves current quote data for a ticker
 func (c *YFinanceClient) GetQuote(ctx context.Context, ticker string) (*ports.YFinanceQuote, error) {
-	logctx.Or(ctx, c.logger).Debug("Fetching quote", zap.String("ticker", ticker))
+	// Tier-2 trace.gateway.market.yahoo.fetch entry: log inputs.
+	startFetch := time.Now()
+	logctx.Or(ctx, c.logger).Debug("trace.gateway.market.yahoo.fetch",
+		zap.String("ticker", ticker),
+		zap.String("endpoint", "v7/finance/quote"))
 
 	// Yahoo Finance v7 API endpoint
 	endpoint := fmt.Sprintf("%s/v7/finance/quote", c.baseURL)
@@ -138,9 +144,19 @@ func (c *YFinanceClient) GetQuote(ctx context.Context, ticker string) (*ports.YF
 	}
 
 	quote := result.QuoteResponse.Result[0]
-	logctx.Or(ctx, c.logger).Debug("Successfully fetched quote",
+
+	// Tier-3 artifact bundle: snapshot the parsed quote struct. The raw payload
+	// is captured by makeQuoteRequest's TeeReader hook on the response body.
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "fetch.market", "06-fetch-market.parsed.json", &quote)
+		b.AddSchemaVersion("MarketData", 1)
+	}
+
+	// Tier-2 trace.gateway.market.yahoo.parse exit: outcome + elapsed.
+	logctx.Or(ctx, c.logger).Debug("trace.gateway.market.yahoo.parse",
 		zap.String("ticker", ticker),
-		zap.Float64("price", quote.RegularMarketPrice))
+		zap.Float64("price", quote.RegularMarketPrice),
+		zap.Duration("elapsed", time.Since(startFetch)))
 
 	return &quote, nil
 }
@@ -334,9 +350,30 @@ func (c *YFinanceClient) makeQuoteRequest(ctx context.Context, reqURL string) (*
 		return nil, fmt.Errorf("yahoo finance API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Tier-3 artifact bundle: TeeReader the response body so reads dual-stream
+	// into both the JSON decoder AND a per-request raw-bytes buffer. Buffer is
+	// bounded by the Yahoo response size (typically <50 KB for quote payloads).
+	body := resp.Body
+	var rawBuf *bytes.Buffer
+	if b := artifact.From(ctx); b != nil {
+		rawBuf = &bytes.Buffer{}
+		body = io.NopCloser(io.TeeReader(resp.Body, rawBuf))
+	}
+
 	var result YFinanceQuoteResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Now that decoding has fully drained the TeeReader, push the captured raw
+	// bytes into the bundle. Redaction runs first so any sensitive JSON fields
+	// (Yahoo doesn't typically emit secrets in quote payloads, but the regex
+	// pattern guards against future surprises) are scrubbed before disk write.
+	if rawBuf != nil {
+		raw, redacted := artifact.RedactJSONBytes(rawBuf.Bytes())
+		if b := artifact.From(ctx); b != nil {
+			b.SnapshotRaw(ctx, "fetch.market", "06-fetch-market.raw.json", raw, redacted)
+		}
 	}
 
 	return &result, nil

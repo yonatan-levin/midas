@@ -86,13 +86,65 @@ if ($ExitCode -eq 0) {
     Write-Host "Fix: replace <receiver>.logger.<Level>(...) with logctx.Or(ctx, <receiver>.logger).<Level>(...)"
     Write-Host "     or add the file to the whitelist in scripts/lint-logs.ps1 if it is a background-only path."
     exit 1
-} elseif ($ExitCode -eq 1) {
-    # rg exit 1 = no matches found
-    Write-Host "OK: No unguarded singleton logger calls found in request-path code."
-    exit 0
-} else {
+} elseif ($ExitCode -ne 1) {
     # rg exit 2 = error
     Write-Error "ripgrep encountered an error (exit $ExitCode):"
     $RgOutput | ForEach-Object { Write-Error "  $_" }
     exit 2
 }
+# rg exit 1 (no matches) → fall through to the second check.
+
+# ----------------------------------------------------------------------------
+# Phase 1 (observability narrative & artifacts spec §6) — Debug-tracer prefix.
+# Any Debug("…", …) call inside request-path code must use the message
+# convention: logger.Debug("trace.<area>.<op>", …).
+# ----------------------------------------------------------------------------
+Write-Host ""
+Write-Host "lint-logs: scanning Debug() messages for trace.<area>.<op> prefix..."
+$DebugPattern = '\.Debug\("(?!trace\.)'
+
+# Whitelist of files containing legacy Debug calls predating the convention.
+$DebugWhitelist = @(
+    "!internal/services/scheduler/**",
+    "!internal/services/auth/**",
+    "!internal/services/watchlist/**",
+    "!internal/services/alerting/**",
+    "!internal/services/metrics/**",
+    "!internal/services/ratelimit/**",
+    "!internal/services/datacleaner/ai/**",
+    "!internal/services/growth/estimator.go",
+    "!internal/services/valuation/service.go",
+    "!internal/services/valuation/models/**",
+    "!internal/infra/gateways/**"
+)
+$DebugGlobArgs = $DebugWhitelist | ForEach-Object { "--glob"; $_ }
+
+$DebugOutput = & rg `
+    --no-heading `
+    --line-number `
+    --color never `
+    --type go `
+    --pcre2 `
+    @DebugGlobArgs `
+    $DebugPattern `
+    @ScanDirs 2>&1
+$DebugExit = $LASTEXITCODE
+
+if ($DebugExit -eq 0) {
+    Write-Host "FAIL: Found Debug() calls in request-path code missing trace.<area>.<op> prefix:"
+    Write-Host ""
+    $DebugOutput | ForEach-Object { Write-Host "  $_" }
+    Write-Host ""
+    Write-Host "Fix: change message to 'trace.<area>.<op>' (e.g. trace.gateway.sec.fetch)"
+    Write-Host "     or whitelist the file in scripts/lint-logs.ps1."
+    exit 1
+} elseif ($DebugExit -eq 1) {
+    Write-Host "OK: All non-whitelisted Debug() calls follow trace.<area>.<op> prefix."
+} else {
+    Write-Error "ripgrep PCRE2 check failed (exit $DebugExit):"
+    $DebugOutput | ForEach-Object { Write-Error "  $_" }
+    exit 2
+}
+
+Write-Host "OK: No unguarded singleton logger calls found in request-path code."
+exit 0

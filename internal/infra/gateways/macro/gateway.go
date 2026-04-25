@@ -1,6 +1,7 @@
 package macro
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
@@ -43,15 +45,32 @@ func NewGateway(cfg *config.MacroConfig, logger *zap.Logger) ports.MacroDataGate
 	}
 }
 
-// GetTreasuryRates retrieves current Treasury yield curve data
+// GetTreasuryRates retrieves current Treasury yield curve data.
+//
+// On success, snapshots the parsed treasury rates into the request bundle
+// (when a bundle is on ctx) under fetch.macro/07-fetch-macro.parsed.json.
+// FRED raw payloads are captured per-series in getFREDSeries via TeeReader.
 func (g *Gateway) GetTreasuryRates(ctx context.Context) (*entities.TreasuryRates, error) {
-	logctx.Or(ctx, g.logger).Debug("Fetching treasury rates")
+	// Tier-2 trace.gateway.macro.fred.fetch entry: log start.
+	startFetch := time.Now()
+	logctx.Or(ctx, g.logger).Debug("trace.gateway.macro.fred.fetch",
+		zap.Bool("fred_enabled", g.config.FREDEnabled && g.config.FREDAPIKey != ""))
 
 	// If FRED API is enabled, try to fetch from FRED first
 	if g.config.FREDEnabled && g.config.FREDAPIKey != "" {
 		rates, err := g.getTreasuryRatesFromFRED(ctx)
 		if err == nil {
 			logctx.Or(ctx, g.logger).Info("Successfully fetched treasury rates from FRED")
+
+			// Tier-3 artifact bundle: snapshot the parsed treasury rates.
+			if b := artifact.From(ctx); b != nil {
+				b.Snapshot(ctx, "fetch.macro", "07-fetch-macro.parsed.json", rates)
+				b.AddSchemaVersion("MacroData", 1)
+			}
+			logctx.Or(ctx, g.logger).Debug("trace.gateway.macro.fred.parse",
+				zap.String("provider", "fred"),
+				zap.Duration("elapsed", time.Since(startFetch)))
+
 			return rates, nil
 		}
 		logctx.Or(ctx, g.logger).Warn("Failed to fetch from FRED, falling back to config defaults",
@@ -59,7 +78,15 @@ func (g *Gateway) GetTreasuryRates(ctx context.Context) (*entities.TreasuryRates
 	}
 
 	// Fallback to manual config settings as per user requirement
-	return g.getTreasuryRatesFromConfig(ctx), nil
+	rates := g.getTreasuryRatesFromConfig(ctx)
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "fetch.macro", "07-fetch-macro.parsed.json", rates)
+		b.AddSchemaVersion("MacroData", 1)
+	}
+	logctx.Or(ctx, g.logger).Debug("trace.gateway.macro.fred.parse",
+		zap.String("provider", "manual_config"),
+		zap.Duration("elapsed", time.Since(startFetch)))
+	return rates, nil
 }
 
 // GetMarketRiskPremium retrieves the market risk premium
@@ -163,7 +190,14 @@ func (g *Gateway) getTreasuryRatesFromFRED(ctx context.Context) (*entities.Treas
 	return treasuryRates, nil
 }
 
-// getFREDSeries fetches a single series from FRED API
+// getFREDSeries fetches a single series from FRED API.
+//
+// When an artifact bundle is on ctx, the raw FRED response body is captured
+// under fetch.macro/07-fetch-macro-<seriesID>.raw.json after JSON-key
+// redaction. The FRED `api_key` URL query parameter is the secret to scrub —
+// it travels in the URL, not the body, so RedactJSONBytes alone won't see
+// it; the secret is also recorded against the manifest's redactions list
+// via a synthetic redaction path "query.api_key".
 func (g *Gateway) getFREDSeries(ctx context.Context, seriesID string) (float64, error) {
 	url := fmt.Sprintf("%s/series/observations?series_id=%s&api_key=%s&file_type=json&limit=1&sort_order=desc",
 		g.config.FREDBaseURL, seriesID, g.config.FREDAPIKey)
@@ -184,9 +218,31 @@ func (g *Gateway) getFREDSeries(ctx context.Context, seriesID string) (float64, 
 		return 0, fmt.Errorf("FRED API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Tier-3 artifact bundle: TeeReader the response body so reads dual-stream
+	// into both the JSON decoder AND a per-request raw-bytes buffer.
+	body := resp.Body
+	var rawBuf *bytes.Buffer
+	if b := artifact.From(ctx); b != nil {
+		rawBuf = &bytes.Buffer{}
+		body = io.NopCloser(io.TeeReader(resp.Body, rawBuf))
+	}
+
 	var fredResponse FREDResponse
-	if err := json.NewDecoder(resp.Body).Decode(&fredResponse); err != nil {
+	if err := json.NewDecoder(body).Decode(&fredResponse); err != nil {
 		return 0, fmt.Errorf("failed to decode FRED response: %w", err)
+	}
+
+	// Push the captured raw bytes into the bundle. Body redaction strips any
+	// secret-looking JSON keys; we ALSO record "query.api_key" in the manifest
+	// redaction set since the FRED key travels in the URL (not visible to
+	// RedactJSONBytes which only sees the response body).
+	if rawBuf != nil {
+		raw, redacted := artifact.RedactJSONBytes(rawBuf.Bytes())
+		if b := artifact.From(ctx); b != nil {
+			redacted = append(redacted, "query.api_key")
+			fname := fmt.Sprintf("07-fetch-macro-%s.raw.json", seriesID)
+			b.SnapshotRaw(ctx, "fetch.macro", fname, raw, redacted)
+		}
 	}
 
 	if len(fredResponse.Observations) == 0 {

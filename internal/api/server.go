@@ -19,10 +19,13 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 	"go.uber.org/zap"
 
+	"github.com/midas/dcf-valuation-api/internal/api/middleware"
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
+	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/auth"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
 	"github.com/midas/dcf-valuation-api/internal/services/ratelimit"
@@ -133,46 +136,69 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // setupMiddleware configures the global middleware chain.
 // Order is intentional:
 //  1. requestIDMiddleware  — must be first: injects request_id + child logger into context
-//  2. securityHeadersMiddleware — sets security headers early so all responses carry them
-//  3. metrics.HTTPMetricsMiddleware — records latency/status counts
-//  4. accessLogMiddleware — OUTSIDE CustomRecovery so it always emits its line, even on panics.
+//  2. traceMiddleware       — opens narrate.Emitter (always) + artifact.Bundle (when ?trace=1)
+//     and attaches both to the request context. Runs AFTER requestID
+//     because the bundle directory uses request_id as its name.
+//  3. securityHeadersMiddleware — sets security headers early so all responses carry them
+//  4. metrics.HTTPMetricsMiddleware — records latency/status counts
+//  5. accessLogMiddleware — OUTSIDE CustomRecovery so it always emits its line, even on panics.
 //     Because it wraps CustomRecovery, its c.Next() returns normally after recovery; by the
 //     time the deferred access log runs, the status is already 500 (set by panicHandler).
-//  5. gin.CustomRecovery — catches panics from handlers; logs with request_id; returns 500.
+//  6. gin.CustomRecovery — catches panics from handlers; logs with request_id; returns 500.
 //     Registered AFTER accessLog so it is on the INSIDE of the access log wrapper.
-//  6. CORS
-//  7. rateLimitMiddleware
+//  7. CORS
+//  8. rateLimitMiddleware
 func (s *Server) setupMiddleware() {
 	// 1. Request correlation — injects request_id into context logger; runs first
 	s.engine.Use(s.requestIDMiddleware())
 
-	// 2. Security headers on every response
+	// 2. Trace middleware — narrate.Emitter (always) + artifact.Bundle (when opt-in flag).
+	//    No-op for bundle when logging.artifact_store.enabled=false; narrate emitter still
+	//    attaches to ctx so downstream code can call narrate.From(ctx).Emit unconditionally.
+	s.engine.Use(middleware.TraceMiddleware(
+		narrate.Config{
+			Enabled:      s.config.Logging.Narrate.Enabled,
+			SampleRate:   s.config.Logging.Narrate.SampleRate,
+			RedactFields: s.config.Logging.Narrate.RedactFields,
+		},
+		artifact.Config{
+			Enabled:       s.config.Logging.ArtifactStore.Enabled,
+			RootPath:      s.config.Logging.ArtifactStore.RootPath,
+			RetentionDays: s.config.Logging.ArtifactStore.RetentionDays,
+			MaxTotalBytes: s.config.Logging.ArtifactStore.MaxTotalBytes,
+			QueueSize:     s.config.Logging.ArtifactStore.QueueSize,
+			GitSHA:        s.config.GitCommit,
+			BuildVersion:  s.config.Version,
+		},
+	))
+
+	// 3. Security headers on every response
 	s.engine.Use(s.securityHeadersMiddleware())
 
-	// 3. Prometheus metrics (records HTTP request latency/status counts)
+	// 4. Prometheus metrics (records HTTP request latency/status counts)
 	s.engine.Use(metrics.HTTPMetricsMiddleware(s.metricsService, s.logger))
 
-	// 4. Structured access log — registered BEFORE CustomRecovery so that when a panic
+	// 5. Structured access log — registered BEFORE CustomRecovery so that when a panic
 	// occurs, CustomRecovery catches it (sets status 500), then returns normally to
 	// accessLogMiddleware's c.Next() call, which then emits the access line with
 	// the correct 500 status.
 	s.engine.Use(s.accessLogMiddleware())
 
-	// 5. Panic recovery — CustomRecovery logs with request_id from logctx; runs INSIDE
+	// 6. Panic recovery — CustomRecovery logs with request_id from logctx; runs INSIDE
 	// the access log middleware wrapper so panics are caught before accessLog reads the status.
 	s.engine.Use(gin.CustomRecovery(s.panicHandler))
 
-	// 6. CORS
+	// 7. CORS
 	s.engine.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"*"}, // TODO: Configure appropriately for production
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Content-Length", "Accept-Encoding", "X-CSRF-Token", "Authorization", "X-API-Key", "X-Request-ID"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Content-Length", "Accept-Encoding", "X-CSRF-Token", "Authorization", "X-API-Key", "X-Request-ID", "X-Midas-Trace"},
 		ExposeHeaders:    []string{"Content-Length", "X-Request-ID"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
 
-	// 7. Rate limiting (applied globally; uses api_key_info from context if present)
+	// 8. Rate limiting (applied globally; uses api_key_info from context if present)
 	s.engine.Use(s.rateLimitMiddleware())
 }
 
@@ -436,6 +462,21 @@ func (s *Server) rateLimitMiddleware() gin.HandlerFunc {
 			c.Header(key, value)
 		}
 
+		// Tier-1 narrate: ratelimit.checked. Emitted on every request that
+		// reaches the limiter so the per-request story carries the bucket and
+		// remaining/limit counters regardless of allow/deny.
+		rlOutcome := narrate.OutcomeOK
+		rlNotes := ""
+		if !result.Allowed {
+			rlOutcome = narrate.OutcomeError
+			rlNotes = "limit exceeded"
+		}
+		narrate.From(c.Request.Context()).Emit(c.Request.Context(),
+			narrate.PhaseRateLimitChecked, rlOutcome, rlNotes,
+			zap.String("bucket", string(limitType)),
+			zap.Int("remaining", result.Remaining),
+		)
+
 		if !result.Allowed {
 			// Log with request-scoped logger so the line carries request_id
 			logctx.From(c.Request.Context()).Warn("Rate limit exceeded",
@@ -525,6 +566,13 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 				zap.String("ip", c.ClientIP()),
 			)
 
+			// Tier-1 narrate: auth.resolved with outcome=error so the per-
+			// request story shows the auth attempt and its failure.
+			narrate.From(c.Request.Context()).Emit(c.Request.Context(),
+				narrate.PhaseAuthResolved, narrate.OutcomeError, err.Error(),
+				zap.String("auth_source", "header:X-API-Key"),
+			)
+
 			// Determine specific error response
 			switch {
 			case errors.Is(err, auth.ErrKeyNotFound):
@@ -586,6 +634,16 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		// Log successful auth with the now-enriched request-scoped logger
 		logctx.From(c.Request.Context()).Debug("API key authenticated successfully",
 			zap.Int("permissions", len(keyInfo.Permissions)),
+		)
+
+		// Tier-1 narrate: auth.resolved with outcome=ok. Carries key_id and
+		// permission count so the per-request story identifies which API key
+		// authenticated the call.
+		narrate.From(c.Request.Context()).Emit(c.Request.Context(),
+			narrate.PhaseAuthResolved, narrate.OutcomeOK, "",
+			zap.String("key_id", keyInfo.ID),
+			zap.Int("permissions", len(keyInfo.Permissions)),
+			zap.String("auth_source", "header:X-API-Key"),
 		)
 
 		c.Next()

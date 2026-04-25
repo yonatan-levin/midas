@@ -2,7 +2,7 @@
 
 **Version:** 0.1 DRAFT
 **Date:** 2026-04-25
-**Status:** DESIGN — Phase 1 scoped (manual-trigger only). Phase 2 (auto-triggers) explicitly deferred — see [Deferred Work](#deferred-work-phase-2).
+**Status:** PHASE 1 IMPLEMENTED 2026-04-25 — see commits 666d275, e463b3e, af6c314, 41bd91c, and the bundle-log-streams follow-up that closes QA-2026-04-25 MINOR-1 (`99-narrate.jsonl` + `99-debug-trace.jsonl` written via a `BundleSink` `zapcore.Core` wrapper). Phase 2 (auto-triggers) explicitly deferred — see [Deferred Work](#deferred-work-phase-2).
 **Builds on:** [`observability-upgrade-spec.md`](./observability-upgrade-spec.md) (v1.1, ALL PHASES COMPLETE 2026-04-23). This spec is additive; it does not modify Phases O/R/S/M/U/D.
 
 ---
@@ -546,3 +546,4 @@ A CLI command `cmd/replay/main.go` that takes a bundle directory and re-runs the
 | Date | Change |
 |---|---|
 | 2026-04-25 | v0.1 — Initial design draft. Three-tier architecture (narrate / Debug-tracer convention / artifact bundle). 17-phase taxonomy. Manual-trigger only (Phase 1). Phase 2 auto-triggers explicitly deferred — see §13. |
+| 2026-04-25 | v0.2 — §7.1 + §7.3 closed: `99-narrate.jsonl` and `99-debug-trace.jsonl` are now written into bundles via a `BundleSink` `zapcore.Core` wrapper installed by trace middleware after a successful bundle open. The wrapper forwards every entry to the wrapped core unchanged AND tees `event=narrate` entries to `99-narrate.jsonl` plus Debug-level entries to `99-debug-trace.jsonl`. Bundle stream files are flushed + closed on `Bundle.Close`. Closes QA-2026-04-25 MINOR-1. |
