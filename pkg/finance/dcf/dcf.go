@@ -59,7 +59,12 @@ type Result struct {
 	Projections []Projection `json:"projections"` // Year-by-year projections
 
 	// Terminal value details
-	TerminalYearFCF      float64 `json:"terminal_year_fcf"`      // FCF in final explicit year
+	TerminalYearFCF float64 `json:"terminal_year_fcf"` // FCF in final explicit year
+	// ExitMultipleTV is the raw exit-multiple terminal value component, before
+	// averaging with Gordon Growth TV. Zero when ExitMultiple input is 0
+	// (Gordon-only path). Surfaced on the "terminal_value" calc trace so
+	// operators can audit the two TV estimates separately. Added per M-1c.
+	ExitMultipleTV       float64 `json:"exit_multiple_tv,omitempty"`
 	TerminalValueNominal float64 `json:"terminal_value_nominal"` // Terminal value before discounting
 
 	// Input validation and quality
@@ -171,6 +176,10 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 		terminalEBITDA := terminalOI + scaledDA
 		if terminalEBITDA > 0 {
 			exitMultipleTV := terminalEBITDA * inputs.ExitMultiple
+			// Persist the raw exit-multiple TV component so the valuation service can
+			// surface it on the "terminal_value" calc trace alongside Gordon Growth TV.
+			// Zero when this branch isn't taken — omitempty keeps JSON clean. (M-1c)
+			result.ExitMultipleTV = exitMultipleTV
 			result.TerminalValueNominal = (gordonTV + exitMultipleTV) / 2
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("Terminal value averaged: Gordon Growth (%.0f) and Exit Multiple %.1fx (%.0f)",
