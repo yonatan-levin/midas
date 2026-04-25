@@ -192,6 +192,52 @@ func TestMetricsService_RegistryReceivesMetrics(t *testing.T) {
 	assert.True(t, found, "http_requests_total must be registered on the service registry")
 }
 
+// TestRecordHTTPRequest_StatusCodeLabel pins M2: the status_code label on
+// http_requests_total must be the decimal string ("200"), not the
+// single-rune encoding (string(rune(200)) == "È", U+00C8) that the
+// pre-fix code produced. The bug was invisible until PREX-1 actually
+// registered the metric on a gatherer; once /metrics surfaced the label,
+// any Grafana panel or Prometheus rule keyed on status_code="200" was
+// silently broken.
+func TestRecordHTTPRequest_StatusCodeLabel(t *testing.T) {
+	logger := zap.NewNop()
+	registry := prometheus.NewRegistry()
+	svc := NewServiceWithRegistry(logger, registry)
+
+	svc.RecordHTTPRequest("GET", "/api/v1/fair-value/:ticker", 200, 100*time.Millisecond, 1024)
+	svc.RecordHTTPRequest("GET", "/api/v1/fair-value/:ticker", 404, 100*time.Millisecond, 1024)
+	svc.RecordHTTPRequest("POST", "/api/v1/fair-value/bulk", 500, 100*time.Millisecond, 1024)
+
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("registry.Gather error: %v", err)
+	}
+
+	want := map[string]bool{"200": false, "404": false, "500": false}
+	for _, f := range families {
+		if f.GetName() != "http_requests_total" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() != "status_code" {
+					continue
+				}
+				val := lp.GetValue()
+				if _, ok := want[val]; ok {
+					want[val] = true
+				} else {
+					t.Errorf("unexpected status_code label value %q (len=%d) — must be a decimal numeric string, not a single-rune encoding",
+						val, len(val))
+				}
+			}
+		}
+	}
+	for code, seen := range want {
+		assert.True(t, seen, "status_code=%q must appear as a decimal label on http_requests_total", code)
+	}
+}
+
 // Benchmark test for metrics recording performance
 func BenchmarkRecordHTTPRequest(b *testing.B) {
 	logger := zap.NewNop()

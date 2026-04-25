@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"runtime"
+	"strconv"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -357,7 +358,7 @@ func (s *Service) initMetrics(registry *prometheus.Registry) {
 // HTTP Metrics Methods
 func (s *Service) RecordHTTPRequest(method, endpoint string, statusCode int, duration time.Duration, responseSize int) {
 	// Update Prometheus metrics
-	s.httpRequestsTotal.WithLabelValues(method, endpoint, string(rune(statusCode))).Inc()
+	s.httpRequestsTotal.WithLabelValues(method, endpoint, strconv.Itoa(statusCode)).Inc()
 	s.httpRequestDuration.WithLabelValues(method, endpoint).Observe(duration.Seconds())
 	s.httpResponseSizeBytes.WithLabelValues(method, endpoint).Observe(float64(responseSize))
 
