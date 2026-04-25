@@ -752,12 +752,14 @@ func (s *Service) performValuation(
 		}
 		// exit_multiple_used is true when TerminalValueNominal differs from the pure
 		// Gordon Growth value — i.e. pkg/finance/dcf averaged an exit-multiple TV in.
-		// The raw exit_multiple_tv component is not exposed by dcf.Result; surfacing
-		// it would require a pkg/finance change that is out of Phase M's scope (D7/R1).
+		// Post-M-1c the raw exit_multiple_tv component is also persisted on
+		// dcf.Result.ExitMultipleTV (zero on the Gordon-only path), so we surface it
+		// directly rather than back-calculating via 2*averaged - gordon.
 		exitMultipleUsed := math.Abs(dcfResult.TerminalValueNominal-gordonTV) > 1e-6
 		s.calcEmitter.Emit(ctx, "terminal_value",
 			zap.String("ticker", historicalData.Ticker),
 			zap.Float64("gordon_tv", gordonTV),
+			zap.Float64("exit_multiple_tv", dcfResult.ExitMultipleTV),
 			zap.Bool("exit_multiple_used", exitMultipleUsed),
 			zap.Float64("averaged_tv", dcfResult.TerminalValueNominal),
 			zap.Float64("terminal_growth", terminalGrowthRate),

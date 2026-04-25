@@ -210,6 +210,12 @@ func TestCalculateDCF_ExitMultipleTV(t *testing.T) {
 			assert.NotContains(t, w, "Exit Multiple",
 				"Should not mention exit multiple when ExitMultiple=0")
 		}
+
+		// M-1c: the raw exit-multiple TV component must be exactly zero on
+		// the Gordon-only path so omitempty drops it from JSON output and the
+		// valuation service's "terminal_value" trace surfaces a clean 0.
+		assert.Equal(t, 0.0, result.ExitMultipleTV,
+			"ExitMultipleTV should be zero when ExitMultiple input is 0")
 	})
 
 	t.Run("ExitMultiple > 0 averages Gordon and exit TV", func(t *testing.T) {
@@ -237,6 +243,18 @@ func TestCalculateDCF_ExitMultipleTV(t *testing.T) {
 			}
 		}
 		assert.True(t, found, "Should include warning about TV averaging method")
+
+		// M-1c: ExitMultipleTV must be persisted (positive) on the averaged path,
+		// AND must satisfy the algebraic identity
+		//     averaged = (gordon + exitMultiple) / 2   <=>
+		//     exitMultiple = 2*averaged - gordon
+		// This is the same back-calculation the trace USED to do; pinning it
+		// here ensures the directly-stored value matches what the math implies.
+		assert.Greater(t, result.ExitMultipleTV, 0.0,
+			"ExitMultipleTV should be positive when exit multiple is used")
+		expectedExitTV := 2*result.TerminalValueNominal - gordonResult.TerminalValueNominal
+		assert.InDelta(t, expectedExitTV, result.ExitMultipleTV, 1.0,
+			"ExitMultipleTV must satisfy the averaging identity 2*averaged - gordon")
 	})
 }
 
