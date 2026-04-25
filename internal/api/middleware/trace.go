@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
@@ -93,6 +94,33 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 		ctx := narrate.Inject(c.Request.Context(), emitter)
 		if bundle != nil {
 			ctx = artifact.Inject(ctx, bundle)
+
+			// Tee narrate + Debug zap entries into the bundle's JSONL streams
+			// (spec §7.1 + §7.3). We wrap the request-scoped logger (which
+			// already carries request_id baked into its core's With-state)
+			// — wrapping the singleton would lose that correlation in the
+			// host log stream.
+			//
+			// Subtlety: zap's Core.Write only receives call-site fields, not
+			// the wrapped core's With-state, so the BundleSink can't see
+			// request_id from the wrapped core's internal state. We
+			// re-attach request_id via .With() AFTER wrapping so the
+			// BundleSink.With path captures it into its own fields slice
+			// and includes it in the JSONL tee. The host log stream remains
+			// unaffected — the wrapped core de-duplicates fields under the
+			// hood (same key written twice picks the last write, which is
+			// identical to the first, so no observable change).
+			//
+			// The wrapper is transparent for non-narrate Info+ entries so
+			// existing log output is unaffected. Bundle handle lifetime is
+			// bounded by the deferred bundle.Close() below; the wrapper
+			// stops writing once the bundle is closed (AppendStream is
+			// no-op past Close).
+			base := logctx.From(c.Request.Context())
+			wrapped := base.WithOptions(zap.WrapCore(func(c zapcore.Core) zapcore.Core {
+				return artifact.NewBundleSink(c, bundle)
+			})).With(zap.String("request_id", requestID))
+			ctx = logctx.Inject(ctx, wrapped)
 		}
 		c.Request = c.Request.WithContext(ctx)
 

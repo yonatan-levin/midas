@@ -75,6 +75,12 @@ type Bundle struct {
 	dropped     atomic.Int64
 	writeErrors atomic.Int64
 	requestID   string
+
+	// mu protects the streams cache. AppendStream uses cached file handles
+	// so we don't pay open() per line for the ~17 narrate lines + potentially
+	// hundreds of debug lines per request.
+	mu      sync.Mutex
+	streams map[string]*os.File
 }
 
 // snapshotJob is the unit of work passed from Snapshot() (request-thread,
@@ -237,6 +243,66 @@ func (b *Bundle) SnapshotRaw(_ context.Context, phase, filename string, body []b
 	}
 }
 
+// AppendStream appends a single JSONL line to <bundleDir>/<filename>. Used
+// by BundleSink (the zapcore.Core wrapper) to tee narrate + debug log
+// entries into the bundle without going through the snapshot machinery,
+// which assumes one-shot per-phase writes with manifest registration.
+//
+// The file handle is cached in b.streams so we don't pay open() per line:
+// each request emits ~17 narrate lines and potentially hundreds of debug
+// lines, so the cache is meaningful.
+//
+// Behaviour:
+//   - No-op when b == nil (nil-receiver safety).
+//   - No-op when bundle is closed (matches Snapshot's contract).
+//   - Returns the underlying error on os.OpenFile / Write failure and
+//     increments writeErrors so Close() can downgrade outcome to "partial"
+//     and annotate the manifest.
+//   - Appends a trailing newline if line doesn't already end in one (zap's
+//     JSON encoder adds the newline, but defensive in case other callers
+//     pass raw bytes).
+func (b *Bundle) AppendStream(filename string, line []byte) error {
+	if b == nil || b.closed.Load() {
+		return nil
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	// Re-check closed under the lock to avoid racing with Close(), which
+	// also takes mu before draining the cache.
+	if b.closed.Load() {
+		return nil
+	}
+
+	f, ok := b.streams[filename]
+	if !ok {
+		path := filepath.Join(b.root, filename)
+		opened, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			b.writeErrors.Add(1)
+			return fmt.Errorf("artifact: open stream %s: %w", filename, err)
+		}
+		if b.streams == nil {
+			b.streams = make(map[string]*os.File)
+		}
+		b.streams[filename] = opened
+		f = opened
+	}
+
+	if _, err := f.Write(line); err != nil {
+		b.writeErrors.Add(1)
+		return fmt.Errorf("artifact: write stream %s: %w", filename, err)
+	}
+	if len(line) == 0 || line[len(line)-1] != '\n' {
+		if _, err := f.Write([]byte{'\n'}); err != nil {
+			b.writeErrors.Add(1)
+			return fmt.Errorf("artifact: write newline %s: %w", filename, err)
+		}
+	}
+	return nil
+}
+
 // runWorker is the bundle's background writer. Drains the queue serially so
 // disk I/O ordering is deterministic.
 func (b *Bundle) runWorker() {
@@ -282,9 +348,29 @@ func (b *Bundle) Close() error {
 	close(b.queue)
 	b.worker.Wait()
 
-	// Read the loss counters AFTER worker.Wait() so all increments are
-	// observed. Both queue-overflow drops and on-disk write failures
-	// indicate an incomplete capture; either degrades the outcome.
+	// Flush + close any cached AppendStream file handles. Done AFTER the
+	// snapshot worker has drained so we don't race with in-flight Snapshots,
+	// and BEFORE we read writeErrors so any close-time errors are reflected
+	// in the outcome. Held under mu so a late AppendStream caller racing
+	// with Close cleanly observes closed=true and no-ops.
+	b.mu.Lock()
+	for name, f := range b.streams {
+		if err := f.Sync(); err != nil {
+			b.writeErrors.Add(1)
+			_ = err // best-effort: nowhere useful to surface this
+		}
+		if err := f.Close(); err != nil {
+			b.writeErrors.Add(1)
+			_ = err
+		}
+		delete(b.streams, name)
+	}
+	b.mu.Unlock()
+
+	// Read the loss counters AFTER worker.Wait() AND stream flush so all
+	// increments are observed. Queue-overflow drops, snapshot write
+	// failures, and stream flush errors all indicate an incomplete capture;
+	// any degrades the outcome.
 	dropped := b.dropped.Load()
 	writeErrors := b.writeErrors.Load()
 	if dropped > 0 || writeErrors > 0 {

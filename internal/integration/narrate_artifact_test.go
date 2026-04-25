@@ -223,6 +223,40 @@ func TestNarrateArtifact_TraceOn_EmitsStreamAndBundle(t *testing.T) {
 			assert.NoError(t, err, "manifest references missing file: %s", path)
 		}
 	}
+
+	// --- Assert (4): 99-narrate.jsonl contains every emitted narrate phase,
+	//     each tagged with the request_id. Pins QA-2026-04-25 MINOR-1 fix:
+	//     spec §7.1 + §7.3 promise this file in the bundle and the
+	//     BundleSink (commit 5) writes it.
+	narrateStream := filepath.Join(bundleDir, "99-narrate.jsonl")
+	streamBody, err := os.ReadFile(narrateStream)
+	require.NoError(t, err, "99-narrate.jsonl must exist in opened bundle")
+
+	streamLines := strings.Split(strings.TrimSpace(string(streamBody)), "\n")
+	require.GreaterOrEqual(t, len(streamLines), len(requiredNarratePhases),
+		"narrate stream must have at least one entry per required phase; got %d lines, need >= %d",
+		len(streamLines), len(requiredNarratePhases))
+
+	for i, line := range streamLines {
+		var entry map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(line), &entry),
+			"line %d not valid JSON: %s", i, line)
+		assert.Equal(t, "narrate", entry["event"],
+			"line %d missing event=narrate", i)
+		assert.Equal(t, requestID, entry["request_id"],
+			"line %d carries wrong request_id", i)
+	}
+
+	// --- Assert (5): 99-debug-trace.jsonl semantics depend on the test
+	//     logger's level. The observerCore is constructed at zapcore.InfoLevel
+	//     above, so Debug entries are filtered out at the wrapped-core level
+	//     BEFORE the BundleSink's Write is invoked — which means the file is
+	//     never created. If a future change raises the observer to DebugLevel,
+	//     this assertion must flip to require.FileExists + GreaterOrEqual(1).
+	debugStream := filepath.Join(bundleDir, "99-debug-trace.jsonl")
+	_, err = os.Stat(debugStream)
+	assert.True(t, os.IsNotExist(err),
+		"99-debug-trace.jsonl must NOT exist when test logger runs at InfoLevel")
 }
 
 // TestNarrateArtifact_TraceOff_NoBundleCreated verifies the spec G5 invariant

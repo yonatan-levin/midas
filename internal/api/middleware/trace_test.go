@@ -336,6 +336,138 @@ func TestTrace_OpenBundleFailureWarnsAndDegrades(t *testing.T) {
 	assert.Equal(t, "req-openfail", fields["request_id"])
 }
 
+// TestTrace_BundleSinkInstalledAndCaptures — when ?trace=1 opens a bundle,
+// the trace middleware must wrap the request-scoped logger with a
+// BundleSink so subsequent narrate + Debug entries land in 99-narrate.jsonl
+// / 99-debug-trace.jsonl on disk. Forwarding to the host log stream must
+// also still work (the wrapper is transparent).
+//
+// This is the contract behind QA finding MINOR-1 (2026-04-25): the spec
+// promised these JSONL files live in the bundle and the test pins that
+// promise at the middleware layer.
+func TestTrace_BundleSinkInstalledAndCaptures(t *testing.T) {
+	root := t.TempDir()
+
+	// Observer logger at Debug level so the BundleSink wrapper can see Debug
+	// entries (production typically runs at Info; the integration test's
+	// debug-stream branch covers that case).
+	core, recorded := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-sink-cap"))
+	// Inject the observer logger so trace.go's wrap-the-request-scoped-logger
+	// path has a non-nop logger to wrap.
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{Enabled: true, RootPath: root, QueueSize: 64},
+	))
+
+	var bundleRoot string
+	r.GET("/x", func(c *gin.Context) {
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b)
+		bundleRoot = b.Root()
+
+		// Emit one narrate line and one Debug line via logctx — the wrapped
+		// logger from trace middleware should tee both to bundle JSONL
+		// streams while still forwarding to the observer.
+		l := logctx.From(c.Request.Context())
+		l.Info("trace.handler.narrate",
+			zap.String("event", "narrate"),
+			zap.String("phase", "handler.entry"),
+		)
+		l.Debug("trace.handler.debug",
+			zap.String("phase", "compute"),
+		)
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x?trace=1", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	require.NotEmpty(t, bundleRoot)
+
+	// Forwarding still works: the observer must have seen both entries plus
+	// trace middleware's own request.received + response.sent narrate lines.
+	allEntries := recorded.All()
+	require.NotEmpty(t, allEntries, "observer must receive entries (forwarding works)")
+	sawHandlerNarrate := false
+	sawHandlerDebug := false
+	for _, e := range allEntries {
+		if e.Message == "trace.handler.narrate" {
+			sawHandlerNarrate = true
+		}
+		if e.Message == "trace.handler.debug" {
+			sawHandlerDebug = true
+		}
+	}
+	assert.True(t, sawHandlerNarrate, "observer must receive the narrate entry")
+	assert.True(t, sawHandlerDebug, "observer must receive the debug entry")
+
+	// Bundle JSONL streams must contain the entries.
+	narrateBody, err := os.ReadFile(filepath.Join(bundleRoot, "99-narrate.jsonl"))
+	require.NoError(t, err, "99-narrate.jsonl must be on disk")
+	// Multiple narrate lines: trace middleware's request.received + response.sent
+	// + the handler's emit. Just assert "at least one" so future trace phases
+	// don't break this test.
+	assert.Contains(t, string(narrateBody), `"phase":"handler.entry"`,
+		"narrate stream must contain the handler's narrate entry")
+
+	debugBody, err := os.ReadFile(filepath.Join(bundleRoot, "99-debug-trace.jsonl"))
+	require.NoError(t, err, "99-debug-trace.jsonl must be on disk when Debug entries emitted")
+	assert.Contains(t, string(debugBody), `trace.handler.debug`,
+		"debug stream must contain the handler's debug entry")
+}
+
+// TestTrace_NoBundleSink_WhenDisabled — when artifact store is disabled,
+// the trace middleware MUST NOT wrap the logger (the wrapper is nil-bundle
+// transparent, but skipping the wrap entirely keeps the hot path slim).
+// We assert by emitting a narrate line and confirming no JSONL file lands
+// anywhere on disk.
+func TestTrace_NoBundleSink_WhenDisabled(t *testing.T) {
+	root := t.TempDir()
+
+	core, _ := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-no-sink"))
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{Enabled: false, RootPath: root},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		l := logctx.From(c.Request.Context())
+		l.Info("phase",
+			zap.String("event", "narrate"),
+			zap.String("phase", "handler.entry"),
+		)
+		l.Debug("dbg")
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x?trace=1", nil)
+	r.ServeHTTP(w, req)
+
+	// Disk must remain empty: no bundle was ever opened.
+	entries, _ := os.ReadDir(root)
+	assert.Empty(t, entries, "no bundle dir when artifact store disabled")
+}
+
 // TestTrace_NarrateEmitterAlwaysOnContext — even with no trace flag and no
 // bundle, downstream code must be able to call narrate.From(ctx) safely.
 func TestTrace_NarrateEmitterAlwaysOnContext(t *testing.T) {

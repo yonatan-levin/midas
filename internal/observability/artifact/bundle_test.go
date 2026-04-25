@@ -339,6 +339,71 @@ func TestOpenBundle_RequestIDAndRootRequired(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestBundle_AppendStream_Persists pins the JSONL append contract: 5 lines
+// in, 5 valid JSON lines on disk after Close.
+func TestBundle_AppendStream_Persists(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+	b, err := artifact.OpenBundle(cfg, "rid-stream", "AAPL", artifact.TriggerHeader)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	const N = 5
+	for i := 0; i < N; i++ {
+		line := []byte(`{"event":"narrate","phase":"test"}`)
+		require.NoError(t, b.AppendStream("99-narrate.jsonl", line))
+	}
+	require.NoError(t, b.Close())
+
+	body, err := os.ReadFile(filepath.Join(b.Root(), "99-narrate.jsonl"))
+	require.NoError(t, err)
+
+	// 5 lines, each valid JSON.
+	lines := splitJSONLines(string(body))
+	require.Len(t, lines, N)
+	for i, l := range lines {
+		var v map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(l), &v), "line %d not valid JSON: %s", i, l)
+		assert.Equal(t, "narrate", v["event"])
+	}
+}
+
+// TestBundle_AppendStream_NilSafe — same nil-receiver contract as Snapshot.
+func TestBundle_AppendStream_NilSafe(t *testing.T) {
+	var b *artifact.Bundle
+	assert.NoError(t, b.AppendStream("foo", []byte("x")))
+}
+
+// TestBundle_AppendStream_AfterClose_NoOps — calling AppendStream on a
+// closed bundle must be a no-op (matches Snapshot's contract). The pre-close
+// stream content must remain untouched.
+func TestBundle_AppendStream_AfterClose_NoOps(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+	b, err := artifact.OpenBundle(cfg, "rid-closed", "AAPL", artifact.TriggerHeader)
+	require.NoError(t, err)
+
+	require.NoError(t, b.AppendStream("99-narrate.jsonl", []byte("before")))
+	require.NoError(t, b.Close())
+
+	// File from pre-close write must exist.
+	beforePath := filepath.Join(b.Root(), "99-narrate.jsonl")
+	beforeBody, err := os.ReadFile(beforePath)
+	require.NoError(t, err)
+
+	// Post-close call must not error and must not alter the file.
+	assert.NoError(t, b.AppendStream("99-narrate.jsonl", []byte("after")))
+	assert.NoError(t, b.AppendStream("99-fresh.jsonl", []byte("never")))
+
+	afterBody, err := os.ReadFile(beforePath)
+	require.NoError(t, err)
+	assert.Equal(t, beforeBody, afterBody, "post-close AppendStream must not mutate stream files")
+
+	// Fresh stream that was never opened pre-close must not exist either.
+	_, err = os.Stat(filepath.Join(b.Root(), "99-fresh.jsonl"))
+	assert.True(t, os.IsNotExist(err), "no new stream files after Close")
+}
+
 // splitPath returns the path components of fullPath relative to root.
 func splitPath(t *testing.T, fullPath, root string) []string {
 	t.Helper()
