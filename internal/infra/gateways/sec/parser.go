@@ -324,6 +324,25 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		financialData.StockholdersEquity = val
 	}
 
+	// Minority (non-controlling) interest — subtracted from EV→equity bridge
+	// so per-share value reflects only the parent's claim. M-1d: see
+	// docs/reviewer/M1-growth-and-model-selection-traces-missing-ticker.md.
+	if val, exists := p.findValue(data, []string{
+		"MinorityInterest",
+		"MinorityInterestInLimitedPartnerships",
+	}); exists {
+		financialData.MinorityInterest = val
+	}
+
+	// Preferred stock par/carrying value — subtracted from EV→equity bridge
+	// so per-share value reflects only common shareholders' claim. M-1d.
+	if val, exists := p.findValue(data, []string{
+		"PreferredStockValue",
+		"PreferredStockValueOutstanding",
+	}); exists {
+		financialData.PreferredEquity = val
+	}
+
 	if val, exists := p.findValue(data, []string{
 		"Goodwill",
 	}); exists {
@@ -513,6 +532,12 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"us-gaap:Liabilities",
 		"us-gaap:LiabilitiesCurrent",
 		"us-gaap:LiabilitiesNoncurrent",
+
+		// Balance Sheet - Equity bridge correction terms (M-1d)
+		"us-gaap:MinorityInterest",
+		"us-gaap:MinorityInterestInLimitedPartnerships",
+		"us-gaap:PreferredStockValue",
+		"us-gaap:PreferredStockValueOutstanding",
 
 		// Operating Leases (ASC 842)
 		"us-gaap:OperatingLeaseLiability",

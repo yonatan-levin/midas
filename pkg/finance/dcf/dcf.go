@@ -193,9 +193,18 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 	return result, nil
 }
 
-// CalculateEquityValue converts enterprise value to equity value
-func CalculateEquityValue(enterpriseValue, debt, cash float64) float64 {
-	return enterpriseValue - debt + cash
+// CalculateEquityValue applies the EV → equity bridge. The standard
+// formula is EV - Debt + Cash; M-1d adds the two correction terms that
+// matter for accuracy on companies with significant non-controlling
+// interest or preferred stock outstanding.
+//
+//	Common Equity = EV - Debt + Cash - MinorityInterest - PreferredEquity
+//
+// For tickers without minority interest or preferred stock the new
+// terms are zero and per-share output is unchanged versus the prior
+// signature.
+func CalculateEquityValue(enterpriseValue, debt, cash, minorityInterest, preferredEquity float64) float64 {
+	return enterpriseValue - debt + cash - minorityInterest - preferredEquity
 }
 
 // CalculateValuePerShare converts equity value to per-share value

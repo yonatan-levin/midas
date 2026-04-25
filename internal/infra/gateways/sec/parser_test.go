@@ -490,6 +490,9 @@ func TestParser_ParsePeriodData_AllXBRLTags(t *testing.T) {
 		"InventoryNet":                          6331000000,
 		"DeferredTaxAssetsNet":                  17852000000,
 		"OperatingLeaseLiability":               11087000000,
+		// M-1d: equity bridge correction terms (primary XBRL tags).
+		"MinorityInterest":    250000000,
+		"PreferredStockValue": 100000000,
 
 		// Pension
 		"DefinedBenefitPlanPensionPlansProjectedBenefitObligationIncrease": 500000000,
@@ -525,6 +528,10 @@ func TestParser_ParsePeriodData_AllXBRLTags(t *testing.T) {
 	assert.Equal(t, 6331000000.0, result.Inventory)
 	assert.Equal(t, 17852000000.0, result.DeferredTaxAssets)
 	assert.Equal(t, 11087000000.0, result.OperatingLeaseLiability)
+
+	// Verify M-1d equity bridge correction terms (primary XBRL tags).
+	assert.Equal(t, 250000000.0, result.MinorityInterest)
+	assert.Equal(t, 100000000.0, result.PreferredEquity)
 
 	// Verify pension fields
 	assert.Equal(t, 500000000.0, result.ProjectedBenefitObligation)
@@ -569,6 +576,9 @@ func TestParser_ParsePeriodData_FallbackTags(t *testing.T) {
 		"WeightedAverageNumberOfSharesOutstandingBasicAndDiluted": 10500000,
 		"ProjectedBenefitObligation":                              200000,
 		"PensionPlanAssets":                                       150000,
+		// M-1d: equity bridge correction terms (fallback XBRL tags).
+		"MinorityInterestInLimitedPartnerships": 75000,
+		"PreferredStockValueOutstanding":        25000,
 	}
 
 	result, err := parser.parsePeriodData("0000789019", "2023FY", data)
@@ -591,6 +601,9 @@ func TestParser_ParsePeriodData_FallbackTags(t *testing.T) {
 	assert.Equal(t, 10500000.0, result.DilutedSharesOutstanding)
 	assert.Equal(t, 200000.0, result.ProjectedBenefitObligation)
 	assert.Equal(t, 150000.0, result.PensionPlanAssets)
+	// M-1d: fallback tag resolution.
+	assert.Equal(t, 75000.0, result.MinorityInterest)
+	assert.Equal(t, 25000.0, result.PreferredEquity)
 }
 
 // TestParser_ParsePeriodData_InsufficientData verifies parsePeriodData returns an
