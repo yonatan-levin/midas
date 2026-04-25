@@ -10,9 +10,13 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/midas/dcf-valuation-api/internal/api/middleware"
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 )
 
@@ -263,6 +267,73 @@ func TestTrace_BundleClosedOnReturn(t *testing.T) {
 		return nil
 	})
 	assert.NotEmpty(t, found, "manifest must be present after request returns")
+}
+
+// TestTrace_OpenBundleFailureWarnsAndDegrades — when artifact.OpenBundle
+// fails (here: RootPath is a regular file, so MkdirAll errors), the
+// middleware MUST:
+//   - emit a Warn log line so operators can find the cause (HIGH 1 fix);
+//   - set trace_enabled=false on the gin context;
+//   - record trace_reason=open_failed so the request narrative isn't silent.
+//
+// Pre-fix this path silently swallowed the error and the user saw no bundle
+// with no log line explaining why.
+func TestTrace_OpenBundleFailureWarnsAndDegrades(t *testing.T) {
+	// Make RootPath a FILE rather than a directory — every MkdirAll under
+	// it will fail with "not a directory" on POSIX and ENOTDIR on Windows.
+	tmpDir := t.TempDir()
+	rootAsFile := filepath.Join(tmpDir, "artifacts-but-actually-a-file")
+	require.NoError(t, os.WriteFile(rootAsFile, []byte("not a dir"), 0o644))
+
+	// Capture log output via a zap observer so we can assert on the Warn line.
+	core, recorded := observer.New(zapcore.WarnLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-openfail"))
+	// Inject the observer logger via logctx so trace.go's
+	// logctx.From(c.Request.Context()) picks it up.
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{Enabled: true, RootPath: rootAsFile},
+	))
+
+	var sawBundle bool
+	var sawTraceEnabled bool
+	var sawTraceReason string
+	r.GET("/x", func(c *gin.Context) {
+		sawBundle = artifact.From(c.Request.Context()) != nil
+		v, _ := c.Get("trace_enabled")
+		sawTraceEnabled, _ = v.(bool)
+		reason, _ := c.Get("trace_reason")
+		sawTraceReason, _ = reason.(string)
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x?trace=1", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.False(t, sawBundle, "bundle must be absent on OpenBundle failure")
+	assert.False(t, sawTraceEnabled,
+		"trace_enabled must downgrade to false when bundle fails to open")
+	assert.Equal(t, "open_failed", sawTraceReason,
+		"trace_reason must explain the silent absence of the bundle")
+
+	// And the Warn line must have been emitted with the open error.
+	logs := recorded.FilterMessage("trace.bundle.open_failed").All()
+	require.Len(t, logs, 1, "expected exactly one open_failed Warn line")
+	assert.Equal(t, zapcore.WarnLevel, logs[0].Level)
+	// The error field must be present and non-empty.
+	fields := logs[0].ContextMap()
+	assert.NotEmpty(t, fields["error"], "Warn line must carry the underlying error")
+	assert.Equal(t, "req-openfail", fields["request_id"])
 }
 
 // TestTrace_NarrateEmitterAlwaysOnContext — even with no trace flag and no

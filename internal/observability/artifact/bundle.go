@@ -60,13 +60,21 @@ type Config struct {
 // finalised at request exit. All Snapshot calls dispatch to a background
 // goroutine via a bounded queue — the request thread never blocks on disk.
 type Bundle struct {
-	root      string
-	manifest  *ManifestBuilder
-	queue     chan snapshotJob
-	worker    sync.WaitGroup
-	closed    atomic.Bool
-	dropped   atomic.Int64 // count of snapshots dropped due to a full queue
-	requestID string
+	root     string
+	manifest *ManifestBuilder
+	queue    chan snapshotJob
+	worker   sync.WaitGroup
+	closed   atomic.Bool
+	// dropped counts snapshots discarded BEFORE reaching disk (queue full).
+	// writeErrors counts snapshots that reached the worker but failed
+	// os.WriteFile (disk-full, permission, removed root, etc).
+	// Both are factored into the manifest's outcome at Close(): any non-zero
+	// count downgrades a clean "ok" to "partial" and is annotated in
+	// manifest.Notes so a reader of the bundle directory immediately knows
+	// why the capture is incomplete.
+	dropped     atomic.Int64
+	writeErrors atomic.Int64
+	requestID   string
 }
 
 // snapshotJob is the unit of work passed from Snapshot() (request-thread,
@@ -237,10 +245,18 @@ func (b *Bundle) runWorker() {
 		path := filepath.Join(b.root, job.filename)
 		err := os.WriteFile(path, job.data, 0o644)
 		if err != nil {
-			// We can't reliably log here — the bundle has no zap.Logger and
-			// the request context may already be done. Silent drop is the
-			// least-bad option; the bundle's manifest will reflect the
-			// missing phase row.
+			// Track write failures so Close() can mark the bundle outcome
+			// "partial" and annotate the manifest. Pre-fix this branch
+			// silently dropped the failure: a disk-full or permission
+			// error left outcome="ok" with zero phases on disk, which
+			// turned bundles into liars. We still don't have a zap.Logger
+			// here (worker is goroutine-scoped); runtime visibility for
+			// these failures is a follow-up — see TODO below.
+			b.writeErrors.Add(1)
+			// TODO: thread a *zap.Logger into OpenBundle so worker errors
+			// can be Warn-logged at runtime, not just postmortem in the
+			// manifest. Tracked as a follow-up — see REVIEWER notes for
+			// HIGH 2 in the observability-narrative branch.
 			continue
 		}
 		b.manifest.AddPhase(job.phase, []string{job.filename}, int64(len(job.data)))
@@ -266,10 +282,17 @@ func (b *Bundle) Close() error {
 	close(b.queue)
 	b.worker.Wait()
 
-	// If snapshots were dropped, downgrade the bundle outcome to partial so
-	// consumers know the on-disk record is incomplete.
-	if b.dropped.Load() > 0 {
+	// Read the loss counters AFTER worker.Wait() so all increments are
+	// observed. Both queue-overflow drops and on-disk write failures
+	// indicate an incomplete capture; either degrades the outcome.
+	dropped := b.dropped.Load()
+	writeErrors := b.writeErrors.Load()
+	if dropped > 0 || writeErrors > 0 {
 		b.manifest.SetOutcome("partial")
+		// Annotate the manifest so a reader of the bundle directory
+		// immediately understands why outcome is "partial". The format is
+		// stable so log-greppers and tooling can parse it.
+		b.manifest.SetNotes(fmt.Sprintf("write_failures=%d queue_drops=%d", writeErrors, dropped))
 	}
 
 	// Best effort — failure to write the manifest is logged only via the
@@ -286,6 +309,17 @@ func (b *Bundle) Dropped() int64 {
 		return 0
 	}
 	return b.dropped.Load()
+}
+
+// WriteErrors returns the count of snapshot jobs the worker accepted but
+// failed to persist to disk (os.WriteFile error — disk full, permission,
+// removed root, etc). Zero means every queued snapshot reached the
+// filesystem. Used by tests and surfaced in the manifest's notes.
+func (b *Bundle) WriteErrors() int64 {
+	if b == nil {
+		return 0
+	}
+	return b.writeErrors.Load()
 }
 
 // safeRequestID strips characters that are problematic in directory names on

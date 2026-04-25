@@ -205,7 +205,14 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 			return nil, fmt.Errorf("failed to fetch data via DataFetcher: %w", fetchErr)
 		}
 
-		fmt.Println("fetchResult for ticker", ticker, fetchResult)
+		// NOTE: a stray `fmt.Println(fetchResult)` lived here pre-branch
+		// (commit 53717609). It violated the structured-logging rule
+		// (CLAUDE.md "Use go.uber.org/zap exclusively, never fmt.Println"),
+		// dumped megabytes of raw SEC XBRL to stdout on every cold-cache
+		// request, and bypassed the artifact redactor. Removed by the
+		// observability-narrative branch fix-up. If you need a fetch-result
+		// peek, use `s.log(ctx).Debug("trace.fetch_result_summary", ...)`
+		// with a SUMMARY (counts/sizes), never the raw struct.
 
 		// Use multi-period historical data if available (from full SEC parser)
 		if fetchResult.HistoricalData != nil && len(fetchResult.HistoricalData.Data) > 0 {

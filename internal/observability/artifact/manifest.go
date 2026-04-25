@@ -33,6 +33,12 @@ type Manifest struct {
 	SchemaVersions    map[string]int `json:"schema_versions"`
 	GitSHA            string         `json:"git_sha,omitempty"`
 	BuildVersion      string         `json:"build_version,omitempty"`
+	// Notes is a free-form annotation populated by the bundle when outcome
+	// degrades to "partial" — e.g. "write_failures=3 queue_drops=1". Empty
+	// (and omitted from JSON) for clean bundles. Consumers should treat the
+	// value as opaque; the format is stable enough for grep but not a
+	// machine contract.
+	Notes string `json:"notes,omitempty"`
 }
 
 // PhaseRecord is one row in the manifest's phases_recorded[] index. Tells a
@@ -125,6 +131,15 @@ func (b *ManifestBuilder) SetOutcome(outcome string) {
 		return
 	}
 	b.manifest.Outcome = outcome
+}
+
+// SetNotes records a free-form note on the manifest. Used by Bundle.Close()
+// to annotate why outcome degraded to "partial" (e.g. write failures or
+// queue overflow). Last writer wins; empty string clears the annotation.
+func (b *ManifestBuilder) SetNotes(notes string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.manifest.Notes = notes
 }
 
 // Finalize stamps finished_at, freezes the phase index + redaction list, and

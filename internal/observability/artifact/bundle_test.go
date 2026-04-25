@@ -174,6 +174,74 @@ func TestSnapshot_QueueOverflowDrops(t *testing.T) {
 		"bundle with dropped snapshots must report outcome=partial")
 }
 
+// TestSnapshot_WriteFailureDegradesAndAnnotates — when os.WriteFile fails on
+// the worker (here: the bundle root is replaced with a regular file after
+// OpenBundle succeeds, so every subsequent write under it is ENOTDIR), the
+// bundle MUST:
+//   - increment writeErrors for every failed write;
+//   - degrade outcome to "partial" at Close();
+//   - record manifest.Notes describing the failure counts so a reader of
+//     the bundle directory immediately knows why the capture is incomplete.
+//
+// Pre-fix the worker silently swallowed the error and the manifest claimed
+// outcome="ok" with zero phases — the bundle was lying about itself.
+//
+// We restore the directory just before Close() so the manifest write inside
+// Finalize() can succeed and we can read it back to assert on outcome+notes.
+func TestSnapshot_WriteFailureDegradesAndAnnotates(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root, QueueSize: 64}
+	b, err := artifact.OpenBundle(cfg, "rid-write-fail", "AAPL", artifact.TriggerHeader)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	// Sabotage: replace the bundle directory with a regular file. Every
+	// subsequent os.WriteFile under it will fail with "not a directory" on
+	// POSIX and Windows alike. Queue size 64 > write attempts means no
+	// queue-overflow drops — every failure observed is a WriteFile failure.
+	bundleRoot := b.Root()
+	require.NoError(t, os.RemoveAll(bundleRoot))
+	require.NoError(t, os.WriteFile(bundleRoot, []byte("blocked"), 0o644))
+
+	type Payload struct{ N int }
+	const writeAttempts = 5
+	for i := 0; i < writeAttempts; i++ {
+		b.Snapshot(context.Background(), "fetch.sec", "x.json", Payload{N: i})
+	}
+
+	// Restore the directory before Close so Finalize's manifest write
+	// succeeds. We can't reliably synchronise with the worker without
+	// closing the queue, so this races: we accept the test must tolerate
+	// the worker possibly seeing a healed root for the LAST snapshot
+	// in-flight when we restore. The assertion uses GreaterOrEqual on the
+	// failed count and matches any annotated value.
+	require.NoError(t, os.Remove(bundleRoot))
+	require.NoError(t, os.MkdirAll(bundleRoot, 0o755))
+	require.NoError(t, b.Close())
+
+	// At least 1 write failure must have been observed; in practice all 5
+	// fail because the worker drains in tight succession. We assert >=1 so
+	// the test isn't flaky on slow CI runners where the worker might
+	// observe the restored directory for one trailing snapshot.
+	writeErrs := b.WriteErrors()
+	assert.GreaterOrEqual(t, writeErrs, int64(1),
+		"at least one os.WriteFile attempt should have been counted as a failure")
+	assert.EqualValues(t, 0, b.Dropped(),
+		"queue was big enough; nothing should have been queue-dropped")
+
+	// Manifest must reflect the partial outcome with annotated notes.
+	mfBody, err := os.ReadFile(filepath.Join(bundleRoot, "00-manifest.json"))
+	require.NoError(t, err)
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(mfBody, &mf))
+	assert.Equal(t, "partial", mf.Outcome,
+		"writeErrors > 0 must downgrade outcome to partial")
+	assert.Contains(t, mf.Notes, "write_failures=",
+		"notes must annotate the write-failure count")
+	assert.Contains(t, mf.Notes, "queue_drops=0",
+		"notes must annotate the queue-drop count for completeness")
+}
+
 // TestClose_Idempotent — defer + explicit Close is safe.
 func TestClose_Idempotent(t *testing.T) {
 	root := t.TempDir()

@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 )
 
@@ -62,11 +63,26 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 		// Decide whether to open a bundle.
 		trigger, traceFlag := detectTraceTrigger(c)
 		var bundle *artifact.Bundle
+		// openErr is captured so we can both surface the failure to log
+		// readers (via Warn) and downgrade trace_enabled with an
+		// explanatory reason on the narrate stream. Silent swallow makes
+		// "?trace=1 returns no bundle" un-debuggable.
+		var openErr error
 		if traceFlag && cfgA.Enabled {
 			// Ticker is unknown at this point — handler will SetTicker
 			// after URL parsing.
 			b, err := artifact.OpenBundle(cfgA, requestID, "", trigger)
-			if err == nil {
+			if err != nil {
+				// Disk-full / permission / malformed config — emit a Warn so
+				// operators can find the cause in logs. We use the request
+				// context's logger via logctx so the line carries request_id.
+				openErr = err
+				logctx.From(c.Request.Context()).Warn("trace.bundle.open_failed",
+					zap.String("request_id", requestID),
+					zap.String("trigger", string(trigger)),
+					zap.Error(err),
+				)
+			} else {
 				bundle = b
 				emitter.WithPayloadRoot(b.Root())
 			}
@@ -80,14 +96,26 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 		}
 		c.Request = c.Request.WithContext(ctx)
 
+		// Compute trace_enabled — the bundle must have actually opened, not
+		// just been requested. open_failed flips trace_enabled to false even
+		// though traceFlag && cfgA.Enabled were both true.
+		traceEnabled := traceFlag && cfgA.Enabled && openErr == nil
+
 		// Stash the trigger flag on the gin context for downstream consumers.
 		c.Set("trace_flag", traceFlag)
 		c.Set("trace_trigger", string(trigger))
-		c.Set("trace_enabled", traceFlag && cfgA.Enabled)
+		c.Set("trace_enabled", traceEnabled)
 		traceReason := ""
-		if traceFlag && !cfgA.Enabled {
-			c.Set("trace_reason", "disabled")
+		switch {
+		case traceFlag && !cfgA.Enabled:
 			traceReason = "disabled"
+		case traceFlag && cfgA.Enabled && openErr != nil:
+			// Bundle creation failed — narrate readers see the reason
+			// without having to cross-reference the Warn line.
+			traceReason = "open_failed"
+		}
+		if traceReason != "" {
+			c.Set("trace_reason", traceReason)
 		}
 
 		// Tier-1 narrate: request.received. First line of the per-request
@@ -102,7 +130,7 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 			zap.String("method", c.Request.Method),
 			zap.String("path", c.Request.URL.Path),
 			zap.String("client_ip_hash", hashIP(c.ClientIP())),
-			zap.Bool("trace_enabled", traceFlag && cfgA.Enabled),
+			zap.Bool("trace_enabled", traceEnabled),
 		)
 
 		// Run the rest of the middleware chain + handler.
@@ -125,10 +153,10 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 		emitter.Emit(c.Request.Context(), narrate.PhaseResponseSent, respOutcome, "", respFields...)
 
 		// Set the bundle's outcome so the manifest reflects the request result.
-		if bundle != nil {
-			if respOutcome == narrate.OutcomeError {
-				bundle.SetOutcome("error")
-			}
+		// SetOutcome and Close are nil-receiver no-ops, so we drop the
+		// `if bundle != nil` guards for consistency (REVIEWER nit).
+		if respOutcome == narrate.OutcomeError {
+			bundle.SetOutcome("error")
 		}
 
 		// Close the bundle at request end, finalising 00-manifest.json.
