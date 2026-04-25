@@ -311,17 +311,17 @@ func TestIndustryClassifier_Classify_ExactNameMatching(t *testing.T) {
 
 	result, err := classifier.Classify(context.Background(), "", "", "American Tower Corp")
 	require.NoError(t, err)
-	assert.Equal(t, "REIT", result)
+	assert.Equal(t, "REIT", result.Industry)
 
 	// Case-insensitive match
 	result, err = classifier.Classify(context.Background(), "", "", "american tower corp")
 	require.NoError(t, err)
-	assert.Equal(t, "REIT", result)
+	assert.Equal(t, "REIT", result.Industry)
 
 	// No match
 	result, err = classifier.Classify(context.Background(), "", "", "Random Company")
 	require.NoError(t, err)
-	assert.Equal(t, "NA", result)
+	assert.Equal(t, "NA", result.Industry)
 }
 
 // TestIndustryClassifier_Classify_ShortKeywordBoundary tests word-boundary handling
@@ -367,7 +367,7 @@ func TestIndustryClassifier_Classify_ShortKeywordBoundary(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := classifier.Classify(context.Background(), "", "", tt.companyName)
 			require.NoError(t, err)
-			assert.Equal(t, tt.expected, result)
+			assert.Equal(t, tt.expected, result.Industry)
 		})
 	}
 }
@@ -400,11 +400,11 @@ func TestIndustryClassifier_Classify_PatternMatching(t *testing.T) {
 
 	result, err := classifier.Classify(context.Background(), "", "", "Big Oil and Gas Company")
 	require.NoError(t, err)
-	assert.Equal(t, "ENERGY", result)
+	assert.Equal(t, "ENERGY", result.Industry)
 
 	result, err = classifier.Classify(context.Background(), "", "", "National Petroleum Corp")
 	require.NoError(t, err)
-	assert.Equal(t, "ENERGY", result)
+	assert.Equal(t, "ENERGY", result.Industry)
 }
 
 // TestIndustryClassifier_Classify_NilCodesConfigError tests that Classify returns an error
@@ -417,7 +417,7 @@ func TestIndustryClassifier_Classify_NilCodesConfigError(t *testing.T) {
 
 	result, err := classifier.Classify(context.Background(), "7372", "", "")
 	assert.Error(t, err)
-	assert.Equal(t, "NA", result)
+	assert.Equal(t, "NA", result.Industry)
 	assert.Contains(t, err.Error(), "config not loaded")
 }
 
@@ -464,7 +464,7 @@ func TestIndustryClassifier_Classify_PriorityOrderingDualKeywords(t *testing.T) 
 
 	result, err := classifier.Classify(context.Background(), "", "", "Big Software Inc")
 	require.NoError(t, err)
-	assert.Equal(t, "TECH_SAAS", result, "higher priority mapping should win")
+	assert.Equal(t, "TECH_SAAS", result.Industry, "higher priority mapping should win")
 }
 
 // TestIndustryClassifier_LoadIndustryCodesConfig_InvalidJSON tests loading invalid JSON

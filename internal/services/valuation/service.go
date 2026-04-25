@@ -550,6 +550,14 @@ func (s *Service) performValuation(
 	industryCode := latestFinancialData.IndustryCode
 	var sicLabel string
 
+	// classification carries the full classifier output (sector, industry,
+	// sub-industry, model_hint, plus echoes of the input SIC/NAICS) so the
+	// "industry_classification" calc trace below can surface every field
+	// in the Phase M spec table — see docs/refactoring/observability-
+	// upgrade-spec.md §374 (M-1b).
+	var classification industry.ClassificationResult
+	classification.SIC = historicalData.SICCode
+
 	if industryCode == "" && s.industryClassifier != nil {
 		// Use SIC code and company name from SEC data for classification.
 		// Falls back to ticker if company name unavailable.
@@ -559,9 +567,12 @@ func (s *Service) performValuation(
 		}
 		// ctx is passed through for future context-aware tracing inside Classify.
 		classified, classifyErr := s.industryClassifier.Classify(ctx, historicalData.SICCode, "", companyName)
-		if classifyErr == nil && classified != "" && classified != "NA" {
-			industryCode = classified
+		if classifyErr == nil && classified.Industry != "" && classified.Industry != "NA" {
+			industryCode = classified.Industry
 		}
+		// Always retain the classification (even on error / NA) so the trace
+		// below can echo the SIC/NAICS the caller asked about.
+		classification = classified
 	}
 
 	// sicLabel reflects whatever value the router actually uses, so the API
@@ -596,16 +607,20 @@ func (s *Service) performValuation(
 	// Stage 3 — "industry_classification" calc trace: always emitted from here (not
 	// inside Classify) so only the valuation pipeline fires it once per valuation —
 	// avoids double-emission if Classify is also called from the datacleaner path.
-	// Emits only the fields the current Classify actually produces (a single
-	// industry code string). A parent-sector split is not surfaced because the
-	// classifier returns one code — see docs/reviewer/M1 follow-up for a richer
-	// classification return type.
+	// Surfaces the full Phase M spec field set (sic, naics, sector, industry,
+	// sub_industry, model_hint) per docs/refactoring/observability-upgrade-spec.md
+	// §374. industry_code is preserved as a back-compat alias for downstream
+	// log consumers that key on the original field name.
 	if s.calcEmitter != nil {
 		s.calcEmitter.Emit(ctx, "industry_classification",
 			zap.String("ticker", historicalData.Ticker),
-			zap.String("sic", historicalData.SICCode),
+			zap.String("sic", classification.SIC),
+			zap.String("naics", classification.NAICS),
+			zap.String("sector", classification.Sector),
+			zap.String("industry", classification.Industry),
+			zap.String("sub_industry", classification.SubIndustry),
 			zap.String("industry_code", industryCode),
-			zap.String("model_hint", industryCode),
+			zap.String("model_hint", classification.ModelHint),
 		)
 	}
 

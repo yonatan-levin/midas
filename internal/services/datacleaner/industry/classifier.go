@@ -279,8 +279,35 @@ func compilePatternRegexes(patterns []string) []*regexp.Regexp {
 	return out
 }
 
-// Classify determines the industry code for a company using SIC code, NAICS code,
-// and company name. It performs a two-pass classification:
+// ClassificationResult is the full classifier output. Surfaced on the
+// "industry_classification" calc trace per docs/refactoring/observability-
+// upgrade-spec.md §Phase M trace points table (M-1b).
+//
+// Field semantics:
+//   - Sector    : top-level (parent) industry code from industry_codes.json
+//     (e.g. "TECH", "FIN", "HEALTH"). Equal to Industry when no
+//     sub-industry matched.
+//   - Industry  : most-specific industry code emitted (e.g. "TECH_SAAS",
+//     "HEALTH_BIOTECH"). Equal to Sector when no sub-industry matched.
+//   - SubIndustry: the sub-industry code when one matched (e.g. "TECH_SAAS"),
+//     empty string otherwise.
+//   - ModelHint : the code used by ModelRouter.SelectModel to pick a
+//     valuation model. Currently equal to Industry — kept as a
+//     distinct field so the model-routing key can diverge from
+//     the surface-level industry label without a breaking change.
+//   - SIC / NAICS: caller's input echoed back for trace completeness; empty
+//     when the caller passed an empty string.
+type ClassificationResult struct {
+	Sector      string
+	Industry    string
+	SubIndustry string
+	ModelHint   string
+	NAICS       string
+	SIC         string
+}
+
+// Classify determines the industry classification for a company using SIC code,
+// NAICS code, and company name. It performs a two-pass classification:
 //  1. Parent industry match (TECH, FIN, HEALTH, etc.) — by priority
 //  2. Sub-industry refinement within the matched parent (TECH_SAAS, FIN_IB, etc.)
 //
@@ -295,11 +322,22 @@ func compilePatternRegexes(patterns []string) []*regexp.Regexp {
 //  4. Keyword matching on company name (word-boundary for short keywords)
 //  5. Regex pattern matching on company name
 //
-// Returns the most specific industry code string (e.g., "TECH_SAAS" if sub-industry
-// matches, else "TECH"), or the default code ("NA") when no match is found.
-func (ic *IndustryClassifier) Classify(_ context.Context, sicCode string, naicsCode string, companyName string) (string, error) {
+// Returns a ClassificationResult populated with both the parent (Sector) and
+// most-specific (Industry) codes plus echoes of the input SIC/NAICS, so callers
+// can emit a complete observability trace. On no match the default code ("NA")
+// is returned in both Sector and Industry. SIC/NAICS echoes are preserved even
+// in the error path so trace completeness survives a missing config.
+func (ic *IndustryClassifier) Classify(_ context.Context, sicCode string, naicsCode string, companyName string) (ClassificationResult, error) {
 	if ic.codesConfig == nil {
-		return "NA", fmt.Errorf("industry codes config not loaded")
+		// Preserve SIC/NAICS echoes on the error path so observability traces
+		// stay complete even when the codes config never loaded.
+		return ClassificationResult{
+			Sector:    "NA",
+			Industry:  "NA",
+			ModelHint: "NA",
+			SIC:       sicCode,
+			NAICS:     naicsCode,
+		}, fmt.Errorf("industry codes config not loaded")
 	}
 
 	// Ensure regexes are compiled — handles the case where tests set codesConfig
@@ -325,15 +363,28 @@ func (ic *IndustryClassifier) Classify(_ context.Context, sicCode string, naicsC
 		}
 	}
 
+	// Default result: no parent match — Sector == Industry == default code.
+	result := ClassificationResult{
+		Sector:    bestCode,
+		Industry:  bestCode,
+		ModelHint: bestCode,
+		SIC:       sicCode,
+		NAICS:     naicsCode,
+	}
+
 	// Pass 2: Refine with sub-industry classification within the matched parent (W-3).
 	// A sub-industry match returns a more specific code like "TECH_SAAS" instead of "TECH".
+	// When matched, Industry/ModelHint are upgraded to the sub-industry code while
+	// Sector retains the parent code so callers can surface both.
 	if bestMapping != nil {
 		if subCode := ic.classifySubIndustry(bestMapping, sicCode, naicsCode, lowerName); subCode != "" {
-			return subCode, nil
+			result.Industry = subCode
+			result.SubIndustry = subCode
+			result.ModelHint = subCode
 		}
 	}
 
-	return bestCode, nil
+	return result, nil
 }
 
 // matchesParent checks if a company matches a parent industry mapping across all matcher types.
