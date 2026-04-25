@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -281,25 +282,54 @@ func NewLogger(cfg *config.Config) (*zap.Logger, error) {
 	cores = append(cores, stdoutCore)
 
 	if cfg.Logging.File.Enabled {
-		fileWriter := &lumberjack.Logger{
-			Filename:   cfg.Logging.File.Path,
-			MaxSize:    cfg.Logging.File.MaxSizeMB,
-			MaxBackups: cfg.Logging.File.MaxBackups,
-			MaxAge:     cfg.Logging.File.MaxAgeDays,
-			Compress:   cfg.Logging.File.Compress,
-		}
+		// M-1e: proactively verify the log file's parent directory is writable
+		// and the path itself can be opened for append. lumberjack.Logger lazily
+		// fails on first write — silently dropping log lines — so operators
+		// enabling file logging on a misconfigured path get zero signal that
+		// their file logs are being lost. Probe-and-warn instead, then fall
+		// back cleanly to stdout-only.
+		logDir := filepath.Dir(cfg.Logging.File.Path)
+		if mkErr := os.MkdirAll(logDir, 0o755); mkErr != nil {
+			// Directory cannot be created (nonexistent drive on Windows,
+			// permission denied on Linux, etc.). Emit a one-line warning to
+			// the stdout core and skip the file core entirely.
+			stdoutOnly := zap.New(stdoutCore, zap.AddCaller())
+			stdoutOnly.Warn("logging.file.enabled=true but log directory is unwritable; falling back to stdout-only",
+				zap.String("path", cfg.Logging.File.Path),
+				zap.String("dir", logDir),
+				zap.Error(mkErr),
+			)
+		} else if probeErr := probeWritable(cfg.Logging.File.Path); probeErr != nil {
+			// Directory exists, but the file path itself can't be opened for
+			// append (e.g. ACL denies the current user). Same fallback path:
+			// warn once on stdout and skip the file core.
+			stdoutOnly := zap.New(stdoutCore, zap.AddCaller())
+			stdoutOnly.Warn("logging.file.enabled=true but log file path is unwritable; falling back to stdout-only",
+				zap.String("path", cfg.Logging.File.Path),
+				zap.Error(probeErr),
+			)
+		} else {
+			// Probe succeeded — register the lumberjack-backed file core.
+			fileWriter := &lumberjack.Logger{
+				Filename:   cfg.Logging.File.Path,
+				MaxSize:    cfg.Logging.File.MaxSizeMB,
+				MaxBackups: cfg.Logging.File.MaxBackups,
+				MaxAge:     cfg.Logging.File.MaxAgeDays,
+				Compress:   cfg.Logging.File.Compress,
+			}
 
-		// The file sink always uses JSON so log-ingestion pipelines can parse it,
-		// even when the stdout format is set to "console".
-		jsonEncCfg := zap.NewProductionEncoderConfig()
-		jsonEncCfg.TimeKey = "ts"
-		jsonEncCfg.EncodeTime = zapcore.ISO8601TimeEncoder
-		fileCore := zapcore.NewCore(
-			zapcore.NewJSONEncoder(jsonEncCfg),
-			zapcore.AddSync(fileWriter),
-			levelEnabler,
-		)
-		cores = append(cores, fileCore)
+			// The file sink always uses JSON so log-ingestion pipelines can parse it,
+			// even when the stdout format is set to "console".
+			jsonEncCfg := zap.NewProductionEncoderConfig()
+			jsonEncCfg.TimeKey = "ts"
+			jsonEncCfg.EncodeTime = zapcore.ISO8601TimeEncoder
+			fileCore := zapcore.NewCore(
+				zapcore.NewJSONEncoder(jsonEncCfg),
+				zapcore.AddSync(fileWriter),
+				levelEnabler,
+			)
+			cores = append(cores, fileCore)
+		}
 	}
 
 	// Tee all cores together.
@@ -313,6 +343,21 @@ func NewLogger(cfg *config.Config) (*zap.Logger, error) {
 	).Named("midas")
 
 	return logger, nil
+}
+
+// probeWritable opens the path with O_CREATE|O_APPEND|O_WRONLY so a permission
+// error or "can't create file" error surfaces synchronously (here, at logger
+// construction) rather than at lumberjack's first asynchronous write. Closes
+// the handle immediately on success; no log content is written by the probe.
+//
+// Used by NewLogger to validate the configured `logging.file.path` before
+// registering the file core (M-1e).
+func probeWritable(path string) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	return f.Close()
 }
 
 // mapDatabaseDriver maps configuration driver names to actual registered driver names

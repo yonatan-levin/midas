@@ -11,8 +11,10 @@ package di
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -170,6 +172,77 @@ func TestNewLogger_LevelFiltering(t *testing.T) {
 	logger.Debug("should_be_dropped")
 	logger.Info("should_be_dropped")
 	logger.Warn("should_be_dropped")
+}
+
+// TestNewLogger_FileSinkProbeFailure pins M-1e: when logging.file.enabled=true
+// but the configured path's parent directory cannot be created (permission
+// denied / nonexistent drive / etc.), NewLogger must:
+//   - return successfully (no error) so the server keeps running on stdout-only
+//   - log a single warning to stdout containing "falling back to stdout-only"
+//     plus the failing path, so operators get a clear signal that file logs
+//     are being lost
+//   - NOT create the configured log file on disk (the file core must be skipped
+//     entirely, not registered with a lumberjack writer that would lazily fail)
+//
+// Without the probe, lumberjack would silently drop every log line at first
+// write — operators would see stdout logs flowing and assume the file sink was
+// healthy too. The probe surfaces the misconfiguration synchronously.
+func TestNewLogger_FileSinkProbeFailure(t *testing.T) {
+	// Choose a path that is guaranteed-unwritable on the host platform.
+	// On Windows, a path inside a nonexistent drive (Z:) produces a
+	// directory-creation failure on MkdirAll. On Linux, "/proc/1/nope/x.log"
+	// fails because /proc/1 is a kernel-managed directory that rejects
+	// arbitrary subdirectory creation even for root.
+	var unwritablePath string
+	switch runtime.GOOS {
+	case "windows":
+		unwritablePath = `Z:\midas-m1e-probe-fail\test.log`
+	default:
+		unwritablePath = "/proc/1/nope/test.log"
+	}
+
+	cfg := baseLoggingCfg()
+	cfg.Logging.File.Enabled = true
+	cfg.Logging.File.Path = unwritablePath
+	cfg.Logging.File.MaxSizeMB = 1
+	cfg.Logging.File.MaxBackups = 1
+	cfg.Logging.File.MaxAgeDays = 1
+
+	// Capture stdout so we can assert the fallback warning was emitted there.
+	// NewLogger writes the warning to os.Stdout via the pre-built stdoutCore;
+	// swapping os.Stdout for a pipe captures that output for the duration of
+	// the call, then restores the original.
+	oldStdout := os.Stdout
+	r, w, pipeErr := os.Pipe()
+	require.NoError(t, pipeErr)
+	os.Stdout = w
+
+	logger, lerr := NewLogger(cfg)
+
+	// Close the writer before reading, otherwise io.ReadAll blocks.
+	require.NoError(t, w.Close())
+	os.Stdout = oldStdout
+
+	require.NoError(t, lerr, "NewLogger must not return an error on probe failure — the server must stay up")
+	require.NotNil(t, logger)
+
+	captured, _ := io.ReadAll(r)
+	capturedStr := string(captured)
+
+	assert.Contains(t, capturedStr, "falling back to stdout-only",
+		"expected fallback warning in stdout, got: %s", capturedStr)
+	// JSON-encoded path: backslashes get escaped. Match the substring that
+	// appears in the encoded form ("midas-m1e-probe-fail" is invariant).
+	assert.Contains(t, capturedStr, "midas-m1e-probe-fail",
+		"warning must include the failing path. captured: %s", capturedStr)
+
+	// Sanity: the configured log file must NOT exist (probe rejected creation).
+	// If it does exist, the probe didn't run / wasn't honored.
+	if _, statErr := os.Stat(unwritablePath); statErr == nil {
+		// Best-effort cleanup if it somehow got created.
+		_ = os.Remove(unwritablePath)
+		t.Fatalf("log file unexpectedly created at %s — probe must have failed silently", unwritablePath)
+	}
 }
 
 // ---------------------------------------------------------------------------
