@@ -462,6 +462,21 @@ func (s *Server) rateLimitMiddleware() gin.HandlerFunc {
 			c.Header(key, value)
 		}
 
+		// Tier-1 narrate: ratelimit.checked. Emitted on every request that
+		// reaches the limiter so the per-request story carries the bucket and
+		// remaining/limit counters regardless of allow/deny.
+		rlOutcome := narrate.OutcomeOK
+		rlNotes := ""
+		if !result.Allowed {
+			rlOutcome = narrate.OutcomeError
+			rlNotes = "limit exceeded"
+		}
+		narrate.From(c.Request.Context()).Emit(c.Request.Context(),
+			narrate.PhaseRateLimitChecked, rlOutcome, rlNotes,
+			zap.String("bucket", string(limitType)),
+			zap.Int("remaining", result.Remaining),
+		)
+
 		if !result.Allowed {
 			// Log with request-scoped logger so the line carries request_id
 			logctx.From(c.Request.Context()).Warn("Rate limit exceeded",
@@ -551,6 +566,13 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 				zap.String("ip", c.ClientIP()),
 			)
 
+			// Tier-1 narrate: auth.resolved with outcome=error so the per-
+			// request story shows the auth attempt and its failure.
+			narrate.From(c.Request.Context()).Emit(c.Request.Context(),
+				narrate.PhaseAuthResolved, narrate.OutcomeError, err.Error(),
+				zap.String("auth_source", "header:X-API-Key"),
+			)
+
 			// Determine specific error response
 			switch {
 			case errors.Is(err, auth.ErrKeyNotFound):
@@ -612,6 +634,16 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		// Log successful auth with the now-enriched request-scoped logger
 		logctx.From(c.Request.Context()).Debug("API key authenticated successfully",
 			zap.Int("permissions", len(keyInfo.Permissions)),
+		)
+
+		// Tier-1 narrate: auth.resolved with outcome=ok. Carries key_id and
+		// permission count so the per-request story identifies which API key
+		// authenticated the call.
+		narrate.From(c.Request.Context()).Emit(c.Request.Context(),
+			narrate.PhaseAuthResolved, narrate.OutcomeOK, "",
+			zap.String("key_id", keyInfo.ID),
+			zap.Int("permissions", len(keyInfo.Permissions)),
+			zap.String("auth_source", "header:X-API-Key"),
 		)
 
 		c.Next()

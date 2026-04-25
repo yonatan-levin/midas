@@ -12,8 +12,10 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
+	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
@@ -149,13 +151,32 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	hasOverrides := opts != nil && (opts.OverrideBeta != nil || opts.OverrideRiskFree != nil)
 	cacheKey := fmt.Sprintf("valuation:v4:%s", ticker)
 
+	em := narrate.From(ctx)
+
 	if !hasOverrides {
 		var cachedResult entities.ValuationResult
 		if err := s.cache.Get(ctx, cacheKey, &cachedResult); err == nil {
+			// Tier-1 narrate: cache.lookup hit. Per spec §5 row 5 outcome=ok
+			// on hit; emit before the early return.
+			em.Emit(ctx, narrate.PhaseCacheLookup, narrate.OutcomeOK, "",
+				zap.String("cache_key", cacheKey),
+				zap.Bool("hit", true),
+			)
 			s.log(ctx).Info("Returning cached valuation", zap.String("ticker", ticker))
 			s.metricsService.RecordValuationRequest(ticker, "single", "cache_hit", time.Since(start))
 			return &cachedResult, nil
 		}
+		// Cache miss: still emit the lookup line so the per-request story
+		// shows the lookup attempt.
+		em.Emit(ctx, narrate.PhaseCacheLookup, narrate.OutcomeSkipped, "miss",
+			zap.String("cache_key", cacheKey),
+			zap.Bool("hit", false),
+		)
+	} else {
+		// Cache deliberately bypassed; record as skipped so the trace is honest.
+		em.Emit(ctx, narrate.PhaseCacheLookup, narrate.OutcomeSkipped, "overrides bypass cache",
+			zap.Bool("hit", false),
+		)
 	}
 
 	// Try to load data from repositories first (for previously fetched/seeded tickers)
@@ -443,6 +464,38 @@ func (s *Service) performValuation(
 	// Ticker is threaded in so the emitted trace carries it self-describingly (M-1a).
 	growthEstimate := s.growthEstimator.EstimateGrowthRates(ctx, historicalData.Ticker, analystData, historicalGrowth, sustainableGrowth)
 
+	// Tier-1 narrate: growth.estimated. Spec §5 row 12 fields. Reports
+	// year-1 + terminal growth and an indication of which inputs drove the
+	// blend (analyst vs historical weights).
+	{
+		gYear1 := 0.0
+		if rates := growthEstimate.ProjectedGrowthRates; len(rates) > 0 {
+			gYear1 = rates[0]
+		}
+		analystWeight := 0.0
+		historicalWeight := 1.0
+		if analystData != nil {
+			// Coarse signal — actual weighting is internal to estimator.
+			analystWeight = 0.5
+			historicalWeight = 0.5
+		}
+		gOutcome := narrate.OutcomeOK
+		if !historicalGrowth.IsReliable {
+			gOutcome = narrate.OutcomePartial
+		}
+		narrate.From(ctx).Emit(ctx, narrate.PhaseGrowthEstimated, gOutcome, "",
+			zap.Int("stage_count", len(growthEstimate.ProjectedGrowthRates)),
+			zap.Float64("analyst_weight", analystWeight),
+			zap.Float64("historical_weight", historicalWeight),
+			zap.Float64("g_year_1", gYear1),
+			zap.Float64("g_terminal", growthEstimate.TerminalGrowthRate),
+		)
+		if b := artifact.From(ctx); b != nil {
+			b.Snapshot(ctx, "growth.estimated", "12-growth-curve.json", growthEstimate)
+			b.AddSchemaVersion("GrowthEstimate", 1)
+		}
+	}
+
 	// Get the latest financial data for asset calculations
 	latestFinancialData, latestPeriod := historicalData.GetLatestPeriod()
 	if latestFinancialData == nil {
@@ -538,6 +591,27 @@ func (s *Service) performValuation(
 		)
 	}
 
+	// Tier-1 narrate: wacc.computed. Spec §5 row 13 fields. Carries the
+	// final WACC and the major inputs so a reader can sanity-check it.
+	narrate.From(ctx).Emit(ctx, narrate.PhaseWACCComputed, narrate.OutcomeOK, "",
+		zap.Float64("cost_of_equity", waccResult.CostOfEquity),
+		zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
+		zap.Float64("weight_equity", waccResult.WeightOfEquity),
+		zap.Float64("wacc", waccResult.WACC),
+		zap.Bool("country_premium_applied", countryRiskPremium > 0),
+	)
+	// Tier-3 artifact bundle: snapshot WACC inputs + result.
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "wacc.computed", "13-wacc.json", map[string]any{
+			"inputs":         waccInputs,
+			"result":         waccResult,
+			"raw_beta":       rawBeta,
+			"blume_beta":     blumeBeta,
+			"unlevered_beta": unleveredBeta,
+			"relevered_beta": releveredBeta,
+		})
+	}
+
 	// Use terminal growth from the growth estimate, with WACC safety guard
 	terminalGrowthRate := s.calculateTerminalGrowthRate(growthEstimate.SummaryGrowthRate(), waccResult.WACC)
 	growthEstimate.TerminalGrowthRate = terminalGrowthRate
@@ -624,6 +698,26 @@ func (s *Service) performValuation(
 		)
 	}
 
+	// Tier-1 narrate: classify.industry. Spec §5 row 11. Carries both
+	// classifier outputs (SIC-based and the heuristic) plus a match flag so
+	// a reader can spot drift between the two without opening the bundle.
+	matchFlag := classification.Industry != "" && heuristicCode != ""
+	narrate.From(ctx).Emit(ctx, narrate.PhaseClassifyIndustry, narrate.OutcomeOK, "",
+		zap.String("sic_label", classification.Industry),
+		zap.String("heuristic_label", heuristicCode),
+		zap.Bool("match", matchFlag),
+		zap.String("chosen", industryCode),
+	)
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "classify.industry", "11-classify.json", map[string]any{
+			"sic_classifier":       classification,
+			"heuristic_code":       heuristicCode,
+			"heuristic_name":       heuristicName,
+			"chosen_industry_code": industryCode,
+			"match":                matchFlag,
+		})
+	}
+
 	// Resolve shares outstanding (needed by both DCF and alternative models)
 	// Priority: diluted (most conservative) > market basic (most current) > financial basic
 	sharesOutstanding := latestFinancialData.DilutedSharesOutstanding
@@ -641,6 +735,30 @@ func (s *Service) performValuation(
 	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace;
 	// ticker is threaded in so that trace entry carries it self-describingly (M-1a).
 	selectedModel := s.modelRouter.SelectModel(ctx, historicalData.Ticker, industryCode, latestFinancialData)
+
+	// Tier-1 narrate: model.selected. Spec §5 row 14 fields. Reason is
+	// intentionally coarse — full reasoning lives in the calclog
+	// model_selection trace which fires from inside SelectModel.
+	{
+		modelName := "none"
+		reason := "no model registered"
+		if selectedModel != nil {
+			modelName = selectedModel.ModelType()
+			reason = "router selection"
+		}
+		narrate.From(ctx).Emit(ctx, narrate.PhaseModelSelected, narrate.OutcomeOK, "",
+			zap.String("model", modelName),
+			zap.String("reason", reason),
+		)
+		if b := artifact.From(ctx); b != nil {
+			b.Snapshot(ctx, "model.selected", "14-model-selection.json", map[string]any{
+				"model":         modelName,
+				"reason":        reason,
+				"industry_code": industryCode,
+			})
+		}
+	}
+
 	var dcfFallbackWarning string
 
 	// If an alternative model (non-DCF) is selected, use it.
@@ -920,10 +1038,45 @@ func (s *Service) performValuation(
 			)
 		}
 
+		// Tier-1 narrate: crosscheck.evaluated. Spec §5 row 16 fields.
+		// deviation_sigma is approximated as |1 - implied_pe/sector_pe| (no
+		// proper sigma available in the current SanityCheck struct); flagged
+		// is true iff any flag fired.
+		flagged := len(sanity.Flags) > 0
+		var devSigma float64
+		if sanity.ImpliedPE > 0 && sanity.SectorMedianPE > 0 {
+			r := sanity.ImpliedPE / sanity.SectorMedianPE
+			if r > 1 {
+				devSigma = r - 1
+			} else {
+				devSigma = 1 - r
+			}
+		}
+		ccOutcome := narrate.OutcomeOK
+		if flagged {
+			ccOutcome = narrate.OutcomePartial
+		}
+		narrate.From(ctx).Emit(ctx, narrate.PhaseCrosscheckEvaluated, ccOutcome, "",
+			zap.Float64("implied_pe", sanity.ImpliedPE),
+			zap.Float64("sector_pe", sanity.SectorMedianPE),
+			zap.Float64("deviation_sigma", devSigma),
+			zap.Bool("flagged", flagged),
+		)
+		if b := artifact.From(ctx); b != nil {
+			b.Snapshot(ctx, "crosscheck.evaluated", "16-crosscheck.json", sanity)
+		}
+
 		// Propagate sanity check flags as warnings for visibility in the API response
 		if !sanity.IsReasonable {
 			result.Warnings = append(result.Warnings, sanity.Flags...)
 		}
+	}
+
+	// Tier-3 artifact bundle: snapshot the full DCF working result so the
+	// per-year cashflows + PVs + TV can be replayed offline.
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "valuation.computed", "15-valuation.json", result)
+		b.AddSchemaVersion("ValuationResult", 2)
 	}
 
 	return result, nil

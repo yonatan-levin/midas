@@ -8,9 +8,13 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
@@ -76,23 +80,83 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 		}
 		c.Request = c.Request.WithContext(ctx)
 
-		// Stash the trigger flag on the gin context so commit 3's
-		// request.received emission can carry trace_enabled+reason without
-		// re-parsing the URL/headers.
+		// Stash the trigger flag on the gin context for downstream consumers.
 		c.Set("trace_flag", traceFlag)
 		c.Set("trace_trigger", string(trigger))
 		c.Set("trace_enabled", traceFlag && cfgA.Enabled)
+		traceReason := ""
 		if traceFlag && !cfgA.Enabled {
 			c.Set("trace_reason", "disabled")
+			traceReason = "disabled"
 		}
+
+		// Tier-1 narrate: request.received. First line of the per-request
+		// story; carries the method+path+client_ip_hash so log readers know
+		// what request they are inspecting and whether bundling is on.
+		reqStart := time.Now()
+		notes := ""
+		if traceReason != "" {
+			notes = "trace_reason=" + traceReason
+		}
+		emitter.Emit(c.Request.Context(), narrate.PhaseRequestReceived, narrate.OutcomeOK, notes,
+			zap.String("method", c.Request.Method),
+			zap.String("path", c.Request.URL.Path),
+			zap.String("client_ip_hash", hashIP(c.ClientIP())),
+			zap.Bool("trace_enabled", traceFlag && cfgA.Enabled),
+		)
 
 		// Run the rest of the middleware chain + handler.
 		c.Next()
+
+		// Tier-1 narrate: response.sent. Final line of the per-request story.
+		// Outcome=error when the response status is >=500 per spec §4.
+		respOutcome := narrate.OutcomeOK
+		if c.Writer.Status() >= 500 {
+			respOutcome = narrate.OutcomeError
+		}
+		respFields := []zap.Field{
+			zap.Int("status", c.Writer.Status()),
+			zap.Int("body_bytes", maxInt(c.Writer.Size(), 0)),
+			zap.Int64("total_elapsed_ms", time.Since(reqStart).Milliseconds()),
+		}
+		if bundle != nil {
+			respFields = append(respFields, zap.String("artifact_path", bundle.Root()))
+		}
+		emitter.Emit(c.Request.Context(), narrate.PhaseResponseSent, respOutcome, "", respFields...)
+
+		// Set the bundle's outcome so the manifest reflects the request result.
+		if bundle != nil {
+			if respOutcome == narrate.OutcomeError {
+				bundle.SetOutcome("error")
+			}
+		}
 
 		// Close the bundle at request end, finalising 00-manifest.json.
 		// Close is idempotent and nil-safe.
 		_ = bundle.Close()
 	}
+}
+
+// hashIP returns the first 8 hex chars of a SHA-256 hash of the client IP.
+// This gives us a stable per-IP identifier in narrate lines without storing
+// the raw IP address (which is PII in many jurisdictions). Truncating to 8
+// chars trades collision resistance (1 in ~4 billion) for log brevity —
+// adequate for "did this storm of requests come from one IP" triage.
+func hashIP(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(ip))
+	return hex.EncodeToString(sum[:4])
+}
+
+// maxInt is a local helper to avoid importing math just for two lines. The
+// builtin `max` exists in Go 1.21+ but using a local for clarity.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // detectTraceTrigger returns the trigger source (header > query) and whether

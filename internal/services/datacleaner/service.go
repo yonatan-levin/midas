@@ -11,7 +11,9 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
+	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/adjustments"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
@@ -116,6 +118,13 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	}
 
 	startTime := time.Now()
+
+	// Tier-3 artifact bundle: snapshot the cleaner's input data BEFORE any
+	// rules run. Pairs with the post-clean snapshot below so a reader can
+	// diff input vs output to see exactly what the cleaner changed.
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "clean.normalized", "10-clean-input.json", data)
+	}
 
 	// Validate input data
 	if err := s.ValidateData(data); err != nil {
@@ -243,6 +252,27 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 			zap.Float64("quality_score", result.QualityScore),
 			zap.String("quality_grade", result.QualityGrade),
 		)
+	}
+
+	// Tier-1 narrate: clean.normalized. Spec §5 row 10 fields. Outcome is
+	// `partial` when the cleaner had to fall back (errors recorded) or any
+	// flag fired; `ok` only when no errors and no flags were raised.
+	cleanOutcome := narrate.OutcomeOK
+	if len(result.Errors) > 0 || len(result.Flags) > 0 {
+		cleanOutcome = narrate.OutcomePartial
+	}
+	narrate.From(ctx).Emit(ctx, narrate.PhaseCleanNormalized, cleanOutcome, "",
+		zap.Int("rules_applied", result.RulesApplied),
+		zap.Int("adjustments_made", len(result.Adjustments)),
+		zap.Int("flags_raised", len(result.Flags)),
+	)
+
+	// Tier-3 artifact bundle: snapshot the cleaner output (the cleaned
+	// FinancialData) and the per-rule trace (the CleaningResult itself).
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "clean.normalized", "10-clean-output.json", result.CleanedData)
+		b.Snapshot(ctx, "clean.normalized", "10-clean-trace.json", result)
+		b.AddSchemaVersion("FinancialData", 7)
 	}
 
 	return result, nil
