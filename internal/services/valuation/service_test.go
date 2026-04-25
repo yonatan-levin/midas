@@ -801,6 +801,96 @@ func TestService_CalculateValuation_CacheSetFailure(t *testing.T) {
 	freshDataCleaner.AssertExpectations(t)
 }
 
+// TestService_performValuation_MinorityInterestPreferredEquity_BridgeDelta
+// pins the M-1d follow-through end-to-end (BLOCKER-2 from the validation
+// cycle): given a HistoricalFinancialData carrying non-zero MinorityInterest
+// and PreferredEquity, the per-share value emitted by performValuation must
+// drop by exactly (MI + PE) / shares vs. the same fixture with both zero.
+//
+// This is the integration-shaped counterpart to TestCalculateEquityValue: the
+// dcf-layer test pins the bridge math; this test pins that the service
+// actually threads the values from FinancialData into the bridge call. The
+// two together close the original "end-to-end claim is unverified" gap.
+func TestService_performValuation_MinorityInterestPreferredEquity_BridgeDelta(t *testing.T) {
+	const (
+		// BRK-style scale relative to the createTestData fixture: MI/PE roughly
+		// 5%/0.5% of the fixture's total assets. Large enough that the per-share
+		// delta is well above floating-point noise without triggering any
+		// downstream guard (negative equity, etc.).
+		miAmount = 25_000_000_000.0 // $25B
+		peAmount = 2_500_000_000.0  // $2.5B
+	)
+
+	makeService := func() (*Service, *entities.HistoricalFinancialData, *entities.MarketData, *entities.MacroData) {
+		financialRepo := &MockFinancialDataRepository{}
+		marketRepo := &MockMarketDataRepository{}
+		macroRepo := &MockMacroDataRepository{}
+		cache := &MockCacheRepository{}
+		dataCleaner := &MockDataCleanerService{}
+		metricsService := &MockMetricsService{}
+		metricsService.On("IncWACCCalculations").Return()
+		metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+		metricsService.On("IncDCFCalculations").Return()
+		metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+		cfg := &config.Config{
+			Valuation: config.ValuationConfig{
+				CacheTTL:                 1 * time.Hour,
+				SlowRequestThreshold:     500 * time.Millisecond,
+				DataFetchTimeout:         30 * time.Second,
+				DefaultTerminalGrowthCap: 0.025,
+				DCFMaxGrowthRate:         0.5,
+				DCFMinGrowthRate:         -0.3,
+			},
+		}
+		svc := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, metricsService, cfg, zap.NewNop(), newTestCalcEmitter())
+		hist, mkt, mac := createTestData()
+		return svc, hist, mkt, mac
+	}
+
+	// Baseline: MI = PE = 0 (legacy behavior).
+	baseSvc, baseHist, baseMkt, baseMac := makeService()
+	baseResult, err := baseSvc.performValuation(context.Background(), baseHist, baseMkt, baseMac, nil)
+	require.NoError(t, err)
+	require.NotNil(t, baseResult)
+	require.Greater(t, baseResult.DCFValuePerShare, 0.0)
+
+	// With MI/PE: clone the fixture and set MI/PE on every period so whichever
+	// period is the "latest" carries them. createTestData() returns three
+	// periods (2021FY, 2022FY, 2023FY) — patch all three.
+	miSvc, miHist, miMkt, miMac := makeService()
+	for _, period := range miHist.Data {
+		period.MinorityInterest = miAmount
+		period.PreferredEquity = peAmount
+	}
+	miResult, err := miSvc.performValuation(context.Background(), miHist, miMkt, miMac, nil)
+	require.NoError(t, err)
+	require.NotNil(t, miResult)
+
+	// Per-share delta must match (MI + PE) / shares within float tolerance.
+	// shares is whatever performValuation chose — read it back from the result
+	// via EquityValue / DCFValuePerShare to avoid duplicating the share
+	// resolution logic.
+	require.Greater(t, baseResult.DCFValuePerShare, 0.0)
+	shares := baseResult.EquityValue / baseResult.DCFValuePerShare
+	require.Greater(t, shares, 0.0, "shares derived from baseResult must be positive")
+
+	expectedDelta := (miAmount + peAmount) / shares
+	actualDelta := baseResult.DCFValuePerShare - miResult.DCFValuePerShare
+
+	// Delta tolerance: 0.5% of the expected delta is comfortable headroom for
+	// any floating-point recombination through the WACC/growth pipeline.
+	tolerance := 0.005 * expectedDelta
+	assert.InDelta(t, expectedDelta, actualDelta, tolerance,
+		"per-share delta must equal (MI+PE)/shares; baseline=%.4f miResult=%.4f delta=%.4f expected=%.4f",
+		baseResult.DCFValuePerShare, miResult.DCFValuePerShare, actualDelta, expectedDelta)
+
+	// Sanity: the equity value itself should drop by exactly MI + PE.
+	expectedEquityDelta := miAmount + peAmount
+	actualEquityDelta := baseResult.EquityValue - miResult.EquityValue
+	assert.InDelta(t, expectedEquityDelta, actualEquityDelta, expectedEquityDelta*0.001,
+		"equity value delta must equal MI+PE")
+}
+
 func TestService_performValuation(t *testing.T) {
 	// Create service with properly configured metrics mock
 	financialRepo := &MockFinancialDataRepository{}

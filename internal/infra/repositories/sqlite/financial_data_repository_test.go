@@ -13,6 +13,67 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
 
+// TestFinancialDataRepository_MinorityInterestPreferredEquity_RoundTrip pins
+// the M-1d-fix follow-through: minority_interest and preferred_equity must
+// survive Store → GetLatest, Store → GetHistorical, and Store → GetByPeriod.
+//
+// Pre-fix, the SQLite schema did not carry the two columns and the INSERT/
+// SELECT lists in storeWith / GetLatest / GetHistorical / GetByPeriod silently
+// dropped both fields. Cached reads zeroed them, making the equity_bridge
+// trace lie and per-share regress to pre-M-1d behavior on the warm-cache path.
+func TestFinancialDataRepository_MinorityInterestPreferredEquity_RoundTrip(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer cleanupTestDatabase(db)
+
+	repo := NewFinancialDataRepository(db)
+	ctx := context.Background()
+
+	// BRK-A-shape values: meaningful MI, modest preferred.
+	const wantMI = 250_000_000.0
+	const wantPE = 75_000_000.0
+
+	data := &entities.FinancialData{
+		Ticker:                   "BRKA",
+		CIK:                      "0001067983",
+		FilingPeriod:             "2023Q4",
+		FilingDate:               time.Date(2024, 2, 24, 0, 0, 0, 0, time.UTC),
+		AsOf:                     time.Now(),
+		OperatingIncome:          1000.0,
+		Revenue:                  10000.0,
+		MinorityInterest:         wantMI,
+		PreferredEquity:          wantPE,
+		SharesOutstanding:        100,
+		DilutedSharesOutstanding: 100,
+	}
+
+	require.NoError(t, repo.Store(ctx, data))
+
+	t.Run("GetLatest preserves both fields", func(t *testing.T) {
+		got, err := repo.GetLatest(ctx, "BRKA")
+		require.NoError(t, err)
+		assert.Equal(t, wantMI, got.MinorityInterest, "minority_interest must survive Store→GetLatest")
+		assert.Equal(t, wantPE, got.PreferredEquity, "preferred_equity must survive Store→GetLatest")
+	})
+
+	t.Run("GetByPeriod preserves both fields", func(t *testing.T) {
+		got, err := repo.GetByPeriod(ctx, "BRKA", "2023Q4")
+		require.NoError(t, err)
+		assert.Equal(t, wantMI, got.MinorityInterest, "minority_interest must survive Store→GetByPeriod")
+		assert.Equal(t, wantPE, got.PreferredEquity, "preferred_equity must survive Store→GetByPeriod")
+	})
+
+	t.Run("GetHistorical preserves both fields", func(t *testing.T) {
+		hist, err := repo.GetHistorical(ctx, "BRKA", 5)
+		require.NoError(t, err)
+		require.NotNil(t, hist)
+		require.Len(t, hist.Data, 1, "expected exactly one period in the historical map")
+		period, ok := hist.Data["2023Q4"]
+		require.True(t, ok, "2023Q4 missing from GetHistorical result")
+		assert.Equal(t, wantMI, period.MinorityInterest, "minority_interest must survive Store→GetHistorical")
+		assert.Equal(t, wantPE, period.PreferredEquity, "preferred_equity must survive Store→GetHistorical")
+	})
+}
+
 func TestFinancialDataRepository_Store(t *testing.T) {
 	db := setupTestDatabase(t)
 	defer cleanupTestDatabase(db)

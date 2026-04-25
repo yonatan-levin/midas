@@ -70,6 +70,10 @@ CREATE TABLE IF NOT EXISTS financial_data (
     -- Equity (for ROIC calculation)
     stockholders_equity DECIMAL(15,2),
 
+    -- Equity bridge correction terms (M-1d): subtracted in dcf.CalculateEquityValue.
+    minority_interest DECIMAL(15,2),
+    preferred_equity DECIMAL(15,2),
+
     -- Share information
     shares_outstanding DECIMAL(15,0),
     diluted_shares_outstanding DECIMAL(15,0),

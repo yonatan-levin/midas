@@ -57,35 +57,25 @@ Recommendation: **Option 1** — most principled, preserves emit-from-callee pat
 
 ## M-1b — `industry_classification` trace emits a single code as `industry_code`; no parent-sector split
 
+**Status: RESOLVED 2026-04-25.** `Classify` now returns `industry.ClassificationResult{Sector, Industry, SubIndustry, ModelHint, NAICS, SIC}` and the calc trace at `internal/services/valuation/service.go performValuation` surfaces all six spec fields plus the back-compat `industry_code` alias. The pre-populated `IndustryCode` hot path (where `Classify` is intentionally bypassed for performance) synthesizes the struct from the cached code so `industry`/`model_hint` stay non-empty. Pinned by `TestClassify_ReturnsClassificationResult` in `classifier_classify_test.go`. Implementation commit `28919e1`; pre-populated-path follow-through in the M-1 hotfix commit (see commit log).
+
+### Original problem
+
 The spec field table listed `sic, naics, sector, industry, model_hint`. The current `industry.Classifier.Classify(...)` returns a single `industry_code` string (e.g. `"TECH_SAAS"` or `"FIN"`), not a `(sector, subIndustry)` tuple. A naïve split-on-`_` would be arbitrary — the code set is not guaranteed to follow that pattern.
 
 The emit therefore surfaces only the fields the classifier genuinely produces: `sic`, `industry_code`, `model_hint`. `naics` and `sector` are dropped rather than populated with misleading duplicates.
-
-### Proposed fix
-
-- Extend `Classify` to return a richer struct (e.g. `ClassificationResult{ Sector, Industry, SubIndustry, ModelHint string; NAICS string }`) instead of a single string.
-- Update its one caller (`valuation/service.go performValuation`).
-- Update the emit to populate the full field set.
-
-### Why deferred
-
-Touches the classifier's public return type (a meaningful internal refactor). Phase M kept its scope to the observability wiring; the classifier enhancement belongs to a "classifier v2" or similar task.
 
 ---
 
 ## M-1c — `terminal_value` trace omits the raw exit-multiple TV component
 
+**Status: RESOLVED 2026-04-25.** Added `ExitMultipleTV float64` (with `omitempty`) to `pkg/finance/dcf/dcf.Result`, populated at the same compute site that produces the averaged `TerminalValueNominal`. The `terminal_value` calc trace at `internal/services/valuation/service.go` now surfaces `exit_multiple_tv` directly instead of relying on the misleading `2*averaged - gordon` back-calculation. The R1 `pkg/finance` purity gate was Phase-M scope; this is the post-Phase-M cleanup the deferral note explicitly anticipated. Pinned by `TestCalculateDCF_ExitMultipleTV` in `pkg/finance/dcf/dcf_test.go`. Implementation commit `3e6cab7`.
+
+### Original problem
+
 The spec field table listed `gordon_tv, exit_multiple_tv, averaged_tv, terminal_growth`. `pkg/finance/dcf/dcf.Result` only exposes the averaged `TerminalValueNominal` — not the raw exit-multiple component. Back-calculating it via `2 * averaged - gordon` produces the mathematically correct value when exit multiples WERE used, but `gordon_tv` when they weren't, which is misleading.
 
 The emit therefore surfaces `gordon_tv` (re-derived), `averaged_tv` (authoritative), and a boolean `exit_multiple_used` flag derived from the difference. The raw `exit_multiple_tv` is omitted.
-
-### Proposed fix
-
-Add `ExitMultipleTV float64` to `dcf.Result` in `pkg/finance/dcf/dcf.go` — a one-field addition set at the point where the average is computed. Update the `terminal_value` emit to include it.
-
-### Why deferred
-
-`pkg/finance/*` is explicitly out-of-scope per spec Decision D7 / Refinement R1 ("keep `pkg/finance/` logger-free; emit all calc traces from the service layer"). A one-field data addition to `dcf.Result` is not a "logger concern" and would be allowed in principle — but the deliberate policy is "zero `pkg/finance` diff in Phase M." Move with a companion Phase M.1 cleanup commit or bundle with a future dcf-enhancement task.
 
 ---
 

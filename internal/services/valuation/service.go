@@ -573,6 +573,16 @@ func (s *Service) performValuation(
 		// Always retain the classification (even on error / NA) so the trace
 		// below can echo the SIC/NAICS the caller asked about.
 		classification = classified
+	} else if industryCode != "" {
+		// Pre-populated upstream — Classify was bypassed, so the trace would
+		// otherwise emit empty sector/industry/model_hint while industry_code
+		// holds the real value. Synthesize the struct fields from the cached
+		// code so the calc trace stays self-consistent (M-1b validation
+		// follow-up). Sector / SubIndustry / NAICS remain unknown on this
+		// path — leave them blank rather than guess; the upstream caller
+		// authoritatively chose `industryCode` and that's all we know.
+		classification.Industry = industryCode
+		classification.ModelHint = industryCode
 	}
 
 	// sicLabel reflects whatever value the router actually uses, so the API

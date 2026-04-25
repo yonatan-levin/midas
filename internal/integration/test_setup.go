@@ -344,6 +344,11 @@ func SeedTestData(t *testing.T, db *sqlx.DB) {
 				5.0e10, 2.0e11, // cash_and_cash_equivalents, stockholders_equity
 				1.5e10, 1.5e10,
 				1, "[]")
+			// Note: minority_interest and preferred_equity (M-1d) are deliberately
+			// omitted from this raw INSERT and default to NULL. The repository's
+			// SELECT statements use COALESCE(..., 0) so NULL reads cleanly back
+			// as 0.0 — preserves the test's intent of "tickers without MI/PE
+			// behave identically to pre-M-1d".
 			require.NoError(t, err, "Failed to seed financial data for %s %s", ticker, p.period)
 		}
 	}

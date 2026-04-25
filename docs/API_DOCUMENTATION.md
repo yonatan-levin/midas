@@ -1155,12 +1155,12 @@ The full stage set emitted per request:
 |-------|-------|------------|
 | `data_fetch` | After data acquisition | `ticker`, `via_fetcher`, `sources_tried`, `sources_ok`, `duration_ms` |
 | `data_clean_summary` | After normalization | `ticker`, `adjustments_count`, `flags_count`, `quality_score`, `quality_grade` |
-| `industry_classification` | After SIC/NAICS classification | `ticker`, `sic`, `industry_code`, `model_hint` |
+| `industry_classification` | After SIC/NAICS classification | `ticker`, `sic`, `naics`, `sector`, `industry`, `sub_industry`, `industry_code`, `model_hint` |
 | `model_selection` | After model router decision | `model_chosen` (`dcf`/`ddm`/`ffo`/`revenue_multiple`), `reason` |
 | `growth` | After growth estimation | `source` (analyst/historical/blended), `growth_rates`, `roic_ceiling`, `sustainability` |
 | `wacc` | After WACC computation | `rf`, `beta_*`, `erp`, `crp`, `tax_rate`, `cost_of_debt`, `wacc` |
 | `fcf_projection` | After FCF series build | `years`, `growth_rates`, `fcf_series` |
-| `terminal_value` | After terminal value | `gordon_tv`, `exit_multiple_used`, `averaged_tv`, `terminal_growth` |
+| `terminal_value` | After terminal value | `ticker`, `gordon_tv`, `exit_multiple_tv`, `exit_multiple_used`, `averaged_tv`, `terminal_growth` |
 | `discount` | After discounting | `pv_explicit`, `pv_terminal`, `enterprise_value` |
 | `equity_bridge` | In equity-bridge block | `cash`, `debt`, `minority_interest`, `preferred`, `equity_value`, `diluted_shares`, `per_share` |
 | `cross_check` | After sanity check (if multiples config present) | `implied_pe`, `implied_ev_ebitda`, `sector_median_pe`, `sector_median_ev_ebitda`, `flags` |

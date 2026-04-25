@@ -150,7 +150,7 @@ The core product flow for `GET /api/v1/fair-value/{ticker}`:
      │        ├── Terminal value: Gordon Growth averaged with exit-multiple TV when available
      │        ├── Discount all cash flows to present value
      │        ├── Enterprise Value = Sum of PV(FCFs) + PV(Terminal Value)
-     │        └── Equity Value = EV - Debt + Cash → per share (diluted shares preferred)
+     │        └── Equity Value = EV - Debt + Cash - MinorityInterest - PreferredEquity → per share (diluted shares preferred)
      │
      ├── 5g. Tangible Book Value = (Total Assets - Intangibles - Liabilities) / Shares
      │

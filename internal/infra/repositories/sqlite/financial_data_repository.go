@@ -57,6 +57,7 @@ func (r *FinancialDataRepository) storeWith(ctx context.Context, exec namedExece
 			depreciation_and_amortization, capital_expenditures, operating_cash_flow,
 			current_assets, current_liabilities,
 			cash_and_cash_equivalents, stockholders_equity,
+			minority_interest, preferred_equity,
 			shares_outstanding, diluted_shares_outstanding,
 			has_normalized_data, missing_fields, created_at, updated_at
 		) VALUES (
@@ -70,6 +71,7 @@ func (r *FinancialDataRepository) storeWith(ctx context.Context, exec namedExece
 			:depreciation_and_amortization, :capital_expenditures, :operating_cash_flow,
 			:current_assets, :current_liabilities,
 			:cash_and_cash_equivalents, :stockholders_equity,
+			:minority_interest, :preferred_equity,
 			:shares_outstanding, :diluted_shares_outstanding,
 			:has_normalized_data, :missing_fields, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 		)`
@@ -104,6 +106,8 @@ func (r *FinancialDataRepository) storeWith(ctx context.Context, exec namedExece
 		"current_liabilities":           data.CurrentLiabilities,
 		"cash_and_cash_equivalents":     data.CashAndCashEquivalents,
 		"stockholders_equity":           data.StockholdersEquity,
+		"minority_interest":             data.MinorityInterest,
+		"preferred_equity":              data.PreferredEquity,
 		"shares_outstanding":            data.SharesOutstanding,
 		"diluted_shares_outstanding":    data.DilutedSharesOutstanding,
 		"has_normalized_data":           data.HasNormalizedData,
@@ -135,6 +139,7 @@ func (r *FinancialDataRepository) GetLatest(ctx context.Context, ticker string) 
 			depreciation_and_amortization, capital_expenditures, operating_cash_flow,
 			current_assets, current_liabilities,
 			cash_and_cash_equivalents, stockholders_equity,
+			COALESCE(minority_interest, 0), COALESCE(preferred_equity, 0),
 			shares_outstanding, diluted_shares_outstanding,
 			has_normalized_data, missing_fields
 		FROM financial_data
@@ -156,6 +161,7 @@ func (r *FinancialDataRepository) GetLatest(ctx context.Context, ticker string) 
 		&data.DepreciationAndAmortization, &data.CapitalExpenditures, &data.OperatingCashFlow,
 		&data.CurrentAssets, &data.CurrentLiabilities,
 		&data.CashAndCashEquivalents, &data.StockholdersEquity,
+		&data.MinorityInterest, &data.PreferredEquity,
 		&data.SharesOutstanding, &data.DilutedSharesOutstanding,
 		&data.HasNormalizedData, &missingFieldsJSON,
 	)
@@ -192,6 +198,7 @@ func (r *FinancialDataRepository) GetHistorical(ctx context.Context, ticker stri
 			depreciation_and_amortization, capital_expenditures, operating_cash_flow,
 			current_assets, current_liabilities,
 			cash_and_cash_equivalents, stockholders_equity,
+			COALESCE(minority_interest, 0), COALESCE(preferred_equity, 0),
 			shares_outstanding, diluted_shares_outstanding,
 			has_normalized_data, missing_fields
 		FROM financial_data
@@ -225,6 +232,7 @@ func (r *FinancialDataRepository) GetHistorical(ctx context.Context, ticker stri
 			&data.DepreciationAndAmortization, &data.CapitalExpenditures, &data.OperatingCashFlow,
 			&data.CurrentAssets, &data.CurrentLiabilities,
 			&data.CashAndCashEquivalents, &data.StockholdersEquity,
+			&data.MinorityInterest, &data.PreferredEquity,
 			&data.SharesOutstanding, &data.DilutedSharesOutstanding,
 			&data.HasNormalizedData, &missingFieldsJSON,
 		)
@@ -264,6 +272,7 @@ func (r *FinancialDataRepository) GetByPeriod(ctx context.Context, ticker, perio
 			depreciation_and_amortization, capital_expenditures, operating_cash_flow,
 			current_assets, current_liabilities,
 			cash_and_cash_equivalents, stockholders_equity,
+			COALESCE(minority_interest, 0), COALESCE(preferred_equity, 0),
 			shares_outstanding, diluted_shares_outstanding,
 			has_normalized_data, missing_fields
 		FROM financial_data
@@ -283,6 +292,7 @@ func (r *FinancialDataRepository) GetByPeriod(ctx context.Context, ticker, perio
 		&data.DepreciationAndAmortization, &data.CapitalExpenditures, &data.OperatingCashFlow,
 		&data.CurrentAssets, &data.CurrentLiabilities,
 		&data.CashAndCashEquivalents, &data.StockholdersEquity,
+		&data.MinorityInterest, &data.PreferredEquity,
 		&data.SharesOutstanding, &data.DilutedSharesOutstanding,
 		&data.HasNormalizedData, &missingFieldsJSON,
 	)
