@@ -168,6 +168,7 @@ temp/
 .claude/hooks/.rules-loaded
 .claude/ralph-loop.local.md
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
 .cursor/hooks/.session-edits.json
 
 # Git worktrees (superpowers / feature-branch isolation)
