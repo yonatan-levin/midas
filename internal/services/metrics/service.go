@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 )
@@ -68,7 +69,6 @@ type Service struct {
 
 	// System Metrics
 	systemInfo    *prometheus.GaugeVec
-	goInfo        *prometheus.GaugeVec
 	processUptime prometheus.Gauge
 
 	// Database Metrics
@@ -95,11 +95,18 @@ func NewService(logger *zap.Logger) *Service {
 }
 
 // NewServiceWithRegistry creates a new metrics service. If registry is nil,
-// a fresh *prometheus.Registry is allocated and owned by the service.
-// Callers that need to share a registry (rare) pass one in.
+// a fresh *prometheus.Registry is allocated and owned by the service, and
+// Go runtime + process collectors are registered on it so /metrics surfaces
+// go_goroutines, go_memstats_*, process_cpu_seconds_total, etc. — matching
+// what an operator expects from a typical Prometheus-instrumented Go service.
+//
+// Caller-supplied registries are NOT augmented (the caller already owns the
+// registration policy — common in tests that want strict isolation).
 func NewServiceWithRegistry(logger *zap.Logger, registry *prometheus.Registry) *Service {
 	if registry == nil {
 		registry = prometheus.NewRegistry()
+		registry.MustRegister(collectors.NewGoCollector())
+		registry.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	}
 	s := &Service{
 		logger:    logger,
@@ -309,13 +316,13 @@ func (s *Service) initMetrics(registry *prometheus.Registry) {
 		[]string{"version", "go_version", "build_date"},
 	)
 
-	s.goInfo = factory.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "go_info",
-			Help: "Go runtime information",
-		},
-		[]string{"version"},
-	)
+	// go_info is provided by collectors.NewGoCollector(), registered in
+	// NewServiceWithRegistry on owned registries. The previous in-house
+	// gauge here duplicated the standard collector's series (same name,
+	// same "version" label) and was silently dropped pre-PREX-1 by
+	// promauto.Factory{}'s nil registerer; with PREX-1 it would have
+	// collided with the runtime collector. Removed in favor of the
+	// authoritative standard collector.
 
 	s.processUptime = factory.NewGauge(prometheus.GaugeOpts{
 		Name: "process_uptime_seconds",
@@ -347,9 +354,9 @@ func (s *Service) initMetrics(registry *prometheus.Registry) {
 		[]string{"operation", "table"},
 	)
 
-	// Initialize system info
+	// Initialize system info — go_info is now provided by the standard Go
+	// collector registered in NewServiceWithRegistry, so no manual Set call.
 	s.systemInfo.WithLabelValues("v1.0.0", runtime.Version(), time.Now().Format("2006-01-02")).Set(1)
-	s.goInfo.WithLabelValues(runtime.Version()).Set(1)
 
 	s.logger.Info("Prometheus metrics initialized",
 		zap.Int("total_metrics", s.getMetricsCount()))

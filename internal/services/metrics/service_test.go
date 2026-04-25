@@ -192,6 +192,61 @@ func TestMetricsService_RegistryReceivesMetrics(t *testing.T) {
 	assert.True(t, found, "http_requests_total must be registered on the service registry")
 }
 
+// TestMetricsService_OwnedRegistry_HasGoRuntimeMetrics pins Task C of the
+// 2026-04-25 follow-through: when NewService allocates its own registry,
+// the standard Go runtime + process collectors must be registered alongside
+// Midas-specific metrics so /metrics surfaces go_goroutines, go_memstats_*,
+// process_cpu_seconds_total, etc. Pre-fix (PREX-1's first cut), the service-
+// owned registry held only Midas series and operators lost runtime visibility.
+//
+// Caller-supplied registries are intentionally NOT augmented (test isolation),
+// so this test must construct via NewService (the no-custom-registry path).
+func TestMetricsService_OwnedRegistry_HasGoRuntimeMetrics(t *testing.T) {
+	logger := zap.NewNop()
+	svc := NewService(logger)
+
+	families, err := svc.GetRegistry().Gather()
+	if err != nil {
+		t.Fatalf("registry.Gather error: %v", err)
+	}
+
+	want := map[string]bool{
+		"go_goroutines":             false,
+		"go_memstats_alloc_bytes":   false,
+		"process_cpu_seconds_total": false,
+	}
+	for _, f := range families {
+		if _, ok := want[f.GetName()]; ok {
+			want[f.GetName()] = true
+		}
+	}
+	for name, seen := range want {
+		assert.True(t, seen, "owned registry must surface %q from the standard Go/process collector", name)
+	}
+}
+
+// TestMetricsService_CallerSuppliedRegistry_NoGoCollector pins the inverse:
+// when a caller passes their own registry, the service must NOT auto-register
+// runtime collectors — the caller owns the policy, and tests rely on this for
+// strict isolation. This guarantees we never accidentally pollute a test
+// registry with go_goroutines / go_memstats_* series.
+func TestMetricsService_CallerSuppliedRegistry_NoGoCollector(t *testing.T) {
+	logger := zap.NewNop()
+	customReg := prometheus.NewRegistry()
+	svc := NewServiceWithRegistry(logger, customReg)
+
+	families, err := svc.GetRegistry().Gather()
+	if err != nil {
+		t.Fatalf("registry.Gather error: %v", err)
+	}
+	for _, f := range families {
+		switch f.GetName() {
+		case "go_goroutines", "go_memstats_alloc_bytes", "process_cpu_seconds_total":
+			t.Errorf("caller-supplied registry must NOT contain %q (Midas should not augment caller registries)", f.GetName())
+		}
+	}
+}
+
 // TestRecordHTTPRequest_StatusCodeLabel pins M2: the status_code label on
 // http_requests_total must be the decimal string ("200"), not the
 // single-rune encoding (string(rune(200)) == "È", U+00C8) that the
