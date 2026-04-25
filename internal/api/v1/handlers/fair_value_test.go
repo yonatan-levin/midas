@@ -942,8 +942,11 @@ func TestFairValueResponse_Industry_RealClassifier(t *testing.T) {
 			// Drive the real classifier with optional company name to exercise
 			// the sub-industry refinement path.
 			// ctx param added in Phase M (observability); harmless in tests.
-			sicLabel, classifyErr := classifier.Classify(context.Background(), tc.sicCode, "", tc.companyName)
+			// Classify now returns ClassificationResult (M-1b); .Industry is
+			// the most-specific code (parent or sub-industry).
+			classifyResult, classifyErr := classifier.Classify(context.Background(), tc.sicCode, "", tc.companyName)
 			require.NoError(t, classifyErr)
+			sicLabel := classifyResult.Industry
 			assert.Contains(t, tc.acceptableLabels, sicLabel,
 				"real classifier produced label %q; acceptable set %v",
 				sicLabel, tc.acceptableLabels)
