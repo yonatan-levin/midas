@@ -74,6 +74,24 @@
       "alternative_tags": ["LongTermDebtNoncurrent"],
       "context": "instant"
     },
+    "minority_interest": {
+      "xbrl_tag": "us-gaap:MinorityInterest",
+      "internal_field": "minority_interest",
+      "data_type": "decimal",
+      "required": false,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["MinorityInterestInLimitedPartnerships"],
+      "context": "instant"
+    },
+    "preferred_equity": {
+      "xbrl_tag": "us-gaap:PreferredStockValue",
+      "internal_field": "preferred_equity",
+      "data_type": "decimal",
+      "required": false,
+      "transformations": ["to_decimal", "multiply_by_thousand"],
+      "alternative_tags": ["PreferredStockValueOutstanding"],
+      "context": "instant"
+    },
     "operating_income": {
       "xbrl_tag": "us-gaap:OperatingIncomeLoss",
       "internal_field": "operating_income",

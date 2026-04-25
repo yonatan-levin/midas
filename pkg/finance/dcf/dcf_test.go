@@ -337,15 +337,20 @@ func TestCalculateDCF_InvalidInputs(t *testing.T) {
 }
 
 func TestCalculateEquityValue(t *testing.T) {
+	// M-1d: bridge is now EV - Debt + Cash - MinorityInterest - PreferredEquity.
+	// Rows with MI=0 and PE=0 verify the legacy three-arg behavior is preserved
+	// numerically; the additional rows pin the two new correction terms.
 	tests := []struct {
-		name            string
-		enterpriseValue float64
-		debt            float64
-		cash            float64
-		expected        float64
+		name             string
+		enterpriseValue  float64
+		debt             float64
+		cash             float64
+		minorityInterest float64
+		preferredEquity  float64
+		expected         float64
 	}{
 		{
-			name:            "Standard case",
+			name:            "Standard case (no MI/PE)",
 			enterpriseValue: 1000.0,
 			debt:            200.0,
 			cash:            50.0,
@@ -365,11 +370,38 @@ func TestCalculateEquityValue(t *testing.T) {
 			cash:            0.0,
 			expected:        500.0, // 800 - 300
 		},
+		{
+			name:             "With minority interest",
+			enterpriseValue:  1000.0,
+			debt:             200.0,
+			cash:             50.0,
+			minorityInterest: 100.0,
+			preferredEquity:  0.0,
+			expected:         750.0, // 1000 - 200 + 50 - 100 - 0
+		},
+		{
+			name:             "With preferred equity",
+			enterpriseValue:  1000.0,
+			debt:             200.0,
+			cash:             50.0,
+			minorityInterest: 0.0,
+			preferredEquity:  80.0,
+			expected:         770.0, // 1000 - 200 + 50 - 0 - 80
+		},
+		{
+			name:             "With both MI and PE",
+			enterpriseValue:  1000.0,
+			debt:             200.0,
+			cash:             50.0,
+			minorityInterest: 100.0,
+			preferredEquity:  80.0,
+			expected:         670.0, // 1000 - 200 + 50 - 100 - 80
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := CalculateEquityValue(tt.enterpriseValue, tt.debt, tt.cash)
+			result := CalculateEquityValue(tt.enterpriseValue, tt.debt, tt.cash, tt.minorityInterest, tt.preferredEquity)
 			assert.Equal(t, tt.expected, result)
 		})
 	}

@@ -1,9 +1,69 @@
 package entities
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 )
+
+// TestFinancialData_MinorityAndPreferred_JSONRoundTrip pins the M-1d entity
+// extension: MinorityInterest and PreferredEquity must serialize through the
+// canonical JSON tags `minority_interest` and `preferred_equity` and round-trip
+// without loss. Downstream log consumers and persisted blobs depend on these
+// exact tag names.
+func TestFinancialData_MinorityAndPreferred_JSONRoundTrip(t *testing.T) {
+	original := FinancialData{
+		Ticker:           "TEST",
+		MinorityInterest: 1234.56,
+		PreferredEquity:  789.01,
+	}
+
+	encoded, err := json.Marshal(&original)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	// Verify canonical tag names appear in the serialized form.
+	if !contains(encoded, []byte(`"minority_interest":1234.56`)) {
+		t.Errorf("missing or wrong-tagged minority_interest in JSON: %s", encoded)
+	}
+	if !contains(encoded, []byte(`"preferred_equity":789.01`)) {
+		t.Errorf("missing or wrong-tagged preferred_equity in JSON: %s", encoded)
+	}
+
+	var decoded FinancialData
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if decoded.MinorityInterest != original.MinorityInterest {
+		t.Errorf("MinorityInterest round-trip: got %v, want %v",
+			decoded.MinorityInterest, original.MinorityInterest)
+	}
+	if decoded.PreferredEquity != original.PreferredEquity {
+		t.Errorf("PreferredEquity round-trip: got %v, want %v",
+			decoded.PreferredEquity, original.PreferredEquity)
+	}
+}
+
+// contains is a tiny substring helper to keep the test self-contained.
+func contains(haystack, needle []byte) bool {
+	if len(needle) == 0 {
+		return true
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		match := true
+		for j := range needle {
+			if haystack[i+j] != needle[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
 
 func TestGetSortedPeriods(t *testing.T) {
 	tests := []struct {

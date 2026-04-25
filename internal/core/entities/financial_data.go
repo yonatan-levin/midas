@@ -92,6 +92,18 @@ type FinancialData struct {
 	// Equity (for ROIC / invested capital calculation)
 	StockholdersEquity float64 `json:"stockholders_equity"`
 
+	// MinorityInterest is the equity attributable to non-controlling interests
+	// in consolidated subsidiaries. Subtracted from enterprise-to-equity
+	// bridge per CFA convention. SEC XBRL tag: us-gaap:MinorityInterest
+	// (also reported as MinorityInterestInLimitedPartnerships variants).
+	MinorityInterest float64 `json:"minority_interest"`
+
+	// PreferredEquity is the par or carrying value of preferred stock.
+	// Subtracted from common-equity bridge so per-share value reflects
+	// only common shareholders' claim. SEC XBRL tag: us-gaap:PreferredStockValue
+	// (also PreferredStockValueOutstanding for some filers).
+	PreferredEquity float64 `json:"preferred_equity"`
+
 	// Share information
 	SharesOutstanding        float64 `json:"shares_outstanding"`
 	DilutedSharesOutstanding float64 `json:"diluted_shares_outstanding"`

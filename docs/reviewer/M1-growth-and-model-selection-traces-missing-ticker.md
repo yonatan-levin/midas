@@ -7,9 +7,9 @@ This file aggregates three small field-completeness items from Phase M code revi
 | Sub-item | Status |
 |----------|--------|
 | M-1a (ticker on growth + model_selection traces) | **RESOLVED** 2026-04-24 |
-| M-1b (richer industry classification trace) | Open — needs classifier v2 refactor |
-| M-1c (raw exit_multiple_tv on terminal_value trace) | Open — needs `pkg/finance/dcf` touch |
-| M-1d (minority_interest + preferred on equity_bridge) | Open — needs entity schema extension |
+| M-1b (richer industry classification trace) | **RESOLVED** 2026-04-25 |
+| M-1c (raw exit_multiple_tv on terminal_value trace) | **RESOLVED** 2026-04-25 |
+| M-1d (minority_interest + preferred on equity_bridge) | **RESOLVED** 2026-04-25 |
 | M-1e (NewLogger file-sink probe-and-warn) | **RESOLVED** 2026-04-25 |
 | M-1f (control-char injection test subcases) | **RESOLVED** 2026-04-24 |
 
@@ -93,19 +93,28 @@ Add `ExitMultipleTV float64` to `dcf.Result` in `pkg/finance/dcf/dcf.go` — a o
 
 ## M-1d — `equity_bridge` trace omits `minority_interest` and `preferred`
 
+**Status: RESOLVED 2026-04-25.**
+
 The spec field table for `equity_bridge` lists `ticker, cash, debt, minority_interest, preferred, equity_value, diluted_shares, per_share`. The `FinancialData` entity does not currently carry `minority_interest` or `preferred_equity` fields, so the emit omits both rather than emitting a hardcoded 0 that would mislead downstream log consumers.
 
-### Proposed fix
+### Resolution
 
-- Extend `internal/core/entities/financial_data.go` with `MinorityInterest float64` and `PreferredEquity float64`.
-- Update the SEC gateway to populate them from the right XBRL tags (`us-gaap:MinorityInterest`, `us-gaap:PreferredStockValue`, or the fact-tag equivalents).
-- Update the datacleaner normalisation to carry the values through.
-- Update `dcf.CalculateEquityValue` to subtract them alongside debt, if the current equation doesn't already.
-- Add the two fields to the `equity_bridge` emit.
+Plumbed `MinorityInterest` and `PreferredEquity` end-to-end:
 
-### Why deferred
+- `internal/core/entities/financial_data.go` — added `MinorityInterest float64` and `PreferredEquity float64` (JSON tags `minority_interest`, `preferred_equity`).
+- `internal/infra/gateways/sec/parser.go` — populated from `us-gaap:MinorityInterest` (fallback `MinorityInterestInLimitedPartnerships`) and `us-gaap:PreferredStockValue` (fallback `PreferredStockValueOutstanding`). Added the four tags to `GetSupportedConcepts`. Datacleaner pipeline mutates the same struct in-place, so no copy step required there.
+- `pkg/finance/dcf/dcf.go` — `CalculateEquityValue` signature extended:
+  `Common Equity = EV - Debt + Cash - MinorityInterest - PreferredEquity`.
+  Tickers without MI/PE are unchanged numerically (both terms zero).
+- `internal/services/valuation/service.go` — caller updated; `equity_bridge` calc trace now emits `minority_interest` and `preferred` adjacent to `cash` and `debt`. The "intentionally omitted" comment is removed.
+- `config/datacleaner/xbrl_tag_mappings.json` — added `minority_interest` and `preferred_equity` entries for documentation parity.
 
-This requires a coordinated change across entity, gateway, cleaner, and math layers — not a trace-only change. It belongs in an "equity bridge completeness" ticket, not in Phase M's observability scope.
+### Tests
+
+- `dcf_test.go::TestCalculateEquityValue` — extended with three new rows pinning MI-only, PE-only, and both-together cases.
+- `parser_test.go::TestParser_ParsePeriodData_AllXBRLTags` — primary tag fixture + assertions.
+- `parser_test.go::TestParser_ParsePeriodData_FallbackTags` — fallback tag fixture + assertions.
+- `financial_data_test.go::TestFinancialData_MinorityAndPreferred_JSONRoundTrip` — pins JSON tag names `minority_interest`/`preferred_equity` and round-trip fidelity.
 
 ---
 
