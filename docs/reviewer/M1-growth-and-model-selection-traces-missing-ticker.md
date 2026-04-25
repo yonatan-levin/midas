@@ -2,7 +2,7 @@
 
 This file aggregates three small field-completeness items from Phase M code review that were deferred because the cleanest fix touches out-of-scope code (`pkg/finance/*`) or requires a richer classifier return type.
 
-**Status summary (as of 2026-04-24):**
+**Status summary (as of 2026-04-25):**
 
 | Sub-item | Status |
 |----------|--------|
@@ -10,7 +10,7 @@ This file aggregates three small field-completeness items from Phase M code revi
 | M-1b (richer industry classification trace) | Open — needs classifier v2 refactor |
 | M-1c (raw exit_multiple_tv on terminal_value trace) | Open — needs `pkg/finance/dcf` touch |
 | M-1d (minority_interest + preferred on equity_bridge) | Open — needs entity schema extension |
-| M-1e (NewLogger file-sink probe-and-warn) | Open — resilience improvement |
+| M-1e (NewLogger file-sink probe-and-warn) | **RESOLVED** 2026-04-25 |
 | M-1f (control-char injection test subcases) | **RESOLVED** 2026-04-24 |
 
 ---
@@ -112,6 +112,8 @@ This requires a coordinated change across entity, gateway, cleaner, and math lay
 ---
 
 ## M-1e — `NewLogger` file sink fails silently on unwritable path
+
+**Status: RESOLVED 2026-04-25.** `NewLogger` now probes the file-sink path before registering the lumberjack core. On `MkdirAll` or open-for-append failure, it emits a one-line warning to the stdout core ("falling back to stdout-only") and skips the file core entirely — the server keeps running on stdout-only, and operators get a synchronous, visible signal of the misconfiguration. The new `probeWritable` helper in `internal/di/container.go` opens the path with `O_CREATE|O_APPEND|O_WRONLY` and closes immediately on success (no log content written by the probe). Pinned by `TestNewLogger_FileSinkProbeFailure` in `internal/di/logger_test.go`, which uses `runtime.GOOS` to pick a guaranteed-unwritable path (Windows: `Z:\midas-m1e-probe-fail\test.log`; other platforms: `/proc/1/nope/test.log`), captures stdout via an `os.Pipe` swap, and asserts (1) no error returned, (2) warning string + path in captured stdout, (3) the configured log file is never created.
 
 When `logging.file.enabled=true` and `logging.file.path` points at a non-existent directory or an unwritable location, `lumberjack.Logger` lazily fails on first write — it silently drops the line. The stdout core keeps working, so the server remains operational, but operators enabling file logging on a misconfigured path get zero signal that file logs are being lost.
 
