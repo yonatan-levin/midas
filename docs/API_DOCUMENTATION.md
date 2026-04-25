@@ -1168,7 +1168,141 @@ The full stage set emitted per request:
 
 All 12 entries carry identical `request_id`, `user_id`, and `key_id` field values, so `jq 'select(.request_id == "...")'` reconstructs the full math story for any single request.
 
-### 10.5 Health Checks
+### 10.5 Per-Request Artifact Bundles
+
+When deeper forensics are needed than the structured log stream alone provides — e.g. inspecting the exact raw SEC payload returned for a ticker, or comparing the cleaner's input vs output for a single request — clients can opt a single request into **artifact-bundle capture**. The server writes a self-describing directory of JSON / JSONL files to disk for that request.
+
+#### Opt-in (per request)
+
+Either of the following on a `GET /api/v1/fair-value/{ticker}` request enables capture:
+
+```bash
+# Header form
+curl -H "X-API-Key: <key>" -H "X-Midas-Trace: 1" \
+  "http://localhost:8080/api/v1/fair-value/AAPL"
+
+# Query-param form
+curl -H "X-API-Key: <key>" \
+  "http://localhost:8080/api/v1/fair-value/AAPL?trace=1"
+```
+
+Both are equivalent. Without either flag, **no bundle is written** — there is zero per-request disk overhead on un-flagged requests.
+
+#### Server-side gate
+
+Capture is also gated by `logging.artifact_store.enabled` in the server config. Defaults:
+
+| Environment | `artifact_store.enabled` | Effect |
+|-------------|--------------------------|--------|
+| `development` | `true` | Per-request bundles honored when client opts in |
+| `staging`, `production` | `false` | Opt-in flag is recognized but the bundle is suppressed (logged as `trace_enabled=false reason=disabled`) |
+
+Override via `LOGGING_ARTIFACT_STORE_ENABLED=true|false`.
+
+#### Bundle layout on disk
+
+```
+artifacts/
+  2026-04-25/                        # date partition (UTC)
+    AAPL/                            # ticker partition
+      req_01HW8ZQXKR.../             # per-request directory; one bundle per request
+        00-manifest.json             # bundle manifest (see schema below)
+        01-request.json              # original HTTP request (auth headers redacted)
+        02-handler-options.json      # parsed ValuationOptions (overrides applied)
+        05-fetch-sec.raw.json        # raw SEC companyfacts response bytes
+        05-fetch-sec.parsed.json     # parsed SECCompanyFacts struct
+        06-fetch-market.raw.json     # raw Yahoo / Finzive response (after redaction)
+        06-fetch-market.parsed.json
+        07-fetch-macro.raw.json      # raw FRED response (api_key redacted from URL)
+        07-fetch-macro.parsed.json
+        10-clean-input.json          # FinancialData going into cleaner
+        10-clean-output.json         # FinancialData after cleaner
+        11-classify.json             # both classifier outputs + match flag
+        12-growth-curve.json         # final multi-stage growth curve
+        13-wacc.json                 # all WACC inputs + final value
+        14-model-selection.json      # router decision + reason
+        15-valuation.json            # full DCF / DDM working
+        16-crosscheck.json           # implied multiples + sector medians
+        17-response.json             # final response body sent to client
+        99-narrate.jsonl             # full narrate stream for this request
+        99-debug-trace.jsonl         # full Debug stream (only if log level is debug)
+```
+
+The numeric prefix matches the narrate phase number (see `internal/observability/narrate/phases.go` for the canonical 17-phase taxonomy). `ls` of any bundle directory reads in pipeline order.
+
+`.raw.json` files contain the exact upstream bytes after auth redaction. `.parsed.json` files contain `json.Marshal(...)` of the domain struct after the gateway's parser ran. The two together let you `diff` upstream API drift vs parser drift independently.
+
+#### Manifest schema (`00-manifest.json`)
+
+```json
+{
+  "bundle_version": "1.0",
+  "request_id": "req_01HW8ZQXKR...",
+  "ticker": "AAPL",
+  "trigger": "header",
+  "started_at": "2026-04-25T10:23:14.470Z",
+  "finished_at": "2026-04-25T10:23:18.221Z",
+  "outcome": "ok",
+  "phases_recorded": [
+    {"phase": "fetch.sec", "files": ["05-fetch-sec.raw.json", "05-fetch-sec.parsed.json"], "bytes": 6212048}
+  ],
+  "redactions_applied": ["headers.authorization", "headers.cookie", "headers.x-api-key", "yahoo.crumb", "fred.api_key"],
+  "schema_versions": {
+    "SECCompanyFacts": 3,
+    "FinancialData": 7,
+    "ValuationResult": 2
+  },
+  "git_sha": "83cbfc7",
+  "build_version": "v0.9.0-rc1"
+}
+```
+
+| Field | Meaning |
+|-------|---------|
+| `bundle_version` | Bundle layout version (`"1.0"` for Phase 1) |
+| `request_id` | Same value carried on every log line and the response header |
+| `ticker` | Late-bound after URL parsing; may be `_no-ticker` for early-failing requests |
+| `trigger` | `header` (X-Midas-Trace: 1) or `query` (?trace=1) |
+| `outcome` | `ok` / `partial` (some snapshots failed to write or were dropped) / `error` (HTTP status >= 500) |
+| `phases_recorded[]` | Index of which pipeline phases contributed files |
+| `redactions_applied[]` | Hard-coded list of secret fields scrubbed before disk write — never config-driven |
+| `schema_versions{}` | Domain-struct versions in effect when the bundle was written; pin replay against the matching code revision |
+| `git_sha`, `build_version` | Build identity for replay / audit |
+
+#### Retention
+
+A reaper goroutine sweeps `artifacts/` on a 1-hour tick and prunes:
+- Bundles older than `logging.artifact_store.retention_days` (default `7`)
+- Oldest-first eviction once total size exceeds `logging.artifact_store.max_total_bytes` (default 5 GiB)
+
+In-flight bundles (locked file handles) are never deleted.
+
+#### Redaction (hard-coded, fail-on-leak tested)
+
+| Field path | Action |
+|------------|--------|
+| `headers.Authorization` | replaced with `"<redacted>"` |
+| `headers.Cookie`, `headers.Set-Cookie` | replaced with `"<redacted>"` |
+| `headers.X-API-Key` | replaced with `"<redacted>"` |
+| Yahoo `crumb` query param | replaced with `"<redacted>"` |
+| FRED `api_key` query param | replaced with `"<redacted>"` |
+| Any JSON key matching `(?i)(password|secret|token|bearer)` | replaced with `"<redacted>"` |
+
+A unit test in `internal/observability/artifact/redact_test.go` pins the redaction list against fixtures. Adding a new external API requires adding its auth field to this list.
+
+#### Error semantics
+
+If a bundle can't be opened (disk-full, permission denied), the request still completes normally; the trace middleware logs a Warn line via `logctx.From(ctx).Warn("trace.bundle.open_failed", ...)` and the `request.received` narrate line carries `trace_enabled=false reason=open_failed`. If individual snapshot writes fail mid-request, the bundle's manifest `outcome` degrades to `partial` and the `notes` field carries `write_failures=N queue_drops=M`.
+
+#### Phase 2 (deferred — not available in Phase 1)
+
+The following are explicitly NOT shipped in Phase 1 — see `docs/refactoring/observability-narrative-and-artifacts-spec.md` §13:
+- Auto-on-error trigger (write a bundle when the response is HTTP 5xx, even without the flag)
+- Auto-on-quality-flag trigger (write a bundle when the cleaner raises severity >= threshold)
+- Always-on knob (write a bundle for every request, capped by retention)
+- Replay tooling (`cmd/replay` to re-run a bundle against the current code)
+
+### 10.6 Health Checks
 
 | Endpoint | Purpose | Auth | Status Mapping |
 |----------|---------|------|---------------|

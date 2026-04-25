@@ -98,12 +98,11 @@ W-1..W-5 and S-2/S-3/S-5 were resolved in earlier commits (`4d46142`, `01f4db0`)
 | Initiative | Completed | Branch / Spec |
 |------------|-----------|---------------|
 | **Observability upgrade** — request correlation via context-scoped logger, file logging in local dev only, 12-stage DCF calc tracing, docker-compose cleanup | 2026-04-23 (all 5 phases) | `feat/observability` · `docs/refactoring/observability-upgrade-spec.md` |
+| **Observability narrative + artifact capture (Phase 1)** — Tier-1 narrate stream (one Info line per pipeline phase, 17 closed-enum phases + `outcome` + free-text `notes`), Tier-2 Debug-tracer convention (`trace.<area>.<op>`), Tier-3 per-request artifact bundle (raw + parsed payloads, before/after pipeline snapshots, `99-narrate.jsonl` + `99-debug-trace.jsonl` streams via a `BundleSink` zapcore wrapper, self-describing manifest with schema versions, git SHA, build version, hard-coded redaction). Opt-in via `?trace=1` / `X-Midas-Trace: 1`. 7-day retention, 5 GiB cap, reaper goroutine. Phase 2 (auto-on-error / auto-on-quality-flag / always-on / replay tooling) explicitly deferred — see spec §13. | 2026-04-25 (6 commits, merge `83cbfc7`) | `feat/observability-narrative` · `docs/refactoring/observability-narrative-and-artifacts-spec.md` |
 
 ## In Flight
 
-| Initiative | Status | Spec |
-|------------|--------|------|
-| **Observability narrative + artifact capture** — Tier-1 narrate stream (one Info line per pipeline phase, 17 phases, closed `outcome` enum + free-text `notes`), Tier-2 Debug-tracer convention (`trace.<area>.<op>`), Tier-3 per-request artifact bundle (raw + parsed payloads, before/after pipeline snapshots, manifest with schema versions and git SHA). Manual-trigger only in Phase 1 (`?trace=1` / `X-Midas-Trace: 1`); auto-on-error / auto-on-quality-flag / always-on / replay tooling all explicitly deferred to Phase 2. | DESIGN — Phase 1 scoped 2026-04-25 | `docs/refactoring/observability-narrative-and-artifacts-spec.md` |
+_No initiatives currently in flight._
 
 ## Next Candidate Work (Ranked)
 
@@ -113,7 +112,8 @@ No commitment yet — listed for future prioritization:
 2. **Close the W-4 coverage gap** — bring `models/` to 90%+.
 3. **Fix S-1/S-4** — make config loading robust for Docker deployments.
 4. **Sector-specific validation sets** — test bank valuations against known bank valuations, REIT valuations against REIT benchmarks, etc.
-5. **Observability narrative & artifacts — Phase 2** — auto-trigger bundle capture on errors, on data-quality flags, and an "always-on" debugging knob; replay tooling. Tracked in §13 of the Phase-1 spec; promote to `docs/reviewer/` items at the time Phase 1 merges.
+5. **Observability narrative & artifacts — Phase 2** — auto-trigger bundle capture on errors, on data-quality flags, and an "always-on" debugging knob; replay tooling. Tracked in §13 of `docs/refactoring/observability-narrative-and-artifacts-spec.md`; file individual `docs/reviewer/` items when prioritized.
+6. **Close G-1 follow-up** — `growth.estimated` narrate phase emits coarse `analyst_weight=0.5/historical_weight=0.5` because `growth.Result` doesn't expose the actual blend math. Fix described in `docs/reviewer/G1-growth-blend-weights-coarse.md`.
 
 ---
 
@@ -132,3 +132,4 @@ No commitment yet — listed for future prioritization:
 | 2026-04-18 | Initial file. Promoted content from `.claude/.../memory/project_upgrade_status.md`, `project_midas_overview.md`, `user_role.md`. |
 | 2026-04-23 | Added IC-1/IC-2/IC-3 follow-ups tracking industry-classification unification and two live-QA data gaps (owned-store retail misclassification, missing R&D for some semiconductor filings). Context: AMD retail-misclassification hotfix + Industry-in-response feature. |
 | 2026-04-25 | M-1 sweep closed (M-1a..f + post-validation hotfix `fb01061`); `docs/reviewer/` is now empty of open items. Drafted `docs/refactoring/observability-narrative-and-artifacts-spec.md` (Tier-1 narrate / Tier-2 Debug-tracer / Tier-3 artifact bundle) as next In-Flight initiative; Phase 1 scoped (manual-trigger only), Phase 2 (auto-triggers) explicitly deferred. Schema migration `0006_add_minority_interest_preferred_equity.sql` landed alongside the M-1d equity-bridge fix. |
+| 2026-04-25 | **Phase 1 of observability narrative + artifact capture merged to master** as `83cbfc7` (preceded by 6 feature commits on `feat/observability-narrative`). Full BACKEND → VERIFIER → REVIEWER → QA validation cycle ran (REVIEWER round 1 caught BLOCKER + 2 HIGH, fixed in `41bd91c`; REVIEWER round 2 caught 1 HIGH duplicate `request_id` in host stream, fixed in `1e1c6fc`; QA round 2 returned READY TO MERGE). Coverage gates met (narrate 96.4%, artifact 90.2%, middleware 93.7%). G-1 follow-up filed for `growth.estimated` weight precision. In Flight section emptied; Phase 2 deferred work surfaced as Next Candidate Work item #5. |
