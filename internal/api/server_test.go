@@ -370,8 +370,20 @@ func TestServer_respondWithError(t *testing.T) {
 
 	// Extension fields
 	assert.Equal(t, "TEST_001", body["code"])
-	assert.NotEmpty(t, body["timestamp"])
 	assert.Equal(t, "GET", body["method"])
+
+	// M1 follow-through: timestamp must be RFC3339 second-precision (matches
+	// CONTRACTS.md example "2025-01-31T10:30:00Z"), not RFC3339Nano. Pre-fix
+	// respondWithError passed a raw time.Time which json marshalled as
+	// nanosecond precision; sendError emitted RFC3339; the two error paths
+	// diverged. Both now share handlers.ErrorResponse + .Format(time.RFC3339).
+	tsRaw, ok := body["timestamp"].(string)
+	require.True(t, ok, "timestamp must be a JSON string, got %T", body["timestamp"])
+	parsed, err := time.Parse(time.RFC3339, tsRaw)
+	require.NoError(t, err, "timestamp %q must parse as RFC3339", tsRaw)
+	assert.Equal(t, 0, parsed.Nanosecond(),
+		"timestamp must be second-precision RFC3339, got %q (nanoseconds=%d)",
+		tsRaw, parsed.Nanosecond())
 }
 
 func TestServer_respondWithError_aborts(t *testing.T) {

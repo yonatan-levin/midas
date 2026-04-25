@@ -687,22 +687,26 @@ func (s *Server) permissionsToStrings(permissions []entities.Permission) []strin
 // respondWithError sends a standardized RFC 7807 Problem Details error response.
 // It also stores the error code in the gin context so accessLogMiddleware can
 // include it in the access log line without re-parsing the response body.
+//
+// Uses the typed handlers.ErrorResponse struct (the same one fair_value.go
+// sendError uses) so the two error paths emit byte-identical JSON shapes.
+// Pre-D2-follow-through this function passed a raw time.Time which json
+// marshalled as RFC3339Nano (variable nanosecond precision); now both paths
+// emit RFC3339 second precision matching the CONTRACTS.md example.
 func (s *Server) respondWithError(c *gin.Context, statusCode int, errorCode, message string) {
 	// Make error_code available to accessLogMiddleware for structured access logging
 	c.Set("error_code", errorCode)
 
-	// RFC 7807 Problem Details with project-specific extension field "code"
 	c.Header("Content-Type", "application/problem+json")
-	c.JSON(statusCode, gin.H{
-		"type":     "https://problems.midas.dev/" + errorCode,
-		"title":    http.StatusText(statusCode),
-		"status":   statusCode,
-		"detail":   message,
-		"instance": c.Request.URL.Path,
-		// Extensions allowed by RFC7807
-		"code":      errorCode,
-		"timestamp": time.Now().UTC(),
-		"method":    c.Request.Method,
+	c.JSON(statusCode, handlers.ErrorResponse{
+		Type:      "https://problems.midas.dev/" + errorCode,
+		Title:     http.StatusText(statusCode),
+		Status:    statusCode,
+		Detail:    message,
+		Instance:  c.Request.URL.Path,
+		Code:      errorCode,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Method:    c.Request.Method,
 	})
 	c.Abort()
 }
