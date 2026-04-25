@@ -24,6 +24,9 @@ Midas uses a layered documentation system (see `AGENTS.md` loading contract for 
 |------|---------|----------------|
 | `CLAUDE.md` | Project identity, tech stack, build commands | Commands change, new gotchas, conventions shift |
 | `AGENTS.md` | Canonical load order for AI agents (tier 1-4) | Files move between directories, new tier entries |
+| `ARCHITECTURE.md` | System architecture | Structural changes, new dependencies |
+| `TESTING.md` | Testing strategy and coverage | Test changes, new tests, test coverage changes |
+| `CONTRACTS.md` | API contracts and service interfaces | API contract changes, new endpoints, new services |
 | `docs/THESIS.md` | Product direction, phase status, scope | Phase completion, roadmap adjustment |
 | `docs/FEEDBACK-LOG.md` | User corrections log | A correction recurs — promote to MEMORY index |
 | `docs/API_DOCUMENTATION.md` | Human-readable API + engine + deployment reference | Endpoint changes, valuation model changes, config additions |

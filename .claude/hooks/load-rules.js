@@ -106,30 +106,30 @@ async function main() {
       process.exit(0);
     }
 
-    const contentHash = computeContentHash(sections);
-    const prevState = loadState();
+    //const contentHash = computeContentHash(sections);
+    // const prevState = loadState();
 
-    // Skip if same session + same content (already in context).
-    // Also enforce a TTL: if the state is older than 1 hour, always reload.
-    // This handles cases where the Stop hook didn't run (crash, Ctrl+C)
-    // and the stale state would otherwise suppress the first-prompt load.
-    const MAX_STATE_AGE_MS = 60 * 60 * 1000; // 1 hour
-    const stateAge = prevState && prevState.loadedAt
-      ? Date.now() - new Date(prevState.loadedAt).getTime()
-      : Infinity;
+    // // Skip if same session + same content (already in context).
+    // // Also enforce a TTL: if the state is older than 1 hour, always reload.
+    // // This handles cases where the Stop hook didn't run (crash, Ctrl+C)
+    // // and the stale state would otherwise suppress the first-prompt load.
+    // const MAX_STATE_AGE_MS = 60 * 60 * 1000; // 1 hour
+    // const stateAge = prevState && prevState.loadedAt
+    //   ? Date.now() - new Date(prevState.loadedAt).getTime()
+    //   : Infinity;
 
-    if (
-      prevState &&
-      prevState.contentHash === contentHash &&
-      sessionId &&
-      prevState.sessionId === sessionId &&
-      stateAge < MAX_STATE_AGE_MS
-    ) {
-      process.exit(0);
-    }
+    // if (
+    //   prevState &&
+    //   prevState.contentHash === contentHash &&
+    //   sessionId &&
+    //   prevState.sessionId === sessionId &&
+    //   stateAge < MAX_STATE_AGE_MS
+    // ) {
+    //   process.exit(0);
+    // }
 
     // New session, different content, or no previous state → load rules
-    saveState(sessionId, contentHash);
+    // saveState(sessionId, contentHash);
 
     const body = sections
       .map(s => `## Rule: ${s.name}\n\n${s.content}`)

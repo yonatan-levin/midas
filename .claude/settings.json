@@ -1,53 +1,55 @@
 {
-  "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/load-rules.js\"",
-            "timeout": 10,
-            "statusMessage": "Loading workflow rules..."
-          }
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/load-rules.js\"",
+                        "timeout": 10,
+                        "statusMessage": "Loading workflow rules..."
+                    }
+                ]
+            }
+        ],
+        "PreToolUse": [
+            {
+                "matcher": "Read",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-read.js\"",
+                        "timeout": 10,
+                        "statusMessage": "Running pre-read quality checks..."
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit.js\"",
+                        "timeout": 60,
+                        "statusMessage": "Running post-edit quality checks..."
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/on-stop.js\"",
+                        "timeout": 600,
+                        "statusMessage": "Running quality gates..."
+                    }
+                ]
+            }
         ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-read.js\"",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit.js\"",
-            "timeout": 60,
-            "statusMessage": "Running post-edit quality checks..."
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/on-stop.js\"",
-            "timeout": 600,
-            "statusMessage": "Running quality gates..."
-          }
-        ]
-      }
-    ]
-  }
+    }
 }
