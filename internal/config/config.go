@@ -56,6 +56,68 @@ type LoggingConfig struct {
 
 	// File holds rolling-file sink configuration.
 	File LogFileConfig `mapstructure:"file"`
+
+	// Narrate controls the Tier-1 pipeline-phase narrative stream. See
+	// docs/refactoring/observability-narrative-and-artifacts-spec.md (§4-§5).
+	Narrate NarrateConfig `mapstructure:"narrate"`
+
+	// ArtifactStore controls the Tier-3 per-request bundle on disk. See
+	// docs/refactoring/observability-narrative-and-artifacts-spec.md (§7-§8).
+	ArtifactStore ArtifactStoreConfig `mapstructure:"artifact_store"`
+}
+
+// NarrateConfig governs the Tier-1 narrate stream (one Info line per
+// pipeline phase).
+type NarrateConfig struct {
+	// Enabled is the master switch. When false, narrate.Emitter.Emit is a
+	// no-op for every request.
+	Enabled bool `mapstructure:"enabled"`
+
+	// SampleRate is a value in [0.0, 1.0]. The decision is made ONCE per
+	// request_id at request entry and stuck on the emitter — a request is
+	// either fully narrated or fully sampled out, never half-told.
+	SampleRate float64 `mapstructure:"sample_rate"`
+
+	// RedactFields lists field keys to drop from emitted lines (e.g.
+	// "client_ip_hash") for operators with stricter privacy requirements.
+	RedactFields []string `mapstructure:"redact_fields"`
+}
+
+// ArtifactStoreConfig governs the Tier-3 artifact bundle (per-request
+// directory of raw + parsed payloads on disk).
+type ArtifactStoreConfig struct {
+	// Enabled is the master switch. Default false in all environments
+	// except development.
+	Enabled bool `mapstructure:"enabled"`
+
+	// RootPath is the directory under which dated bundle subtrees are
+	// created. Default ./artifacts.
+	RootPath string `mapstructure:"root_path"`
+
+	// RetentionDays is the maximum age of bundle directories before the
+	// reaper sweeps them. 0 disables the age-based sweep.
+	RetentionDays int `mapstructure:"retention_days"`
+
+	// MaxTotalBytes is the soft cap for the entire bundle root tree.
+	// When exceeded, the reaper evicts oldest bundles first. 0 disables.
+	MaxTotalBytes int64 `mapstructure:"max_total_bytes"`
+
+	// QueueSize bounds the per-bundle snapshot queue. Bursty captures will
+	// drop snapshots (logged + recorded as bundle outcome=partial) rather
+	// than block the request thread. Default 256.
+	QueueSize int `mapstructure:"queue_size"`
+
+	// Triggers controls which conditions open a bundle. Phase 1: only
+	// Manual is honoured (?trace=1 / X-Midas-Trace).
+	Triggers ArtifactTriggers `mapstructure:"triggers"`
+}
+
+// ArtifactTriggers enumerates the per-request conditions that open a
+// bundle. Phase 1 supports only Manual; Phase 2 will add OnError,
+// OnQualityFlag, Always (see spec §13).
+type ArtifactTriggers struct {
+	// Manual = ?trace=1 query OR X-Midas-Trace: 1 header.
+	Manual bool `mapstructure:"manual"`
 }
 
 // LogFileConfig controls the rolling log-file sink backed by lumberjack.
@@ -292,6 +354,20 @@ func setDefaults() {
 	// not pollute access logs with high-frequency noise.
 	viper.SetDefault("logging.access_log_skip_paths", []string{"/metrics", "/health", "/ready"})
 
+	// Narrate defaults: stream is on by default, full sampling. Per-environment
+	// override (dev=on, staging/prod=on) handled in applyLoggingEnvironmentDefaults.
+	viper.SetDefault("logging.narrate.sample_rate", 1.0)
+	viper.SetDefault("logging.narrate.redact_fields", []string{})
+
+	// Artifact-store defaults. Master Enabled flag is set per-environment
+	// (default off in staging/prod) by applyLoggingEnvironmentDefaults so dev
+	// gets bundles automatically while prod is opt-in.
+	viper.SetDefault("logging.artifact_store.root_path", "./artifacts")
+	viper.SetDefault("logging.artifact_store.retention_days", 7)
+	viper.SetDefault("logging.artifact_store.max_total_bytes", int64(5)*int64(1<<30)) // 5 GiB
+	viper.SetDefault("logging.artifact_store.queue_size", 256)
+	viper.SetDefault("logging.artifact_store.triggers.manual", true)
+
 	// Server defaults
 	viper.SetDefault("server.port", "8080")
 	viper.SetDefault("server.read_timeout", "30s")
@@ -407,6 +483,10 @@ func applyLoggingEnvironmentDefaults() {
 		viper.SetDefault("logging.file.enabled", false)
 		viper.SetDefault("logging.level", "info")
 		viper.SetDefault("logging.trace_calculations", false)
+		// Narrate stream is on in all environments by default; bundle store
+		// is OFF in staging/prod to avoid surprise disk usage in production.
+		viper.SetDefault("logging.narrate.enabled", true)
+		viper.SetDefault("logging.artifact_store.enabled", false)
 	default:
 		// "development" and any unrecognised environment fall through to
 		// developer-friendly defaults: coloured console output with file sink.
@@ -414,6 +494,8 @@ func applyLoggingEnvironmentDefaults() {
 		viper.SetDefault("logging.file.enabled", true)
 		viper.SetDefault("logging.level", "debug")
 		viper.SetDefault("logging.trace_calculations", true)
+		viper.SetDefault("logging.narrate.enabled", true)
+		viper.SetDefault("logging.artifact_store.enabled", true)
 	}
 }
 

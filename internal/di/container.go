@@ -26,6 +26,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/infra/repositories/cache"
 	"github.com/midas/dcf-valuation-api/internal/infra/repositories/sqlite"
 	"github.com/midas/dcf-valuation-api/internal/infra/resilience"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	"github.com/midas/dcf-valuation-api/internal/services/auth"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
@@ -98,6 +99,10 @@ var CoreModule = fx.Options(
 
 	// Observability: calculation-stage emitter (consumed by services in Phase S)
 	fx.Provide(calclog.NewEmitter),
+
+	// Observability: artifact-bundle reaper. Started by RegisterHooks at app
+	// startup, stopped at shutdown. Idle when ArtifactStore.Enabled=false.
+	fx.Provide(NewArtifactReaper),
 
 	// Database Module
 	fx.Provide(NewDatabase),
@@ -735,10 +740,11 @@ func NewMetricsService(logger *zap.Logger) *metrics.Service {
 // RegisterHooksParams defines the parameters for RegisterHooks
 type RegisterHooksParams struct {
 	fx.In
-	Lifecycle   fx.Lifecycle
-	DB          *sqlx.DB
-	Logger      *zap.Logger
-	RedisClient *redis.Client `optional:"true"`
+	Lifecycle      fx.Lifecycle
+	DB             *sqlx.DB
+	Logger         *zap.Logger
+	RedisClient    *redis.Client `optional:"true"`
+	ArtifactReaper *artifact.Reaper
 }
 
 // RegisterHooks registers application lifecycle hooks
@@ -746,10 +752,17 @@ func RegisterHooks(params RegisterHooksParams) {
 	params.Lifecycle.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			params.Logger.Info("Application starting...")
+			// Start the bundle reaper. No-op when ArtifactStore.Enabled=false.
+			// Use a long-lived context so the goroutine survives until OnStop.
+			//nolint:contextcheck // intentional fresh context for background daemon
+			params.ArtifactReaper.Start(context.Background())
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {
 			params.Logger.Info("Application stopping...")
+
+			// Stop reaper goroutine (idempotent + nil-safe).
+			params.ArtifactReaper.Stop()
 
 			// Close database connection
 			if params.DB != nil {
@@ -767,5 +780,18 @@ func RegisterHooks(params RegisterHooksParams) {
 
 			return nil
 		},
+	})
+}
+
+// NewArtifactReaper builds the bundle reaper from app config. The reaper is
+// idle (no goroutine) when ArtifactStore.Enabled is false; Start is called
+// from RegisterHooks at app startup so it begins sweeping immediately.
+func NewArtifactReaper(cfg *config.Config) *artifact.Reaper {
+	return artifact.NewReaper(artifact.Config{
+		Enabled:       cfg.Logging.ArtifactStore.Enabled,
+		RootPath:      cfg.Logging.ArtifactStore.RootPath,
+		RetentionDays: cfg.Logging.ArtifactStore.RetentionDays,
+		MaxTotalBytes: cfg.Logging.ArtifactStore.MaxTotalBytes,
+		QueueSize:     cfg.Logging.ArtifactStore.QueueSize,
 	})
 }
