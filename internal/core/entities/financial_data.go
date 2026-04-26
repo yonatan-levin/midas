@@ -19,6 +19,22 @@ type FinancialData struct {
 	CIK          string    `json:"cik"`
 	AsOf         time.Time `json:"as_of"`
 
+	// ReportingCurrency is the ISO-4217 code of the currency that every
+	// monetary field on this struct (Revenue, Assets, OperatingIncome, …) is
+	// denominated in, as taken from the SEC XBRL `Units` key. Set by the SEC
+	// parser; populated by Phase B5 of the IFRS-FPI plan
+	// (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+	//
+	// Empty string is treated as "USD" by callers — backward compat for
+	// FinancialData rows persisted before the field shipped, and for tests
+	// that build FinancialData literals without setting it.
+	//
+	// SharesOutstanding / DilutedSharesOutstanding are dimensionless and
+	// MUST NOT be FX-converted when ReportingCurrency != USD. The full list
+	// of monetary vs. non-monetary fields is documented in
+	// internal/services/valuation/currency.go (Phase B9).
+	ReportingCurrency string `json:"reporting_currency,omitempty"`
+
 	// Income Statement (normalized values)
 	OperatingIncome           float64 `json:"operating_income"`            // Normalized operating income after adjustments
 	NormalizedOperatingIncome float64 `json:"normalized_operating_income"` // After removing non-recurring items
