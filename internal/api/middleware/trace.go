@@ -62,14 +62,29 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 		emitter := narrate.NewEmitter(cfgN, requestID)
 
 		// Decide whether to open a bundle.
+		//
+		// Precedence (spec §13 + Phase 2.A brief):
+		//   1. Manual flag (?trace=1 / X-Midas-Trace) — open eager bundle
+		//      with trigger=header/query. Always wins so debug sessions
+		//      stay attributable to the operator who flipped the flag.
+		//   2. on_error trigger enabled — open DEFERRED bundle. The bundle
+		//      is in-memory only; trace middleware decides at request-end
+		//      (post-c.Next) whether to Promote (status>=500) or Close
+		//      (status<500, dissolves the buffer).
+		//   3. Otherwise — no bundle.
 		trigger, traceFlag := detectTraceTrigger(c)
 		var bundle *artifact.Bundle
+		// deferredBundle tracks whether we opened in deferred mode. Used
+		// post-c.Next to decide between Promote() and Close()-without-flush.
+		// Manual triggers bypass this flag (they always promote == eager).
+		var deferredBundle bool
 		// openErr is captured so we can both surface the failure to log
 		// readers (via Warn) and downgrade trace_enabled with an
 		// explanatory reason on the narrate stream. Silent swallow makes
 		// "?trace=1 returns no bundle" un-debuggable.
 		var openErr error
-		if traceFlag && cfgA.Enabled {
+		switch {
+		case traceFlag && cfgA.Enabled:
 			// Ticker is unknown at this point — handler will SetTicker
 			// after URL parsing.
 			b, err := artifact.OpenBundle(cfgA, requestID, "", trigger)
@@ -86,6 +101,33 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 			} else {
 				bundle = b
 				emitter.WithPayloadRoot(b.Root())
+			}
+		case cfgA.Enabled && cfgA.Triggers.OnError:
+			// No manual flag, but on_error is on — open a deferred bundle.
+			// We pass TriggerOnError as the speculative trigger value so the
+			// manifest is correct if/when Promote() fires. If status<500,
+			// Close() drops the buffers and nothing lands on disk.
+			//
+			// OpenDeferredBundle does NOT mkdir or spawn a goroutine, so
+			// non-erroring requests pay only buffer-allocation cost.
+			b, err := artifact.OpenDeferredBundle(cfgA, requestID, "", artifact.TriggerOnError)
+			if err != nil {
+				// Same Warn shape as the eager path so log readers don't
+				// have to learn two log lines for the same class of failure.
+				openErr = err
+				logctx.From(c.Request.Context()).Warn("trace.bundle.open_failed",
+					zap.String("request_id", requestID),
+					zap.String("trigger", string(artifact.TriggerOnError)),
+					zap.Error(err),
+				)
+			} else {
+				bundle = b
+				deferredBundle = true
+				// Intentionally NOT calling WithPayloadRoot here: the bundle
+				// directory does not exist on disk yet and may never exist.
+				// payload_ref fields would point to a non-existent path,
+				// which is more confusing than absent. WithPayloadRoot is
+				// invoked at Promote()-time below if/when we promote.
 			}
 		}
 
@@ -166,12 +208,54 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 		if c.Writer.Status() >= 500 {
 			respOutcome = narrate.OutcomeError
 		}
+
+		// Phase 2.A: deferred-bundle promote/discard decision.
+		//
+		// MUST run BEFORE we emit response.sent so that:
+		//   - Promoted bundles include the response.sent narrate line in
+		//     their 99-narrate.jsonl (the buffered request.received line +
+		//     the freshly-emitted response.sent both end up on disk).
+		//   - Promoting now lets us include artifact_path in response.sent
+		//     pointing at the now-on-disk bundle directory.
+		//
+		// Manual triggers always opened in eager mode (deferredBundle=false)
+		// and reach this block as no-op. Only on_error-triggered bundles
+		// take the Promote/Close branch.
+		if deferredBundle && bundle != nil {
+			if respOutcome == narrate.OutcomeError {
+				if perr := bundle.Promote(artifact.TriggerOnError); perr != nil {
+					// Promote failed (mkdir error). Same Warn shape as the
+					// open-time failure so log readers don't have to learn
+					// two log lines.
+					logctx.From(c.Request.Context()).Warn("trace.bundle.promote_failed",
+						zap.String("request_id", requestID),
+						zap.String("trigger", string(artifact.TriggerOnError)),
+						zap.Error(perr),
+					)
+				} else {
+					// Wire payload_root NOW so response.sent (and any
+					// downstream narrate lines if there are any) carry
+					// resolvable payload_ref values. Pre-promote narrate
+					// lines were buffered without payload_root; that's OK
+					// because their payload_ref fields would have pointed
+					// at a nonexistent path anyway.
+					emitter.WithPayloadRoot(bundle.Root())
+				}
+			}
+			// On status<500 we DON'T call Promote: the deferred bundle is
+			// dropped via Close() below, releasing all in-memory state.
+		}
+
 		respFields := []zap.Field{
 			zap.Int("status", c.Writer.Status()),
 			zap.Int("body_bytes", maxInt(c.Writer.Size(), 0)),
 			zap.Int64("total_elapsed_ms", time.Since(reqStart).Milliseconds()),
 		}
-		if bundle != nil {
+		// artifact_path is added for eager bundles AND promoted deferred
+		// bundles. Skipped for deferred-but-not-promoted bundles — their
+		// directory does not (and will never) exist on disk, so a path
+		// would mislead log readers.
+		if bundle != nil && (!deferredBundle || respOutcome == narrate.OutcomeError) {
 			respFields = append(respFields, zap.String("artifact_path", bundle.Root()))
 		}
 		emitter.Emit(c.Request.Context(), narrate.PhaseResponseSent, respOutcome, "", respFields...)
@@ -184,7 +268,9 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 		}
 
 		// Close the bundle at request end, finalising 00-manifest.json.
-		// Close is idempotent and nil-safe.
+		// Close is idempotent and nil-safe. For deferred-but-unpromoted
+		// bundles, Close() drops the in-memory buffers without touching
+		// disk — see Bundle.Close()'s deferred branch.
 		_ = bundle.Close()
 	}
 }
