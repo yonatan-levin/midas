@@ -434,3 +434,152 @@ func splitOSSep(p string) []string {
 	}
 	return parts
 }
+
+// TestSetTicker_RenamesDirectory pins the contract that SetTicker updates
+// the on-disk directory layout, not just the manifest. Trace middleware opens
+// the bundle BEFORE the handler parses :ticker, so the initial directory
+// segment is "_no-ticker"; once the handler stamps the ticker, the segment
+// must be replaced so per-ticker forensics like
+// `ls artifacts/<date>/TSM/` find the bundle.
+//
+// Repros the 2026-04-26 bug report: `?trace=1` against /api/v1/fair-value/TSM
+// produced artifacts under `_no-ticker/` instead of `TSM/`.
+func TestSetTicker_RenamesDirectory(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	// Open with empty ticker — mirrors trace middleware behaviour.
+	b, err := artifact.OpenBundle(cfg, "rid-rename-1", "", artifact.TriggerQuery)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	originalRoot := b.Root()
+
+	// Initial directory MUST be under "_no-ticker" — sanity-check the precondition.
+	parts := splitPath(t, originalRoot, root)
+	require.Equal(t, "_no-ticker", parts[1], "precondition: initial dir is _no-ticker")
+
+	// Simulate work that opens cached file handles before SetTicker.
+	require.NoError(t, b.AppendStream("99-narrate.jsonl", []byte(`{"event":"narrate","phase":"request.received"}`)))
+	b.Snapshot(context.Background(), "fetch.sec", "05-fetch-sec.parsed.json", map[string]string{"cik": "1018724"})
+
+	// Late-bind the ticker. This is what the handler does.
+	b.SetTicker("TSM")
+
+	// Bundle root must now point to the TSM directory.
+	newRoot := b.Root()
+	newParts := splitPath(t, newRoot, root)
+	require.Len(t, newParts, 3, "expected 3 levels under root, got %v", newParts)
+	assert.Equal(t, "TSM", newParts[1], "after SetTicker the ticker segment must be TSM, not %s", newParts[1])
+	assert.Equal(t, "req_rid-rename-1", newParts[2])
+
+	// New directory must exist on disk.
+	st, err := os.Stat(newRoot)
+	require.NoError(t, err, "renamed directory must exist on disk")
+	assert.True(t, st.IsDir())
+
+	// Old _no-ticker request directory must no longer exist.
+	_, err = os.Stat(originalRoot)
+	assert.True(t, os.IsNotExist(err), "old _no-ticker req dir must be gone after rename, stat err=%v", err)
+
+	// Append more data AFTER rename — must land in the NEW location.
+	require.NoError(t, b.AppendStream("99-narrate.jsonl", []byte(`{"event":"narrate","phase":"handler.entry"}`)))
+
+	require.NoError(t, b.Close())
+
+	// Manifest must reflect the new ticker AND live in the new directory.
+	mfPath := filepath.Join(newRoot, "00-manifest.json")
+	mfBody, err := os.ReadFile(mfPath)
+	require.NoError(t, err, "manifest must exist at new path %s", mfPath)
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(mfBody, &mf))
+	assert.Equal(t, "TSM", mf.Ticker)
+
+	// Both the pre-rename and post-rename JSONL appends must be present.
+	streamBody, err := os.ReadFile(filepath.Join(newRoot, "99-narrate.jsonl"))
+	require.NoError(t, err)
+	streamLines := splitJSONLines(string(streamBody))
+	require.Len(t, streamLines, 2, "expected 2 narrate lines (pre + post rename), got %d", len(streamLines))
+}
+
+// TestSetTicker_NoOpWhenAlreadyMatching — opening with a ticker and then
+// calling SetTicker with the same value (or empty) is idempotent and does
+// not move the directory.
+func TestSetTicker_NoOpWhenAlreadyMatching(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	b, err := artifact.OpenBundle(cfg, "rid-noop", "AAPL", artifact.TriggerHeader)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	originalRoot := b.Root()
+
+	// Same ticker — must be a no-op.
+	b.SetTicker("AAPL")
+	assert.Equal(t, originalRoot, b.Root(), "same-ticker SetTicker must not move the dir")
+
+	// Empty ticker after non-empty — must NOT rename to _no-ticker.
+	b.SetTicker("")
+	assert.Equal(t, originalRoot, b.Root(), "empty SetTicker must not move a non-empty bundle dir")
+
+	require.NoError(t, b.Close())
+}
+
+// TestSetTicker_NoOpAfterClose — calling SetTicker after Close must not
+// panic, must not attempt a rename, and must leave the bundle's root path
+// unchanged.
+func TestSetTicker_NoOpAfterClose(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	b, err := artifact.OpenBundle(cfg, "rid-after-close", "", artifact.TriggerHeader)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	rootBeforeClose := b.Root()
+	require.NoError(t, b.Close())
+
+	// SetTicker after close — must be a safe no-op.
+	b.SetTicker("AAPL")
+	assert.Equal(t, rootBeforeClose, b.Root(), "SetTicker after Close must not move the dir")
+}
+
+// TestSetTicker_RenameFailureCountedAsWriteError — when the underlying
+// os.Rename fails (e.g., source directory deleted out from under us), the
+// failure must be accounted as a writeError so the manifest outcome degrades
+// to "partial", and the manifest's ticker field must still be updated so the
+// in-memory record is honest about what the request was for.
+func TestSetTicker_RenameFailureCountedAsWriteError(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	b, err := artifact.OpenBundle(cfg, "rid-rename-fail", "", artifact.TriggerQuery)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	// Sabotage the bundle directory so os.Rename fails.
+	require.NoError(t, os.RemoveAll(b.Root()))
+
+	// SetTicker should not panic; should record a writeError and update manifest.
+	b.SetTicker("FAIL")
+	assert.Greater(t, b.WriteErrors(), int64(0), "rename failure must be counted as a writeError")
+}
+
+// TestSetTicker_SanitizesPathSeparators — a malicious ticker with path
+// separators must be neutralised before becoming a directory name.
+func TestSetTicker_SanitizesPathSeparators(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	b, err := artifact.OpenBundle(cfg, "rid-evil", "", artifact.TriggerQuery)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	b.SetTicker("../../etc/passwd")
+	parts := splitPath(t, b.Root(), root)
+	assert.NotContains(t, parts[1], "..", "ticker segment must not contain ..")
+	assert.NotContains(t, parts[1], "/", "ticker segment must not contain /")
+	assert.NotContains(t, parts[1], "\\", "ticker segment must not contain backslash")
+
+	require.NoError(t, b.Close())
+}

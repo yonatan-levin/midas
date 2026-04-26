@@ -259,6 +259,9 @@ func TestTrace_BundleClosedOnReturn(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	// Walk: <root>/<date>/_no-ticker/req_*/00-manifest.json must exist.
+	// (This middleware test doesn't run a handler that calls SetTicker, so the
+	// dir stays at _no-ticker — by design. End-to-end ticker rename is covered
+	// by TestSetTicker_RenamesDirectory in internal/observability/artifact.)
 	var found string
 	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
 		if err == nil && filepath.Base(p) == "00-manifest.json" {

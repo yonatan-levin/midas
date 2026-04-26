@@ -92,14 +92,27 @@ type snapshotJob struct {
 	pathsRed []string
 }
 
+// sanitizeTickerDir scrubs a ticker so it's safe to use as a single
+// directory-name segment: replaces path separators and parent-traversal
+// sequences with underscores so a malicious ticker can't escape the bundle
+// root. Empty ticker → empty string (callers fall back to "_no-ticker").
+// Used by both OpenBundle (initial creation) and SetTicker (late-binding rename).
+func sanitizeTickerDir(ticker string) string {
+	s := ticker
+	s = strings.ReplaceAll(s, "/", "_")
+	s = strings.ReplaceAll(s, "\\", "_")
+	s = strings.ReplaceAll(s, "..", "_")
+	return s
+}
+
 // OpenBundle creates the on-disk directory for a request and returns the
 // Bundle handle. Returns nil + nil error when cfg.Enabled is false (so callers
 // can blindly defer Close on a nil bundle).
 //
 // Path layout: <root>/<UTC-date>/<TICKER>/req_<request_id>/
 // When ticker is empty (request.received fires before parsing) it falls back
-// to "_no-ticker"; the trace middleware can rename the directory once the
-// handler stamps the ticker via SetTicker.
+// to "_no-ticker"; the handler renames the directory to <TICKER>/ once the
+// URL path param is parsed via SetTicker.
 func OpenBundle(cfg Config, requestID, ticker string, trigger Trigger) (*Bundle, error) {
 	if !cfg.Enabled {
 		return nil, nil
@@ -116,15 +129,10 @@ func OpenBundle(cfg Config, requestID, ticker string, trigger Trigger) (*Bundle,
 		queueSize = 256
 	}
 
-	tickerDir := ticker
+	tickerDir := sanitizeTickerDir(ticker)
 	if tickerDir == "" {
 		tickerDir = "_no-ticker"
 	}
-	// Sanitise ticker: replace path separators so a malicious ticker can't
-	// escape the bundle root. Tickers are URL path params so rare in practice.
-	tickerDir = strings.ReplaceAll(tickerDir, "/", "_")
-	tickerDir = strings.ReplaceAll(tickerDir, "\\", "_")
-	tickerDir = strings.ReplaceAll(tickerDir, "..", "_")
 
 	// safeID drops any characters that aren't safe on common filesystems.
 	safeID := safeRequestID(requestID)
@@ -148,22 +156,107 @@ func OpenBundle(cfg Config, requestID, ticker string, trigger Trigger) (*Bundle,
 	return b, nil
 }
 
-// Root returns the on-disk directory of the bundle.
+// Root returns the on-disk directory of the bundle. The path may change
+// during the bundle's lifetime if SetTicker renames the directory after URL
+// parsing, so callers should re-read this rather than caching.
 func (b *Bundle) Root() string {
 	if b == nil {
 		return ""
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	return b.root
 }
 
-// SetTicker updates the ticker on the manifest after URL parsing. The on-disk
-// directory is NOT renamed — that would invalidate paths captured in narrate
-// lines. The mismatch is rare (ticker is parsed inside a few microseconds of
-// the bundle being opened) and the manifest is the authoritative record.
+// SetTicker is called by the handler once the URL path param has been parsed.
+// It updates BOTH the manifest's ticker field AND the on-disk directory name:
+// the bundle moves from <root>/<date>/_no-ticker/req_<id>/ to
+// <root>/<date>/<TICKER>/req_<id>/ so per-ticker forensics like
+// `ls artifacts/<date>/TSM/` find the bundle.
+//
+// No-op when the bundle is nil, the ticker sanitizes to empty, the bundle is
+// already at the target ticker, or after Close. On rename failure (rare —
+// disk-full, permission), increments writeErrors so the manifest outcome
+// degrades to "partial", and still updates the manifest ticker so the
+// in-memory state is correct even if the directory is stuck at _no-ticker.
+//
+// File handles cached by AppendStream are closed before the rename (Windows
+// won't rename a directory containing open files; on Unix it would work but
+// the open handles would point to the old inode location). The streams map
+// is cleared; the next AppendStream call reopens at the new path.
 func (b *Bundle) SetTicker(ticker string) {
 	if b == nil {
 		return
 	}
+	sanitized := sanitizeTickerDir(ticker)
+	if sanitized == "" {
+		// Empty (or empty-after-sanitize) ticker — leave directory as-is and
+		// don't overwrite the manifest with an empty value.
+		return
+	}
+
+	b.mu.Lock()
+
+	// No-op if the bundle is already in the target directory.
+	currentParent := filepath.Base(filepath.Dir(b.root))
+	if currentParent == sanitized {
+		b.mu.Unlock()
+		b.setManifestTicker(ticker)
+		return
+	}
+
+	// Don't try to rename a closed bundle.
+	if b.closed.Load() {
+		b.mu.Unlock()
+		return
+	}
+
+	// Compute target path: same date dir, swap ticker segment, same req_<id>.
+	reqDirName := filepath.Base(b.root)
+	dateDir := filepath.Dir(filepath.Dir(b.root))
+	newRoot := filepath.Join(dateDir, sanitized, reqDirName)
+
+	// Close cached stream file handles. Required on Windows (open files block
+	// directory rename); harmless on Unix. The streams map is cleared so the
+	// next AppendStream call reopens at the new path via b.root.
+	for filename, f := range b.streams {
+		if cerr := f.Close(); cerr != nil {
+			b.writeErrors.Add(1)
+		}
+		delete(b.streams, filename)
+	}
+
+	// Ensure the new ticker directory exists.
+	if err := os.MkdirAll(filepath.Dir(newRoot), 0o755); err != nil {
+		b.writeErrors.Add(1)
+		b.mu.Unlock()
+		// Manifest still gets the ticker so the in-memory record is honest
+		// about what the request was for, even if the dir is stuck.
+		b.setManifestTicker(ticker)
+		return
+	}
+
+	// Atomic rename. On Unix this is a single inode-level operation. On
+	// Windows it's an atomic NTFS rename when source and destination are on
+	// the same volume (which they are here — both under the same root).
+	if err := os.Rename(b.root, newRoot); err != nil {
+		b.writeErrors.Add(1)
+		b.mu.Unlock()
+		b.setManifestTicker(ticker)
+		return
+	}
+
+	b.root = newRoot
+	b.mu.Unlock()
+
+	b.setManifestTicker(ticker)
+}
+
+// setManifestTicker updates the manifest's ticker field. Pulled into its own
+// helper because the manifest mutex must not be held while b.mu is held — they
+// are independent locks and nesting them would risk deadlock if any future
+// call goes the other direction.
+func (b *Bundle) setManifestTicker(ticker string) {
 	b.manifest.mu.Lock()
 	b.manifest.manifest.Ticker = ticker
 	b.manifest.mu.Unlock()
@@ -308,7 +401,13 @@ func (b *Bundle) AppendStream(filename string, line []byte) error {
 func (b *Bundle) runWorker() {
 	defer b.worker.Done()
 	for job := range b.queue {
+		// b.root may be mutated by SetTicker; snapshot it under mu to avoid
+		// a data race. The window between read and WriteFile is tiny — if a
+		// rename slips in, WriteFile will fail (old path gone) and writeErrors
+		// will record the failure (downgrading manifest outcome to "partial").
+		b.mu.Lock()
 		path := filepath.Join(b.root, job.filename)
+		b.mu.Unlock()
 		err := os.WriteFile(path, job.data, 0o644)
 		if err != nil {
 			// Track write failures so Close() can mark the bundle outcome
@@ -383,7 +482,11 @@ func (b *Bundle) Close() error {
 
 	// Best effort — failure to write the manifest is logged only via the
 	// returned-error swallow point. Caller has nowhere good to report it.
-	_ = b.manifest.Finalize(b.root)
+	// Snapshot b.root under mu in case a SetTicker is racing with Close.
+	b.mu.Lock()
+	root := b.root
+	b.mu.Unlock()
+	_ = b.manifest.Finalize(root)
 	return nil
 }
 

@@ -371,12 +371,13 @@ func filterByEvent(entries []observer.LoggedEntry, eventName string) []observer.
 // directory. The path layout is <root>/<UTC-date>/<TICKER-OR-_no-ticker>/req_<safe-id>/.
 // Returns the first directory whose name matches "req_" + sanitized requestID.
 //
-// Note: when the bundle is opened by the trace middleware BEFORE the handler
-// has parsed the URL ticker, the on-disk directory uses "_no-ticker" — the
-// manifest's ticker field is updated by SetTicker but the directory is not
-// renamed (changing it would invalidate paths captured in narrate lines).
-// The ticker argument is therefore ignored for the directory lookup; it
-// stays in the API for documentation.
+// Note: trace middleware opens the bundle BEFORE the handler parses the URL
+// ticker, so the directory is initially created under "_no-ticker/". The
+// handler then calls SetTicker, which renames the directory to <TICKER>/. If
+// a request fails before reaching the handler (auth, ratelimit, malformed
+// URL), the directory stays at "_no-ticker/". The ticker argument is ignored
+// for the directory lookup since this helper just walks for "req_<id>"; the
+// caller may want to verify the parent dir name separately.
 func findBundleDir(t *testing.T, root, _ /* ticker */, requestID string) string {
 	t.Helper()
 	want := "req_" + sanitiseID(requestID)
