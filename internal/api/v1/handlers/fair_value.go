@@ -298,12 +298,24 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 			zap.String("ticker", ticker),
 			zap.Error(err))
 
-		// Classify error using sentinel types for reliable matching
+		// Classify error using sentinel types for reliable matching.
+		// FPI MUST be checked before ErrInsufficientData — both produce 422
+		// but FPI carries a more specific code/message that helps users
+		// understand we have data, just in a taxonomy we don't yet parse.
 		if errors.Is(err, valuation.ErrTickerNotFound) {
 			h.sendError(c, http.StatusNotFound, "TICKER_NOT_FOUND",
 				"Ticker not found",
 				"The specified ticker could not be found in our database",
 				map[string]interface{}{"ticker": ticker})
+		} else if errors.Is(err, valuation.ErrForeignPrivateIssuer) {
+			h.sendError(c, http.StatusUnprocessableEntity, "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
+				"Foreign private issuer not yet supported",
+				"This ticker files with the SEC under Form 20-F using IFRS taxonomy, which Midas cannot currently parse. Support is on the roadmap.",
+				map[string]interface{}{
+					"ticker":      ticker,
+					"filing_type": "20-F",
+					"taxonomy":    "ifrs-full",
+				})
 		} else if errors.Is(err, valuation.ErrInsufficientData) {
 			h.sendError(c, http.StatusUnprocessableEntity, "INSUFFICIENT_DATA",
 				"Insufficient data for valuation",
@@ -519,6 +531,13 @@ func classifyBulkError(ticker string, err error) BulkFailure {
 			Ticker:    ticker,
 			ErrorCode: "TICKER_NOT_FOUND",
 			Message:   "Ticker not found in any data source",
+		}
+	case errors.Is(err, valuation.ErrForeignPrivateIssuer):
+		// Must be checked before ErrInsufficientData (more specific case).
+		return BulkFailure{
+			Ticker:    ticker,
+			ErrorCode: "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
+			Message:   "Foreign private issuer (Form 20-F / IFRS) not yet supported",
 		}
 	case errors.Is(err, valuation.ErrInsufficientData):
 		return BulkFailure{
