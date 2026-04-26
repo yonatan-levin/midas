@@ -47,17 +47,35 @@ func (c FlexibleCIK) String() string { return string(c) }
 // indistinguishable from Midas's perspective:
 //
 //  1. The `companyfacts/CIKxxxxxxxxxx.json` endpoint returns HTTP 404
-//     (genuinely unknown CIK, revoked registrants, some FPIs).
+//     (genuinely unknown CIK, revoked registrants).
 //  2. The endpoint returns HTTP 200 but every period in the response lacks
 //     the minimum US-GAAP fields (Revenue / OperatingIncome / shares) — the
-//     shape Midas actually observes for clinical-stage biotechs, pre-revenue
-//     companies, and foreign private issuers whose 20-F filings only populate
-//     the `dei` taxonomy.
+//     shape Midas actually observes for clinical-stage biotechs and
+//     pre-revenue companies whose `us-gaap` taxonomy is present but empty
+//     of revenue / operating-income tags.
+//
+// Distinct from ErrForeignPrivateIssuer (below), which fires when the SEC
+// response carries IFRS taxonomy instead of US-GAAP — that is a parsing
+// gap, not a data gap.
 //
 // Callers should use errors.Is to distinguish this from "ticker truly absent
 // from the SEC ticker→CIK index" so the HTTP layer can respond with 422
 // (INSUFFICIENT_DATA) instead of 404 (TICKER_NOT_FOUND).
 var ErrCompanyFactsNotFound = errors.New("no usable SEC XBRL company facts")
+
+// ErrForeignPrivateIssuer indicates SEC EDGAR returned company facts using
+// a non-US-GAAP taxonomy — typically `ifrs-full` from a Form 20-F filing
+// by a foreign private issuer (TSM, ASML, NVO, AZN, SAP, BABA, …). The data
+// exists but the current US-GAAP-only mapping tables in sec/parser.go
+// cannot extract it.
+//
+// Distinguished from ErrCompanyFactsNotFound so the HTTP layer can emit a
+// tailored 422 explaining the taxonomy mismatch instead of the misleading
+// "no data available" message. The full IFRS-FPI support roadmap lives in
+// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md; once Phase B
+// of that spec ships, this sentinel only fires for taxonomies still outside
+// our coverage (JGAAP, K-IFRS, certain unmapped IFRS extensions).
+var ErrForeignPrivateIssuer = errors.New("foreign private issuer: non-US-GAAP taxonomy")
 
 // SECGateway defines the interface for SEC data retrieval
 type SECGateway interface {

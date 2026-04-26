@@ -23,6 +23,39 @@ func NewParser(logger *zap.Logger) *Parser {
 	}
 }
 
+// classifyEmptyParseError chooses between ErrForeignPrivateIssuer and
+// ErrCompanyFactsNotFound based on which taxonomies the SEC response carried.
+// Called when ParseFinancialData extracted zero usable periods.
+//
+// The heuristic is intentionally simple: a response that contains
+// `ifrs-full` (or `ifrs`) but no `us-gaap` taxonomy is almost certainly a
+// foreign private issuer's 20-F filing — the data exists, our parser just
+// can't read it yet. Anything else (no `us-gaap` and no IFRS, or `us-gaap`
+// present but every period missing Revenue/OperatingIncome) falls back to
+// the existing ErrCompanyFactsNotFound classification used by the valuation
+// service for clinical-stage biotechs and pre-revenue companies.
+//
+// Once Phase B of the IFRS-FPI support spec ships (see
+// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md) the parser
+// will successfully extract IFRS data and this branch will only fire for
+// taxonomies still outside our coverage (JGAAP, K-IFRS).
+func classifyEmptyParseError(facts *ports.SECCompanyFacts) error {
+	hasUSGAAP := false
+	hasIFRS := false
+	for taxonomy := range facts.Facts {
+		switch taxonomy {
+		case "us-gaap":
+			hasUSGAAP = true
+		case "ifrs-full", "ifrs":
+			hasIFRS = true
+		}
+	}
+	if !hasUSGAAP && hasIFRS {
+		return fmt.Errorf("%w: SEC filing uses ifrs-full taxonomy (likely Form 20-F)", ports.ErrForeignPrivateIssuer)
+	}
+	return fmt.Errorf("%w: no periods with usable US-GAAP financials", ports.ErrCompanyFactsNotFound)
+}
+
 // ParseFinancialData extracts financial data from SEC company facts
 func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompanyFacts) (*entities.HistoricalFinancialData, error) {
 	if facts == nil {
@@ -64,14 +97,11 @@ func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompany
 	}
 
 	if len(historical.Data) == 0 {
-		// Wrap the shared sentinel so the valuation service can classify this
-		// as ErrInsufficientData (→ HTTP 422) rather than ErrTickerNotFound
-		// (→ HTTP 404). Every period in the SEC response lacked the minimum
-		// US-GAAP fields (Revenue / OperatingIncome / shares), which for our
-		// purposes is equivalent to "SEC has no usable companyfacts" — common
-		// for clinical-stage biotechs, pre-revenue companies, and foreign
-		// private issuers whose 20-F filings are not tagged in US-GAAP.
-		return nil, fmt.Errorf("%w: no periods with usable US-GAAP financials", ports.ErrCompanyFactsNotFound)
+		// Choose between ErrForeignPrivateIssuer and ErrCompanyFactsNotFound
+		// based on which taxonomies the SEC response carried, so the HTTP
+		// layer can emit a tailored 422 instead of the misleading
+		// "INSUFFICIENT_DATA" message that gets emitted for both.
+		return nil, classifyEmptyParseError(facts)
 	}
 
 	p.logger.Info("Successfully parsed financial data",

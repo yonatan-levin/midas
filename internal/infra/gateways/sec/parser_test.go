@@ -163,6 +163,71 @@ func TestParser_ParseFinancialData_NoValidData(t *testing.T) {
 	// ErrInsufficientData (→ HTTP 422) rather than ErrTickerNotFound (→ 404).
 	assert.True(t, errors.Is(err, ports.ErrCompanyFactsNotFound),
 		"parser must wrap ports.ErrCompanyFactsNotFound when all periods lack usable financials; got: %v", err)
+	// And it must NOT additionally wrap ErrForeignPrivateIssuer (no IFRS taxonomy
+	// in this fixture — this is a generic-no-data case, not an FPI case).
+	assert.False(t, errors.Is(err, ports.ErrForeignPrivateIssuer),
+		"generic-no-data must not be misclassified as foreign-private-issuer; got: %v", err)
+}
+
+// TestParser_ParseFinancialData_ForeignPrivateIssuer pins the classification
+// behavior for tickers like TSM (Taiwan Semiconductor Manufacturing), ASML,
+// NVO, AZN, SAP, BABA, etc. — foreign private issuers filing Form 20-F using
+// IFRS taxonomy. SEC EDGAR returns hundreds of `ifrs-full` concepts but no
+// `us-gaap` ones, so the parser cannot extract any period (Phase A behavior;
+// Phase B will teach the parser to read IFRS).
+//
+// The fixture is a minimized version of the real TSM artifact captured in
+// artifacts/2026-04-26/_no-ticker/req_78653629…/05-fetch-sec.parsed.json.
+func TestParser_ParseFinancialData_ForeignPrivateIssuer(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	facts := &ports.SECCompanyFacts{
+		CIK:        "1046179",
+		EntityName: "Taiwan Semiconductor Manufacturing Company Limited",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"dei": {
+				"EntityCommonStockSharesOutstanding": {
+					Label: "Entity Common Stock, Shares Outstanding",
+					Units: map[string][]ports.SECFact{
+						"shares": {
+							{End: "2024-12-31", Val: 25932733242, Fy: 2024, Fp: "FY", Form: "20-F", Filed: "2025-04-17"},
+						},
+					},
+				},
+			},
+			"ifrs-full": {
+				// Phase A: parser does not yet read IFRS, so even though the
+				// data is here it cannot be extracted into FinancialData.
+				"Revenue": {
+					Label: "Revenue",
+					Units: map[string][]ports.SECFact{
+						"TWD": {
+							{End: "2024-12-31", Val: 2894308000000, Fy: 2024, Fp: "FY", Form: "20-F", Filed: "2025-04-17"},
+						},
+					},
+				},
+				"ProfitLossFromOperatingActivities": {
+					Label: "Profit Loss From Operating Activities",
+					Units: map[string][]ports.SECFact{
+						"TWD": {
+							{End: "2024-12-31", Val: 1321714000000, Fy: 2024, Fp: "FY", Form: "20-F", Filed: "2025-04-17"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	historical, err := parser.ParseFinancialData(ctx, facts)
+
+	assert.Error(t, err)
+	assert.Nil(t, historical)
+	assert.True(t, errors.Is(err, ports.ErrForeignPrivateIssuer),
+		"20-F filer with ifrs-full taxonomy must wrap ports.ErrForeignPrivateIssuer; got: %v", err)
+	assert.False(t, errors.Is(err, ports.ErrCompanyFactsNotFound),
+		"FPI must not be misclassified as missing-companyfacts; got: %v", err)
 }
 
 func TestParser_NormalizeFinancialData_Success(t *testing.T) {
