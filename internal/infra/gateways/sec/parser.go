@@ -73,10 +73,16 @@ func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompany
 		Data:        make(map[string]*entities.FinancialData),
 	}
 
-	// Extract data by fiscal periods
+	// Extract data by fiscal periods. extractFiscalPeriods only fails when it
+	// produced zero usable periods (its loop reads only `USD` and `shares`
+	// units), which for a foreign private issuer in non-USD reporting currency
+	// with no `dei` shares is the same outcome as the late-failure path
+	// below — so we route both through classifyEmptyParseError so the
+	// taxonomy-based classification fires regardless of WHICH layer ran out
+	// of data first.
 	periods, err := p.extractFiscalPeriods(facts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract fiscal periods: %w", err)
+		return nil, classifyEmptyParseError(facts)
 	}
 
 	p.logger.Debug("Extracted fiscal periods", zap.Int("period_count", len(periods)))

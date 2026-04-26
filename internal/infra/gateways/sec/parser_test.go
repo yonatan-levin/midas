@@ -169,6 +169,54 @@ func TestParser_ParseFinancialData_NoValidData(t *testing.T) {
 		"generic-no-data must not be misclassified as foreign-private-issuer; got: %v", err)
 }
 
+// TestParser_ParseFinancialData_ForeignPrivateIssuer_NoDEISharesEdgeCase
+// pins the classification behavior when a 20-F filer's response carries
+// IFRS facts in a non-USD currency AND no `dei` shares units — i.e., NO
+// data extractable by the current USD/shares-only loop in
+// extractFiscalPeriods. Without explicit handling the early-failure path
+// (extractFiscalPeriods returns "no financial periods extracted") would
+// bypass classifyEmptyParseError and surface a generic 500 instead of the
+// 422 FOREIGN_PRIVATE_ISSUER_UNSUPPORTED that the rest of Phase A
+// guarantees.
+//
+// This is an edge case relative to the captured TSM artifact (which DOES
+// include dei shares), but a real 20-F filer is not contractually obliged
+// to provide dei shares — so we pin the behavior explicitly.
+func TestParser_ParseFinancialData_ForeignPrivateIssuer_NoDEISharesEdgeCase(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	// IFRS-full taxonomy in TWD with no `dei` shares unit anywhere — the
+	// extractFiscalPeriods loop only reads `USD` and `shares` units, so this
+	// fixture forces the early "no financial periods extracted" branch.
+	facts := &ports.SECCompanyFacts{
+		CIK:        "1046179",
+		EntityName: "Hypothetical IFRS Filer",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"ifrs-full": {
+				"Revenue": {
+					Label: "Revenue",
+					Units: map[string][]ports.SECFact{
+						"TWD": {
+							{End: "2024-12-31", Val: 2894308000000, Fy: 2024, Fp: "FY", Form: "20-F", Filed: "2025-04-17"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	ctx := context.Background()
+	historical, err := parser.ParseFinancialData(ctx, facts)
+
+	assert.Error(t, err)
+	assert.Nil(t, historical)
+	assert.True(t, errors.Is(err, ports.ErrForeignPrivateIssuer),
+		"IFRS-only filer with no dei shares must still wrap ports.ErrForeignPrivateIssuer; got: %v", err)
+	assert.False(t, errors.Is(err, ports.ErrCompanyFactsNotFound),
+		"FPI must not be misclassified as missing-companyfacts in the early-failure path; got: %v", err)
+}
+
 // TestParser_ParseFinancialData_ForeignPrivateIssuer pins the classification
 // behavior for tickers like TSM (Taiwan Semiconductor Manufacturing), ASML,
 // NVO, AZN, SAP, BABA, etc. — foreign private issuers filing Form 20-F using
