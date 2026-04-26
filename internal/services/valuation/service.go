@@ -195,10 +195,16 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 
 		fetchResult, fetchErr := s.dataFetcher.Fetch(ctx, &entities.FetchRequest{Ticker: ticker})
 		if fetchErr != nil {
-			// Defensive: if a direct fetch error ever wraps ErrCompanyFactsNotFound
-			// (SEC CIK resolved but XBRL missing), classify as insufficient data
-			// rather than a generic 500. In the current flow CoordinateFetch
-			// never returns non-nil, so this branch is primarily future-proofing.
+			// Defensive: if a direct fetch error ever wraps a SEC sentinel,
+			// classify as the appropriate user-facing error rather than a
+			// generic 500. In the current flow CoordinateFetch never returns
+			// non-nil, so these branches are primarily future-proofing.
+			//
+			// FPI check MUST come first — ErrForeignPrivateIssuer is the more
+			// specific case (parsing gap, not data gap).
+			if errors.Is(fetchErr, ports.ErrForeignPrivateIssuer) {
+				return nil, fmt.Errorf("%w: SEC filing for %s uses ifrs-full taxonomy", ErrForeignPrivateIssuer, ticker)
+			}
 			if errors.Is(fetchErr, ports.ErrCompanyFactsNotFound) {
 				return nil, fmt.Errorf("%w: no US-GAAP XBRL facts currently available for %s via SEC EDGAR", ErrInsufficientData, ticker)
 			}
@@ -229,11 +235,24 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 				Data:   map[string]*entities.FinancialData{periodKey: fetchResult.FinancialData},
 			}
 		} else {
-			// No data came back from any source. Distinguish "ticker truly
-			// unknown" (404) from "CIK resolved but SEC has no US-GAAP XBRL"
-			// (422), because the latter is common for foreign private issuers
-			// (20-F filers like Canadian pharmas) and deserves a clearer
-			// diagnostic than "ticker not found".
+			// No data came back from any source. Three-way classification so
+			// the HTTP layer can give a clear, actionable message for each
+			// case (all 422 except the last which is 404):
+			//
+			//   1. FPI — 20-F filer using ifrs-full taxonomy (TSM, ASML, NVO,
+			//      AZN, BABA, …). Data exists, parser can't read it yet.
+			//      Phase B of the IFRS-FPI spec teaches the parser to.
+			//   2. CompanyFactsNotFound — clinical-stage biotech, pre-revenue
+			//      issuer, or genuinely-unknown CIK. us-gaap present but
+			//      missing Revenue/OperatingIncome.
+			//   3. Else — ticker truly unknown across all sources.
+			//
+			// FPI MUST be checked first because it is the more specific case;
+			// a SEC fetch error can technically wrap both sentinels, and the
+			// FPI message is more useful for the user.
+			if hasForeignPrivateIssuerError(fetchResult.Errors) {
+				return nil, fmt.Errorf("%w: SEC filing for %s uses ifrs-full taxonomy", ErrForeignPrivateIssuer, ticker)
+			}
 			if hasCompanyFactsNotFoundError(fetchResult.Errors) {
 				return nil, fmt.Errorf("%w: no US-GAAP XBRL facts currently available for %s via SEC EDGAR", ErrInsufficientData, ticker)
 			}
