@@ -9,10 +9,15 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 )
@@ -571,4 +576,254 @@ func TestDeferredBundle_PromoteThenClose_WriteErrorsAccountedInManifest(t *testi
 	var mf artifact.Manifest
 	require.NoError(t, json.Unmarshal(mfBody, &mf))
 	assert.Equal(t, "on_error", mf.Trigger)
+}
+
+// TestDeferredBundle_PromoteRace_NoLineLoss is the stress test that pins
+// the REVIEWER HIGH-1 fix (Promote's stream flush switched from
+// os.WriteFile/O_TRUNC to O_APPEND). Pre-fix, this test fails because
+// Promote's WriteFile would truncate lines that racing eager AppendStream
+// callers had already written, causing the on-disk line count to be less
+// than the number of successful AppendStream returns.
+//
+// Reproduction strategy: spawn N goroutines each spamming AppendStream in
+// a tight loop while the main goroutine calls Promote partway through.
+// Some goroutines will land their lines via the deferred buffer (pre-flip),
+// some via the eager path (post-flip), some will race exactly during
+// Promote's flush. After Close(), the on-disk line count MUST equal the
+// number of AppendStream calls that returned successfully.
+//
+// Run with -race to also catch data races on b.streams / b.pendingStreams.
+func TestDeferredBundle_PromoteRace_NoLineLoss(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{
+		Enabled:         true,
+		RootPath:        root,
+		QueueSize:       1024,
+		PendingBytesCap: 1 << 20, // 1 MiB — plenty of headroom
+	}
+
+	b, err := artifact.OpenDeferredBundle(cfg, "rid-promote-race-noline-loss", "AAPL", artifact.TriggerOnError)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	const (
+		numGoroutines   = 16
+		linesPerRoutine = 50
+		filename        = "99-narrate.jsonl"
+	)
+
+	var (
+		wg              sync.WaitGroup
+		successfulLines atomic.Int64
+		startGate       = make(chan struct{})
+	)
+
+	// Spawn writer goroutines first; they block on startGate so they all
+	// race the Promote call together rather than serialising.
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			<-startGate
+			for j := 0; j < linesPerRoutine; j++ {
+				// Distinct line content per write so we can also detect
+				// duplicates if the truncation bug ever re-introduces them.
+				line := []byte(`{"writer":` + itoa(id) + `,"seq":` + itoa(j) + `}` + "\n")
+				if err := b.AppendStream(filename, line); err == nil {
+					successfulLines.Add(1)
+				}
+			}
+		}(i)
+	}
+
+	// Release the writers and concurrently call Promote. We sleep briefly
+	// so a few writers buffer pre-promote and a few race the flush.
+	close(startGate)
+	time.Sleep(200 * time.Microsecond)
+	require.NoError(t, b.Promote(artifact.TriggerOnError))
+
+	wg.Wait()
+	require.NoError(t, b.Close())
+
+	// Read the on-disk file and count lines.
+	body, err := os.ReadFile(filepath.Join(b.Root(), filename))
+	require.NoError(t, err)
+	diskLineCount := int64(len(splitJSONLines(string(body))))
+
+	// CRITICAL ASSERTION: every successful AppendStream call must be
+	// represented on disk. Pre-fix, Promote's O_TRUNC flush silently
+	// destroyed bytes written by racing eager AppendStream calls between
+	// the deferred-flip and the WriteFile, making diskLineCount strictly
+	// less than successfulLines.Load().
+	require.Equal(t, successfulLines.Load(), diskLineCount,
+		"successful AppendStream count (%d) must equal on-disk line count (%d) — Promote's stream flush must not destroy concurrent eager-path writes",
+		successfulLines.Load(), diskLineCount)
+}
+
+// itoa is a tiny non-allocating int-to-ascii helper local to this file so
+// the stress test doesn't pull strconv into the import set just for one
+// line of formatting. Handles only non-negative ints (sufficient for the
+// loop indices used above).
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
+}
+
+// TestDeferredBundle_PromoteCloseRace_NoGoroutineLeak pins the REVIEWER
+// HIGH-2 fix (the `promoted` flag check in Close). Pre-fix, Close racing
+// with Promote would observe deferred=true (still set by Promote at the
+// time Close took its snapshot), take the dissolve path, return without
+// close(b.queue) — leaving the worker goroutine ranging over the channel
+// forever and the WaitGroup never counting down.
+//
+// We use go.uber.org/goleak.VerifyNone to assert no goroutines remain
+// after the test body completes. The test runs many race iterations to
+// give the goroutine scheduler ample chance to interleave Promote and
+// Close in the dangerous order.
+func TestDeferredBundle_PromoteCloseRace_NoGoroutineLeak(t *testing.T) {
+	// Snapshot baseline goroutines BEFORE running the race so we ignore
+	// long-lived runtime goroutines (goroutine #1, finalizer, GC sweeper)
+	// and any test-framework goroutines.
+	defer goleak.VerifyNone(t,
+		// Allow goleak to ignore the test-runner's own goroutine.
+		goleak.IgnoreTopFunction("testing.(*T).Run"),
+		goleak.IgnoreTopFunction("runtime.gopark"),
+	)
+
+	const iterations = 50
+	for i := 0; i < iterations; i++ {
+		root := t.TempDir()
+		cfg := artifact.Config{
+			Enabled:   true,
+			RootPath:  root,
+			QueueSize: 16,
+		}
+		b, err := artifact.OpenDeferredBundle(cfg, "rid-race-"+itoa(i), "AAPL", artifact.TriggerOnError)
+		require.NoError(t, err)
+
+		// Buffer a snapshot so the worker has work to do post-Promote.
+		b.Snapshot(context.Background(), "phase", "x.json", map[string]int{"i": i})
+
+		// Race: spawn one goroutine that calls Promote, one that calls Close.
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_ = b.Promote(artifact.TriggerOnError)
+		}()
+		go func() {
+			defer wg.Done()
+			// Tiny sleep with ~50% probability so Close sometimes wins
+			// and sometimes loses the race vs Promote.
+			if i%2 == 0 {
+				runtime.Gosched()
+			}
+			_ = b.Close()
+		}()
+		wg.Wait()
+	}
+}
+
+// TestBundle_StreamLineExceedsHardCap_DroppedAndCounted pins the REVIEWER
+// HIGH-3 fix (per-line MaxStreamLineBytes guard in AppendStream). A 1 MiB
+// stream line MUST be rejected at AppendStream entry, OversizeLines() MUST
+// return 1, and the manifest's notes MUST contain "oversize_lines=1" so
+// postmortem readers can attribute the partial outcome to the rogue line
+// rather than to buffer-pressure eviction.
+//
+// Tests both modes (eager and deferred) in one parameterised form because
+// the cap is enforced at AppendStream entry, BEFORE the deferred branch.
+func TestBundle_StreamLineExceedsHardCap_DroppedAndCounted(t *testing.T) {
+	tests := []struct {
+		name       string
+		isDeferred bool
+		open       func(cfg artifact.Config) (*artifact.Bundle, error)
+	}{
+		{
+			name:       "eager_bundle",
+			isDeferred: false,
+			open: func(cfg artifact.Config) (*artifact.Bundle, error) {
+				return artifact.OpenBundle(cfg, "rid-oversize-eager", "AAPL", artifact.TriggerHeader)
+			},
+		},
+		{
+			name:       "deferred_bundle",
+			isDeferred: true,
+			open: func(cfg artifact.Config) (*artifact.Bundle, error) {
+				return artifact.OpenDeferredBundle(cfg, "rid-oversize-deferred", "AAPL", artifact.TriggerOnError)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			cfg := artifact.Config{Enabled: true, RootPath: root}
+
+			b, err := tc.open(cfg)
+			require.NoError(t, err)
+			require.NotNil(t, b)
+
+			// Build a 1 MiB line — well over MaxStreamLineBytes (256 KiB)
+			// and large enough that pre-fix it would have evicted any
+			// buffered snapshots in deferred mode.
+			oversize := make([]byte, 1<<20)
+			for i := range oversize {
+				oversize[i] = 'x'
+			}
+
+			// AppendStream must NOT error — the contract is "drop + count",
+			// not "fail loudly".
+			require.NoError(t, b.AppendStream("99-narrate.jsonl", oversize))
+
+			// OversizeLines counter must reflect the rejection.
+			assert.Equal(t, int64(1), b.OversizeLines(),
+				"oversize line must be counted via OversizeLines()")
+
+			// Deferred bundles need Promote to materialise the manifest on
+			// disk; otherwise Close dissolves the bundle and there's
+			// nothing to read. We Promote with TriggerOnError to mirror the
+			// production trace-middleware path.
+			if tc.isDeferred {
+				require.NoError(t, b.Promote(artifact.TriggerOnError))
+			}
+			require.NoError(t, b.Close())
+
+			// On-disk file must NOT contain the oversize line. (For eager
+			// bundles the file may not exist at all; for deferred bundles
+			// the file may exist but be empty.)
+			body, _ := os.ReadFile(filepath.Join(b.Root(), "99-narrate.jsonl"))
+			assert.NotContains(t, string(body), string(oversize[:64]),
+				"oversize line bytes must not appear on disk")
+
+			// Manifest's notes must annotate the oversize count so
+			// postmortem readers can grep for it.
+			mfBody, err := os.ReadFile(filepath.Join(b.Root(), "00-manifest.json"))
+			require.NoError(t, err)
+			var mf artifact.Manifest
+			require.NoError(t, json.Unmarshal(mfBody, &mf))
+			assert.Equal(t, "partial", mf.Outcome,
+				"oversize-line drop must downgrade outcome to partial")
+			assert.Contains(t, mf.Notes, "oversize_lines=1",
+				"manifest notes must record the oversize_lines count for postmortem grep")
+		})
+	}
+}
+
+// TestBundle_MaxStreamLineBytesConstant pins the public constant value
+// so a future refactor can't silently shrink the cap and reject log lines
+// the production code reasonably emits (e.g. ~8 KiB narrate entries with
+// large payload_ref lists).
+func TestBundle_MaxStreamLineBytesConstant(t *testing.T) {
+	assert.Equal(t, 256*1024, artifact.MaxStreamLineBytes,
+		"MaxStreamLineBytes is part of the package's public surface — do not shrink without a deprecation cycle")
 }

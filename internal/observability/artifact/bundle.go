@@ -20,6 +20,24 @@ import (
 // happy-path valuation request (snapshots + JSONL streams).
 const defaultPendingBytesCap = int64(10) << 20
 
+// MaxStreamLineBytes is the hard upper bound on a single stream-line write
+// (one zap entry teed via BundleSink, or one direct AppendStream caller).
+// Lines that exceed this cap are dropped at AppendStream / bufferStream entry
+// and counted via Bundle.oversizeLines so the manifest's notes can surface
+// them at Close()-time. 256 KiB is large enough for any reasonable structured
+// log line (including the biggest narrate entry we produce in production —
+// ~8 KiB) but small enough that a single rogue Debug payload (e.g. the full
+// 5 MiB SEC company-facts response logged with zap.Any) cannot evict the
+// entire deferred buffer in one shot. See REVIEWER finding HIGH-3 for the
+// regression scenario this bound prevents.
+//
+// Exported so BundleSink (zap_core.go) can short-circuit oversized entries
+// before serialization if a future optimization wants to skip the
+// EncodeEntry cost on giant payloads. Today the check lives only in
+// AppendStream / bufferStream — the simpler placement that catches both
+// the BundleSink path and direct AppendStream callers in one place.
+const MaxStreamLineBytes = 256 * 1024
+
 // Trigger names how a bundle was opened. Used in the manifest to let
 // consumers tell apart manual debugging from future auto-triggered captures.
 type Trigger string
@@ -111,7 +129,14 @@ type Bundle struct {
 	// why the capture is incomplete.
 	dropped     atomic.Int64
 	writeErrors atomic.Int64
-	requestID   string
+	// oversizeLines counts stream-line writes that were rejected at
+	// AppendStream / bufferStream entry because their byte length exceeded
+	// MaxStreamLineBytes. Surfaces in the manifest's notes at Close-time
+	// alongside dropped/writeErrors so postmortem readers can distinguish
+	// "buffer full so we evicted oldest" (queue_drops) from "one rogue line
+	// was too big to ever accept" (oversize_lines). REVIEWER HIGH-3 fix.
+	oversizeLines atomic.Int64
+	requestID     string
 
 	// mu protects the streams cache. AppendStream uses cached file handles
 	// so we don't pay open() per line for the ~17 narrate lines + potentially
@@ -131,7 +156,18 @@ type Bundle struct {
 	// streams cache lock. Promote acquires pendingMu, drains the buffers,
 	// flips deferred=false, and releases — late-arriving Snapshots that hit
 	// pendingMu after the flip are forwarded to the eager queue.
-	deferred       atomic.Bool
+	deferred atomic.Bool
+	// promoted is set to true under pendingMu by Promote() AFTER the worker
+	// goroutine has been spawned and BEFORE deferred is flipped to false.
+	// Close() reads promoted under pendingMu to decide between the deferred-
+	// dissolve path (no worker exists, just GC the buffers) and the eager-
+	// finalize path (close(queue) + worker.Wait()). Required because
+	// Close()/Promote() can race and reading `deferred` alone is not enough:
+	// if Close arrives between Promote spawning the worker and Promote
+	// flipping deferred=false, Close would take the dissolve path, return
+	// without closing the queue, and leak the worker goroutine forever.
+	// REVIEWER HIGH-2 fix.
+	promoted       atomic.Bool
 	pendingMu      sync.Mutex
 	pendingJobs    []snapshotJob
 	pendingStreams map[string]*bytes.Buffer
@@ -561,6 +597,18 @@ func (b *Bundle) AppendStream(filename string, line []byte) error {
 		return nil
 	}
 
+	// Hard upper bound on a single line. Catches both BundleSink-teed
+	// entries (a runaway zap.Any payload) and direct callers. Done BEFORE
+	// the deferred branch so the cap is enforced uniformly across modes.
+	// REVIEWER HIGH-3: pre-fix, a 5 MiB log payload would blow through
+	// the deferred buffer's pendingCap (10 MiB default) in two writes,
+	// evicting all buffered snapshots to make room and silently destroying
+	// the bundle's value as a debugging artifact.
+	if int64(len(line)) > MaxStreamLineBytes {
+		b.oversizeLines.Add(1)
+		return nil
+	}
+
 	if b.deferred.Load() {
 		return b.bufferStream(filename, line)
 	}
@@ -616,7 +664,20 @@ func (b *Bundle) AppendStream(filename string, line []byte) error {
 // As with bufferSnapshot, re-checks deferred under pendingMu so a concurrent
 // Promote() that flipped to eager mode forwards the line to the on-disk
 // AppendStream path instead of silently dropping it.
+//
+// AppendStream enforces MaxStreamLineBytes BEFORE dispatching here, so in
+// practice the redundant cap check below is dead-code in normal flow. Kept
+// as defense-in-depth so a future refactor that adds a direct caller to
+// bufferStream cannot accidentally re-introduce the HIGH-3 regression.
 func (b *Bundle) bufferStream(filename string, line []byte) error {
+	// Defense-in-depth: AppendStream already enforced this, but keep the
+	// guard local so bufferStream is safe even if a future call path skips
+	// AppendStream.
+	if int64(len(line)) > MaxStreamLineBytes {
+		b.oversizeLines.Add(1)
+		return nil
+	}
+
 	b.pendingMu.Lock()
 	defer b.pendingMu.Unlock()
 
@@ -687,11 +748,13 @@ func (b *Bundle) bufferStream(filename string, line []byte) error {
 //   - No-op when bundle is nil, already promoted, or already closed.
 //   - mkdirs the bundle root (deferred mode skipped this at construction).
 //   - Spawns the background snapshot worker (deferred mode skipped this).
+//   - Sets the `promoted` flag under pendingMu so Close() can route to the
+//     eager-finalize path even if it observes a stale `deferred` value.
 //   - Drains buffered snapshots into the worker queue (blocking sends; the
 //     queue is sized to match the cap, and the worker drains in parallel).
-//   - Flushes buffered stream buffers via os.WriteFile (one shot per stream).
-//     Subsequent AppendStream calls in the same request fall through to the
-//     eager path and append to the now-on-disk file.
+//   - Flushes buffered stream buffers via O_APPEND opens (one shot per
+//     stream). Subsequent AppendStream calls in the same request fall
+//     through to the eager path and append to the now-on-disk file.
 //   - Updates the manifest's Trigger field. Useful when the deferred bundle
 //     was opened with one trigger value but promoted with another (today
 //     they always match — TriggerOnError — but defensive for future
@@ -742,26 +805,67 @@ func (b *Bundle) Promote(trigger Trigger) error {
 	b.worker.Add(1)
 	go b.runWorker()
 
+	// Mark the bundle as promoted BEFORE flipping deferred=false. Close()
+	// reads `promoted` under pendingMu to decide between the dissolve path
+	// and the eager-finalize path; setting it here (still inside pendingMu)
+	// ensures Close cannot observe (deferred=true && promoted=false) AFTER
+	// the worker has been spawned. If we set it AFTER the deferred flip,
+	// a Close racing in the gap would take the dissolve path, fail to
+	// close(b.queue), and leak the worker forever (REVIEWER HIGH-2).
+	b.promoted.Store(true)
+
 	// Flip mode under the lock so concurrent Snapshot/AppendStream callers
 	// that arrived BEFORE us see the new mode after they get the lock.
 	b.deferred.Store(false)
-	b.pendingMu.Unlock()
 
-	// Drain buffered snapshots into the worker queue. Blocking send is OK:
-	// the worker is running and the queue is sized to match queueCap (which
-	// also caps len(pendingJobs)), so back-pressure tops out at queueCap
-	// items and the worker drains them at disk speed.
+	// Drain buffered snapshots into the worker queue WHILE STILL HOLDING
+	// pendingMu. This serialises the channel-send against Close's
+	// close(b.queue), which itself waits on pendingMu (via the
+	// promoted-flag check) before progressing to the close. Without this
+	// serialisation, Close could close(queue) while Promote is still
+	// draining, causing a "send on closed channel" panic — the actual
+	// race the REVIEWER HIGH-2 fix had to chase down.
+	//
+	// Holding pendingMu across the drain is bounded: the queue capacity
+	// equals queueCap, len(pendingJobs) <= queueCap (enforced by
+	// bufferSnapshot), and the worker is concurrently consuming. Worst
+	// case the drain blocks briefly while the worker writes to disk;
+	// pendingMu hold time stays in milliseconds, not seconds.
 	for _, job := range pendingJobs {
 		b.queue <- job
 	}
+	b.pendingMu.Unlock()
 
-	// Flush each buffered stream as a single os.WriteFile. We do NOT cache
-	// the file handle here — subsequent AppendStream calls reopen via the
-	// eager path's handle cache (O_APPEND), so the pre-promote and post-
-	// promote lines end up in the same file in order.
+	// Flush each buffered stream by APPENDING the buffered bytes to the on-
+	// disk file. We deliberately use O_APPEND|O_CREATE|O_WRONLY (NOT
+	// os.WriteFile, which uses O_TRUNC) so that any concurrent eager
+	// AppendStream call that beat us to the file — which is possible because
+	// the eager path's AppendStream takes b.mu, not pendingMu, and may run
+	// after we released pendingMu above — has its bytes preserved instead
+	// of silently truncated. Pre-fix (REVIEWER HIGH-1):
+	//   1. Promote unlocks pendingMu, eager AppendStream wakes, opens the
+	//      file with O_APPEND|O_CREATE, writes "lineA\n", caches the handle.
+	//   2. Promote's os.WriteFile here truncates the file to zero, writes the
+	//      buffered content. lineA is gone.
+	// The cached handle in b.streams still works (O_TRUNC reuses the inode
+	// in place on Linux), so the post-promote AppendStream calls happily
+	// append into the truncated file — making the data loss completely
+	// invisible to the caller. The fix is to switch to append-mode here so
+	// the worst case is a (lineA, buffered) ordering inversion rather than
+	// data loss. We do NOT cache the file handle here — subsequent
+	// AppendStream calls open their own handle via the eager path's handle
+	// cache.
 	for filename, buf := range pendingStreams {
 		path := filepath.Join(b.root, filename)
-		if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			b.writeErrors.Add(1)
+			continue
+		}
+		if _, werr := f.Write(buf.Bytes()); werr != nil {
+			b.writeErrors.Add(1)
+		}
+		if cerr := f.Close(); cerr != nil {
 			b.writeErrors.Add(1)
 		}
 	}
@@ -813,6 +917,15 @@ func (b *Bundle) runWorker() {
 // and no manual flag was present), Close drops the in-memory buffers and
 // returns immediately without touching disk. Nothing was ever written, so
 // there's nothing to finalise; the bundle dissolves cleanly.
+//
+// REVIEWER HIGH-2: the dissolve-vs-finalize decision must be observed under
+// pendingMu (not via a bare deferred.Load()) so a Close that races a
+// concurrent Promote sees the `promoted` flag atomically with respect to
+// Promote's worker spawn. Reading deferred alone is racy: Promote spawns the
+// worker, sets promoted=true, and flips deferred=false — all under pendingMu.
+// Without the flag check, Close arriving between worker-spawn and
+// deferred-flip would see deferred=true, take the dissolve path, return
+// without close(b.queue), and leak the worker forever.
 func (b *Bundle) Close() error {
 	if b == nil {
 		return nil
@@ -821,19 +934,30 @@ func (b *Bundle) Close() error {
 		return nil
 	}
 
-	// Unpromoted deferred bundle — clean GC of the in-memory buffers.
-	// We do NOT close(b.queue) because no worker was ever started; closing
-	// would leave the channel un-drained but that's fine, GC reclaims it.
-	// Skipping all disk I/O is the whole point of Close-without-Promote:
-	// the request was uneventful and the bundle should leave no trace.
-	if b.deferred.Load() {
-		b.pendingMu.Lock()
+	// Decide deferred-dissolve vs eager-finalize under pendingMu so we
+	// observe Promote() atomically. Promote sets `promoted=true` while
+	// holding pendingMu and BEFORE releasing it; therefore by the time we
+	// hold pendingMu here, either Promote ran fully (promoted=true,
+	// deferred=false → eager finalize) or Promote has not yet started
+	// (promoted=false, deferred=true → dissolve). The (promoted=true,
+	// deferred=true) intermediate state inside Promote is invisible to us
+	// because Promote holds pendingMu through that whole transition.
+	b.pendingMu.Lock()
+	dissolve := !b.promoted.Load() && b.deferred.Load()
+	if dissolve {
+		// Unpromoted deferred bundle — clean GC of the in-memory buffers.
+		// We do NOT close(b.queue) because no worker was ever started;
+		// closing would leave the channel un-drained but that's fine, GC
+		// reclaims it. Skipping all disk I/O is the whole point of
+		// Close-without-Promote: the request was uneventful and the bundle
+		// should leave no trace.
 		b.pendingJobs = nil
 		b.pendingStreams = nil
 		b.pendingBytes = 0
 		b.pendingMu.Unlock()
 		return nil
 	}
+	b.pendingMu.Unlock()
 
 	// Closing the queue lets the worker drain remaining jobs and exit.
 	close(b.queue)
@@ -860,16 +984,21 @@ func (b *Bundle) Close() error {
 
 	// Read the loss counters AFTER worker.Wait() AND stream flush so all
 	// increments are observed. Queue-overflow drops, snapshot write
-	// failures, and stream flush errors all indicate an incomplete capture;
-	// any degrades the outcome.
+	// failures, stream flush errors, and oversize-line rejects all indicate
+	// an incomplete capture; any degrades the outcome.
 	dropped := b.dropped.Load()
 	writeErrors := b.writeErrors.Load()
-	if dropped > 0 || writeErrors > 0 {
+	oversize := b.oversizeLines.Load()
+	if dropped > 0 || writeErrors > 0 || oversize > 0 {
 		b.manifest.SetOutcome("partial")
 		// Annotate the manifest so a reader of the bundle directory
 		// immediately understands why outcome is "partial". The format is
 		// stable so log-greppers and tooling can parse it.
-		b.manifest.SetNotes(fmt.Sprintf("write_failures=%d queue_drops=%d", writeErrors, dropped))
+		// REVIEWER HIGH-3: oversize_lines surfaces lines rejected by the
+		// MaxStreamLineBytes guard so postmortem readers can distinguish
+		// "buffer pressure evicted oldest" from "rogue line was too big".
+		b.manifest.SetNotes(fmt.Sprintf("write_failures=%d queue_drops=%d oversize_lines=%d",
+			writeErrors, dropped, oversize))
 	}
 
 	// Best effort — failure to write the manifest is logged only via the
@@ -901,6 +1030,17 @@ func (b *Bundle) WriteErrors() int64 {
 		return 0
 	}
 	return b.writeErrors.Load()
+}
+
+// OversizeLines returns the count of stream-line writes (eager AppendStream
+// or deferred bufferStream) rejected because their byte length exceeded
+// MaxStreamLineBytes. Surfaced in the manifest's notes as oversize_lines=N
+// at Close-time. REVIEWER HIGH-3 fix.
+func (b *Bundle) OversizeLines() int64 {
+	if b == nil {
+		return 0
+	}
+	return b.oversizeLines.Load()
 }
 
 // safeRequestID strips characters that are problematic in directory names on
