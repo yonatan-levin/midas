@@ -2,6 +2,8 @@
 
 This file provides guidance for AI assistants (Claude, etc.) working on this codebase.
 
+READING AGENTS.md IS MANDATORY.
+
 ## Project Overview
 
 **Midas** is a production-grade REST API for equity valuation using Discounted Cash Flow (DCF) analysis. It fetches real-time financial data from SEC EDGAR, market prices from Yahoo Finance/Finzive, and macroeconomic indicators from FRED, then normalizes, cleans, and uses that data to calculate intrinsic value per share.

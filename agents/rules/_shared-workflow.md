@@ -13,6 +13,7 @@ This file contains shared workflow patterns used across all roles and modes.
    - `ARCHITECTURE.md` (service-specific if applicable)
    - `CONTRACTS.md`
    - `TESTING.md`
+   - `AGENTS.md`
 
 2. **USE MCP TOOLS** - You MUST call:
 - **sequential-thinking**: Break down complex tasks into smaller steps
@@ -20,7 +21,7 @@ This file contains shared workflow patterns used across all roles and modes.
 - **perplexity-ask**: Research unknown problems, search web for answers
 - **context7**: Look up documentation for any code subject
 - **zen-mcp thinkdeep**: Deep thinking about architecture and complex problems
-- **zen-mcp codereview**: Systematic code review with GPT-5 Pro
+- **zen-mcp codereview**: Systematic code review.
 - **zen-mcp debug**: Root cause analysis for bugs
 
 3. **SHOW YOUR WORK** - Response must include:

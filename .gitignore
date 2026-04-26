@@ -87,6 +87,7 @@ ehthumbs.db
 # Logs
 *.log
 logs/
+artifacts/
 *.gz
 
 # Caches (tooling may create these locally)

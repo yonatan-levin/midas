@@ -65,7 +65,7 @@ At the start of any work session, read these files in order. Stop at the first t
 | **Durable memory** | `memory/MEMORY.md` + linked files | Curated weekly; keep concise (~150 lines for index) |
 | **Volatile preferences** | `docs/FEEDBACK-LOG.md` | Append-only; pruned quarterly |
 | **Daily notes** | `memory/daily/YYYY-MM-DD.md` | Append during session; promoted to MEMORY weekly |
-| **Operational rules** | `agents/rules/*.mdc`, `agents/roles/*.md` | Changes when workflow evolves |
+| **Operational rules** | `agents/rules/*.md`, `agents/roles/*.md` | Changes when workflow evolves |
 | **Reference docs** | `docs/*` | Updated alongside code changes |
 
 ---
@@ -127,21 +127,21 @@ This keeps sub-agent context tight and avoids compaction pressure.
 
 ## How Claude Code Auto-Loads Tier 3 Rules
 
-The hook at `.claude/hooks/load-rules.js` reads three foundation rules from `agents/rules/` on every `UserPromptSubmit`:
+The hook at `.claude/hooks/load-rules.js` reads three foundation rules from `agents/rules/` on every `SessionStart`:
 
-1. `agents/rules/_shared-workflow.mdc`
-2. `agents/rules/preflight.mdc`
-3. `agents/rules/orchestrator.mdc`
+1. `agents/rules/_shared-workflow.md`
+2. `agents/rules/preflight.md`
+3. `agents/rules/orchestrator.md`
 
 It injects them into context with a header `# Loaded Workflow Rules (agents/rules/)`. Deduplication is session+content-hash based with a 1-hour TTL.
 
-The remaining rules (`codeexecution.mdc`, `load-context.mdc`, `project-planing.mdc`, `qa-automation.mdc`, `scaffold-module.mdc`, `ux-first-bug-fix-research.mdc`) are **not auto-loaded** — they are read on-demand when acting in the corresponding mode.
+The remaining rules (`load-context.md`, `scaffold-module.md`) are **not auto-loaded** — they are read on-demand when acting in the corresponding mode.
 
 ### Cursor Users
 
 Cursor auto-discovers rules from `.cursor/rules/` only. Since the canonical location is now `agents/rules/`, Cursor will no longer auto-attach these rules. Options:
 
-- **(Recommended)** Invoke rules explicitly with `@agents/rules/<name>.mdc` when using Cursor.
+- **(Recommended)** Invoke rules explicitly with `@agents/rules/<name>.md` when using Cursor.
 - **(Alternative)** Create symlinks from `.cursor/rules/` to `agents/rules/` if Cursor auto-attach is needed.
 
 ---

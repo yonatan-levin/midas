@@ -25,9 +25,9 @@ const { PROJECT_ROOT, readStdin } = require('./utils');
 
 // Rule files to load (relative to project root).
 const RULE_FILES = [
-  'agents/rules/_shared-workflow.mdc',   // Foundation: roles, validation cycle, response format
-  'agents/rules/preflight.mdc',          // Pre-implementation checklist
-  'agents/rules/orchestrator.mdc',       // Routing logic and specialist dispatch
+  'agents/rules/_shared-workflow.md',   // Foundation: roles, validation cycle, response format
+  'agents/rules/preflight.md',          // Pre-implementation checklist
+  'agents/rules/orchestrator.md',       // Routing logic and specialist dispatch
 ];
 
 // State file tracking what was loaded and for which session
