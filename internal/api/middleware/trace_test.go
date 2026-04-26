@@ -846,3 +846,76 @@ func TestTrace_OnError_BundleSinkInstalledForDeferred(t *testing.T) {
 	assert.Contains(t, string(streamBody), `"phase":"handler.entry"`,
 		"narrate stream must contain the handler-emitted line that fired BEFORE the 500")
 }
+
+// TestTrace_OnError_HandlerPanic_StillBundles pins REVIEWER HIGH-4. With
+// the trace middleware registered AFTER the recovery middleware (i.e.,
+// recovery is OUTSIDE trace in the call stack), a handler panic propagates
+// THROUGH trace's c.Next() back up to recovery. Pre-fix, trace's
+// post-c.Next() block — which contains the deferred-bundle Promote/Close
+// logic — was skipped entirely, leaking the in-memory buffers and (much
+// worse) silently dropping the on-error bundle for the very requests most
+// in need of post-mortem visibility.
+//
+// Post-fix the post-c.Next() block lives inside a defer with a recover()
+// at the top; the bundle is finalised, the panic is re-raised so any
+// outer recovery middleware still observes it, and the on-disk bundle
+// directory exists with trigger="on_error".
+//
+// Verifies:
+//   - The bundle directory exists on disk (the most important part —
+//     pre-fix it did not).
+//   - The manifest's trigger is "on_error".
+//   - The manifest's outcome is "error" (panicked → forced error outcome
+//     even before any outer recovery sets status to 500).
+//   - gin's recovery middleware did its job and returned 500 to the client.
+func TestTrace_OnError_HandlerPanic_StillBundles(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-panic-onerror"))
+	// Recovery is registered FIRST, which means it runs FIRST in the chain
+	// and therefore wraps every middleware registered after it. Any panic
+	// from a downstream middleware or handler propagates back through
+	// trace's c.Next() to here, where Recovery catches it.
+	r.Use(gin.Recovery())
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{OnError: true},
+		},
+	))
+	r.GET("/boom", func(c *gin.Context) {
+		// Synthetic panic — simulates a nil pointer or any unrecovered
+		// runtime fault inside the handler.
+		panic("simulated handler panic for trace HIGH-4")
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	// The defer-wrap re-raises the panic AFTER bundle finalisation so the
+	// outer gin.Recovery() can still translate it into a 500. The test
+	// relies on that re-raise to keep gin's recovery semantics intact.
+	r.ServeHTTP(w, req)
+
+	// gin.Recovery translates the panic into a 500.
+	require.Equal(t, http.StatusInternalServerError, w.Code,
+		"outer Recovery middleware must still see the panic after trace finalises the bundle")
+
+	// Pre-fix: this assertion FAILED — no bundle on disk because trace's
+	// post-c.Next() block was skipped by the panic.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath,
+		"on-error bundle must exist on disk even when the handler panics")
+
+	// Manifest must reflect the on_error auto-trigger and the error outcome.
+	body, err := os.ReadFile(mfPath)
+	require.NoError(t, err)
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(body, &mf))
+	assert.Equal(t, "on_error", mf.Trigger,
+		"panicking handler must promote the deferred bundle with trigger=on_error")
+	assert.Equal(t, "error", mf.Outcome,
+		"panicked request must record outcome=error in the manifest")
+}
