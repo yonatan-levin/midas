@@ -36,6 +36,7 @@ Quality bar: **fintech-platform-grade accuracy**, not a personal script.
 | Data Quality Guardrail | COMPLETE (2026-04-09) | `e5c33c0`, `08cf32e` | Schema migration, stale data cleanup, CapEx smoothing |
 | 3: Industry-Aware Models | COMPLETE (2026-04-09) | `7eaa488` | DDM (banks), FFO (REITs), Revenue Multiple (pre-revenue), DCF (default) |
 | 4: International + Cross-Checks | COMPLETE (2026-04-10) | `440d204` | Country risk premium, Blume beta, exit-multiple TV, sanity cross-check |
+| IFRS / FPI Support | COMPLETE (2026-04-27) | `phase-b-ifrs-fpi-support` tag | TSM, ASML, NVO, AZN, BABA, BIDU, TM, RIO, BHP, NVS, SHEL, BP produce USD per-ADR fair values via IFRS-full XBRL parsing + FRED FX conversion + configured ADR ratios. Response surfaces `currency` and `adr_ratio_applied` for transparency. See `docs/refactoring/ifrs-foreign-private-issuer-support-spec.md`. |
 
 **All planned phases are complete.** The engine is at `CalculationVersion 4.0`.
 

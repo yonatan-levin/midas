@@ -438,6 +438,22 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 		return nil, fmt.Errorf("failed to perform valuation: %w", err)
 	}
 
+	// Phase B12 (IFRS-FPI): stamp transparency fields on the result.
+	//
+	// ReportingCurrency is always "USD" because convertFinancialsToUSD
+	// (Phase B9) ran above with the calculation-safety contract that every
+	// monetary field on every period ends up in USD before any math runs.
+	// Hard-coded rather than read from historicalData[*].ReportingCurrency
+	// because the latter could be "" for legacy/test data and the user's
+	// actual unit on DCFValuePerShare is what they care about.
+	//
+	// ADRRatioApplied mirrors what applyADRRatio (Phase B10) divided by:
+	// the configured ratio for foreign filers (TSM=5, BABA=8, …) or 1 for
+	// every other ticker. Get() is nil-safe and always returns a positive
+	// int by contract, so this is unconditionally safe.
+	result.ReportingCurrency = "USD"
+	result.ADRRatioApplied = s.adrRatios.Get(ticker)
+
 	// Add cleaning results if available
 	if cleaningResult != nil {
 		result.DataQualityScore = cleaningResult.QualityScore

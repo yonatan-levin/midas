@@ -24,21 +24,43 @@ func NewParser(logger *zap.Logger) *Parser {
 }
 
 // classifyEmptyParseError chooses between ErrForeignPrivateIssuer and
-// ErrCompanyFactsNotFound based on which taxonomies the SEC response carried.
-// Called when ParseFinancialData extracted zero usable periods.
+// ErrCompanyFactsNotFound based on which taxonomies the SEC response
+// carried. Called when ParseFinancialData extracted zero usable periods.
 //
-// The heuristic is intentionally simple: a response that contains
-// `ifrs-full` (or `ifrs`) but no `us-gaap` taxonomy is almost certainly a
-// foreign private issuer's 20-F filing — the data exists, our parser just
-// can't read it yet. Anything else (no `us-gaap` and no IFRS, or `us-gaap`
-// present but every period missing Revenue/OperatingIncome) falls back to
-// the existing ErrCompanyFactsNotFound classification used by the valuation
-// service for clinical-stage biotechs and pre-revenue companies.
+// Post-Phase-B6 invariant (see
+// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md): the parser
+// now reads IFRS-full concepts (Revenue, ProfitLossFromOperatingActivities,
+// CashAndCashEquivalents, …) and stamps the period's reporting currency
+// from any ISO-4217 unit key. So for the well-mapped IFRS-full filers (TSM,
+// ASML, NVO, AZN, SAP, BABA, BIDU, TM, RIO, BHP, NVS, SHEL, BP, …)
+// extractFiscalPeriods + parsePeriodData succeed and this function is
+// NEVER called.
 //
-// Once Phase B of the IFRS-FPI support spec ships (see
-// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md) the parser
-// will successfully extract IFRS data and this branch will only fire for
-// taxonomies still outside our coverage (JGAAP, K-IFRS).
+// This branch now fires ONLY when the parser could not extract ANY usable
+// period AFTER reading IFRS-full. That happens in two scenarios:
+//
+//  1. The taxonomy IS `ifrs-full` but every concept the filer used falls
+//     outside the Phase B6 mapping table — e.g., custom IFRS extensions,
+//     concepts that landed under `ifrs-full` but the filer chose
+//     non-standard tag names. Pinned by
+//     TestParser_ParseFinancialData_ForeignPrivateIssuer_UnmappedConcepts.
+//  2. The taxonomy is something else entirely — JGAAP, K-IFRS,
+//     `ifrs-smes`, or future SEC additions we have not yet mapped.
+//
+// In both cases the data exists in the SEC response but our parser cannot
+// read it; ErrForeignPrivateIssuer is the more helpful classification for
+// the user (and lets the API return 422 FOREIGN_PRIVATE_ISSUER_UNSUPPORTED
+// instead of the misleading INSUFFICIENT_DATA fallback).
+//
+// Anything else (no `us-gaap` and no IFRS, or `us-gaap` present but every
+// period missing Revenue/OperatingIncome) falls through to
+// ErrCompanyFactsNotFound — the same classification the valuation service
+// uses for clinical-stage biotechs and pre-revenue US companies.
+//
+// FX-failure path (Phase B11): if the parser succeeded but the
+// service-layer FX conversion failed for non-USD periods, the service
+// itself maps that to ErrForeignPrivateIssuer via convertFinancialsToUSD +
+// hasNonUSDPeriod. That code path does NOT come through this function.
 func classifyEmptyParseError(facts *ports.SECCompanyFacts) error {
 	hasUSGAAP := false
 	hasIFRS := false
