@@ -41,6 +41,7 @@ type Service struct {
 	industryClassifier *industry.IndustryClassifier // Phase 3: SIC/NAICS classification
 	countryRiskMap     map[string]float64           // Phase 4: ISO-2 country code -> CRP
 	industryMultiples  *industryMultiplesConfig     // Phase 4: EV/EBITDA and P/E multiples for cross-checks
+	adrRatios          *ADRRatios                   // Phase B8 (IFRS-FPI): ordinary-shares-per-ADR; consumed in Phase B10
 	config             *config.Config
 	logger             *zap.Logger
 	calcEmitter        *calclog.Emitter // emits the 12 DCF stage traces (Phase M)
@@ -114,6 +115,18 @@ func NewService(
 			zap.Error(imErr))
 	}
 
+	// Phase B8 (IFRS-FPI): Load ADR-to-ordinary-share ratios. Phase B10 will
+	// consume this to convert SEC-reported ordinary-share counts into per-ADR
+	// terms before computing per-ADR fair value. Missing file is non-fatal —
+	// the loader returns an empty *ADRRatios and Get() defaults every ticker
+	// to 1:1, so we boot fine but log a warning for operator visibility.
+	adrRatios, adrErr := LoadADRRatios(DefaultADRRatiosConfigPath)
+	if adrErr != nil {
+		logger.Warn("ADR ratios config unavailable, all tickers default to 1:1",
+			zap.Error(adrErr))
+		adrRatios = &ADRRatios{Ratios: map[string]int{}}
+	}
+
 	return &Service{
 		financialRepo:      financialRepo,
 		marketRepo:         marketRepo,
@@ -127,6 +140,7 @@ func NewService(
 		industryClassifier: classifier,
 		countryRiskMap:     crpMap,
 		industryMultiples:  indMultiples,
+		adrRatios:          adrRatios,
 		config:             cfg,
 		logger:             logger,
 		calcEmitter:        calcEmitter,
