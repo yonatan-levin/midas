@@ -571,12 +571,29 @@ func NewMarketDataGateway(
 	return market.NewGateway(&cfg.Market, logger)
 }
 
-// NewMacroDataGateway creates a macro data gateway
+// NewMacroDataGateway creates a macro data gateway. Loads the static FX
+// rates snapshot from config/fx_rates.json (Phase B7) and injects it as the
+// fallback layer for GetFXRate. A missing or unreadable file degrades to
+// FRED-only mode rather than crashing boot — operators see a warning.
 func NewMacroDataGateway(
 	cfg *config.Config,
 	logger *zap.Logger,
 ) ports.MacroDataGateway {
-	return macro.NewGateway(&cfg.Macro, logger)
+	// Phase B7: load static FX-rate snapshot. Failure is non-fatal because
+	// FRED is the primary source; the static map is a safety net for
+	// FRED outages. We log warnings so operators notice configuration drift.
+	fxRates, err := valuation.LoadFXRates(valuation.DefaultFXRatesConfigPath)
+	if err != nil {
+		logger.Warn("Failed to load static FX rates snapshot, FX gateway will run in FRED-only mode",
+			zap.String("path", valuation.DefaultFXRatesConfigPath),
+			zap.Error(err))
+		return macro.NewGatewayWithFXRates(&cfg.Macro, nil, logger)
+	}
+	if fxRates == nil || len(fxRates.RatesToUSD) == 0 {
+		logger.Warn("Static FX rates snapshot is empty, FX gateway will run in FRED-only mode",
+			zap.String("path", valuation.DefaultFXRatesConfigPath))
+	}
+	return macro.NewGatewayWithFXRates(&cfg.Macro, fxRates.RatesToUSD, logger)
 }
 
 // Service Providers

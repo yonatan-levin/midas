@@ -77,6 +77,13 @@ var ErrCompanyFactsNotFound = errors.New("no usable SEC XBRL company facts")
 // our coverage (JGAAP, K-IFRS, certain unmapped IFRS extensions).
 var ErrForeignPrivateIssuer = errors.New("foreign private issuer: non-US-GAAP taxonomy")
 
+// ErrFXRateUnavailable indicates neither FRED nor the static config has an
+// exchange rate for a requested currency pair. Phase B9 of the IFRS-FPI spec
+// (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md) uses this
+// sentinel to abort FX conversion with a clear, classifiable error instead
+// of producing nonsensical USD values from a zero-rate fallback.
+var ErrFXRateUnavailable = errors.New("FX rate unavailable")
+
 // SECGateway defines the interface for SEC data retrieval
 type SECGateway interface {
 	GetCompanyFacts(ctx context.Context, cik string) (*entities.CompanyFactsResponse, error)
@@ -98,6 +105,18 @@ type MarketDataGateway interface {
 type MacroDataGateway interface {
 	GetTreasuryRates(ctx context.Context) (*entities.TreasuryRates, error)
 	GetMarketRiskPremium(ctx context.Context) (float64, error)
+
+	// GetFXRate returns the spot exchange rate fromCcy→toCcy: how many units
+	// of toCcy you get for one unit of fromCcy. Both arguments are ISO-4217
+	// codes. Implementations consult FRED daily series first (e.g., DEXTAUS
+	// for TWD→USD) and fall back to config/fx_rates.json when FRED is
+	// unavailable. fromCcy == toCcy short-circuits to 1.0.
+	//
+	// Phase B9 of docs/refactoring/ifrs-foreign-private-issuer-support-spec.md
+	// will be the only consumer; until then this method has no production
+	// callers and exists purely as a forward-compatibility seam.
+	GetFXRate(ctx context.Context, fromCcy, toCcy string) (float64, error)
+
 	HealthCheck(ctx context.Context) error
 }
 

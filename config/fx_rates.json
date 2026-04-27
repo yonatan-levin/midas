@@ -1,0 +1,20 @@
+{
+  "as_of": "2026-04-27",
+  "source": "FRED H.10 manual snapshot — fallback only when FRED API is unavailable",
+  "rates_to_usd": {
+    "USD": 1.0,
+    "TWD": 0.0312,
+    "EUR": 1.0850,
+    "JPY": 0.00665,
+    "GBP": 1.2710,
+    "HKD": 0.1280,
+    "CNY": 0.1390,
+    "KRW": 0.000725,
+    "CHF": 1.1320,
+    "CAD": 0.7350,
+    "AUD": 0.6580,
+    "INR": 0.01195,
+    "BRL": 0.1980,
+    "DKK": 0.1455
+  }
+}

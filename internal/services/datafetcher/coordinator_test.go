@@ -112,6 +112,13 @@ func (f *fakeMacroGateway) GetTreasuryRates(ctx context.Context) (*entities.Trea
 func (f *fakeMacroGateway) GetMarketRiskPremium(ctx context.Context) (float64, error) {
 	return 0.05, nil
 }
+
+// GetFXRate stub — coordinator tests don't drive FX. Phase B7 added this
+// method to ports.MacroDataGateway; identity 1.0 keeps the fake compiling
+// without forcing FX expectations into unrelated test fixtures.
+func (f *fakeMacroGateway) GetFXRate(_ context.Context, _, _ string) (float64, error) {
+	return 1.0, nil
+}
 func (f *fakeMacroGateway) HealthCheck(ctx context.Context) error { return nil }
 
 // test memory cache using in-process implementation
@@ -517,6 +524,11 @@ func (f *fakeMacroGatewayWithRiskPremiumError) GetTreasuryRates(ctx context.Cont
 
 func (f *fakeMacroGatewayWithRiskPremiumError) GetMarketRiskPremium(ctx context.Context) (float64, error) {
 	return 0, fmt.Errorf("risk premium API unavailable")
+}
+
+// GetFXRate stub — see fakeMacroGateway.GetFXRate for rationale.
+func (f *fakeMacroGatewayWithRiskPremiumError) GetFXRate(_ context.Context, _, _ string) (float64, error) {
+	return 1.0, nil
 }
 
 func (f *fakeMacroGatewayWithRiskPremiumError) HealthCheck(ctx context.Context) error { return nil }
