@@ -556,6 +556,15 @@ func TestSetTicker_RenameFailureCountedAsWriteError(t *testing.T) {
 	b, err := artifact.OpenBundle(cfg, "rid-rename-fail", "", artifact.TriggerQuery)
 	require.NoError(t, err)
 	require.NotNil(t, b)
+	// Close reaps the eager worker goroutine spawned by OpenBundle. Without
+	// this defer the worker sits on `chan receive` forever, leaking a
+	// goroutine that trips goleak.VerifyNone in
+	// TestDeferredBundle_PromoteCloseRace_NoGoroutineLeak when the package
+	// runs under `-count=N -race`. Close() is safe to call after the root
+	// directory has been removed: manifest.Finalize errors are swallowed and
+	// any worker WriteFile errors simply accumulate into WriteErrors() —
+	// which has already been asserted on by the time Close runs.
+	defer func() { _ = b.Close() }()
 
 	// Sabotage the bundle directory so os.Rename fails.
 	require.NoError(t, os.RemoveAll(b.Root()))

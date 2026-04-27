@@ -107,17 +107,30 @@ type ArtifactStoreConfig struct {
 	// than block the request thread. Default 256.
 	QueueSize int `mapstructure:"queue_size"`
 
+	// PendingBytesCap is the per-bundle in-memory buffer ceiling for
+	// deferred (auto-on-error) bundles introduced in Phase 2.A. Bounds the
+	// worst-case heap footprint when many requests are buffering snapshots
+	// "just in case" they 5xx. Overflow drops oldest snapshots first.
+	// Default 10 MiB; only consulted when Triggers.OnError is true.
+	PendingBytesCap int64 `mapstructure:"pending_bytes_cap"`
+
 	// Triggers controls which conditions open a bundle. Phase 1: only
-	// Manual is honoured (?trace=1 / X-Midas-Trace).
+	// Manual is honoured (?trace=1 / X-Midas-Trace). Phase 2.A adds OnError.
 	Triggers ArtifactTriggers `mapstructure:"triggers"`
 }
 
 // ArtifactTriggers enumerates the per-request conditions that open a
-// bundle. Phase 1 supports only Manual; Phase 2 will add OnError,
-// OnQualityFlag, Always (see spec §13).
+// bundle. Phase 1 supports only Manual; Phase 2.A added OnError. Phase 2.B
+// (OnQualityFlag) and Phase 2.C (Always) are still deferred (see spec §13).
 type ArtifactTriggers struct {
 	// Manual = ?trace=1 query OR X-Midas-Trace: 1 header.
 	Manual bool `mapstructure:"manual"`
+
+	// OnError = auto-trigger when HTTP status >=500. The trace middleware
+	// opens a deferred bundle for every request and only flushes to disk
+	// if the response code crosses the 5xx threshold; non-erroring requests
+	// pay only the in-memory buffer cost (capped by PendingBytesCap).
+	OnError bool `mapstructure:"on_error"`
 }
 
 // LogFileConfig controls the rolling log-file sink backed by lumberjack.
@@ -366,7 +379,15 @@ func setDefaults() {
 	viper.SetDefault("logging.artifact_store.retention_days", 7)
 	viper.SetDefault("logging.artifact_store.max_total_bytes", int64(5)*int64(1<<30)) // 5 GiB
 	viper.SetDefault("logging.artifact_store.queue_size", 256)
+	// 10 MiB per-bundle in-memory buffer cap for deferred (auto-on-error)
+	// bundles. Sized roughly 2x the worst-case Phase 1 happy-path bundle so
+	// realistic requests rarely overflow.
+	viper.SetDefault("logging.artifact_store.pending_bytes_cap", int64(10)*int64(1<<20))
 	viper.SetDefault("logging.artifact_store.triggers.manual", true)
+	// Phase 2.A — auto-on-error: OFF by default everywhere. Operators opt
+	// in via env var (LOGGING_ARTIFACT_STORE_TRIGGERS_ON_ERROR=true) once
+	// they've sized disk for the expected 5xx volume.
+	viper.SetDefault("logging.artifact_store.triggers.on_error", false)
 
 	// Server defaults
 	viper.SetDefault("server.port", "8080")

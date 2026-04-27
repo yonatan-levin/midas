@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"github.com/jmoiron/sqlx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -352,6 +353,184 @@ func TestNarrateArtifact_TraceOff_NoBundleCreated(t *testing.T) {
 	entries, err := os.ReadDir(artifactRoot)
 	require.NoError(t, err)
 	assert.Empty(t, entries, "artifact root must remain empty when ?trace=1 is absent; got %v", entries)
+}
+
+// TestNarrate_OnErrorAutoBundle pins Phase 2.A end-to-end: with
+// logging.artifact_store.triggers.on_error=true and a request that errors
+// (HTTP status >=500), the bundle MUST land on disk WITHOUT a manual
+// ?trace=1 flag, the manifest's trigger MUST be "on_error", and
+// 99-narrate.jsonl MUST contain the full per-request narrate stream — both
+// pre-trigger lines (request.received, classify.industry, etc., buffered in
+// memory) and the response.sent line emitted post-promote.
+//
+// We force a 500 by returning an unknown ticker (TICKER_NOT_FOUND_AUTO),
+// which goes through the same valuation orchestration path but lands on the
+// 404 handler. To keep the test focused on the on-error trigger we instead
+// mount a synthetic 5xx-erroring handler under a side-router after wiring
+// the same trace middleware. This isolates the on_error trigger from
+// fair-value handler quirks while still exercising the full middleware
+// chain (trace -> security -> metrics -> recovery -> handler).
+func TestNarrate_OnErrorAutoBundle(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	projectRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+
+	srcMultiples := filepath.Join(projectRoot, "config", "industry_multiples.json")
+	require.FileExists(t, srcMultiples)
+	require.NoError(t, os.MkdirAll("./config", 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll("./config") })
+	multiplesBytes, err := os.ReadFile(srcMultiples)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile("./config/industry_multiples.json", multiplesBytes, 0o644))
+
+	observerCore, observedLogs := observer.New(zapcore.InfoLevel)
+	obsLogger := zap.New(observerCore)
+
+	artifactRoot := t.TempDir()
+
+	cfg := createTestConfig("redis://127.0.0.1:0")
+	cfg.Logging.TraceCalculations = true
+	cfg.Logging.Narrate.Enabled = true
+	cfg.Logging.Narrate.SampleRate = 1.0
+	cfg.Logging.ArtifactStore.Enabled = true
+	cfg.Logging.ArtifactStore.RootPath = artifactRoot
+	cfg.Logging.ArtifactStore.QueueSize = 256
+	// Phase 2.A — auto-on-error trigger ENABLED. No manual flag will be sent.
+	cfg.Logging.ArtifactStore.Triggers.OnError = true
+	cfg.Market.YFinance.Enabled = false
+	cfg.Macro.FREDEnabled = false
+	cfg.Macro.ManualRiskFreeRate = 0.04
+	cfg.Macro.ManualMarketRiskPremium = 0.05
+	cfg.DataCleaner.RulesPath = filepath.Join(projectRoot, "config", "datacleaner", "rules.json")
+	cfg.DataCleaner.IndustryRulesPath = filepath.Join(projectRoot, "config", "datacleaner", "industry")
+
+	var (
+		database       *sqlx.DB
+		authService    *auth.Service
+		valuationSvc   *valuation.Service
+		rateLimiter    *ratelimit.RateLimiter
+		healthHandler  *handlers.HealthHandler
+		metricsService *metrics.Service
+	)
+
+	app := fxtest.New(t,
+		fx.Provide(func() *config.Config { return cfg }),
+		fx.Decorate(func() *zap.Logger { return obsLogger }),
+		di.CoreModule,
+		di.ServiceModule,
+		di.HandlerModule,
+		fx.Provide(handlers.NewFairValueHandler),
+		fx.Populate(
+			&database,
+			&authService,
+			&valuationSvc,
+			&rateLimiter,
+			&healthHandler,
+			&metricsService,
+		),
+	)
+	app.RequireStart()
+	t.Cleanup(app.RequireStop)
+
+	SetupDatabase(t, database)
+	SeedTestData(t, database)
+
+	srv := api.NewServer(cfg, obsLogger, valuationSvc, authService, rateLimiter, healthHandler, metricsService)
+	router := srv.Engine()
+
+	ctx := context.Background()
+	apiKey, err := authService.CreateKey(ctx, "narrate-onerror-user", []coreEntities.Permission{
+		coreEntities.PermissionReadFairValue,
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	// Request a non-existent ticker — the valuation pipeline emits the same
+	// upstream narrate phases (request.received, auth.resolved, etc.), then
+	// the handler responds with 404. To force a 500, we hit a path that
+	// doesn't match any route. Gin's default 404 handler returns 404 not 500,
+	// so we instead trigger a 500 by sending a malformed bulk body to the
+	// existing fair-value bulk endpoint, which the handler 500s on if the
+	// service errors. Simplest approach that doesn't require touching the
+	// production handlers: hit a non-existent ticker that the handler maps
+	// to 500 via a panic — but we don't want to test panics.
+	//
+	// Cleanest: ZZZ-NONEXISTENT triggers the valuation service's
+	// ErrTickerNotFound which maps to 404, so that won't 500.
+	// We force a 500 by overriding gin's NoMethod handler to abort with 500.
+	router.NoRoute(func(c *gin.Context) {
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+	// NB: NO ?trace=1, NO X-Midas-Trace — pin the on_error auto-trigger.
+	req, err := http.NewRequest(http.MethodGet, "/api/v1/this-route-does-not-exist", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-API-Key", apiKey.Key)
+
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+
+	requestID := w.Header().Get("X-Request-ID")
+	require.NotEmpty(t, requestID, "X-Request-ID must be present")
+
+	// --- Assert (1): a bundle was created on disk under the on_error trigger.
+	bundleDir := findBundleDir(t, artifactRoot, "_no-ticker", requestID)
+	require.NotEmpty(t, bundleDir, "expected a bundle directory for request %s under %s after on_error auto-trigger", requestID, artifactRoot)
+
+	// --- Assert (2): manifest.trigger == "on_error" (NOT "header"/"query").
+	mfBody, err := os.ReadFile(filepath.Join(bundleDir, "00-manifest.json"))
+	require.NoError(t, err)
+	var m artifact.Manifest
+	require.NoError(t, json.Unmarshal(mfBody, &m))
+	assert.Equal(t, "on_error", m.Trigger,
+		"auto-triggered bundle must carry trigger=on_error in its manifest")
+	assert.Equal(t, requestID, m.RequestID)
+
+	// --- Assert (3): the bundle's narrate stream (99-narrate.jsonl) contains
+	// the full per-request story — both buffered (pre-trigger) lines like
+	// request.received AND the post-promote line response.sent. A reader of
+	// the bundle must be able to reconstruct the request's story without
+	// having to grep the host log stream.
+	narrateStream := filepath.Join(bundleDir, "99-narrate.jsonl")
+	streamBody, err := os.ReadFile(narrateStream)
+	require.NoError(t, err, "99-narrate.jsonl must exist in promoted deferred bundle")
+
+	streamLines := strings.Split(strings.TrimSpace(string(streamBody)), "\n")
+	require.GreaterOrEqual(t, len(streamLines), 2,
+		"narrate stream must have at least request.received + response.sent; got %d lines", len(streamLines))
+
+	// Parse each line and verify request_id correlation.
+	var sawRequestReceived, sawResponseSent bool
+	for i, line := range streamLines {
+		var entry map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(line), &entry),
+			"line %d not valid JSON: %s", i, line)
+		assert.Equal(t, "narrate", entry["event"], "line %d missing event=narrate", i)
+		assert.Equal(t, requestID, entry["request_id"], "line %d wrong request_id", i)
+		switch entry["phase"] {
+		case "request.received":
+			sawRequestReceived = true
+		case "response.sent":
+			sawResponseSent = true
+		}
+	}
+	assert.True(t, sawRequestReceived,
+		"buffered request.received line must survive the deferred->promoted transition")
+	assert.True(t, sawResponseSent,
+		"post-promote response.sent line must land in the same stream file")
+
+	// --- Assert (4): the host log stream still got the same narrate lines
+	// (the BundleSink is a tee, not a replacement). request_id correlation
+	// is the contract that lets log readers cross-reference both surfaces.
+	narrateEntries := filterByEvent(observedLogs.All(), "narrate")
+	require.NotEmpty(t, narrateEntries, "host log stream must still receive narrate lines")
+	hostHasResponseSent := false
+	for _, e := range narrateEntries {
+		if fieldString(e, "phase") == "response.sent" && fieldString(e, "request_id") == requestID {
+			hostHasResponseSent = true
+			break
+		}
+	}
+	assert.True(t, hostHasResponseSent,
+		"host log stream must contain response.sent for the same request_id")
 }
 
 // filterByEvent returns the subset of log entries whose structured "event"

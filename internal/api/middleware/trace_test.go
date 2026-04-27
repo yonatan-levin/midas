@@ -1,6 +1,7 @@
 package middleware_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -562,4 +563,475 @@ func TestTrace_NarrateEmitterAlwaysOnContext(t *testing.T) {
 	r.ServeHTTP(w, req)
 
 	assert.True(t, hasEmitter)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2.A — auto-on-error trigger tests
+// ---------------------------------------------------------------------------
+//
+// These pin the behaviour matrix from the Phase 2.A brief:
+//
+//   manual flag | on_error cfg | status   | bundle?  | trigger
+//   ------------|--------------|----------|----------|------------
+//   yes         | any          | any      | yes      | header/query
+//   no          | true         | >=500    | yes      | on_error
+//   no          | true         | <500     | no       | —
+//   no          | false        | any      | no       | —
+//
+// One test per non-trivial row.
+
+// findManifest walks `root` and returns the bundle's 00-manifest.json path
+// (empty if none exists). Used by the auto-trigger tests because the
+// directory layout is artifacts/<UTC-date>/<TICKER-or-_no-ticker>/req_<id>/
+// and the date partition isn't predictable in a unit-test seam.
+func findManifest(root string) string {
+	var found string
+	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err == nil && info != nil && filepath.Base(p) == "00-manifest.json" {
+			found = p
+		}
+		return nil
+	})
+	return found
+}
+
+// readManifestTrigger returns the trigger value from the bundle's manifest
+// at root, or empty when no manifest exists. Defensive helper so the auto-
+// trigger tests can assert on trigger without rebuilding manifest plumbing
+// each time.
+func readManifestTrigger(t *testing.T, root string) string {
+	t.Helper()
+	mfPath := findManifest(root)
+	if mfPath == "" {
+		return ""
+	}
+	body, err := os.ReadFile(mfPath)
+	require.NoError(t, err)
+	var m artifact.Manifest
+	require.NoError(t, json.Unmarshal(body, &m))
+	return m.Trigger
+}
+
+// TestTrace_OnError_AutoBundle_When500 — handler returns 500, on_error=true,
+// no manual flag. A bundle MUST appear on disk and the manifest's trigger
+// MUST be "on_error". This is the row-2 happy path.
+func TestTrace_OnError_AutoBundle_When500(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-onerror-500"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{OnError: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// Synthetic 500 — the on_error trigger only cares about Writer.Status().
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	// NB: NO ?trace=1 and NO X-Midas-Trace header — pin the auto-trigger.
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+
+	// Bundle must exist on disk.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath, "bundle must be on disk for 500 + on_error=true")
+
+	// Trigger must be on_error.
+	assert.Equal(t, "on_error", readManifestTrigger(t, root),
+		"auto-triggered bundle must record trigger=on_error")
+}
+
+// TestTrace_OnError_NoBundle_When200 — handler returns 200, on_error=true,
+// no manual flag. NO bundle directory may be created. This is the dominant
+// production path; getting it wrong floods the disk.
+func TestTrace_OnError_NoBundle_When200(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-onerror-200"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{OnError: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Disk must remain pristine — no bundle dir, no date partition.
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	assert.Empty(t, entries,
+		"non-erroring request with on_error=true must NOT leave files on disk; got %v", entries)
+}
+
+// TestTrace_OnError_Disabled_NoBundle_When500 — handler returns 500,
+// on_error=false (default), no manual flag. NO bundle must be created.
+// Pins the default-off invariant: enabling artifact_store alone (without
+// flipping on_error) does NOT auto-capture errors.
+func TestTrace_OnError_Disabled_NoBundle_When500(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-onerror-disabled"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			// Triggers.OnError NOT set — defaults to false.
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	assert.Empty(t, entries,
+		"500 with on_error=false must NOT auto-capture; got %v", entries)
+}
+
+// TestTrace_Manual_StillWorks — regression pin for Phase 1: a request with
+// ?trace=1 + on_error=false + status 200 must still create a bundle with
+// trigger=query. This is row 1 of the matrix and verifies Phase 2.A did not
+// break Phase 1's manual path.
+func TestTrace_Manual_StillWorks(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-manual"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			// on_error explicitly off — manual path must be self-sufficient.
+			Triggers: artifact.TriggerConfig{OnError: false},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x?trace=1", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath, "manual ?trace=1 must still create a bundle")
+	assert.Equal(t, "query", readManifestTrigger(t, root),
+		"manual via query string must record trigger=query")
+}
+
+// TestTrace_Manual_PrecedenceOverOnError — when BOTH the manual flag AND
+// on_error fire (manual flag set + 500 returned + on_error=true), the
+// manifest's trigger MUST stay "header" or "query" (NOT "on_error").
+// Manual takes precedence so debug sessions stay attributable to whoever
+// flipped the flag, even when the request happens to error.
+func TestTrace_Manual_PrecedenceOverOnError(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-precedence"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{OnError: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// Erroring handler with the manual flag also set — both triggers
+		// COULD fire. Manual must win.
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x?trace=1", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+
+	trigger := readManifestTrigger(t, root)
+	require.NotEmpty(t, trigger, "bundle must exist (eager manual path)")
+	// Specifically NOT on_error — manual wins.
+	assert.NotEqual(t, "on_error", trigger,
+		"manifest trigger must NOT be on_error when manual flag was also set")
+	assert.Contains(t, []string{"query", "header"}, trigger,
+		"manifest trigger must be the manual source (query/header)")
+}
+
+// TestTrace_OnError_BundleSinkInstalledForDeferred — pins that the
+// BundleSink is installed even for deferred bundles, so log entries emitted
+// before the trigger fires are buffered into the deferred stream and end up
+// in 99-narrate.jsonl AFTER promote. Without this, the bundle would only
+// contain post-promote entries — useless for understanding the request that
+// errored.
+func TestTrace_OnError_BundleSinkInstalledForDeferred(t *testing.T) {
+	root := t.TempDir()
+
+	core, _ := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-deferred-sink"))
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{OnError: true},
+		},
+	))
+
+	r.GET("/x", func(c *gin.Context) {
+		l := logctx.From(c.Request.Context())
+		// Emit a narrate-tagged entry mid-handler — must be buffered into the
+		// deferred bundle's stream and survive the promote at request-end.
+		l.Info("trace.handler.narrate",
+			zap.String("event", "narrate"),
+			zap.String("phase", "handler.entry"),
+		)
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+
+	// Walk for the bundle dir and read 99-narrate.jsonl.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath, "deferred bundle must promote on 500")
+	bundleDir := filepath.Dir(mfPath)
+
+	streamBody, err := os.ReadFile(filepath.Join(bundleDir, "99-narrate.jsonl"))
+	require.NoError(t, err, "99-narrate.jsonl must be on disk after promote")
+	// The buffered handler.entry line must be present in the post-promote
+	// JSONL — that is the whole point of "buffer through request, decide at
+	// end" vs. Phase 1's "decide at start, write through".
+	assert.Contains(t, string(streamBody), `"phase":"handler.entry"`,
+		"narrate stream must contain the handler-emitted line that fired BEFORE the 500")
+}
+
+// TestTrace_OnError_PromoteFailure_NoArtifactPathOnNarrate pins QA finding
+// MINOR-NEW (2026-04-26). Pre-fix: when a deferred bundle was opened on the
+// auto-on-error path and Promote() failed at request-end (e.g. mkdir error
+// because the destination is unwritable), the response.sent narrate line
+// still emitted artifact_path pointing at the now-non-existent bundle
+// directory. Log readers chasing the path hit a missing-dir dead end with
+// no signal that promotion ever failed.
+//
+// Post-fix: artifact_path is gated on promoteSucceeded (true only when
+// Promote returns nil). On promote failure the field is OMITTED from
+// response.sent and the existing trace.bundle.promote_failed Warn line
+// remains the operator's correlation point.
+//
+// Setup: RootPath is set to a regular FILE so OpenDeferredBundle (which
+// does NOT mkdir at construction — see internal/observability/artifact/
+// bundle.go:281) succeeds, then Promote()'s os.MkdirAll(b.root) fails with
+// "not a directory" (ENOTDIR / Windows equivalent) because the parent isn't
+// a directory. This exercises the Promote-failure branch specifically; if
+// OpenDeferredBundle had failed instead, we'd be testing a different code
+// path (the open_failed branch already covered by
+// TestTrace_OpenBundleFailureWarnsAndDegrades).
+func TestTrace_OnError_PromoteFailure_NoArtifactPathOnNarrate(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Make RootPath a FILE rather than a directory. OpenDeferredBundle just
+	// computes the path string at construction and won't notice; Promote()'s
+	// MkdirAll on <file>/<date>/<ticker>/req_<id> fails with ENOTDIR because
+	// the immediate parent (<file>) cannot host children.
+	rootAsFile := filepath.Join(tmpDir, "artifacts-but-actually-a-file")
+	require.NoError(t, os.WriteFile(rootAsFile, []byte("not a dir"), 0o644))
+
+	// Capture every entry the request-scoped logger emits. Narrate uses
+	// Info level (l.Info("narrate", ...)) and the Warn line uses Warn
+	// level — DebugLevel observer captures both.
+	core, recorded := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-promote-fail"))
+	// Inject the observer logger via logctx so trace.go's
+	// logctx.From(c.Request.Context()) picks it up for the Warn line AND the
+	// narrate emitter (the narrate emitter resolves logctx.From at Emit-time).
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: rootAsFile,
+			Triggers: artifact.TriggerConfig{OnError: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// Synthetic 500 — triggers the deferred-bundle Promote attempt at
+		// request-end. Promote will fail because RootPath is a file.
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	// NB: NO ?trace=1 and NO X-Midas-Trace header — must exercise the
+	// auto-on-error / deferred path, not the eager path.
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	// The Promote failure must NOT propagate to the client — the request
+	// completes normally with the handler's chosen status.
+	require.Equal(t, http.StatusInternalServerError, w.Code,
+		"Promote failure must not change the HTTP response")
+
+	// Disk must be empty under tmpDir aside from the file we created.
+	// Specifically, no bundle directory was created (Promote's MkdirAll failed).
+	entries, err := os.ReadDir(tmpDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "tmpDir should only contain the file we created")
+	require.Equal(t, "artifacts-but-actually-a-file", entries[0].Name())
+	require.False(t, entries[0].IsDir(), "the entry must still be the file, not a directory")
+
+	// The Warn line MUST have been emitted with the underlying error and
+	// request_id — that's the operator's correlation point now that
+	// artifact_path is omitted from the narrate stream.
+	warnLogs := recorded.FilterMessage("trace.bundle.promote_failed").All()
+	require.Len(t, warnLogs, 1, "expected exactly one promote_failed Warn line")
+	assert.Equal(t, zapcore.WarnLevel, warnLogs[0].Level)
+	warnFields := warnLogs[0].ContextMap()
+	assert.NotEmpty(t, warnFields["error"], "Warn line must carry the underlying error")
+	assert.Equal(t, "req-promote-fail", warnFields["request_id"])
+	assert.Equal(t, "on_error", warnFields["trigger"])
+
+	// The response.sent narrate line MUST exist (every request emits one)
+	// but MUST NOT carry artifact_path — that is the bug being pinned.
+	narrateLogs := recorded.FilterMessage("narrate").All()
+	var responseSent *observer.LoggedEntry
+	for i := range narrateLogs {
+		fields := narrateLogs[i].ContextMap()
+		if phase, _ := fields["phase"].(string); phase == "response.sent" {
+			responseSent = &narrateLogs[i]
+			break
+		}
+	}
+	require.NotNil(t, responseSent, "response.sent narrate line must be emitted on every request")
+
+	respFields := responseSent.ContextMap()
+	_, hasArtifactPath := respFields["artifact_path"]
+	assert.False(t, hasArtifactPath,
+		"response.sent must NOT carry artifact_path when Promote failed (got fields=%v)", respFields)
+	// Sanity: the standard narrate fields must still be present so we're sure
+	// we found the right line and the regression is specifically about
+	// artifact_path, not a broader emit failure.
+	assert.Equal(t, "error", respFields["outcome"],
+		"response.sent on a 500 must carry outcome=error")
+	assert.EqualValues(t, http.StatusInternalServerError, respFields["status"],
+		"response.sent must carry the status field")
+}
+
+// TestTrace_OnError_HandlerPanic_StillBundles pins REVIEWER HIGH-4. With
+// the trace middleware registered AFTER the recovery middleware (i.e.,
+// recovery is OUTSIDE trace in the call stack), a handler panic propagates
+// THROUGH trace's c.Next() back up to recovery. Pre-fix, trace's
+// post-c.Next() block — which contains the deferred-bundle Promote/Close
+// logic — was skipped entirely, leaking the in-memory buffers and (much
+// worse) silently dropping the on-error bundle for the very requests most
+// in need of post-mortem visibility.
+//
+// Post-fix the post-c.Next() block lives inside a defer with a recover()
+// at the top; the bundle is finalised, the panic is re-raised so any
+// outer recovery middleware still observes it, and the on-disk bundle
+// directory exists with trigger="on_error".
+//
+// Verifies:
+//   - The bundle directory exists on disk (the most important part —
+//     pre-fix it did not).
+//   - The manifest's trigger is "on_error".
+//   - The manifest's outcome is "error" (panicked → forced error outcome
+//     even before any outer recovery sets status to 500).
+//   - gin's recovery middleware did its job and returned 500 to the client.
+func TestTrace_OnError_HandlerPanic_StillBundles(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-panic-onerror"))
+	// Recovery is registered FIRST, which means it runs FIRST in the chain
+	// and therefore wraps every middleware registered after it. Any panic
+	// from a downstream middleware or handler propagates back through
+	// trace's c.Next() to here, where Recovery catches it.
+	r.Use(gin.Recovery())
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{OnError: true},
+		},
+	))
+	r.GET("/boom", func(c *gin.Context) {
+		// Synthetic panic — simulates a nil pointer or any unrecovered
+		// runtime fault inside the handler.
+		panic("simulated handler panic for trace HIGH-4")
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	// The defer-wrap re-raises the panic AFTER bundle finalisation so the
+	// outer gin.Recovery() can still translate it into a 500. The test
+	// relies on that re-raise to keep gin's recovery semantics intact.
+	r.ServeHTTP(w, req)
+
+	// gin.Recovery translates the panic into a 500.
+	require.Equal(t, http.StatusInternalServerError, w.Code,
+		"outer Recovery middleware must still see the panic after trace finalises the bundle")
+
+	// Pre-fix: this assertion FAILED — no bundle on disk because trace's
+	// post-c.Next() block was skipped by the panic.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath,
+		"on-error bundle must exist on disk even when the handler panics")
+
+	// Manifest must reflect the on_error auto-trigger and the error outcome.
+	body, err := os.ReadFile(mfPath)
+	require.NoError(t, err)
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(body, &mf))
+	assert.Equal(t, "on_error", mf.Trigger,
+		"panicking handler must promote the deferred bundle with trigger=on_error")
+	assert.Equal(t, "error", mf.Outcome,
+		"panicked request must record outcome=error in the manifest")
 }

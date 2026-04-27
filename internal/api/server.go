@@ -162,13 +162,17 @@ func (s *Server) setupMiddleware() {
 			RedactFields: s.config.Logging.Narrate.RedactFields,
 		},
 		artifact.Config{
-			Enabled:       s.config.Logging.ArtifactStore.Enabled,
-			RootPath:      s.config.Logging.ArtifactStore.RootPath,
-			RetentionDays: s.config.Logging.ArtifactStore.RetentionDays,
-			MaxTotalBytes: s.config.Logging.ArtifactStore.MaxTotalBytes,
-			QueueSize:     s.config.Logging.ArtifactStore.QueueSize,
-			GitSHA:        s.config.GitCommit,
-			BuildVersion:  s.config.Version,
+			Enabled:         s.config.Logging.ArtifactStore.Enabled,
+			RootPath:        s.config.Logging.ArtifactStore.RootPath,
+			RetentionDays:   s.config.Logging.ArtifactStore.RetentionDays,
+			MaxTotalBytes:   s.config.Logging.ArtifactStore.MaxTotalBytes,
+			QueueSize:       s.config.Logging.ArtifactStore.QueueSize,
+			PendingBytesCap: s.config.Logging.ArtifactStore.PendingBytesCap,
+			Triggers: artifact.TriggerConfig{
+				OnError: s.config.Logging.ArtifactStore.Triggers.OnError,
+			},
+			GitSHA:       s.config.GitCommit,
+			BuildVersion: s.config.Version,
 		},
 	))
 
