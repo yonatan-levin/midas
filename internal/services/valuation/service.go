@@ -355,6 +355,15 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 			zap.String("ticker", ticker), zap.Error(err))
 	}
 
+	// Phase B10 (IFRS-FPI): FX conversion ran above (B9). Now divide
+	// ordinary-share counts by the configured ADR ratio so per-share values
+	// match the listed ADR price (e.g., TSM 25.93B ordinary / 5 = 5.19B
+	// ADR-equivalent). No-op for domestic filers (ratio=1, ticker absent
+	// from config/adr_ratios.json). Single-call-only by contract — the
+	// function does not mark the data, so do NOT re-invoke this anywhere
+	// downstream. Failures here are warnings only (no error path).
+	s.applyADRRatio(ctx, ticker, historicalData, marketData)
+
 	// Stage 1 — "data_fetch" calc trace: emit which data sources were consulted and
 	// whether they succeeded. This always fires regardless of whether data came from
 	// the repository or the DataFetcher, giving operators full acquisition visibility.

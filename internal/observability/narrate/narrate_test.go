@@ -23,6 +23,7 @@ import (
 //   - 17 (initial taxonomy)
 //   - 18 (added "fx.convert" for Phase B9 of IFRS-FPI plan,
 //     docs/refactoring/ifrs-foreign-private-issuer-support-spec.md)
+//   - 19 (added "adr_ratio.applied" for Phase B10 of IFRS-FPI plan)
 var expectedPhases = map[string]struct{}{
 	"request.received":     {},
 	"auth.resolved":        {},
@@ -40,6 +41,7 @@ var expectedPhases = map[string]struct{}{
 	"model.selected":       {},
 	"valuation.computed":   {},
 	"fx.convert":           {},
+	"adr_ratio.applied":    {},
 	"crosscheck.evaluated": {},
 	"response.sent":        {},
 }
@@ -74,10 +76,11 @@ func TestPhases_ClosedSet(t *testing.T) {
 		narrate.PhaseModelSelected,
 		narrate.PhaseValuationComputed,
 		narrate.PhaseFXConvert,
+		narrate.PhaseADRRatioApplied,
 		narrate.PhaseCrosscheckEvaluated,
 		narrate.PhaseResponseSent,
 	}
-	require.Len(t, cases, 18, "spec freezes the phase count at 18 (17 + fx.convert from Phase B9 of IFRS-FPI plan)")
+	require.Len(t, cases, 19, "spec freezes the phase count at 19 (18 + adr_ratio.applied from Phase B10 of IFRS-FPI plan)")
 
 	seen := make(map[string]struct{}, len(cases))
 	for _, p := range cases {

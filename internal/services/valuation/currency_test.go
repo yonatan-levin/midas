@@ -28,6 +28,8 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
@@ -361,4 +363,316 @@ func TestService_ConvertFinancialsToUSD_OperatingLeaseCommitments_Converted(t *t
 	assert.InDelta(t, 2496.0, got["2026"], 0.001, "lease commitment value must be FX-converted")
 
 	gw.AssertExpectations(t)
+}
+
+// ---------------------------------------------------------------------------
+// Phase B10 — applyADRRatio tests
+// ---------------------------------------------------------------------------
+//
+// The contract under test:
+//   - applyADRRatio divides SharesOutstanding and DilutedSharesOutstanding on
+//     EVERY period by the configured ADR ratio. No other field is touched.
+//   - Tickers absent from config get ratio 1 → no-op (must produce identical
+//     results to pre-B10 era for domestic 10-K filers).
+//   - When marketData carries Yahoo's reported sharesOutstanding (already
+//     ADR-equivalent), a deviation of (post-divide-shares vs Yahoo-shares) of
+//     more than 10% emits a WARN log but is non-blocking — the configured
+//     ratio still wins.
+//   - Function does NOT mark the data; it is single-call-only by contract.
+//   - nil *ADRRatios receiver and nil *MarketData are both safe (no panic).
+
+// newADRTestService builds a Service with a configured *ADRRatios map. Mirrors
+// newFXTestService but adds the adrRatios field which Phase B10 reads. The
+// returned service uses the supplied logger so tests can capture WARN lines
+// via zaptest/observer.
+func newADRTestService(t *testing.T, ratios map[string]int, logger *zap.Logger) *Service {
+	t.Helper()
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	svc := NewService(nil, nil, nil, nil, nil, nil, &MockMetricsService{}, cfg, logger, newTestCalcEmitter())
+	// Override the on-disk-loaded *ADRRatios with the test fixture so tests are
+	// hermetic and don't depend on config/adr_ratios.json contents.
+	if ratios == nil {
+		svc.adrRatios = nil
+	} else {
+		svc.adrRatios = &ADRRatios{Ratios: ratios}
+	}
+	return svc
+}
+
+// TestService_ApplyADRRatio_TSM_Divides5x pins the calculation-safety contract:
+// 25_932_733_242 ordinary shares / ratio 5 = 5_186_546_648.4 ADR-equivalent
+// shares. This is the concrete TSM 2024-12-31 value from the captured artifact;
+// any drift in the divide arithmetic surfaces as a 5x per-share-value bug.
+func TestService_ApplyADRRatio_TSM_Divides5x(t *testing.T) {
+	ctx := context.Background()
+	svc := newADRTestService(t, map[string]int{"TSM": 5}, nil)
+
+	hist := &entities.HistoricalFinancialData{
+		Ticker: "TSM",
+		Data: map[string]*entities.FinancialData{
+			"2024FY": {
+				Ticker:                   "TSM",
+				FilingPeriod:             "2024FY",
+				SharesOutstanding:        25_932_733_242,
+				DilutedSharesOutstanding: 25_932_733_242,
+				Revenue:                  90_000_000_000, // touched only as a non-shares sentinel
+			},
+		},
+	}
+
+	// marketData = nil → cross-check is skipped; pure divide path under test.
+	svc.applyADRRatio(ctx, "TSM", hist, nil)
+
+	got := hist.Data["2024FY"]
+	assert.InDelta(t, 5_186_546_648.4, got.SharesOutstanding, 1.0,
+		"SharesOutstanding must be ordinary / 5 = ADR-equivalent")
+	assert.InDelta(t, 5_186_546_648.4, got.DilutedSharesOutstanding, 1.0,
+		"DilutedSharesOutstanding must be ordinary / 5 = ADR-equivalent")
+	// Sentinel: Revenue must NOT be touched. Phase B9 owns FX; B10 owns shares.
+	assert.Equal(t, 90_000_000_000.0, got.Revenue,
+		"Revenue must NOT be touched by applyADRRatio")
+}
+
+// TestService_ApplyADRRatio_NoEntry_NoOp asserts the domestic-filer invariant:
+// AAPL is absent from the map → ratio 1 → shares unchanged. This guarantees
+// pre-B10 era results for 10-K filers stay byte-identical.
+func TestService_ApplyADRRatio_NoEntry_NoOp(t *testing.T) {
+	ctx := context.Background()
+	svc := newADRTestService(t, map[string]int{"TSM": 5}, nil)
+
+	hist := &entities.HistoricalFinancialData{
+		Ticker: "AAPL",
+		Data: map[string]*entities.FinancialData{
+			"2024FY": {
+				Ticker:                   "AAPL",
+				SharesOutstanding:        15_550_061_000,
+				DilutedSharesOutstanding: 15_550_061_000,
+			},
+		},
+	}
+
+	svc.applyADRRatio(ctx, "AAPL", hist, nil)
+
+	got := hist.Data["2024FY"]
+	assert.Equal(t, 15_550_061_000.0, got.SharesOutstanding,
+		"AAPL absent from ADR map → ratio 1 → shares unchanged")
+	assert.Equal(t, 15_550_061_000.0, got.DilutedSharesOutstanding,
+		"AAPL diluted shares must be unchanged")
+}
+
+// TestService_ApplyADRRatio_NilADRRatios_NoOp asserts the receiver-nil safety
+// contract: callers should never panic if the *ADRRatios field is nil (e.g.,
+// service constructed in a test that bypasses NewService).
+func TestService_ApplyADRRatio_NilADRRatios_NoOp(t *testing.T) {
+	ctx := context.Background()
+	svc := newADRTestService(t, nil, nil)
+	require.Nil(t, svc.adrRatios, "test fixture: adrRatios must be nil")
+
+	hist := &entities.HistoricalFinancialData{
+		Ticker: "TSM",
+		Data: map[string]*entities.FinancialData{
+			"2024FY": {
+				Ticker:                   "TSM",
+				SharesOutstanding:        25_932_733_242,
+				DilutedSharesOutstanding: 25_932_733_242,
+			},
+		},
+	}
+
+	// Must not panic.
+	svc.applyADRRatio(ctx, "TSM", hist, nil)
+
+	got := hist.Data["2024FY"]
+	assert.Equal(t, 25_932_733_242.0, got.SharesOutstanding,
+		"nil adrRatios must be a no-op (Get returns 1)")
+	assert.Equal(t, 25_932_733_242.0, got.DilutedSharesOutstanding)
+}
+
+// TestService_ApplyADRRatio_DivergentYFShares_WarnsButProceeds asserts the
+// drift-detection contract: when post-divide shares deviate by > 10% from
+// Yahoo's reported (already-ADR-equivalent) shares count, we emit a WARN with
+// all required fields BUT still apply the divide. Operator gets visibility to
+// update config/adr_ratios.json without the request failing.
+func TestService_ApplyADRRatio_DivergentYFShares_WarnsButProceeds(t *testing.T) {
+	ctx := context.Background()
+
+	// Capture WARN-and-above so we can assert on the deviation log.
+	core, observed := observer.New(zapcore.WarnLevel)
+	logger := zap.New(core)
+	svc := newADRTestService(t, map[string]int{"TSM": 5}, logger)
+
+	hist := &entities.HistoricalFinancialData{
+		Ticker: "TSM",
+		Data: map[string]*entities.FinancialData{
+			"2024FY": {
+				Ticker:                   "TSM",
+				FilingPeriod:             "2024FY",
+				FilingDate:               time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC),
+				SharesOutstanding:        25_932_733_242,
+				DilutedSharesOutstanding: 25_932_733_242,
+			},
+		},
+	}
+	// Yahoo says ~1B shares; expected post-divide is ~5.19B → ~81% deviation.
+	marketData := &entities.MarketData{
+		Ticker:            "TSM",
+		SharesOutstanding: 1_000_000_000,
+	}
+
+	svc.applyADRRatio(ctx, "TSM", hist, marketData)
+
+	// Shares ARE divided despite the warning — non-blocking diagnostic.
+	got := hist.Data["2024FY"]
+	assert.InDelta(t, 5_186_546_648.4, got.SharesOutstanding, 1.0,
+		"divide must still apply even when cross-check warns")
+	assert.InDelta(t, 5_186_546_648.4, got.DilutedSharesOutstanding, 1.0)
+
+	// Locate the deviation WARN. There may be other warns in flight; pick by
+	// substring rather than indexing entries[0].
+	entries := observed.All()
+	var found *observer.LoggedEntry
+	for i := range entries {
+		if entries[i].Level == zapcore.WarnLevel && // narrow to WARN
+			contains(entries[i].Message, "ADR ratio deviation > 10%") {
+			found = &entries[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "expected WARN log: 'ADR ratio deviation > 10%%' (got %d entries)", len(entries))
+
+	fields := found.ContextMap()
+	assert.Equal(t, "TSM", fields["ticker"])
+	assert.EqualValues(t, 5, fields["configured_ratio"])
+	assert.InDelta(t, 5_186_546_648.4, fields["expected_post_divide_shares"], 1.0)
+	assert.InDelta(t, 1_000_000_000.0, fields["yahoo_reported_shares"], 0.001)
+	// Deviation ≈ |5.19B - 1B| / 1B ≈ 4.187 → 418.7%. Just sanity-check it's > 10.
+	dev, ok := fields["deviation_pct"].(float64)
+	require.True(t, ok, "deviation_pct must be a float64 field")
+	assert.Greater(t, dev, 10.0, "deviation must exceed the 10%% warn threshold")
+}
+
+// TestService_ApplyADRRatio_YFSharesWithinTolerance_NoWarn pins the inverse:
+// Yahoo's count agrees with post-divide expectation within 10% → no WARN.
+func TestService_ApplyADRRatio_YFSharesWithinTolerance_NoWarn(t *testing.T) {
+	ctx := context.Background()
+
+	core, observed := observer.New(zapcore.WarnLevel)
+	logger := zap.New(core)
+	svc := newADRTestService(t, map[string]int{"TSM": 5}, logger)
+
+	hist := &entities.HistoricalFinancialData{
+		Ticker: "TSM",
+		Data: map[string]*entities.FinancialData{
+			"2024FY": {
+				Ticker:                   "TSM",
+				FilingPeriod:             "2024FY",
+				FilingDate:               time.Date(2025, 3, 1, 0, 0, 0, 0, time.UTC),
+				SharesOutstanding:        25_932_733_242,
+				DilutedSharesOutstanding: 25_932_733_242,
+			},
+		},
+	}
+	// Expected post-divide = 5_186_546_648.4. Yahoo says 5.2B → ~0.26% deviation.
+	marketData := &entities.MarketData{
+		Ticker:            "TSM",
+		SharesOutstanding: 5_200_000_000,
+	}
+
+	svc.applyADRRatio(ctx, "TSM", hist, marketData)
+
+	for _, e := range observed.All() {
+		assert.NotContains(t, e.Message, "ADR ratio deviation > 10%",
+			"no deviation WARN when Yahoo shares are within 10%% of expected")
+	}
+}
+
+// TestService_ApplyADRRatio_NilMarketData_NoCrossCheck pins the nil-marketData
+// safety contract. Cross-check requires Yahoo's shares; nil short-circuits.
+func TestService_ApplyADRRatio_NilMarketData_NoCrossCheck(t *testing.T) {
+	ctx := context.Background()
+
+	core, observed := observer.New(zapcore.WarnLevel)
+	logger := zap.New(core)
+	svc := newADRTestService(t, map[string]int{"TSM": 5}, logger)
+
+	hist := &entities.HistoricalFinancialData{
+		Ticker: "TSM",
+		Data: map[string]*entities.FinancialData{
+			"2024FY": {
+				Ticker:                   "TSM",
+				SharesOutstanding:        25_932_733_242,
+				DilutedSharesOutstanding: 25_932_733_242,
+			},
+		},
+	}
+
+	// Must not panic.
+	svc.applyADRRatio(ctx, "TSM", hist, nil)
+
+	got := hist.Data["2024FY"]
+	assert.InDelta(t, 5_186_546_648.4, got.SharesOutstanding, 1.0,
+		"divide must still apply with nil marketData")
+
+	// No deviation WARN — cross-check was skipped.
+	for _, e := range observed.All() {
+		assert.NotContains(t, e.Message, "ADR ratio deviation > 10%",
+			"no cross-check warn when marketData is nil")
+	}
+}
+
+// TestService_ApplyADRRatio_MultiplePeriods_AllDivided pins the all-periods
+// invariant: every period in the history is divided, not just the latest.
+// Critical because growth + WACC consume historical periods directly.
+func TestService_ApplyADRRatio_MultiplePeriods_AllDivided(t *testing.T) {
+	ctx := context.Background()
+	svc := newADRTestService(t, map[string]int{"TSM": 5}, nil)
+
+	hist := &entities.HistoricalFinancialData{
+		Ticker: "TSM",
+		Data:   make(map[string]*entities.FinancialData, 5),
+	}
+	periods := []string{"2020FY", "2021FY", "2022FY", "2023FY", "2024FY"}
+	for _, p := range periods {
+		hist.Data[p] = &entities.FinancialData{
+			Ticker:                   "TSM",
+			FilingPeriod:             p,
+			SharesOutstanding:        25_932_733_242,
+			DilutedSharesOutstanding: 25_932_733_242,
+		}
+	}
+
+	svc.applyADRRatio(ctx, "TSM", hist, nil)
+
+	for _, p := range periods {
+		got := hist.Data[p]
+		assert.InDelta(t, 5_186_546_648.4, got.SharesOutstanding, 1.0,
+			"period %s shares must be divided", p)
+		assert.InDelta(t, 5_186_546_648.4, got.DilutedSharesOutstanding, 1.0,
+			"period %s diluted shares must be divided", p)
+	}
+}
+
+// contains is a tiny local helper for substring search used by the deviation
+// log assertion. Avoids pulling in strings just to assert a fragment. Kept
+// here, file-local, so it doesn't pollute package scope.
+func contains(haystack, needle string) bool {
+	if len(needle) == 0 {
+		return true
+	}
+	for i := 0; i+len(needle) <= len(haystack); i++ {
+		if haystack[i:i+len(needle)] == needle {
+			return true
+		}
+	}
+	return false
 }

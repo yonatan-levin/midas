@@ -48,6 +48,7 @@ package valuation
 import (
 	"context"
 	"fmt"
+	"math"
 	"sort"
 
 	"go.uber.org/zap"
@@ -305,4 +306,104 @@ func sortedKeysFloat(m map[string]float64) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// applyADRRatio rewrites SharesOutstanding and DilutedSharesOutstanding on
+// every period from "ordinary shares" to "ADR-equivalent shares" by dividing
+// by the configured ratio. No-op when ratio is 1, when ticker is absent from
+// config/adr_ratios.json, or when s.adrRatios is nil. Per-share monetary
+// fields (e.g., DividendsPerShare) are NOT divided again because Yahoo
+// Finance reports them per-ADR for foreign filers — dividing here would
+// double-correct.
+//
+// Calculation-safety contract — applies to ONLY two fields:
+//
+//	DIVIDED:
+//	  - SharesOutstanding
+//	  - DilutedSharesOutstanding
+//	NOT touched (already per-ADR or dimensionless / monetary handled by B9):
+//	  - everything else on FinancialData
+//
+// Single-call-only contract: this function does NOT mark the data — calling
+// it twice on the same *HistoricalFinancialData yields garbage (5.19B/25,
+// not 5.19B). The caller (CalculateValuation) is responsible for invoking
+// exactly once. We deliberately do NOT add an "applied" sentinel because
+// that would pollute the FinancialData entity with valuation-pipeline state.
+//
+// Sanity cross-check: when marketData carries Yahoo's reported
+// sharesOutstanding (which is already ADR-equivalent for foreign filers), a
+// drift of more than 10% between (SECshares / ratio) and yfShares is logged
+// at WARN. Drift usually means the configured ADR ratio is stale (depositary
+// banks occasionally restructure ratios — TSM has been 5:1 since IPO but
+// BABA went 1:1 → 8:1 after a 2024 corporate action). The warning is
+// non-blocking: B10 still applies the divide because the user explicitly
+// chose the configured ratio over Yahoo's count by maintaining
+// config/adr_ratios.json.
+//
+// Phase B10 of docs/refactoring/ifrs-foreign-private-issuer-support-spec.md.
+func (s *Service) applyADRRatio(ctx context.Context, ticker string, hist *entities.HistoricalFinancialData, marketData *entities.MarketData) {
+	// Defensive guards: nothing to do for nil/empty inputs. Each is its own
+	// branch so a future debugger can step through and see exactly which
+	// guard short-circuited.
+	if hist == nil || len(hist.Data) == 0 {
+		return
+	}
+
+	// adrRatios.Get is nil-safe by contract (B8), so we can call it without
+	// a nil check on the receiver. Unknown tickers and nil receivers both
+	// resolve to ratio=1 which short-circuits the no-op path below.
+	ratio := s.adrRatios.Get(ticker)
+	if ratio == 1 {
+		// Domestic 10-K filers must produce identical pre-B10 results. No
+		// narrate emit either — keeps the stream quiet for the common case.
+		return
+	}
+
+	// Apply the divide in place across all periods. Per-share monetary fields
+	// like DividendsPerShare are deliberately NOT divided here: for foreign
+	// filers, Yahoo reports DPS already per-ADR, so dividing would
+	// double-correct. (FX-converted SEC values are dimensionally per-ordinary-
+	// share-currency-unit; that's a known asymmetry tracked for Phase B11+.)
+	ratioF := float64(ratio)
+	periodsAdjusted := 0
+	for _, fd := range hist.Data {
+		if fd == nil {
+			continue
+		}
+		fd.SharesOutstanding /= ratioF
+		fd.DilutedSharesOutstanding /= ratioF
+		periodsAdjusted++
+	}
+
+	// Cross-check against Yahoo's reported sharesOutstanding. Yahoo's number
+	// is already ADR-equivalent for foreign filers, so it should agree with
+	// our post-divide result. A > 10% gap usually means the configured ratio
+	// is stale; we WARN but don't fail because the user explicitly chose the
+	// configured ratio.
+	if marketData != nil && marketData.SharesOutstanding > 0 {
+		latest, _ := hist.GetLatestPeriod()
+		if latest != nil {
+			expected := latest.SharesOutstanding // already post-divide
+			observed := marketData.SharesOutstanding
+			deviation := math.Abs(expected-observed) / observed
+			if deviation > 0.10 {
+				s.log(ctx).Warn("ADR ratio deviation > 10% — config may be stale",
+					zap.String("ticker", ticker),
+					zap.Int("configured_ratio", ratio),
+					zap.Float64("expected_post_divide_shares", expected),
+					zap.Float64("yahoo_reported_shares", observed),
+					zap.Float64("deviation_pct", deviation*100),
+				)
+			}
+		}
+	}
+
+	// Tier-1 narrate emission. Skipped for the no-op path (ratio=1 returned
+	// earlier) so domestic filers don't pollute the stream.
+	em := narrate.From(ctx)
+	em.Emit(ctx, narrate.PhaseADRRatioApplied, narrate.OutcomeOK, "",
+		zap.String("ticker", ticker),
+		zap.Int("ratio", ratio),
+		zap.Int("periods_adjusted", periodsAdjusted),
+	)
 }
