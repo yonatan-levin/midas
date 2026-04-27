@@ -690,11 +690,18 @@ func itoa(n int) string {
 // give the goroutine scheduler ample chance to interleave Promote and
 // Close in the dangerous order.
 func TestDeferredBundle_PromoteCloseRace_NoGoroutineLeak(t *testing.T) {
-	// Snapshot baseline goroutines BEFORE running the race so we ignore
-	// long-lived runtime goroutines (goroutine #1, finalizer, GC sweeper)
-	// and any test-framework goroutines.
+	// Snapshot the baseline goroutine set NOW (before the race) so VerifyNone
+	// only flags goroutines created by THIS test body. Without IgnoreCurrent
+	// the assertion would observe any goroutines leaked by sibling tests in
+	// the same package run (e.g. an OpenBundle worker left running by another
+	// test) and falsely blame the HIGH-2 fix. IgnoreCurrent is goleak's
+	// recommended pattern for tests that share a process with other tests
+	// (see go.uber.org/goleak docs). The IgnoreTopFunction options remain as
+	// belt-and-braces against benign runtime goroutines that may be spawned
+	// AFTER the snapshot (e.g. test-runner subgoroutines, GC park).
+	ignoreOption := goleak.IgnoreCurrent()
 	defer goleak.VerifyNone(t,
-		// Allow goleak to ignore the test-runner's own goroutine.
+		ignoreOption,
 		goleak.IgnoreTopFunction("testing.(*T).Run"),
 		goleak.IgnoreTopFunction("runtime.gopark"),
 	)
