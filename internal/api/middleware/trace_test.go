@@ -847,6 +847,122 @@ func TestTrace_OnError_BundleSinkInstalledForDeferred(t *testing.T) {
 		"narrate stream must contain the handler-emitted line that fired BEFORE the 500")
 }
 
+// TestTrace_OnError_PromoteFailure_NoArtifactPathOnNarrate pins QA finding
+// MINOR-NEW (2026-04-26). Pre-fix: when a deferred bundle was opened on the
+// auto-on-error path and Promote() failed at request-end (e.g. mkdir error
+// because the destination is unwritable), the response.sent narrate line
+// still emitted artifact_path pointing at the now-non-existent bundle
+// directory. Log readers chasing the path hit a missing-dir dead end with
+// no signal that promotion ever failed.
+//
+// Post-fix: artifact_path is gated on promoteSucceeded (true only when
+// Promote returns nil). On promote failure the field is OMITTED from
+// response.sent and the existing trace.bundle.promote_failed Warn line
+// remains the operator's correlation point.
+//
+// Setup: RootPath is set to a regular FILE so OpenDeferredBundle (which
+// does NOT mkdir at construction — see internal/observability/artifact/
+// bundle.go:281) succeeds, then Promote()'s os.MkdirAll(b.root) fails with
+// "not a directory" (ENOTDIR / Windows equivalent) because the parent isn't
+// a directory. This exercises the Promote-failure branch specifically; if
+// OpenDeferredBundle had failed instead, we'd be testing a different code
+// path (the open_failed branch already covered by
+// TestTrace_OpenBundleFailureWarnsAndDegrades).
+func TestTrace_OnError_PromoteFailure_NoArtifactPathOnNarrate(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Make RootPath a FILE rather than a directory. OpenDeferredBundle just
+	// computes the path string at construction and won't notice; Promote()'s
+	// MkdirAll on <file>/<date>/<ticker>/req_<id> fails with ENOTDIR because
+	// the immediate parent (<file>) cannot host children.
+	rootAsFile := filepath.Join(tmpDir, "artifacts-but-actually-a-file")
+	require.NoError(t, os.WriteFile(rootAsFile, []byte("not a dir"), 0o644))
+
+	// Capture every entry the request-scoped logger emits. Narrate uses
+	// Info level (l.Info("narrate", ...)) and the Warn line uses Warn
+	// level — DebugLevel observer captures both.
+	core, recorded := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-promote-fail"))
+	// Inject the observer logger via logctx so trace.go's
+	// logctx.From(c.Request.Context()) picks it up for the Warn line AND the
+	// narrate emitter (the narrate emitter resolves logctx.From at Emit-time).
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: rootAsFile,
+			Triggers: artifact.TriggerConfig{OnError: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// Synthetic 500 — triggers the deferred-bundle Promote attempt at
+		// request-end. Promote will fail because RootPath is a file.
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	// NB: NO ?trace=1 and NO X-Midas-Trace header — must exercise the
+	// auto-on-error / deferred path, not the eager path.
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	// The Promote failure must NOT propagate to the client — the request
+	// completes normally with the handler's chosen status.
+	require.Equal(t, http.StatusInternalServerError, w.Code,
+		"Promote failure must not change the HTTP response")
+
+	// Disk must be empty under tmpDir aside from the file we created.
+	// Specifically, no bundle directory was created (Promote's MkdirAll failed).
+	entries, err := os.ReadDir(tmpDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "tmpDir should only contain the file we created")
+	require.Equal(t, "artifacts-but-actually-a-file", entries[0].Name())
+	require.False(t, entries[0].IsDir(), "the entry must still be the file, not a directory")
+
+	// The Warn line MUST have been emitted with the underlying error and
+	// request_id — that's the operator's correlation point now that
+	// artifact_path is omitted from the narrate stream.
+	warnLogs := recorded.FilterMessage("trace.bundle.promote_failed").All()
+	require.Len(t, warnLogs, 1, "expected exactly one promote_failed Warn line")
+	assert.Equal(t, zapcore.WarnLevel, warnLogs[0].Level)
+	warnFields := warnLogs[0].ContextMap()
+	assert.NotEmpty(t, warnFields["error"], "Warn line must carry the underlying error")
+	assert.Equal(t, "req-promote-fail", warnFields["request_id"])
+	assert.Equal(t, "on_error", warnFields["trigger"])
+
+	// The response.sent narrate line MUST exist (every request emits one)
+	// but MUST NOT carry artifact_path — that is the bug being pinned.
+	narrateLogs := recorded.FilterMessage("narrate").All()
+	var responseSent *observer.LoggedEntry
+	for i := range narrateLogs {
+		fields := narrateLogs[i].ContextMap()
+		if phase, _ := fields["phase"].(string); phase == "response.sent" {
+			responseSent = &narrateLogs[i]
+			break
+		}
+	}
+	require.NotNil(t, responseSent, "response.sent narrate line must be emitted on every request")
+
+	respFields := responseSent.ContextMap()
+	_, hasArtifactPath := respFields["artifact_path"]
+	assert.False(t, hasArtifactPath,
+		"response.sent must NOT carry artifact_path when Promote failed (got fields=%v)", respFields)
+	// Sanity: the standard narrate fields must still be present so we're sure
+	// we found the right line and the regression is specifically about
+	// artifact_path, not a broader emit failure.
+	assert.Equal(t, "error", respFields["outcome"],
+		"response.sent on a 500 must carry outcome=error")
+	assert.EqualValues(t, http.StatusInternalServerError, respFields["status"],
+		"response.sent must carry the status field")
+}
+
 // TestTrace_OnError_HandlerPanic_StillBundles pins REVIEWER HIGH-4. With
 // the trace middleware registered AFTER the recovery middleware (i.e.,
 // recovery is OUTSIDE trace in the call stack), a handler panic propagates

@@ -241,18 +241,31 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 			// Manual triggers always opened in eager mode (deferredBundle=false)
 			// and reach this block as no-op. Only on_error-triggered bundles
 			// take the Promote/Close branch.
+			//
+			// promoteSucceeded gates the artifact_path field on response.sent
+			// below. It stays false for the dissolve path (status<500, no panic),
+			// for the Promote-failure path (mkdir error), and for non-deferred
+			// bundles (where the field is N/A — eager bundles take the
+			// `!deferredBundle` branch of the gate). It only flips true when
+			// Promote returns nil, signalling the bundle directory is on disk.
+			promoteSucceeded := false
 			if deferredBundle && bundle != nil {
 				if respOutcome == narrate.OutcomeError {
 					if perr := bundle.Promote(artifact.TriggerOnError); perr != nil {
 						// Promote failed (mkdir error). Same Warn shape as the
 						// open-time failure so log readers don't have to learn
-						// two log lines.
+						// two log lines. promoteSucceeded stays false so the
+						// response.sent line below omits artifact_path — it
+						// would otherwise point at a directory that does not
+						// exist on disk, misleading log readers (QA finding,
+						// MINOR-NEW 2026-04-26).
 						logctx.From(c.Request.Context()).Warn("trace.bundle.promote_failed",
 							zap.String("request_id", requestID),
 							zap.String("trigger", string(artifact.TriggerOnError)),
 							zap.Error(perr),
 						)
 					} else {
+						promoteSucceeded = true
 						// Wire payload_root NOW so response.sent (and any
 						// downstream narrate lines if there are any) carry
 						// resolvable payload_ref values. Pre-promote narrate
@@ -272,11 +285,16 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 				zap.Int("body_bytes", maxInt(c.Writer.Size(), 0)),
 				zap.Int64("total_elapsed_ms", time.Since(reqStart).Milliseconds()),
 			}
-			// artifact_path is added for eager bundles AND promoted deferred
-			// bundles. Skipped for deferred-but-not-promoted bundles — their
-			// directory does not (and will never) exist on disk, so a path
-			// would mislead log readers.
-			if bundle != nil && (!deferredBundle || respOutcome == narrate.OutcomeError) {
+			// artifact_path is added for eager bundles (which always have an
+			// on-disk directory) AND for deferred bundles whose Promote()
+			// succeeded. Skipped for deferred-but-not-promoted bundles (status
+			// <500 / no panic — directory was never created) AND for deferred
+			// bundles whose Promote() failed (mkdir error — directory does not
+			// and will never exist on disk). Emitting the path in either of
+			// the latter cases would mislead log readers into chasing a path
+			// that isn't there. The trace.bundle.promote_failed Warn line
+			// above is the operator's correlation point when we omit it here.
+			if bundle != nil && (!deferredBundle || promoteSucceeded) {
 				respFields = append(respFields, zap.String("artifact_path", bundle.Root()))
 			}
 			emitter.Emit(c.Request.Context(), narrate.PhaseResponseSent, respOutcome, "", respFields...)
