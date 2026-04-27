@@ -343,7 +343,9 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	//     foreign filer for which we have no FX coverage), surface as
 	//     ErrForeignPrivateIssuer so the handler emits the existing 422
 	//     FOREIGN_PRIVATE_ISSUER_UNSUPPORTED rather than a generic 500.
-	//     Phase B11 will tighten this further once the IFRS parser ships.
+	//     Post-Phase-B residual case: parser successfully extracted IFRS
+	//     data but the reporting currency has no FRED series AND no entry
+	//     in config/fx_rates.json. Extend coverage by adding to either.
 	//   - Otherwise (mixed-currency partial failure): WARN and proceed with
 	//     the surviving USD + already-converted periods. Better stale-but-
 	//     finite than no answer.

@@ -127,11 +127,13 @@ const (
 )
 
 // allPhases returns the immutable closed set of phase identifiers. Used by
-// the closed-set test in phases_test.go to detect accidental string drift
+// the closed-set test in narrate_test.go to detect accidental string drift
 // (someone renaming a constant value but forgetting to update the consumer).
 //
-// New phases MUST be appended here AND added as a constant above; the spec's
-// 17-phase cap is enforced by the closed-set test.
+// New phases MUST be appended here AND added as a constant above. The
+// closed-set test pins the count at 19 phases (was 17 pre-Phase-B; B9 added
+// PhaseFXConvert and B10 added PhaseADRRatioApplied) — bump the test
+// assertion when adding a 20th.
 func allPhases() []Phase {
 	return []Phase{
 		PhaseRequestReceived,

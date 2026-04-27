@@ -329,8 +329,8 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 				map[string]interface{}{"ticker": ticker})
 		} else if errors.Is(err, valuation.ErrForeignPrivateIssuer) {
 			h.sendError(c, http.StatusUnprocessableEntity, "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
-				"Foreign private issuer not yet supported",
-				"This ticker files with the SEC under Form 20-F using IFRS taxonomy, which Midas cannot currently parse. Support is on the roadmap.",
+				"Foreign private issuer not covered",
+				"This ticker files using a taxonomy or currency pair Midas does not yet cover. Supported: ifrs-full taxonomy with FRED-tracked currencies (TWD, EUR, JPY, GBP, HKD, CNY, KRW, CHF, CAD, AUD, INR, BRL, DKK). Out-of-coverage taxonomies (JGAAP, K-IFRS, ifrs-smes) and currencies are tracked in docs/refactoring/ifrs-foreign-private-issuer-support-spec.md.",
 				map[string]interface{}{
 					"ticker":      ticker,
 					"filing_type": "20-F",
@@ -565,7 +565,7 @@ func classifyBulkError(ticker string, err error) BulkFailure {
 		return BulkFailure{
 			Ticker:    ticker,
 			ErrorCode: "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
-			Message:   "Foreign private issuer (Form 20-F / IFRS) not yet supported",
+			Message:   "Foreign private issuer with taxonomy or currency outside Midas coverage",
 		}
 	case errors.Is(err, valuation.ErrInsufficientData):
 		return BulkFailure{

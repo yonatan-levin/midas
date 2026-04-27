@@ -404,10 +404,10 @@ func (g *Gateway) GetFXRate(ctx context.Context, fromCcy, toCcy string) (float64
 	// distinguish "FRED is down" from "we never had an API key".
 	rate, fallbackErr := g.getFXRateFromStaticConfig(from, to)
 	if fallbackErr != nil {
-		// Both sources unavailable. Wrap the static error (which already
-		// carries ErrFXRateUnavailable) with the FRED error context so the
-		// caller can see both failure modes in a single log line.
-		return 0, fmt.Errorf("fred error %v; static fallback: %w", err, fallbackErr)
+		// Both sources unavailable. Multi-%w (Go 1.20+) so callers can
+		// errors.Is against either the FRED error chain or
+		// ports.ErrFXRateUnavailable (which fallbackErr carries).
+		return 0, fmt.Errorf("fred error: %w; static fallback: %w", err, fallbackErr)
 	}
 
 	logctx.Or(ctx, g.logger).Info("gateway.macro.fx.fallback",

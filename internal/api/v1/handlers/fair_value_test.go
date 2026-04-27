@@ -173,7 +173,7 @@ func Test_classifyBulkError(t *testing.T) {
 			ticker:       "TSM",
 			err:          fmt.Errorf("ifrs-full taxonomy: %w", valuation.ErrForeignPrivateIssuer),
 			wantCode:     "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
-			wantContains: "20-F",
+			wantContains: "Foreign private issuer", // post-Phase-B message identifies the case without the misleading "not yet supported" text.
 		},
 		{
 			name:         "model_not_applicable",
