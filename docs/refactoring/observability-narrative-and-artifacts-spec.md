@@ -2,7 +2,7 @@
 
 **Version:** 0.1 DRAFT
 **Date:** 2026-04-25
-**Status:** PHASE 1 IMPLEMENTED 2026-04-25 — see commits 666d275, e463b3e, af6c314, 41bd91c, and the bundle-log-streams follow-up that closes QA-2026-04-25 MINOR-1 (`99-narrate.jsonl` + `99-debug-trace.jsonl` written via a `BundleSink` `zapcore.Core` wrapper). Phase 2 (auto-triggers) explicitly deferred — see [Deferred Work](#deferred-work-phase-2).
+**Status:** PHASE 1 + 2.A IMPLEMENTED — Phase 1 merged 2026-04-25 as `83cbfc7` (manual `?trace=1` / `X-Midas-Trace` triggers, plus the bundle-log-streams follow-up that closes QA-2026-04-25 MINOR-1 — `99-narrate.jsonl` + `99-debug-trace.jsonl` written via a `BundleSink` `zapcore.Core` wrapper). Phase 2.A merged 2026-04-27 as `48a9578` (auto-on-error trigger via `logging.artifact_store.triggers.on_error`; deferred-mode Bundle infrastructure). Phase 2.B (on_quality_flag), 2.C (always-on), 2.D (replay tooling) explicitly deferred — see [Deferred Work](#13-deferred-work-phase-2).
 **Builds on:** [`observability-upgrade-spec.md`](./observability-upgrade-spec.md) (v1.1, ALL PHASES COMPLETE 2026-04-23). This spec is additive; it does not modify Phases O/R/S/M/U/D.
 
 ---
@@ -469,13 +469,23 @@ Coverage gates:
 
 The following were designed in detail (see conversation thread 2026-04-25) but explicitly deferred. They should be filed as `docs/reviewer/` follow-up items at the time Phase 1 merges:
 
-### Phase 2.A — Auto-trigger: on-error
+### Phase 2.A — Auto-trigger: on-error — **SHIPPED 2026-04-27 (merge `48a9578`)**
 
 When a request returns HTTP status >= 500, write a bundle for it even without the `?trace=1` flag.
 
-**Implementation cost:** `~80 LoC`. Requires the trace middleware to buffer would-be snapshot calls into an in-memory `*pendingBundle` for every request, only flushing to disk at request end if a trigger fires. Memory cost per request: ~10 KB headers + bounded snapshot queue.
+**Status:** SHIPPED on `feat/observability-narrative-phase2` (5 commits: `f937286`, `f892448`, `b27b317`, `2bca707`, `8dab2e6`). Coverage: artifact 90.5%, middleware 95.1%. Race-detector clean under `-count=3`.
 
-**Reason for deferral:** Adds complexity of "buffer through request, decide at end" vs. Phase 1's simpler "decide at start, write through." Wanted to ship the simpler path first and add this once Phase 1 is in production.
+**As built:** the trace middleware now opens a `*Bundle` in **deferred mode** for every request when `logging.artifact_store.triggers.on_error=true` (config knob added). In deferred mode, `OpenDeferredBundle` allocates the bundle but does NOT create a directory; `Snapshot`/`AppendStream`/`SnapshotRaw` calls (and BundleSink-wrapped log entries) buffer into in-memory slices protected by `pendingMu`. At request end, the middleware calls `Promote(TriggerOnError)` on 5xx to flush buffers to disk, OR `Close()` on 2xx/3xx/4xx to dissolve the in-memory state. Manual `?trace=1` / `X-Midas-Trace` triggers still take precedence for the manifest's `trigger` field. The post-`c.Next()` block runs inside a `defer` with `recover()` so panics still trigger Promote.
+
+**New surface:**
+- Config: `logging.artifact_store.triggers.on_error bool` (default `false`); `logging.artifact_store.pending_bytes_cap int64` (default 10 MiB).
+- Constants: `artifact.MaxStreamLineBytes = 256 * 1024` (per-line cap on the BundleSink stream — defends against one giant Debug payload blowing the buffer).
+- Manifest: `notes` field now formats `"write_failures=N queue_drops=M oversize_lines=O"` when any of those counters is non-zero; `outcome` degrades to `"partial"`.
+- Trigger constant: `artifact.TriggerOnError Trigger = "on_error"`.
+
+**Spec deviation (intentional):** the spec text said "buffer would-be snapshot calls for every request"; the implementation only opens the deferred bundle when `on_error=true` is configured (avoids per-request allocation when the feature is off). Same observable behavior; lower idle cost.
+
+**Unblocks:** Phase 2.B and 2.C are now each ~one `case` arm in the trace-middleware switch + a config key; the `*Bundle` deferred-mode infrastructure carries them.
 
 ### Phase 2.B — Auto-trigger: on-quality-flag
 
@@ -547,3 +557,4 @@ A CLI command `cmd/replay/main.go` that takes a bundle directory and re-runs the
 |---|---|
 | 2026-04-25 | v0.1 — Initial design draft. Three-tier architecture (narrate / Debug-tracer convention / artifact bundle). 17-phase taxonomy. Manual-trigger only (Phase 1). Phase 2 auto-triggers explicitly deferred — see §13. |
 | 2026-04-25 | v0.2 — §7.1 + §7.3 closed: `99-narrate.jsonl` and `99-debug-trace.jsonl` are now written into bundles via a `BundleSink` `zapcore.Core` wrapper installed by trace middleware after a successful bundle open. The wrapper forwards every entry to the wrapped core unchanged AND tees `event=narrate` entries to `99-narrate.jsonl` plus Debug-level entries to `99-debug-trace.jsonl`. Bundle stream files are flushed + closed on `Bundle.Close`. Closes QA-2026-04-25 MINOR-1. |
+| 2026-04-27 | v0.3 — §13.A SHIPPED. Phase 2.A (auto-on-error) merged as `48a9578`. Adds: deferred-mode `*Bundle` infrastructure (`OpenDeferredBundle` / `Promote()` / `promoted atomic.Bool`); new `TriggerOnError` constant; new config knobs `logging.artifact_store.triggers.on_error` (default `false`) and `logging.artifact_store.pending_bytes_cap` (default 10 MiB); new exported constant `artifact.MaxStreamLineBytes = 256 KiB` for BundleSink per-line cap; `oversize_lines` counter joins `dropped`/`writeErrors` in manifest `notes`; trace middleware wraps post-`c.Next()` block in `defer`+`recover()` so panics still trigger Promote. REVIEWER round 1 caught 4 HIGH (Promote stream-flush truncation, Close/Promote race goroutine leak, no per-line size cap, panic skips Promote) — all fixed. QA APPROVED-FOR-MERGE with one MINOR (`artifact_path` populated on `response.sent` even when Promote failed) — fixed in `8dab2e6`. Phase 2.B / 2.C / 2.D remain deferred. |

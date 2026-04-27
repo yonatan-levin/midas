@@ -1170,9 +1170,19 @@ All 12 entries carry identical `request_id`, `user_id`, and `key_id` field value
 
 ### 10.5 Per-Request Artifact Bundles
 
-When deeper forensics are needed than the structured log stream alone provides — e.g. inspecting the exact raw SEC payload returned for a ticker, or comparing the cleaner's input vs output for a single request — clients can opt a single request into **artifact-bundle capture**. The server writes a self-describing directory of JSON / JSONL files to disk for that request.
+When deeper forensics are needed than the structured log stream alone provides — e.g. inspecting the exact raw SEC payload returned for a ticker, or comparing the cleaner's input vs output for a single request — the server can write a self-describing directory of JSON / JSONL files to disk for that request. Triggers are either **client-driven** (per-request opt-in via header or query) or **server-driven** (auto-capture on 5xx responses, opt-in via config).
 
-#### Opt-in (per request)
+#### Triggers
+
+| Trigger | Where it lives | When it fires | Manifest `trigger` field |
+|---------|---------------|---------------|--------------------------|
+| Header  | `X-Midas-Trace: 1` on the request | Always (when client opts in) | `header` |
+| Query   | `?trace=1` on the request URL | Always (when client opts in) | `query`  |
+| On-error | `logging.artifact_store.triggers.on_error=true` config | Response status >= 500 | `on_error` |
+
+Without any trigger fired, **no bundle is written** and there is zero per-request disk overhead. Manual triggers (header/query) take precedence over `on_error` for the manifest's `trigger` field — a manually-traced 5xx is still attributed to the client.
+
+#### Opt-in by client (per request)
 
 Either of the following on a `GET /api/v1/fair-value/{ticker}` request enables capture:
 
@@ -1186,18 +1196,34 @@ curl -H "X-API-Key: <key>" \
   "http://localhost:8080/api/v1/fair-value/AAPL?trace=1"
 ```
 
-Both are equivalent. Without either flag, **no bundle is written** — there is zero per-request disk overhead on un-flagged requests.
+Both are equivalent. The `response.sent` narrate line carries `artifact_path` so log readers can navigate from log → bundle.
+
+#### Auto-capture on 5xx (server-driven)
+
+Set `logging.artifact_store.triggers.on_error=true` (or env var `LOGGING_ARTIFACT_STORE_TRIGGERS_ON_ERROR=true`) and any request returning HTTP >= 500 will produce a bundle, even without `?trace=1`. Mechanism: every request opens a `*Bundle` in **deferred mode** (in-memory only, no disk I/O); at request end the middleware either flushes the buffered snapshots/streams to disk on 5xx or dissolves them on 2xx/3xx/4xx. Pre-trigger snapshots (e.g., the SEC raw payload that contributed to the failure) survive the deferred → promoted transition and land on disk along with the `99-narrate.jsonl` stream — the bundle reconstructs the WHOLE request narrative, not just the post-error portion. Memory cost per request when the trigger is configured: ~10 KB headers + bounded snapshot queue (capped by `pending_bytes_cap`, default 10 MiB) + per-line cap of 256 KiB on stream entries. Overflow drops the oldest snapshot and increments a counter that surfaces in the manifest's `notes` field.
+
+If `Promote()` itself fails (disk-full, mkdir error), a `trace.bundle.promote_failed` Warn line fires with the request_id and error; the response still completes normally with the original 5xx status, and the `response.sent` narrate line omits the `artifact_path` field so operators don't follow a dead link.
 
 #### Server-side gate
 
-Capture is also gated by `logging.artifact_store.enabled` in the server config. Defaults:
+Capture is also gated by `logging.artifact_store.enabled` (master switch). Defaults:
 
 | Environment | `artifact_store.enabled` | Effect |
 |-------------|--------------------------|--------|
-| `development` | `true` | Per-request bundles honored when client opts in |
-| `staging`, `production` | `false` | Opt-in flag is recognized but the bundle is suppressed (logged as `trace_enabled=false reason=disabled`) |
+| `development` | `true` | Per-request bundles honored when client opts in OR when `triggers.on_error` fires |
+| `staging`, `production` | `false` | Opt-in flag is recognized but the bundle is suppressed (logged as `trace_enabled=false reason=disabled`); `on_error` trigger inert |
 
 Override via `LOGGING_ARTIFACT_STORE_ENABLED=true|false`.
+
+#### Memory bounds (deferred-mode buffer caps)
+
+| Knob | Default | Override env var | Behavior on overflow |
+|------|---------|------------------|----------------------|
+| `logging.artifact_store.pending_bytes_cap` | `10 MiB` (`10485760`) | `LOGGING_ARTIFACT_STORE_PENDING_BYTES_CAP` | Drop oldest buffered snapshot to make room; increment `dropped` counter |
+| `artifact.MaxStreamLineBytes` (compile-time constant) | `256 KiB` (`262144`) | n/a — exported Go constant | Drop the oversize line entirely; increment `oversize_lines` counter |
+| `logging.artifact_store.queue_size` | `256` jobs | `LOGGING_ARTIFACT_STORE_QUEUE_SIZE` | Drop with `dropped` counter increment when worker is saturated |
+
+Counters surface in `00-manifest.json::notes` as `write_failures=N queue_drops=M oversize_lines=O` (only printed when at least one is non-zero); `outcome` degrades to `"partial"` whenever any drop occurred.
 
 #### Bundle layout on disk
 
@@ -1262,8 +1288,9 @@ The numeric prefix matches the narrate phase number (see `internal/observability
 | `bundle_version` | Bundle layout version (`"1.0"` for Phase 1) |
 | `request_id` | Same value carried on every log line and the response header |
 | `ticker` | Late-bound after URL parsing; may be `_no-ticker` for early-failing requests |
-| `trigger` | `header` (X-Midas-Trace: 1) or `query` (?trace=1) |
-| `outcome` | `ok` / `partial` (some snapshots failed to write or were dropped) / `error` (HTTP status >= 500) |
+| `trigger` | `header` (X-Midas-Trace: 1), `query` (?trace=1), or `on_error` (auto-capture on HTTP >= 500). Manual triggers always win when both fire on the same request |
+| `outcome` | `ok` / `partial` (some snapshots failed to write, were dropped, or exceeded the per-line cap — see `notes`) / `error` (HTTP status >= 500) |
+| `notes` | Human-readable annotation. When any of `write_failures`, `queue_drops`, or `oversize_lines` is non-zero, formatted as `"write_failures=N queue_drops=M oversize_lines=O"` |
 | `phases_recorded[]` | Index of which pipeline phases contributed files |
 | `redactions_applied[]` | Hard-coded list of secret fields scrubbed before disk write — never config-driven |
 | `schema_versions{}` | Domain-struct versions in effect when the bundle was written; pin replay against the matching code revision |
