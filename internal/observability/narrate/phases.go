@@ -77,6 +77,14 @@ const (
 	// fair-value-per-share number (or an error).
 	PhaseValuationComputed Phase = "valuation.computed"
 
+	// PhaseFXConvert is emitted by the valuation service after FX-converting
+	// reporting-currency financials to USD (Phase B9 of IFRS-FPI plan,
+	// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+	// Outcome=ok with currencies_converted + periods_converted on success;
+	// outcome=error with currencies_failed when one or more FX pairs are
+	// unresolved by FRED + static config.
+	PhaseFXConvert Phase = "fx.convert"
+
 	// PhaseCrosscheckEvaluated fires after the implied-multiples sanity check.
 	PhaseCrosscheckEvaluated Phase = "crosscheck.evaluated"
 
@@ -135,6 +143,7 @@ func allPhases() []Phase {
 		PhaseWACCComputed,
 		PhaseModelSelected,
 		PhaseValuationComputed,
+		PhaseFXConvert,
 		PhaseCrosscheckEvaluated,
 		PhaseResponseSent,
 	}

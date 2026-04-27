@@ -628,6 +628,7 @@ func NewValuationService(
 	dataCleaner datacleaner.DataCleanerService,
 	dataFetcher *datafetcher.DataFetcher,
 	marketGateway ports.MarketDataGateway,
+	macroGateway ports.MacroDataGateway,
 	metricsService *metrics.Service,
 	cfg *config.Config,
 	logger *zap.Logger,
@@ -651,6 +652,16 @@ func NewValuationService(
 	if gw, ok := marketGateway.(*market.Gateway); ok && gw.YFinanceClient() != nil {
 		svc.SetYFinanceGateway(gw.YFinanceClient())
 		logger.Info("YFinanceGateway wired for analyst consensus estimates")
+	}
+
+	// Phase B9 (IFRS-FPI): wire MacroDataGateway for FX-rate lookups so
+	// reporting-currency financials are converted to USD before WACC / DCF.
+	// macroGateway is non-nil in production (constructed by NewMacroDataGateway
+	// in the DI container above); nil only in unit tests, where the FX path
+	// short-circuits to a no-op.
+	if macroGateway != nil {
+		svc.SetMacroGateway(macroGateway)
+		logger.Info("MacroDataGateway wired for FX-rate conversion (Phase B9 IFRS-FPI)")
 	}
 
 	return svc

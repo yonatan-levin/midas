@@ -35,7 +35,8 @@ type Service struct {
 	dataCleaner        datacleaner.DataCleanerService
 	dataFetcher        *datafetcher.DataFetcher
 	growthEstimator    *growthsvc.Estimator
-	yfinanceGateway    ports.YFinanceGateway // optional, for analyst estimates
+	yfinanceGateway    ports.YFinanceGateway  // optional, for analyst estimates
+	macroGateway       ports.MacroDataGateway // Phase B9 (IFRS-FPI): FX-rate lookups; nil = no-op FX path
 	metricsService     ports.MetricsService
 	modelRouter        *models.ModelRouter          // Phase 3: industry-aware model selection
 	industryClassifier *industry.IndustryClassifier // Phase 3: SIC/NAICS classification
@@ -329,6 +330,29 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 			s.log(ctx).Warn("Failed to fetch macro data from repository", zap.Error(err), zap.String("ticker", ticker))
 			return nil, fmt.Errorf("failed to fetch macro data: %w", err)
 		}
+	}
+
+	// Phase B9 (IFRS-FPI): FX-convert any non-USD reporting-currency periods
+	// to USD BEFORE WACC / growth / DCF run, so every downstream calculation
+	// sees USD-denominated values. Idempotent — USD periods short-circuit.
+	// Placed at the post-fetch convergence point so both the DataFetcher
+	// path and the repo path get the same treatment.
+	//
+	// On failure, the policy is asymmetric:
+	//   - If the ONLY failures were on non-USD periods (i.e., this is a
+	//     foreign filer for which we have no FX coverage), surface as
+	//     ErrForeignPrivateIssuer so the handler emits the existing 422
+	//     FOREIGN_PRIVATE_ISSUER_UNSUPPORTED rather than a generic 500.
+	//     Phase B11 will tighten this further once the IFRS parser ships.
+	//   - Otherwise (mixed-currency partial failure): WARN and proceed with
+	//     the surviving USD + already-converted periods. Better stale-but-
+	//     finite than no answer.
+	if err := s.convertFinancialsToUSD(ctx, historicalData); err != nil {
+		if errors.Is(err, ports.ErrFXRateUnavailable) && hasNonUSDPeriod(historicalData) {
+			return nil, fmt.Errorf("%w: FX conversion failed for ticker %s reporting in non-USD currency", ErrForeignPrivateIssuer, ticker)
+		}
+		s.log(ctx).Warn("FX conversion partially failed; valuation may be stale",
+			zap.String("ticker", ticker), zap.Error(err))
 	}
 
 	// Stage 1 — "data_fetch" calc trace: emit which data sources were consulted and
