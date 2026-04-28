@@ -1074,6 +1074,88 @@ func TestParser_ExtractFiscalPeriods_MultiCurrency_PicksDominant(t *testing.T) {
 		"dominant currency must be TWD (2 facts) not USD (1 fact)")
 }
 
+// TestParser_ExtractFiscalPeriods_SameConceptMultiCurrency_PrefersDominant
+// is the regression pin for the Phase B post-launch hotfix: when the SAME
+// concept (e.g., ifrs-full:Assets) is reported in BOTH a non-USD reporting
+// currency AND USD for the same period (common for FPIs like TSM that
+// publish company-translated USD figures alongside TWD originals), the
+// parser must store ONLY the value from the dominant currency. Pre-fix,
+// because Go map iteration order is randomized, the second iteration
+// silently overwrote the first via last-write-wins on payload.values —
+// producing periods stamped with one currency but holding values from the
+// other, which then caused convertFinancialsToUSD to FX-multiply
+// already-USD values down by the FX rate factor (~31× for TWD).
+//
+// Live TSM symptom before the fix: tangible_value_per_share = $1.23/ADR
+// (~30× too low) because TotalAssets ended up being the company's
+// USD-translated value of $204B but was then FX-multiplied by 0.0312
+// (TWD→USD) down to $6.4B, divided by 5.19B ADR-equivalent shares.
+func TestParser_ExtractFiscalPeriods_SameConceptMultiCurrency_PrefersDominant(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	// Same TSM-shape: Assets reported in BOTH TWD (filer's reporting
+	// currency, dominant) and USD (filer's translated convenience figure).
+	// Plus another monetary concept (Revenue) only in TWD to make TWD
+	// dominant by count (2 TWD facts vs 1 USD fact).
+	facts := &ports.SECCompanyFacts{
+		CIK:        "1046179",
+		EntityName: "Same-Concept Multi-Currency Filer",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"ifrs-full": {
+				// Assets is published in BOTH TWD and USD by TSM. Pre-fix this
+				// triggered the overwrite race — the value stored depended on
+				// which currency Go's randomized map iteration visited last.
+				"Assets": {
+					Label: "Assets",
+					Units: map[string][]ports.SECFact{
+						"TWD": {
+							{End: "2024-12-31", Val: 6691764700000, Fy: 2024, Fp: "FY", Form: "20-F", Filed: "2025-04-17"},
+						},
+						"USD": {
+							{End: "2024-12-31", Val: 204079400000, Fy: 2024, Fp: "FY", Form: "20-F", Filed: "2025-04-17"},
+						},
+					},
+				},
+				"Revenue": {
+					Label: "Revenue",
+					Units: map[string][]ports.SECFact{
+						"TWD": {
+							{End: "2024-12-31", Val: 2894308000000, Fy: 2024, Fp: "FY", Form: "20-F", Filed: "2025-04-17"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	periods, err := parser.extractFiscalPeriods(facts)
+	require.NoError(t, err)
+	require.Contains(t, periods, "2024FY")
+
+	payload := periods["2024FY"]
+
+	// Hotfix invariant 1: dominant currency is TWD (2 TWD facts > 1 USD fact).
+	assert.Equal(t, "TWD", payload.currency,
+		"dominant currency must be TWD (2 facts) not USD (1 fact)")
+
+	// Hotfix invariant 2: Assets value MUST be the TWD-unit value, not the
+	// USD-unit value. Pre-fix this assertion would flip 50/50 with
+	// iteration order, sometimes returning 204079400000 (USD value
+	// silently winning) and sometimes 6691764700000 (TWD value winning).
+	// Post-fix it is deterministic.
+	assert.Equal(t, 6691764700000.0, payload.values["Assets"],
+		"Assets value must be the TWD-unit value (dominant currency); pre-fix this could be the USD value due to map-iteration race")
+	assert.NotEqual(t, 204079400000.0, payload.values["Assets"],
+		"Assets value must NOT be the USD-unit value when TWD is the dominant reporting currency — that is the pre-fix overwrite-race bug")
+
+	// Hotfix invariant 3: the per-currency bucket map is collapsed and
+	// nil'd, so memory is freed and downstream code does not have to know
+	// about the bucketing.
+	assert.Nil(t, payload.valuesByCurrency,
+		"valuesByCurrency must be nil after extraction collapses the dominant bucket")
+}
+
 // TestParser_ExtractFiscalPeriods_EmptyFacts verifies that empty fact maps
 // return an appropriate error.
 func TestParser_ExtractFiscalPeriods_EmptyFacts(t *testing.T) {
@@ -1198,4 +1280,64 @@ func TestParser_NormalizeFinancialData_DeadInventoryExceedsTangible(t *testing.T
 	// 3M - 10M = -7M => clamped to 0
 	assert.Equal(t, 0.0, normalized.TangibleAssets)
 	assert.Equal(t, 10000000.0, normalized.DeadInventoryWritedown)
+}
+
+// TestParser_ParsePeriodData_IFRS_LeaseLiabilities_NoDoubleCount is the
+// regression pin for the Phase B post-launch hotfix: ifrs-full:LeaseLiabilities
+// must map ONLY to OperatingLeaseLiability and must NOT inflate TotalDebt /
+// InterestBearingDebt. Live TSM symptom before the fix: dcf_value_per_share=
+// -55.01/ADR (negative) and tangible_value_per_share=1.23/ADR (~30x too low),
+// caused by the same TWD lease-liability balance being subtracted twice in
+// the EV→equity bridge — once as debt, once as a lease obligation in
+// adjustments.
+//
+// Mirrors the US-GAAP convention where the LongTermDebt family excludes
+// ASC 842 OperatingLeaseLiability tags. IFRS 16 lease liabilities are
+// operating obligations, not financing debt.
+func TestParser_ParsePeriodData_IFRS_LeaseLiabilities_NoDoubleCount(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	// IFRS-full fixture: a lease-heavy filer (TSM-shape) with both
+	// financing debt (Borrowings) AND operating-lease liability
+	// (LeaseLiabilities) populated.
+	data := map[string]float64{
+		"_filing_date": float64(time.Date(2025, 4, 17, 0, 0, 0, 0, time.UTC).Unix()),
+		"_end_date":    float64(time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC).Unix()),
+
+		// Required fields for parsePeriodData to succeed.
+		"Revenue":         2894308000000,
+		"OperatingIncome": 1321714000000,
+		"ProfitLoss":      1173267000000,
+
+		// The double-count test surface: Borrowings is the financing-debt tag,
+		// LeaseLiabilities is the IFRS 16 operating-lease tag. Distinct values
+		// so we can detect summation if it occurred.
+		"Borrowings":       500000000000, // NT$500B financing debt
+		"LeaseLiabilities": 240000000000, // NT$240B operating-lease liability
+
+		"SharesOutstanding": 25932733242,
+	}
+
+	result, err := parser.parsePeriodData("0001046179", "2024FY", &periodPayload{
+		values:   data,
+		currency: "TWD",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Hotfix invariant 1: TotalDebt is financing-debt ONLY.
+	assert.Equal(t, 500000000000.0, result.TotalDebt,
+		"TotalDebt must be Borrowings only (NT$500B); LeaseLiabilities (NT$240B) must NOT be added")
+	assert.Equal(t, 500000000000.0, result.InterestBearingDebt,
+		"InterestBearingDebt must mirror TotalDebt; LeaseLiabilities must NOT be added")
+
+	// Hotfix invariant 2: LeaseLiabilities flows to OperatingLeaseLiability.
+	assert.Equal(t, 240000000000.0, result.OperatingLeaseLiability,
+		"OperatingLeaseLiability must be populated from ifrs-full:LeaseLiabilities (NT$240B)")
+
+	// Hotfix invariant 3: explicit guard against the pre-fix sum (NT$740B).
+	// If the regression returns, TotalDebt would be Borrowings + LeaseLiabilities.
+	assert.NotEqual(t, 740000000000.0, result.TotalDebt,
+		"TotalDebt must NOT equal Borrowings + LeaseLiabilities — that is the pre-fix double-count bug")
 }

@@ -223,6 +223,21 @@ type periodPayload struct {
 	// corporate-action artifact such as a mid-year reporting-currency
 	// change. Not exposed to callers.
 	currencyCounts map[string]int
+	// valuesByCurrency segregates monetary fact values by the currency unit
+	// they were reported in (outer key = ISO-4217 code, e.g. "USD", "TWD").
+	// Phase B post-launch hotfix: filers like TSM publish the SAME concept
+	// (e.g., ifrs-full:Assets) under BOTH a TWD unit AND a USD unit. Without
+	// segregation, the second iteration silently overwrites the first
+	// (Go map iteration order is randomized), producing periods stamped
+	// with one currency but holding values from the other — which then
+	// FX-converts incorrectly. Once the dominant currency is resolved, the
+	// matching bucket is collapsed into `values` and the others are
+	// discarded so downstream findValue lookups see only currency-coherent
+	// data.
+	//
+	// Dimensionless facts (shares, metadata) write directly to `values`
+	// and are never touched by the collapse step.
+	valuesByCurrency map[string]map[string]float64
 }
 
 // isCurrencyUnit reports whether the given SEC `Units` key is an
@@ -291,30 +306,60 @@ func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]
 		return nil, fmt.Errorf("no financial periods extracted from SEC data")
 	}
 
-	// Resolve the dominant currency for each period. In the overwhelmingly
-	// common case there is exactly one currency per period and this is a
-	// no-op; the multi-currency branch only fires for corporate-action
-	// edge cases (e.g., a mid-year reporting-currency change) and emits a
-	// structured warning so operators can investigate.
+	// Resolve the dominant currency for each period AND collapse the
+	// per-currency value buckets into `payload.values`. The single-
+	// currency case (overwhelmingly common — e.g., AAPL with USD only)
+	// just merges the one bucket. The multi-currency case (e.g., TSM
+	// publishing both TWD and USD for every monetary concept) picks the
+	// dominant currency by fact count, merges that bucket only, and logs
+	// a warning so operators can audit.
+	//
+	// Phase B post-launch hotfix: prior to bucketing, the multi-currency
+	// case suffered from a silent last-write-wins race because Go map
+	// iteration order is randomized — the period was stamped with one
+	// currency (typically the higher-count one) but the values map could
+	// contain a mix of values from BOTH currencies, making FX conversion
+	// incoherent. Collapsing from a deterministic single bucket fixes
+	// this.
 	for periodKey, payload := range periods {
-		if len(payload.currencyCounts) <= 1 {
+		if len(payload.currencyCounts) == 0 {
+			// Period has no monetary facts (dimensionless-only — e.g., a
+			// period that only carries DEI cover-page shares). Nothing to
+			// collapse; values already holds everything.
 			continue
 		}
-		dominantCurrency := payload.currency
-		dominantCount := payload.currencyCounts[dominantCurrency]
-		seen := make([]string, 0, len(payload.currencyCounts))
-		for c, n := range payload.currencyCounts {
-			seen = append(seen, c)
-			if n > dominantCount {
-				dominantCurrency = c
-				dominantCount = n
+
+		// Resolve dominant currency. Single-currency path keeps payload.currency
+		// (set on first write in processFacts) unchanged.
+		if len(payload.currencyCounts) > 1 {
+			dominantCurrency := payload.currency
+			dominantCount := payload.currencyCounts[dominantCurrency]
+			seen := make([]string, 0, len(payload.currencyCounts))
+			for c, n := range payload.currencyCounts {
+				seen = append(seen, c)
+				if n > dominantCount {
+					dominantCurrency = c
+					dominantCount = n
+				}
+			}
+			p.logger.Warn("Period has facts in multiple currencies; picking dominant",
+				zap.String("period", periodKey),
+				zap.Strings("currencies_seen", seen),
+				zap.String("currency_chosen", dominantCurrency))
+			payload.currency = dominantCurrency
+		}
+
+		// Collapse: merge the chosen-currency bucket into `values`. Other
+		// buckets are discarded. This guarantees every monetary entry in
+		// `values` is reported in `payload.currency`, satisfying the
+		// invariant that `convertFinancialsToUSD` relies on.
+		if bucket, ok := payload.valuesByCurrency[payload.currency]; ok {
+			for k, v := range bucket {
+				payload.values[k] = v
 			}
 		}
-		p.logger.Warn("Period has facts in multiple currencies; picking dominant",
-			zap.String("period", periodKey),
-			zap.Strings("currencies_seen", seen),
-			zap.String("currency_chosen", dominantCurrency))
-		payload.currency = dominantCurrency
+		// Free the bucket map — values is now the single source of truth.
+		payload.valuesByCurrency = nil
 	}
 
 	return periods, nil
@@ -336,23 +381,35 @@ func (p *Parser) processFacts(periods map[string]*periodPayload, conceptName str
 		payload, exists := periods[periodKey]
 		if !exists {
 			payload = &periodPayload{
-				values:         make(map[string]float64),
-				currencyCounts: make(map[string]int),
+				values:           make(map[string]float64),
+				currencyCounts:   make(map[string]int),
+				valuesByCurrency: make(map[string]map[string]float64),
 			}
 			periods[periodKey] = payload
 		}
 
-		// Store the value using the local concept name
-		payload.values[conceptName] = fact.Val
-
-		// Track currency for monetary facts only — `shares` and other
-		// dimensionless facts pass currencyUnit="" and must NOT influence
-		// the currency stamp (calculation-safety contract).
+		// Store the value. Monetary facts (currencyUnit != "") go into the
+		// per-currency bucket so we can later collapse to the period's
+		// resolved dominant currency without stale-overwrite races between
+		// concurrent currency units (e.g., TSM publishing the same concept
+		// in BOTH TWD and USD). Dimensionless facts (shares, period
+		// metadata) write directly to `values` because they are never
+		// disambiguated by currency.
 		if currencyUnit != "" {
+			bucket, bucketExists := payload.valuesByCurrency[currencyUnit]
+			if !bucketExists {
+				bucket = make(map[string]float64)
+				payload.valuesByCurrency[currencyUnit] = bucket
+			}
+			bucket[conceptName] = fact.Val
+
 			if payload.currency == "" {
 				payload.currency = currencyUnit
 			}
 			payload.currencyCounts[currencyUnit]++
+		} else {
+			// Dimensionless: shares / metadata go to values directly.
+			payload.values[conceptName] = fact.Val
 		}
 
 		// Also store metadata for the most recent fact in this period
@@ -598,10 +655,18 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		"LongTermDebtAndCapitalLeaseObligations",
 		"DebtCurrent",
 		// IFRS-full equivalents (Phase B6).
+		// NOTE: ifrs-full:LeaseLiabilities is intentionally NOT in this list.
+		// Lease liabilities are operating obligations under IFRS 16, not
+		// financing debt. They map ONLY to OperatingLeaseLiability below
+		// (mirroring the US-GAAP convention where the LongTermDebt family
+		// excludes ASC 842 operating-lease liabilities). Including it here
+		// would double-count lease liabilities in the EV→equity bridge —
+		// once subtracted as debt, once as a lease obligation in
+		// adjustments — crushing equity for lease-heavy filers like TSM
+		// (Phase B post-launch hotfix).
 		"Borrowings",
 		"NoncurrentBorrowings",
 		"CurrentBorrowings",
-		"LeaseLiabilities",
 	}); exists {
 		financialData.TotalDebt = val
 		financialData.InterestBearingDebt = val // Assume all debt is interest-bearing
