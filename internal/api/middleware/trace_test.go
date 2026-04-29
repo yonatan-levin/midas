@@ -1035,3 +1035,277 @@ func TestTrace_OnError_HandlerPanic_StillBundles(t *testing.T) {
 	assert.Equal(t, "error", mf.Outcome,
 		"panicked request must record outcome=error in the manifest")
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2.B — auto-on-quality-flag trigger tests
+// ---------------------------------------------------------------------------
+//
+// Behaviour matrix for Phase 2.B:
+//
+//   manual flag | qty_flag thr | qty count | on_error | status   | bundle?  | trigger
+//   ------------|--------------|-----------|----------|----------|----------|----------------
+//   yes         | any          | any       | any      | any      | yes      | header/query
+//   no          | "warning"    | >=1       | any      | any      | yes      | on_quality_flag
+//   no          | "warning"    | 0         | false    | <500     | no       | —
+//   no          | "warning"    | 0         | true     | >=500    | yes      | on_error
+//   no          | "warning"    | >=1       | true     | >=500    | yes      | on_quality_flag
+//   no          | ""           | any       | any      | any      | no/eager | (no on_qf)
+//
+// The tests below pin the non-trivial rows. The on_error rows from Phase
+// 2.A continue to apply unchanged.
+
+// TestTrace_OnQualityFlag_AutoBundle_WhenThresholdExceeded — handler
+// records 3 qualifying flags via the bundle's RecordQualityFlagCount API.
+// Bundle MUST appear on disk and the manifest's trigger MUST be
+// "on_quality_flag". Status is 200 (no on_error contribution); this row
+// pins that quality_flag fires independently of the response code.
+func TestTrace_OnQualityFlag_AutoBundle_WhenThresholdExceeded(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-qflag-fires"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				QualityFlagThreshold: "warning",
+			},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// Synthetic cleaner hook — record 3 qualifying flags.
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b, "deferred bundle must be on ctx when threshold configured")
+		b.RecordQualityFlagCount(3)
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath, "bundle must be on disk when threshold exceeded")
+	assert.Equal(t, "on_quality_flag", readManifestTrigger(t, root),
+		"auto-triggered bundle must record trigger=on_quality_flag")
+}
+
+// TestTrace_OnQualityFlag_NoBundle_WhenUnderThreshold — handler records
+// zero qualifying flags, status 200, on_error off. NO bundle directory may
+// be created. This is the dominant production path when the trigger is
+// configured: most requests see flag counts below threshold and the
+// deferred bundle dissolves cleanly.
+func TestTrace_OnQualityFlag_NoBundle_WhenUnderThreshold(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-qflag-zero"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				QualityFlagThreshold: "warning",
+			},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// Cleaner ran but found nothing severe enough — count=0.
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b, "deferred bundle must be on ctx even when count stays 0")
+		// Intentionally no RecordQualityFlagCount call — equivalent to count=0.
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	assert.Empty(t, entries,
+		"non-flagging request must NOT leave files on disk; got %v", entries)
+}
+
+// TestTrace_OnQualityFlag_Disabled_NoBundle — threshold is empty (default).
+// Handler records 5 flags but the trigger is disabled. NO bundle must be
+// created. Pins the off-by-default invariant: enabling artifact_store alone
+// (without setting quality_flag_threshold) does NOT auto-capture on flags.
+func TestTrace_OnQualityFlag_Disabled_NoBundle(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-qflag-disabled"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			// QualityFlagThreshold NOT set — defaults to "".
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// No deferred bundle exists, so artifact.From returns nil.
+		// RecordQualityFlagCount on nil is a no-op (per nil-safety contract).
+		b := artifact.From(c.Request.Context())
+		assert.Nil(t, b, "no bundle expected when no trigger is configured")
+		b.RecordQualityFlagCount(5) // must not panic on nil
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	assert.Empty(t, entries,
+		"disabled trigger must NOT auto-capture; got %v", entries)
+}
+
+// TestTrace_OnQualityFlag_PrecedenceOverOnError — request returns 500 AND
+// quality_flag_count exceeds threshold. Both auto-triggers fire; quality
+// flag MUST win because it's more diagnostic (the flag list points at the
+// suspicious upstream data, the 5xx alone just says "something failed").
+//
+// Pre-test invariant: bundle is opened deferred (no manual flag), the
+// handler records flags AND returns 500.
+func TestTrace_OnQualityFlag_PrecedenceOverOnError(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-precedence-qf"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				OnError:              true,
+				QualityFlagThreshold: "warning",
+			},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b)
+		b.RecordQualityFlagCount(2)
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+
+	trigger := readManifestTrigger(t, root)
+	require.NotEmpty(t, trigger, "bundle must exist (both triggers fired)")
+	assert.Equal(t, "on_quality_flag", trigger,
+		"on_quality_flag must outrank on_error in the precedence ladder")
+}
+
+// TestTrace_Manual_PrecedenceOverOnQualityFlag — manual flag + 5+ flags
+// recorded + threshold configured. Manual must STILL win so debug
+// sessions stay attributable to the operator who flipped the flag, even
+// when the request happens to also tickle the quality-flag trigger.
+func TestTrace_Manual_PrecedenceOverOnQualityFlag(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-manual-vs-qf"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				QualityFlagThreshold: "warning",
+			},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b)
+		b.RecordQualityFlagCount(5)
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x?trace=1", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	trigger := readManifestTrigger(t, root)
+	require.NotEmpty(t, trigger, "bundle must exist (eager manual path)")
+	assert.NotEqual(t, "on_quality_flag", trigger,
+		"manifest trigger must NOT be on_quality_flag when manual flag was also set")
+	assert.Contains(t, []string{"query", "header"}, trigger,
+		"manifest trigger must be the manual source (query/header)")
+}
+
+// TestTrace_OnQualityFlag_PromoteOnce — both on_quality_flag and on_error
+// fire on the same request. Promote must be called EXACTLY ONCE, not twice.
+// We assert this indirectly by checking the manifest's trigger is the
+// higher-precedence value (on_quality_flag) — a double-call would either
+// overwrite the trigger or no-op via the deferred-flag check; either way
+// the FIRST trigger value chosen at the precedence ladder must be the one
+// that lands in the manifest.
+//
+// This also incidentally pins that the bundle directory exists exactly
+// once (not duplicated under two timestamps), which a buggy double-promote
+// could conceivably produce if paths weren't deterministic.
+func TestTrace_OnQualityFlag_PromoteOnce(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-promote-once"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				OnError:              true,
+				QualityFlagThreshold: "warning",
+			},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b)
+		b.RecordQualityFlagCount(7)
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+
+	// EXACTLY ONE manifest must exist on disk — not two.
+	manifestCount := 0
+	_ = filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err == nil && info != nil && filepath.Base(p) == "00-manifest.json" {
+			manifestCount++
+		}
+		return nil
+	})
+	assert.Equal(t, 1, manifestCount,
+		"a single Promote call must produce exactly one bundle directory + manifest")
+
+	// And that single manifest must carry the precedence-winning trigger.
+	assert.Equal(t, "on_quality_flag", readManifestTrigger(t, root),
+		"single Promote call must use the precedence-winning trigger")
+}
