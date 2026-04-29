@@ -582,3 +582,165 @@ func sanitiseID(id string) string {
 	r := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "*", "_", "?", "_", "\"", "_", "<", "_", ">", "_", "|", "_")
 	return r.Replace(id)
 }
+
+// TestNarrate_OnQualityFlagAutoBundle pins Phase 2.B end-to-end: with
+// logging.artifact_store.triggers.quality_flag_threshold=warning and a
+// request that runs the cleaner against data with high goodwill (>25% of
+// total assets, which trips the excessive_goodwill_warning flag at
+// severity=warning), the bundle MUST land on disk WITHOUT a manual
+// ?trace=1 flag, the manifest's trigger MUST be "on_quality_flag", and
+// 10-clean-output.json + 10-clean-trace.json MUST contain the cleaner's
+// output (the trace file lists the flags themselves).
+//
+// The test re-inserts AAPL's financial data with goodwill=400M (40% of
+// total assets) so createHardcodedRiskFlags fires the
+// excessive_goodwill_warning flag. The seeded data otherwise stays
+// identical to the happy-path test so the rest of the pipeline reaches
+// the cleaner naturally.
+func TestNarrate_OnQualityFlagAutoBundle(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	projectRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+
+	srcMultiples := filepath.Join(projectRoot, "config", "industry_multiples.json")
+	require.FileExists(t, srcMultiples)
+	require.NoError(t, os.MkdirAll("./config", 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll("./config") })
+	multiplesBytes, err := os.ReadFile(srcMultiples)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile("./config/industry_multiples.json", multiplesBytes, 0o644))
+
+	observerCore, observedLogs := observer.New(zapcore.InfoLevel)
+	obsLogger := zap.New(observerCore)
+
+	artifactRoot := t.TempDir()
+
+	cfg := createTestConfig("redis://127.0.0.1:0")
+	cfg.Logging.TraceCalculations = true
+	cfg.Logging.Narrate.Enabled = true
+	cfg.Logging.Narrate.SampleRate = 1.0
+	cfg.Logging.ArtifactStore.Enabled = true
+	cfg.Logging.ArtifactStore.RootPath = artifactRoot
+	cfg.Logging.ArtifactStore.QueueSize = 256
+	// Phase 2.B — auto-on-quality-flag trigger ENABLED at "warning". No
+	// manual flag will be sent. The rebuilt AAPL seed below produces a
+	// warning-severity flag from the goodwill check.
+	cfg.Logging.ArtifactStore.Triggers.QualityFlagThreshold = "warning"
+	cfg.Market.YFinance.Enabled = false
+	cfg.Macro.FREDEnabled = false
+	cfg.Macro.ManualRiskFreeRate = 0.04
+	cfg.Macro.ManualMarketRiskPremium = 0.05
+	cfg.DataCleaner.RulesPath = filepath.Join(projectRoot, "config", "datacleaner", "rules.json")
+	cfg.DataCleaner.IndustryRulesPath = filepath.Join(projectRoot, "config", "datacleaner", "industry")
+
+	var (
+		database       *sqlx.DB
+		authService    *auth.Service
+		valuationSvc   *valuation.Service
+		rateLimiter    *ratelimit.RateLimiter
+		healthHandler  *handlers.HealthHandler
+		metricsService *metrics.Service
+	)
+
+	app := fxtest.New(t,
+		fx.Provide(func() *config.Config { return cfg }),
+		fx.Decorate(func() *zap.Logger { return obsLogger }),
+		di.CoreModule,
+		di.ServiceModule,
+		di.HandlerModule,
+		fx.Provide(handlers.NewFairValueHandler),
+		fx.Populate(
+			&database,
+			&authService,
+			&valuationSvc,
+			&rateLimiter,
+			&healthHandler,
+			&metricsService,
+		),
+	)
+	app.RequireStart()
+	t.Cleanup(app.RequireStop)
+
+	SetupDatabase(t, database)
+	SeedTestData(t, database)
+
+	// Overwrite AAPL's most-recent-period financial row so goodwill is
+	// 40% of total assets (above the 25% threshold for the
+	// excessive_goodwill_warning flag in createHardcodedRiskFlags). The
+	// rest of the row mirrors the SeedTestData defaults so the valuation
+	// pipeline still completes successfully.
+	_, err = database.Exec(`
+		UPDATE financial_data
+		SET goodwill = ?, other_intangibles = ?
+		WHERE ticker = 'AAPL'
+	`, 2.0e11 /* 40% of 5e11 total_assets */, 0.0)
+	require.NoError(t, err, "failed to inject high-goodwill row for AAPL")
+
+	srv := api.NewServer(cfg, obsLogger, valuationSvc, authService, rateLimiter, healthHandler, metricsService)
+	router := srv.Engine()
+
+	ctx := context.Background()
+	apiKey, err := authService.CreateKey(ctx, "narrate-on-quality-flag-user", []coreEntities.Permission{
+		coreEntities.PermissionReadFairValue,
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	// NB: NO ?trace=1, NO X-Midas-Trace — pin the on_quality_flag auto-trigger.
+	req, err := http.NewRequest(http.MethodGet, "/api/v1/fair-value/AAPL", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-API-Key", apiKey.Key)
+
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	requestID := w.Header().Get("X-Request-ID")
+	require.NotEmpty(t, requestID, "X-Request-ID must be present")
+
+	// --- Assert (1): the cleaner narrate line shows flags_raised>=1 so we
+	// know the test setup actually tripped the cleaner. Without this the
+	// rest of the assertions could pass for the wrong reason (e.g. bundle
+	// landed via a different trigger).
+	narrateEntries := filterByEvent(observedLogs.All(), "narrate")
+	var sawCleanFlag bool
+	for _, e := range narrateEntries {
+		fields := e.ContextMap()
+		if phase, _ := fields["phase"].(string); phase == "clean.normalized" {
+			if raised, ok := fields["flags_raised"].(int64); ok && raised > 0 {
+				sawCleanFlag = true
+			}
+		}
+	}
+	require.True(t, sawCleanFlag,
+		"clean.normalized must report flags_raised>=1 — test setup precondition")
+
+	// --- Assert (2): a bundle was created on disk under the on_quality_flag trigger.
+	bundleDir := findBundleDir(t, artifactRoot, "AAPL", requestID)
+	require.NotEmpty(t, bundleDir,
+		"expected a bundle directory for request %s under %s after on_quality_flag auto-trigger", requestID, artifactRoot)
+
+	// --- Assert (3): manifest.trigger == "on_quality_flag" (NOT on_error / header / query).
+	mfBody, err := os.ReadFile(filepath.Join(bundleDir, "00-manifest.json"))
+	require.NoError(t, err)
+	var m artifact.Manifest
+	require.NoError(t, json.Unmarshal(mfBody, &m))
+	assert.Equal(t, "on_quality_flag", m.Trigger,
+		"auto-triggered bundle must carry trigger=on_quality_flag in its manifest")
+	assert.Equal(t, requestID, m.RequestID)
+
+	// --- Assert (4): the cleaner's flag list is visible in the bundle.
+	// 10-clean-trace.json contains the full CleaningResult including .flags.
+	traceBody, err := os.ReadFile(filepath.Join(bundleDir, "10-clean-trace.json"))
+	require.NoError(t, err, "10-clean-trace.json must exist in promoted bundle")
+
+	var cleanTrace map[string]interface{}
+	require.NoError(t, json.Unmarshal(traceBody, &cleanTrace))
+	flags, _ := cleanTrace["flags"].([]interface{})
+	assert.NotEmpty(t, flags,
+		"10-clean-trace.json must contain at least one flag entry; got %v", cleanTrace["flags"])
+
+	// --- Assert (5): 10-clean-output.json (the cleaned data) is also on disk.
+	// This pins that the standard Phase 1 snapshots survived the deferred
+	// buffering -> promote round-trip intact.
+	_, err = os.Stat(filepath.Join(bundleDir, "10-clean-output.json"))
+	assert.NoError(t, err, "10-clean-output.json must exist in promoted bundle")
+}
