@@ -273,6 +273,20 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 		b.Snapshot(ctx, "clean.normalized", "10-clean-output.json", result.CleanedData)
 		b.Snapshot(ctx, "clean.normalized", "10-clean-trace.json", result)
 		b.AddSchemaVersion("FinancialData", 7)
+
+		// Phase 2.B — auto-on-quality-flag trigger. Count flags at or above
+		// the bundle's configured severity threshold and report the count
+		// back to the bundle. The trace middleware reads this post-c.Next()
+		// to decide whether to Promote with TriggerOnQualityFlag.
+		//
+		// We skip the count when the threshold is empty so we don't pay the
+		// rank-comparison cost on every clean call when the trigger is off.
+		// countQualifyingFlags itself short-circuits on empty threshold, but
+		// the explicit gate keeps the intent obvious to readers and avoids
+		// even the slice walk.
+		if threshold := b.QualityFlagThreshold(); threshold != "" {
+			b.RecordQualityFlagCount(countQualifyingFlags(result.Flags, threshold))
+		}
 	}
 
 	return result, nil
