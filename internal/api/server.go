@@ -169,7 +169,8 @@ func (s *Server) setupMiddleware() {
 			QueueSize:       s.config.Logging.ArtifactStore.QueueSize,
 			PendingBytesCap: s.config.Logging.ArtifactStore.PendingBytesCap,
 			Triggers: artifact.TriggerConfig{
-				OnError: s.config.Logging.ArtifactStore.Triggers.OnError,
+				OnError:              s.config.Logging.ArtifactStore.Triggers.OnError,
+				QualityFlagThreshold: s.config.Logging.ArtifactStore.Triggers.QualityFlagThreshold,
 			},
 			GitSHA:       s.config.GitCommit,
 			BuildVersion: s.config.Version,

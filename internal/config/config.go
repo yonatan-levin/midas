@@ -120,8 +120,9 @@ type ArtifactStoreConfig struct {
 }
 
 // ArtifactTriggers enumerates the per-request conditions that open a
-// bundle. Phase 1 supports only Manual; Phase 2.A added OnError. Phase 2.B
-// (OnQualityFlag) and Phase 2.C (Always) are still deferred (see spec §13).
+// bundle. Phase 1 supports only Manual; Phase 2.A added OnError; Phase 2.B
+// adds QualityFlagThreshold. Phase 2.C (Always) is still deferred (see
+// spec §13).
 type ArtifactTriggers struct {
 	// Manual = ?trace=1 query OR X-Midas-Trace: 1 header.
 	Manual bool `mapstructure:"manual"`
@@ -131,6 +132,19 @@ type ArtifactTriggers struct {
 	// if the response code crosses the 5xx threshold; non-erroring requests
 	// pay only the in-memory buffer cost (capped by PendingBytesCap).
 	OnError bool `mapstructure:"on_error"`
+
+	// QualityFlagThreshold = auto-trigger when the data cleaner raises
+	// one or more flags at or above the named severity (Phase 2.B).
+	// Valid values are FlagSeverity vocabulary (info / low / warning /
+	// medium / high / critical); empty string disables the trigger.
+	// Off by default to keep the trigger opt-in and protect operators
+	// who haven't sized disk for the expected flag-volume.
+	//
+	// Precedence at request-end: manual > on_quality_flag > on_error.
+	// A request that satisfies both quality_flag and on_error promotes
+	// with on_quality_flag because the flag list is more diagnostic than
+	// the bare 5xx signal.
+	QualityFlagThreshold string `mapstructure:"quality_flag_threshold"`
 }
 
 // LogFileConfig controls the rolling log-file sink backed by lumberjack.
@@ -388,6 +402,11 @@ func setDefaults() {
 	// in via env var (LOGGING_ARTIFACT_STORE_TRIGGERS_ON_ERROR=true) once
 	// they've sized disk for the expected 5xx volume.
 	viper.SetDefault("logging.artifact_store.triggers.on_error", false)
+	// Phase 2.B — auto-on-quality-flag: empty string = OFF by default.
+	// Operators opt in via env var (LOGGING_ARTIFACT_STORE_TRIGGERS_
+	// QUALITY_FLAG_THRESHOLD=warning, etc.) once they've sized disk for
+	// the expected flag volume.
+	viper.SetDefault("logging.artifact_store.triggers.quality_flag_threshold", "")
 
 	// Server defaults
 	viper.SetDefault("server.port", "8080")
