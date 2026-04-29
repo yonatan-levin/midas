@@ -35,12 +35,14 @@ type Service struct {
 	dataCleaner        datacleaner.DataCleanerService
 	dataFetcher        *datafetcher.DataFetcher
 	growthEstimator    *growthsvc.Estimator
-	yfinanceGateway    ports.YFinanceGateway // optional, for analyst estimates
+	yfinanceGateway    ports.YFinanceGateway  // optional, for analyst estimates
+	macroGateway       ports.MacroDataGateway // Phase B9 (IFRS-FPI): FX-rate lookups; nil = no-op FX path
 	metricsService     ports.MetricsService
 	modelRouter        *models.ModelRouter          // Phase 3: industry-aware model selection
 	industryClassifier *industry.IndustryClassifier // Phase 3: SIC/NAICS classification
 	countryRiskMap     map[string]float64           // Phase 4: ISO-2 country code -> CRP
 	industryMultiples  *industryMultiplesConfig     // Phase 4: EV/EBITDA and P/E multiples for cross-checks
+	adrRatios          *ADRRatios                   // Phase B8 (IFRS-FPI): ordinary-shares-per-ADR; consumed in Phase B10
 	config             *config.Config
 	logger             *zap.Logger
 	calcEmitter        *calclog.Emitter // emits the 12 DCF stage traces (Phase M)
@@ -114,6 +116,18 @@ func NewService(
 			zap.Error(imErr))
 	}
 
+	// Phase B8 (IFRS-FPI): Load ADR-to-ordinary-share ratios. Phase B10 will
+	// consume this to convert SEC-reported ordinary-share counts into per-ADR
+	// terms before computing per-ADR fair value. Missing file is non-fatal —
+	// the loader returns an empty *ADRRatios and Get() defaults every ticker
+	// to 1:1, so we boot fine but log a warning for operator visibility.
+	adrRatios, adrErr := LoadADRRatios(DefaultADRRatiosConfigPath)
+	if adrErr != nil {
+		logger.Warn("ADR ratios config unavailable, all tickers default to 1:1",
+			zap.Error(adrErr))
+		adrRatios = &ADRRatios{Ratios: map[string]int{}}
+	}
+
 	return &Service{
 		financialRepo:      financialRepo,
 		marketRepo:         marketRepo,
@@ -127,6 +141,7 @@ func NewService(
 		industryClassifier: classifier,
 		countryRiskMap:     crpMap,
 		industryMultiples:  indMultiples,
+		adrRatios:          adrRatios,
 		config:             cfg,
 		logger:             logger,
 		calcEmitter:        calcEmitter,
@@ -195,10 +210,16 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 
 		fetchResult, fetchErr := s.dataFetcher.Fetch(ctx, &entities.FetchRequest{Ticker: ticker})
 		if fetchErr != nil {
-			// Defensive: if a direct fetch error ever wraps ErrCompanyFactsNotFound
-			// (SEC CIK resolved but XBRL missing), classify as insufficient data
-			// rather than a generic 500. In the current flow CoordinateFetch
-			// never returns non-nil, so this branch is primarily future-proofing.
+			// Defensive: if a direct fetch error ever wraps a SEC sentinel,
+			// classify as the appropriate user-facing error rather than a
+			// generic 500. In the current flow CoordinateFetch never returns
+			// non-nil, so these branches are primarily future-proofing.
+			//
+			// FPI check MUST come first — ErrForeignPrivateIssuer is the more
+			// specific case (parsing gap, not data gap).
+			if errors.Is(fetchErr, ports.ErrForeignPrivateIssuer) {
+				return nil, fmt.Errorf("%w: SEC filing for %s uses ifrs-full taxonomy", ErrForeignPrivateIssuer, ticker)
+			}
 			if errors.Is(fetchErr, ports.ErrCompanyFactsNotFound) {
 				return nil, fmt.Errorf("%w: no US-GAAP XBRL facts currently available for %s via SEC EDGAR", ErrInsufficientData, ticker)
 			}
@@ -229,11 +250,24 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 				Data:   map[string]*entities.FinancialData{periodKey: fetchResult.FinancialData},
 			}
 		} else {
-			// No data came back from any source. Distinguish "ticker truly
-			// unknown" (404) from "CIK resolved but SEC has no US-GAAP XBRL"
-			// (422), because the latter is common for foreign private issuers
-			// (20-F filers like Canadian pharmas) and deserves a clearer
-			// diagnostic than "ticker not found".
+			// No data came back from any source. Three-way classification so
+			// the HTTP layer can give a clear, actionable message for each
+			// case (all 422 except the last which is 404):
+			//
+			//   1. FPI — 20-F filer using ifrs-full taxonomy (TSM, ASML, NVO,
+			//      AZN, BABA, …). Data exists, parser can't read it yet.
+			//      Phase B of the IFRS-FPI spec teaches the parser to.
+			//   2. CompanyFactsNotFound — clinical-stage biotech, pre-revenue
+			//      issuer, or genuinely-unknown CIK. us-gaap present but
+			//      missing Revenue/OperatingIncome.
+			//   3. Else — ticker truly unknown across all sources.
+			//
+			// FPI MUST be checked first because it is the more specific case;
+			// a SEC fetch error can technically wrap both sentinels, and the
+			// FPI message is more useful for the user.
+			if hasForeignPrivateIssuerError(fetchResult.Errors) {
+				return nil, fmt.Errorf("%w: SEC filing for %s uses ifrs-full taxonomy", ErrForeignPrivateIssuer, ticker)
+			}
 			if hasCompanyFactsNotFoundError(fetchResult.Errors) {
 				return nil, fmt.Errorf("%w: no US-GAAP XBRL facts currently available for %s via SEC EDGAR", ErrInsufficientData, ticker)
 			}
@@ -297,6 +331,40 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 			return nil, fmt.Errorf("failed to fetch macro data: %w", err)
 		}
 	}
+
+	// Phase B9 (IFRS-FPI): FX-convert any non-USD reporting-currency periods
+	// to USD BEFORE WACC / growth / DCF run, so every downstream calculation
+	// sees USD-denominated values. Idempotent — USD periods short-circuit.
+	// Placed at the post-fetch convergence point so both the DataFetcher
+	// path and the repo path get the same treatment.
+	//
+	// On failure, the policy is asymmetric:
+	//   - If the ONLY failures were on non-USD periods (i.e., this is a
+	//     foreign filer for which we have no FX coverage), surface as
+	//     ErrForeignPrivateIssuer so the handler emits the existing 422
+	//     FOREIGN_PRIVATE_ISSUER_UNSUPPORTED rather than a generic 500.
+	//     Post-Phase-B residual case: parser successfully extracted IFRS
+	//     data but the reporting currency has no FRED series AND no entry
+	//     in config/fx_rates.json. Extend coverage by adding to either.
+	//   - Otherwise (mixed-currency partial failure): WARN and proceed with
+	//     the surviving USD + already-converted periods. Better stale-but-
+	//     finite than no answer.
+	if err := s.convertFinancialsToUSD(ctx, historicalData); err != nil {
+		if errors.Is(err, ports.ErrFXRateUnavailable) && hasNonUSDPeriod(historicalData) {
+			return nil, fmt.Errorf("%w: FX conversion failed for ticker %s reporting in non-USD currency", ErrForeignPrivateIssuer, ticker)
+		}
+		s.log(ctx).Warn("FX conversion partially failed; valuation may be stale",
+			zap.String("ticker", ticker), zap.Error(err))
+	}
+
+	// Phase B10 (IFRS-FPI): FX conversion ran above (B9). Now divide
+	// ordinary-share counts by the configured ADR ratio so per-share values
+	// match the listed ADR price (e.g., TSM 25.93B ordinary / 5 = 5.19B
+	// ADR-equivalent). No-op for domestic filers (ratio=1, ticker absent
+	// from config/adr_ratios.json). Single-call-only by contract — the
+	// function does not mark the data, so do NOT re-invoke this anywhere
+	// downstream. Failures here are warnings only (no error path).
+	s.applyADRRatio(ctx, ticker, historicalData, marketData)
 
 	// Stage 1 — "data_fetch" calc trace: emit which data sources were consulted and
 	// whether they succeeded. This always fires regardless of whether data came from
@@ -371,6 +439,22 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 		s.metricsService.RecordValuationError(ticker, "calculation_failed")
 		return nil, fmt.Errorf("failed to perform valuation: %w", err)
 	}
+
+	// Phase B12 (IFRS-FPI): stamp transparency fields on the result.
+	//
+	// ReportingCurrency is always "USD" because convertFinancialsToUSD
+	// (Phase B9) ran above with the calculation-safety contract that every
+	// monetary field on every period ends up in USD before any math runs.
+	// Hard-coded rather than read from historicalData[*].ReportingCurrency
+	// because the latter could be "" for legacy/test data and the user's
+	// actual unit on DCFValuePerShare is what they care about.
+	//
+	// ADRRatioApplied mirrors what applyADRRatio (Phase B10) divided by:
+	// the configured ratio for foreign filers (TSM=5, BABA=8, …) or 1 for
+	// every other ticker. Get() is nil-safe and always returns a positive
+	// int by contract, so this is unconditionally safe.
+	result.ReportingCurrency = "USD"
+	result.ADRRatioApplied = s.adrRatios.Get(ticker)
 
 	// Add cleaning results if available
 	if cleaningResult != nil {

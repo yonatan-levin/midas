@@ -116,7 +116,18 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: Ticker resolves but cannot be valued — e.g. SEC has no usable US-GAAP XBRL facts (foreign private issuers, some pre-revenue issuers) or no model is applicable
+          description: |
+            Ticker resolves but cannot be valued. The `code` field in the
+            response body distinguishes between the cases:
+
+            * `INSUFFICIENT_DATA` — SEC has no usable US-GAAP XBRL facts
+              (clinical-stage biotechs, pre-revenue issuers).
+            * `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` — SEC filing uses
+              ifrs-full taxonomy from a Form 20-F (TSM, ASML, NVO, AZN, SAP,
+              BABA, …); the data exists but Midas cannot yet parse IFRS.
+              The `context` field carries `taxonomy` and `filing_type`.
+            * `MODEL_NOT_APPLICABLE` — no industry-aware model produced a
+              result (e.g., negative operating income with no fallback).
           content:
             application/json:
               schema:
@@ -254,6 +265,23 @@ components:
           type: string
         industry:
           $ref: '#/components/schemas/Industry'
+        currency:
+          type: string
+          example: "USD"
+          description: |
+            ISO-4217 code that dcf_value_per_share and tangible_value_per_share
+            are denominated in. Always "USD" — the valuation engine FX-converts
+            every period's reporting-currency monetary fields to USD via Phase B9
+            of the IFRS-FPI plan before any math runs. Surfaced for transparency
+            so API consumers do not re-convert.
+        adr_ratio_applied:
+          type: integer
+          example: 5
+          description: |
+            Ordinary-shares-per-ADR multiplier the engine divided SEC-reported
+            share counts by before computing per-share values. 1 for domestic
+            10-K filers and unknown tickers; non-1 for configured ADRs (TSM=5,
+            BABA=8, ...). Phase B10 of the IFRS-FPI plan. Omitted when zero.
     BulkFairValueRequest:
       type: object
       required: [tickers]

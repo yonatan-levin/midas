@@ -158,6 +158,12 @@ func (m *mockMacroGateway) GetMarketRiskPremium(ctx context.Context) (float64, e
 	return args.Get(0).(float64), args.Error(1)
 }
 
+// GetFXRate stub — health-handler tests don't exercise FX. Identity 1.0
+// keeps ports.MacroDataGateway satisfied without bloating expectations.
+func (m *mockMacroGateway) GetFXRate(_ context.Context, _, _ string) (float64, error) {
+	return 1.0, nil
+}
+
 func (m *mockMacroGateway) HealthCheck(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)

@@ -77,7 +77,15 @@ CREATE TABLE IF NOT EXISTS financial_data (
     -- Share information
     shares_outstanding DECIMAL(15,0),
     diluted_shares_outstanding DECIMAL(15,0),
-    
+
+    -- ISO-4217 code of the currency every monetary column is denominated in.
+    -- Defaults to 'USD' for backward compatibility with rows written before
+    -- IFRS-FPI Phase B5 shipped. Foreign private issuers reporting via 20-F
+    -- (TSM='TWD', ASML='EUR', BABA='CNY', …) are stamped by sec/parser.go
+    -- and FX-converted to USD at the service layer (currency.go, Phase B9)
+    -- before any DCF math runs.
+    reporting_currency VARCHAR(3) NOT NULL DEFAULT 'USD',
+
     -- Data quality flags
     has_normalized_data BOOLEAN DEFAULT FALSE,
     missing_fields TEXT, -- JSON array of missing field names

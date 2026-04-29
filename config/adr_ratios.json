@@ -1,0 +1,19 @@
+{
+  "as_of": "2026-04-27",
+  "source": "Depositary bank prospectuses (Citi, JPMorgan, BNY Mellon, Deutsche Bank). Verify before adding new tickers — a wrong ratio silently corrupts per-share valuations.",
+  "ratios": {
+    "TSM":  5,
+    "ASML": 1,
+    "NVO":  1,
+    "AZN":  2,
+    "SAP":  1,
+    "BABA": 8,
+    "BIDU": 1,
+    "TM":   10,
+    "RIO":  1,
+    "BHP":  2,
+    "NVS":  1,
+    "SHEL": 2,
+    "BP":   6
+  }
+}

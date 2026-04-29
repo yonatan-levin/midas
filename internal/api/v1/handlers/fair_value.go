@@ -141,6 +141,26 @@ type FairValueResponse struct {
 	Warnings              []string              `json:"warnings,omitempty"`                                     // Data quality or assumption warnings
 	SanityCheck           *entities.SanityCheck `json:"sanity_check,omitempty"`                                 // Multiples cross-check against sector medians
 	Industry              *Industry             `json:"industry,omitempty"`                                     // Dual industry classification (SIC + heuristic) for drift detection
+
+	// Currency is the ISO-4217 code that dcf_value_per_share and
+	// tangible_value_per_share are denominated in. Always "USD" — the
+	// valuation service FX-converts each period's reporting-currency
+	// monetary fields to USD via Phase B9 of the IFRS-FPI plan
+	// (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md), so
+	// API consumers MUST NOT re-convert. Surfaced so a downstream client
+	// can display "USD" alongside the per-share value rather than guessing.
+	Currency string `json:"currency" example:"USD"`
+
+	// ADRRatioApplied is the ordinary-shares-per-ADR multiplier that the
+	// valuation engine divided SEC-reported share counts by before
+	// computing per-share values, so the resulting fair value compares
+	// like-for-like with the listed ADR price. 1 for domestic 10-K filers
+	// (and any ticker absent from config/adr_ratios.json); non-1 for
+	// configured ADRs (TSM=5, BABA=8, …). Phase B10 of the IFRS-FPI plan.
+	// Omitted from the JSON when zero (defensive — the service always
+	// stamps a positive int via ADRRatios.Get, but omitempty keeps the
+	// response clean if a future bug produces 0).
+	ADRRatioApplied int `json:"adr_ratio_applied,omitempty" example:"5"`
 }
 
 // BulkFairValueRequest represents the request structure for bulk fair value requests
@@ -298,12 +318,24 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 			zap.String("ticker", ticker),
 			zap.Error(err))
 
-		// Classify error using sentinel types for reliable matching
+		// Classify error using sentinel types for reliable matching.
+		// FPI MUST be checked before ErrInsufficientData — both produce 422
+		// but FPI carries a more specific code/message that helps users
+		// understand we have data, just in a taxonomy we don't yet parse.
 		if errors.Is(err, valuation.ErrTickerNotFound) {
 			h.sendError(c, http.StatusNotFound, "TICKER_NOT_FOUND",
 				"Ticker not found",
 				"The specified ticker could not be found in our database",
 				map[string]interface{}{"ticker": ticker})
+		} else if errors.Is(err, valuation.ErrForeignPrivateIssuer) {
+			h.sendError(c, http.StatusUnprocessableEntity, "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
+				"Foreign private issuer not covered",
+				"This ticker files using a taxonomy or currency pair Midas does not yet cover. Supported: ifrs-full taxonomy with FRED-tracked currencies (TWD, EUR, JPY, GBP, HKD, CNY, KRW, CHF, CAD, AUD, INR, BRL, DKK). Out-of-coverage taxonomies (JGAAP, K-IFRS, ifrs-smes) and currencies are tracked in docs/refactoring/ifrs-foreign-private-issuer-support-spec.md.",
+				map[string]interface{}{
+					"ticker":      ticker,
+					"filing_type": "20-F",
+					"taxonomy":    "ifrs-full",
+				})
 		} else if errors.Is(err, valuation.ErrInsufficientData) {
 			h.sendError(c, http.StatusUnprocessableEntity, "INSUFFICIENT_DATA",
 				"Insufficient data for valuation",
@@ -341,6 +373,11 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		Warnings:              result.Warnings,
 		SanityCheck:           result.SanityCheck,
 		Industry:              buildIndustryFromResult(result),
+		// Phase B12 (IFRS-FPI): always-present transparency fields. Currency
+		// falls back to "USD" if an upstream code path forgot to stamp it
+		// (defense in depth — the valuation service guarantees "USD" today).
+		Currency:        currencyOrUSD(result.ReportingCurrency),
+		ADRRatioApplied: result.ADRRatioApplied,
 	}
 
 	// Tier-1 narrate: valuation.computed success line. Carries the headline
@@ -475,6 +512,9 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 			Warnings:              result.Warnings,
 			SanityCheck:           result.SanityCheck,
 			Industry:              buildIndustryFromResult(result),
+			// Phase B12 (IFRS-FPI): mirror single-ticker handler for parity.
+			Currency:        currencyOrUSD(result.ReportingCurrency),
+			ADRRatioApplied: result.ADRRatioApplied,
 		}
 
 		results = append(results, response)
@@ -520,6 +560,13 @@ func classifyBulkError(ticker string, err error) BulkFailure {
 			ErrorCode: "TICKER_NOT_FOUND",
 			Message:   "Ticker not found in any data source",
 		}
+	case errors.Is(err, valuation.ErrForeignPrivateIssuer):
+		// Must be checked before ErrInsufficientData (more specific case).
+		return BulkFailure{
+			Ticker:    ticker,
+			ErrorCode: "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
+			Message:   "Foreign private issuer with taxonomy or currency outside Midas coverage",
+		}
 	case errors.Is(err, valuation.ErrInsufficientData):
 		return BulkFailure{
 			Ticker:    ticker,
@@ -561,6 +608,18 @@ func (h *FairValueHandler) sendError(c *gin.Context, status int, errorType, titl
 		Method:    c.Request.Method,
 	})
 	c.Abort()
+}
+
+// currencyOrUSD returns its argument when non-empty, "USD" otherwise.
+// Defense-in-depth helper for the Phase B12 transparency field — the
+// valuation service always stamps result.ReportingCurrency = "USD" today,
+// but this guarantees the response always carries an ISO-4217 code so
+// downstream clients never see the empty string.
+func currencyOrUSD(c string) string {
+	if c == "" {
+		return "USD"
+	}
+	return c
 }
 
 // isValidTicker validates ticker format (1-5 alphanumeric characters)

@@ -1427,7 +1427,13 @@ func (s *stubMacroGateway) GetTreasuryRates(_ context.Context) (*entities.Treasu
 	return nil, nil
 }
 func (s *stubMacroGateway) GetMarketRiskPremium(_ context.Context) (float64, error) { return 0.05, nil }
-func (s *stubMacroGateway) HealthCheck(_ context.Context) error                     { return nil }
+
+// GetFXRate stub — server wiring tests don't exercise FX. Identity 1.0
+// satisfies ports.MacroDataGateway after the Phase B7 contract addition.
+func (s *stubMacroGateway) GetFXRate(_ context.Context, _, _ string) (float64, error) {
+	return 1.0, nil
+}
+func (s *stubMacroGateway) HealthCheck(_ context.Context) error { return nil }
 
 // stubMetricsService is a no-op MetricsService that satisfies ports.MetricsService.
 type stubMetricsService struct{}

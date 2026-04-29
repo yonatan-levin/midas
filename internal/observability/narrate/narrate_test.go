@@ -15,9 +15,15 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 )
 
-// expectedPhases pins the closed 17-phase set against accidental string drift.
+// expectedPhases pins the closed phase set against accidental string drift.
 // If you add or remove a phase here, you MUST also update the spec
 // (docs/refactoring/observability-narrative-and-artifacts-spec.md §5).
+//
+// Count history:
+//   - 17 (initial taxonomy)
+//   - 18 (added "fx.convert" for Phase B9 of IFRS-FPI plan,
+//     docs/refactoring/ifrs-foreign-private-issuer-support-spec.md)
+//   - 19 (added "adr_ratio.applied" for Phase B10 of IFRS-FPI plan)
 var expectedPhases = map[string]struct{}{
 	"request.received":     {},
 	"auth.resolved":        {},
@@ -34,6 +40,8 @@ var expectedPhases = map[string]struct{}{
 	"wacc.computed":        {},
 	"model.selected":       {},
 	"valuation.computed":   {},
+	"fx.convert":           {},
+	"adr_ratio.applied":    {},
 	"crosscheck.evaluated": {},
 	"response.sent":        {},
 }
@@ -67,10 +75,12 @@ func TestPhases_ClosedSet(t *testing.T) {
 		narrate.PhaseWACCComputed,
 		narrate.PhaseModelSelected,
 		narrate.PhaseValuationComputed,
+		narrate.PhaseFXConvert,
+		narrate.PhaseADRRatioApplied,
 		narrate.PhaseCrosscheckEvaluated,
 		narrate.PhaseResponseSent,
 	}
-	require.Len(t, cases, 17, "spec freezes the phase count at 17")
+	require.Len(t, cases, 19, "spec freezes the phase count at 19 (18 + adr_ratio.applied from Phase B10 of IFRS-FPI plan)")
 
 	seen := make(map[string]struct{}, len(cases))
 	for _, p := range cases {

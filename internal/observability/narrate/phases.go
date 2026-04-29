@@ -6,14 +6,14 @@
 // for the closed-enum phase taxonomy and §4 for the standard-fields contract.
 package narrate
 
-// Phase is the closed-enum identifier for one of the 17 pipeline phases the
+// Phase is the closed-enum identifier for one of the pipeline phases the
 // narrate stream describes. Adding a new phase here is a deliberate API change:
 // downstream log consumers (dashboards, grep playbooks) treat the set as
 // versioned. Update the spec, the consumers, and the closed-set test in
 // phases_test.go in lockstep.
 type Phase string
 
-// The 17 phases that compose a complete fair-value request narrative.
+// The phases that compose a complete fair-value request narrative.
 // Order in this block matches the natural execution order of a successful
 // request and the file-prefix numbering used inside an artifact bundle.
 const (
@@ -77,6 +77,20 @@ const (
 	// fair-value-per-share number (or an error).
 	PhaseValuationComputed Phase = "valuation.computed"
 
+	// PhaseFXConvert is emitted by the valuation service after FX-converting
+	// reporting-currency financials to USD (Phase B9 of IFRS-FPI plan,
+	// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+	// Outcome=ok with currencies_converted + periods_converted on success;
+	// outcome=error with currencies_failed when one or more FX pairs are
+	// unresolved by FRED + static config.
+	PhaseFXConvert Phase = "fx.convert"
+
+	// PhaseADRRatioApplied is emitted when the valuation service has divided
+	// ordinary-share counts by the depositary's ADR ratio so per-share output
+	// matches the listed ADR price (Phase B10 of IFRS-FPI plan). Skipped for
+	// domestic filers (ratio=1, no-op).
+	PhaseADRRatioApplied Phase = "adr_ratio.applied"
+
 	// PhaseCrosscheckEvaluated fires after the implied-multiples sanity check.
 	PhaseCrosscheckEvaluated Phase = "crosscheck.evaluated"
 
@@ -113,11 +127,13 @@ const (
 )
 
 // allPhases returns the immutable closed set of phase identifiers. Used by
-// the closed-set test in phases_test.go to detect accidental string drift
+// the closed-set test in narrate_test.go to detect accidental string drift
 // (someone renaming a constant value but forgetting to update the consumer).
 //
-// New phases MUST be appended here AND added as a constant above; the spec's
-// 17-phase cap is enforced by the closed-set test.
+// New phases MUST be appended here AND added as a constant above. The
+// closed-set test pins the count at 19 phases (was 17 pre-Phase-B; B9 added
+// PhaseFXConvert and B10 added PhaseADRRatioApplied) — bump the test
+// assertion when adding a 20th.
 func allPhases() []Phase {
 	return []Phase{
 		PhaseRequestReceived,
@@ -135,6 +151,8 @@ func allPhases() []Phase {
 		PhaseWACCComputed,
 		PhaseModelSelected,
 		PhaseValuationComputed,
+		PhaseFXConvert,
+		PhaseADRRatioApplied,
 		PhaseCrosscheckEvaluated,
 		PhaseResponseSent,
 	}

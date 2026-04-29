@@ -191,6 +191,13 @@ func (m *mockMacroDataGateway) GetMarketRiskPremium(ctx context.Context) (float6
 	return 0.05, m.err // Default 5% market risk premium
 }
 
+// GetFXRate is a no-op stub. DataFetcher tests don't exercise the FX path
+// (Phase B9 will be the first consumer); identity 1.0 keeps the contract
+// satisfied without spreading FX setup boilerplate across unrelated tests.
+func (m *mockMacroDataGateway) GetFXRate(_ context.Context, _, _ string) (float64, error) {
+	return 1.0, nil
+}
+
 func (m *mockMacroDataGateway) HealthCheck(ctx context.Context) error {
 	return nil // Mock always healthy for tests
 }

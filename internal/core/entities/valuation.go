@@ -68,6 +68,25 @@ type ValuationResult struct {
 	IndustrySIC           string `json:"industry_sic,omitempty"`            // Canonical SIC-derived label from IndustryClassifier.Classify: "TECH", "MFG", "RETAIL", "UTIL", "FIN", "HEALTH", "ENERGY", "RESTATE", "TELECOM", "TRANS", "CONS", "NA" (or sub-industries like "TECH_SAAS")
 	IndustryHeuristicCode string `json:"industry_heuristic_code,omitempty"` // GICS sector code from the balance-sheet heuristic (e.g. "45")
 	IndustryHeuristicName string `json:"industry_heuristic_name,omitempty"` // Human-readable GICS sector name (e.g. "Information Technology")
+
+	// IFRS / FPI transparency fields (Phase B12 of the IFRS-FPI plan,
+	// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+	//
+	// ReportingCurrency is the ISO-4217 code that DCFValuePerShare and
+	// every other monetary field on this result are denominated in.
+	// Always "USD" — convertFinancialsToUSD (Phase B9) FX-converts every
+	// non-USD period before WACC / growth / DCF math runs. Surfaced so
+	// API consumers know not to re-convert.
+	//
+	// ADRRatioApplied is the ordinary-shares-per-ADR multiplier that
+	// applyADRRatio (Phase B10) divided SharesOutstanding /
+	// DilutedSharesOutstanding by before per-share values were computed.
+	// Always 1 for domestic 10-K filers and unknown tickers; non-1 for
+	// configured ADRs (TSM=5, BABA=8, …). Surfaced so API consumers can
+	// reconcile the per-share value against the listed ADR price without
+	// guessing the ratio.
+	ReportingCurrency string `json:"reporting_currency,omitempty"`
+	ADRRatioApplied   int    `json:"adr_ratio_applied,omitempty"`
 }
 
 // SanityCheck contains cross-check multiples that compare the DCF-implied valuation

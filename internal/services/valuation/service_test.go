@@ -2468,6 +2468,14 @@ func (m *MockMacroDataGateway) GetMarketRiskPremium(ctx context.Context) (float6
 	return args.Get(0).(float64), args.Error(1)
 }
 
+// GetFXRate is a no-op stub for tests that do not exercise the FX path.
+// Phase B7 added GetFXRate to ports.MacroDataGateway; existing valuation
+// tests do not call it, so we return identity (1.0) without consulting
+// m.Called to avoid forcing every test to declare an FX expectation.
+func (m *MockMacroDataGateway) GetFXRate(_ context.Context, _, _ string) (float64, error) {
+	return 1.0, nil
+}
+
 func (m *MockMacroDataGateway) HealthCheck(ctx context.Context) error {
 	args := m.Called(ctx)
 	return args.Error(0)

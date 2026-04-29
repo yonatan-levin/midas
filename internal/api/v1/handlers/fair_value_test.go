@@ -166,6 +166,16 @@ func Test_classifyBulkError(t *testing.T) {
 			wantContains: "Not enough",
 		},
 		{
+			// Foreign-private-issuer pin for the bulk endpoint — must produce
+			// FOREIGN_PRIVATE_ISSUER_UNSUPPORTED, not INSUFFICIENT_DATA, in the
+			// per-ticker BulkFailure record.
+			name:         "foreign_private_issuer",
+			ticker:       "TSM",
+			err:          fmt.Errorf("ifrs-full taxonomy: %w", valuation.ErrForeignPrivateIssuer),
+			wantCode:     "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
+			wantContains: "Foreign private issuer", // post-Phase-B message identifies the case without the misleading "not yet supported" text.
+		},
+		{
 			name:         "model_not_applicable",
 			ticker:       "RIVN",
 			err:          fmt.Errorf("negative OI: %w", valuation.ErrModelNotApplicable),
@@ -333,6 +343,39 @@ func TestFairValueHandler_GetFairValue(t *testing.T) {
 				var resp ErrorResponse
 				require.NoError(t, json.Unmarshal(body, &resp))
 				assert.Equal(t, "INSUFFICIENT_DATA", extractErrorCode(resp.Type))
+			},
+		},
+		{
+			// Foreign-private-issuer pin: SEC returns ifrs-full taxonomy
+			// instead of us-gaap (TSM, ASML, NVO, AZN, SAP, BABA, …). Must
+			// produce a distinct 422 with code FOREIGN_PRIVATE_ISSUER_UNSUPPORTED
+			// and MUST NOT be misclassified as INSUFFICIENT_DATA, otherwise the
+			// handler error chain is checking the more-general sentinel first.
+			name:   "foreign_private_issuer",
+			ticker: "TSM",
+			setupMock: func(m *mockValuationService) {
+				m.On("CalculateValuation", mock.Anything, "TSM", (*valuation.ValuationOptions)(nil)).
+					Return(nil, fmt.Errorf("SEC filing for TSM: %w", valuation.ErrForeignPrivateIssuer))
+			},
+			wantStatus: http.StatusUnprocessableEntity,
+			wantBody: func(t *testing.T, body []byte) {
+				var resp ErrorResponse
+				require.NoError(t, json.Unmarshal(body, &resp))
+				assert.Equal(t, "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED", extractErrorCode(resp.Type))
+				assert.Equal(t, http.StatusUnprocessableEntity, resp.Status)
+				// Regression guard: must not fall through to the more-general
+				// INSUFFICIENT_DATA branch even though FPI also wraps a 422
+				// outcome conceptually.
+				assert.NotEqual(t, "INSUFFICIENT_DATA", extractErrorCode(resp.Type),
+					"FPI must not be misclassified as INSUFFICIENT_DATA")
+				// Context payload should explicitly identify the taxonomy so the
+				// user knows why we rejected (and so a future support article
+				// can deep-link to the field).
+				if assert.NotNil(t, resp.Context) {
+					assert.Equal(t, "ifrs-full", resp.Context["taxonomy"])
+					assert.Equal(t, "20-F", resp.Context["filing_type"])
+					assert.Equal(t, "TSM", resp.Context["ticker"])
+				}
 			},
 		},
 		{

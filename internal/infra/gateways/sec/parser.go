@@ -23,6 +23,61 @@ func NewParser(logger *zap.Logger) *Parser {
 	}
 }
 
+// classifyEmptyParseError chooses between ErrForeignPrivateIssuer and
+// ErrCompanyFactsNotFound based on which taxonomies the SEC response
+// carried. Called when ParseFinancialData extracted zero usable periods.
+//
+// Post-Phase-B6 invariant (see
+// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md): the parser
+// now reads IFRS-full concepts (Revenue, ProfitLossFromOperatingActivities,
+// CashAndCashEquivalents, …) and stamps the period's reporting currency
+// from any ISO-4217 unit key. So for the well-mapped IFRS-full filers (TSM,
+// ASML, NVO, AZN, SAP, BABA, BIDU, TM, RIO, BHP, NVS, SHEL, BP, …)
+// extractFiscalPeriods + parsePeriodData succeed and this function is
+// NEVER called.
+//
+// This branch now fires ONLY when the parser could not extract ANY usable
+// period AFTER reading IFRS-full. That happens in two scenarios:
+//
+//  1. The taxonomy IS `ifrs-full` but every concept the filer used falls
+//     outside the Phase B6 mapping table — e.g., custom IFRS extensions,
+//     concepts that landed under `ifrs-full` but the filer chose
+//     non-standard tag names. Pinned by
+//     TestParser_ParseFinancialData_ForeignPrivateIssuer_UnmappedConcepts.
+//  2. The taxonomy is something else entirely — JGAAP, K-IFRS,
+//     `ifrs-smes`, or future SEC additions we have not yet mapped.
+//
+// In both cases the data exists in the SEC response but our parser cannot
+// read it; ErrForeignPrivateIssuer is the more helpful classification for
+// the user (and lets the API return 422 FOREIGN_PRIVATE_ISSUER_UNSUPPORTED
+// instead of the misleading INSUFFICIENT_DATA fallback).
+//
+// Anything else (no `us-gaap` and no IFRS, or `us-gaap` present but every
+// period missing Revenue/OperatingIncome) falls through to
+// ErrCompanyFactsNotFound — the same classification the valuation service
+// uses for clinical-stage biotechs and pre-revenue US companies.
+//
+// FX-failure path (Phase B11): if the parser succeeded but the
+// service-layer FX conversion failed for non-USD periods, the service
+// itself maps that to ErrForeignPrivateIssuer via convertFinancialsToUSD +
+// hasNonUSDPeriod. That code path does NOT come through this function.
+func classifyEmptyParseError(facts *ports.SECCompanyFacts) error {
+	hasUSGAAP := false
+	hasIFRS := false
+	for taxonomy := range facts.Facts {
+		switch taxonomy {
+		case "us-gaap":
+			hasUSGAAP = true
+		case "ifrs-full", "ifrs":
+			hasIFRS = true
+		}
+	}
+	if !hasUSGAAP && hasIFRS {
+		return fmt.Errorf("%w: SEC filing uses ifrs-full taxonomy (likely Form 20-F)", ports.ErrForeignPrivateIssuer)
+	}
+	return fmt.Errorf("%w: no periods with usable US-GAAP financials", ports.ErrCompanyFactsNotFound)
+}
+
 // ParseFinancialData extracts financial data from SEC company facts
 func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompanyFacts) (*entities.HistoricalFinancialData, error) {
 	if facts == nil {
@@ -40,17 +95,28 @@ func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompany
 		Data:        make(map[string]*entities.FinancialData),
 	}
 
-	// Extract data by fiscal periods
+	// Extract data by fiscal periods. extractFiscalPeriods only fails when it
+	// produced zero usable periods, which for a filer whose response carries
+	// no readable currency-denominated facts (or no dei shares) ends up at
+	// the same outcome as the late-failure path below — so we route both
+	// through classifyEmptyParseError so the taxonomy-based classification
+	// fires regardless of WHICH layer ran out of data first.
+	//
+	// Phase B5: extractFiscalPeriods now reads any 3-letter ISO-4217 currency
+	// unit (TWD, EUR, CNY, JPY, …) so foreign private issuers reporting in
+	// non-USD currencies are extracted into FinancialData with a
+	// `ReportingCurrency` stamp. Phase B9 will FX-convert monetary fields;
+	// for now ReportingCurrency is metadata only.
 	periods, err := p.extractFiscalPeriods(facts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract fiscal periods: %w", err)
+		return nil, classifyEmptyParseError(facts)
 	}
 
 	p.logger.Debug("Extracted fiscal periods", zap.Int("period_count", len(periods)))
 
 	// Parse each period
-	for period, periodData := range periods {
-		financialData, err := p.parsePeriodData(facts.CIK.String(), period, periodData)
+	for period, payload := range periods {
+		financialData, err := p.parsePeriodData(facts.CIK.String(), period, payload)
 		if err != nil {
 			p.logger.Warn("Failed to parse period data",
 				zap.String("period", period),
@@ -64,14 +130,11 @@ func (p *Parser) ParseFinancialData(ctx context.Context, facts *ports.SECCompany
 	}
 
 	if len(historical.Data) == 0 {
-		// Wrap the shared sentinel so the valuation service can classify this
-		// as ErrInsufficientData (→ HTTP 422) rather than ErrTickerNotFound
-		// (→ HTTP 404). Every period in the SEC response lacked the minimum
-		// US-GAAP fields (Revenue / OperatingIncome / shares), which for our
-		// purposes is equivalent to "SEC has no usable companyfacts" — common
-		// for clinical-stage biotechs, pre-revenue companies, and foreign
-		// private issuers whose 20-F filings are not tagged in US-GAAP.
-		return nil, fmt.Errorf("%w: no periods with usable US-GAAP financials", ports.ErrCompanyFactsNotFound)
+		// Choose between ErrForeignPrivateIssuer and ErrCompanyFactsNotFound
+		// based on which taxonomies the SEC response carried, so the HTTP
+		// layer can emit a tailored 422 instead of the misleading
+		// "INSUFFICIENT_DATA" message that gets emitted for both.
+		return nil, classifyEmptyParseError(facts)
 	}
 
 	p.logger.Info("Successfully parsed financial data",
@@ -134,12 +197,88 @@ func (p *Parser) NormalizeFinancialData(ctx context.Context, data *entities.Fina
 	return &normalized, nil
 }
 
+// periodPayload is the per-period bag accumulated by extractFiscalPeriods.
+//
+// Phase B5 introduced this struct (replacing the earlier
+// `map[string]map[string]float64` shape) so the parser can capture which
+// currency a period's monetary facts were reported in WITHOUT smuggling
+// the currency code through the float64 values map. The `currency` field
+// is stamped from the SEC `Units` key (an ISO-4217 code: USD, TWD, EUR,
+// CNY, JPY, …) the first time a currency-denominated fact lands in this
+// period. `values` continues to hold both monetary facts and dimensionless
+// facts (shares, period metadata) — exactly as before — so all downstream
+// findValue lookups keep working unchanged.
+//
+// Calculation-safety contract: SharesOutstanding /
+// DilutedSharesOutstanding flow through `values` from `Units["shares"]`
+// and are NEVER tagged with a currency. Phase B9 will FX-convert monetary
+// fields; this struct gives that future converter the metadata it needs
+// without requiring a second pass over the source facts.
+type periodPayload struct {
+	values   map[string]float64
+	currency string
+	// currencyCounts tracks how many facts landed in each currency for
+	// this period. Used to pick the dominant currency when a period
+	// (rarely) carries facts in multiple currencies — typically a
+	// corporate-action artifact such as a mid-year reporting-currency
+	// change. Not exposed to callers.
+	currencyCounts map[string]int
+	// valuesByCurrency segregates monetary fact values by the currency unit
+	// they were reported in (outer key = ISO-4217 code, e.g. "USD", "TWD").
+	// Phase B post-launch hotfix: filers like TSM publish the SAME concept
+	// (e.g., ifrs-full:Assets) under BOTH a TWD unit AND a USD unit. Without
+	// segregation, the second iteration silently overwrites the first
+	// (Go map iteration order is randomized), producing periods stamped
+	// with one currency but holding values from the other — which then
+	// FX-converts incorrectly. Once the dominant currency is resolved, the
+	// matching bucket is collapsed into `values` and the others are
+	// discarded so downstream findValue lookups see only currency-coherent
+	// data.
+	//
+	// Dimensionless facts (shares, metadata) write directly to `values`
+	// and are never touched by the collapse step.
+	valuesByCurrency map[string]map[string]float64
+}
+
+// isCurrencyUnit reports whether the given SEC `Units` key is an
+// ISO-4217 currency code (3 uppercase ASCII letters).
+//
+// This filter is intentionally strict: it accepts USD/TWD/EUR/JPY/… and
+// rejects everything else (`shares`, `pure`, `decimal`, `USD/shares`,
+// `Year`, …). Per-share metrics like `USD/shares` are intentionally
+// dropped here — we already extract dividends-per-share via dedicated
+// US-GAAP / IFRS concepts and the parser does not (yet) consume any
+// other per-share XBRL facts.
+func isCurrencyUnit(unit string) bool {
+	if len(unit) != 3 {
+		return false
+	}
+	for _, r := range unit {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
 // extractFiscalPeriods extracts data organized by fiscal periods from the nested
 // SEC Company Facts structure: taxonomy -> concept -> factGroup -> units -> facts.
-func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]map[string]float64, error) {
-	periods := make(map[string]map[string]float64)
+//
+// Phase B5: iterates ALL ISO-4217 currency unit keys (not only "USD") so
+// foreign private issuers reporting in TWD/EUR/CNY/JPY/… are no longer
+// silently dropped. Each period stamps its `currency` field from the
+// first currency-unit fact that lands; if multiple currencies are seen
+// in a single period we pick the one with the most fact entries and log
+// a warning (rare — typically a corporate-action artifact).
+//
+// Dimensionless `shares` facts continue to be processed via the same
+// code path as before — they NEVER touch the currency stamp, preserving
+// the calculation-safety guarantee that share counts cannot be
+// FX-converted by downstream layers (see Phase B9 currency-conversion plan).
+func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]*periodPayload, error) {
+	periods := make(map[string]*periodPayload)
 
-	// Iterate through taxonomy namespaces (e.g., "dei", "us-gaap")
+	// Iterate through taxonomy namespaces (e.g., "dei", "us-gaap", "ifrs-full")
 	for taxonomy, concepts := range facts.Facts {
 		p.logger.Debug("Processing taxonomy",
 			zap.String("taxonomy", taxonomy),
@@ -147,14 +286,18 @@ func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]
 
 		// Iterate through concepts within this taxonomy (e.g., "Assets", "Revenues")
 		for conceptName, factGroup := range concepts {
-			// Look for USD values (most common for financial data)
-			if usdUnits, exists := factGroup.Units["USD"]; exists {
-				p.processFacts(periods, conceptName, usdUnits)
-			}
-
-			// Also check for shares units for share count data
-			if sharesUnits, exists := factGroup.Units["shares"]; exists {
-				p.processFacts(periods, conceptName, sharesUnits)
+			// Process every currency-denominated unit key (USD, TWD, EUR, CNY, …).
+			// Non-currency keys other than "shares" are skipped — `pure`,
+			// `decimal`, `USD/shares`, etc. are either non-financial or
+			// per-share metrics we intentionally don't ingest here.
+			for unit, factList := range factGroup.Units {
+				switch {
+				case isCurrencyUnit(unit):
+					p.processFacts(periods, conceptName, factList, unit)
+				case unit == "shares":
+					// Dimensionless — no currency stamp.
+					p.processFacts(periods, conceptName, factList, "")
+				}
 			}
 		}
 	}
@@ -163,56 +306,172 @@ func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]
 		return nil, fmt.Errorf("no financial periods extracted from SEC data")
 	}
 
+	// Resolve the dominant currency for each period AND collapse the
+	// per-currency value buckets into `payload.values`. The single-
+	// currency case (overwhelmingly common — e.g., AAPL with USD only)
+	// just merges the one bucket. The multi-currency case (e.g., TSM
+	// publishing both TWD and USD for every monetary concept) picks the
+	// dominant currency by fact count, merges that bucket only, and logs
+	// a warning so operators can audit.
+	//
+	// Phase B post-launch hotfix: prior to bucketing, the multi-currency
+	// case suffered from a silent last-write-wins race because Go map
+	// iteration order is randomized — the period was stamped with one
+	// currency (typically the higher-count one) but the values map could
+	// contain a mix of values from BOTH currencies, making FX conversion
+	// incoherent. Collapsing from a deterministic single bucket fixes
+	// this.
+	for periodKey, payload := range periods {
+		if len(payload.currencyCounts) == 0 {
+			// Period has no monetary facts (dimensionless-only — e.g., a
+			// period that only carries DEI cover-page shares). Nothing to
+			// collapse; values already holds everything.
+			continue
+		}
+
+		// Resolve dominant currency. Single-currency path keeps payload.currency
+		// (set on first write in processFacts) unchanged.
+		if len(payload.currencyCounts) > 1 {
+			dominantCurrency := payload.currency
+			dominantCount := payload.currencyCounts[dominantCurrency]
+			seen := make([]string, 0, len(payload.currencyCounts))
+			for c, n := range payload.currencyCounts {
+				seen = append(seen, c)
+				if n > dominantCount {
+					dominantCurrency = c
+					dominantCount = n
+				}
+			}
+			p.logger.Warn("Period has facts in multiple currencies; picking dominant",
+				zap.String("period", periodKey),
+				zap.Strings("currencies_seen", seen),
+				zap.String("currency_chosen", dominantCurrency))
+			payload.currency = dominantCurrency
+		}
+
+		// Collapse: merge the chosen-currency bucket into `values`. Other
+		// buckets are discarded. This guarantees every monetary entry in
+		// `values` is reported in `payload.currency`, satisfying the
+		// invariant that `convertFinancialsToUSD` relies on.
+		if bucket, ok := payload.valuesByCurrency[payload.currency]; ok {
+			for k, v := range bucket {
+				payload.values[k] = v
+			}
+		}
+		// Free the bucket map — values is now the single source of truth.
+		payload.valuesByCurrency = nil
+	}
+
 	return periods, nil
 }
 
-// processFacts processes individual facts and organizes them by fiscal periods
-func (p *Parser) processFacts(periods map[string]map[string]float64, conceptName string, facts []ports.SECFact) {
+// processFacts processes individual facts and organizes them by fiscal periods.
+//
+// `currencyUnit` is the ISO-4217 code for currency-denominated facts (USD,
+// TWD, …) or the empty string for dimensionless facts (shares). The first
+// non-empty currencyUnit observed for a period stamps the period's currency;
+// subsequent currency observations bump per-currency counters so
+// extractFiscalPeriods can resolve the dominant currency at the end.
+func (p *Parser) processFacts(periods map[string]*periodPayload, conceptName string, facts []ports.SECFact, currencyUnit string) {
 	for _, fact := range facts {
 		// Create period key (e.g., "2023FY", "2023Q4")
 		periodKey := fmt.Sprintf("%d%s", fact.Fy, fact.Fp)
 
-		// Initialize period data if needed
-		if periods[periodKey] == nil {
-			periods[periodKey] = make(map[string]float64)
+		// Initialize period payload if needed
+		payload, exists := periods[periodKey]
+		if !exists {
+			payload = &periodPayload{
+				values:           make(map[string]float64),
+				currencyCounts:   make(map[string]int),
+				valuesByCurrency: make(map[string]map[string]float64),
+			}
+			periods[periodKey] = payload
 		}
 
-		// Store the value using the local concept name
-		periods[periodKey][conceptName] = fact.Val
+		// Store the value. Monetary facts (currencyUnit != "") go into the
+		// per-currency bucket so we can later collapse to the period's
+		// resolved dominant currency without stale-overwrite races between
+		// concurrent currency units (e.g., TSM publishing the same concept
+		// in BOTH TWD and USD). Dimensionless facts (shares, period
+		// metadata) write directly to `values` because they are never
+		// disambiguated by currency.
+		if currencyUnit != "" {
+			bucket, bucketExists := payload.valuesByCurrency[currencyUnit]
+			if !bucketExists {
+				bucket = make(map[string]float64)
+				payload.valuesByCurrency[currencyUnit] = bucket
+			}
+			bucket[conceptName] = fact.Val
+
+			if payload.currency == "" {
+				payload.currency = currencyUnit
+			}
+			payload.currencyCounts[currencyUnit]++
+		} else {
+			// Dimensionless: shares / metadata go to values directly.
+			payload.values[conceptName] = fact.Val
+		}
 
 		// Also store metadata for the most recent fact in this period
-		if _, exists := periods[periodKey]["_filing_date"]; !exists {
+		if _, exists := payload.values["_filing_date"]; !exists {
 			if filingDate, err := time.Parse("2006-01-02", fact.Filed); err == nil {
-				periods[periodKey]["_filing_date"] = float64(filingDate.Unix())
+				payload.values["_filing_date"] = float64(filingDate.Unix())
 			}
 		}
-		if _, exists := periods[periodKey]["_end_date"]; !exists {
+		if _, exists := payload.values["_end_date"]; !exists {
 			if endDate, err := time.Parse("2006-01-02", fact.End); err == nil {
-				periods[periodKey]["_end_date"] = float64(endDate.Unix())
+				payload.values["_end_date"] = float64(endDate.Unix())
 			}
 		}
 	}
 }
 
-// parsePeriodData converts raw period data to FinancialData entity
-func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*entities.FinancialData, error) {
+// parsePeriodData converts raw period data to FinancialData entity.
+//
+// Phase B5: signature now takes a *periodPayload so the per-period
+// `currency` stamp can be propagated to FinancialData.ReportingCurrency.
+// Empty currency defaults to "USD" for backward compatibility (e.g., a
+// period that contains only `shares` facts).
+//
+// Phase B6: lookup tables now include IFRS-full equivalents AFTER the
+// existing US-GAAP names — preserving identical priority order for
+// domestic 10-K filers while enabling 20-F filers to be parsed.
+func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*entities.FinancialData, error) {
+	if payload == nil {
+		return nil, fmt.Errorf("period payload cannot be nil")
+	}
+	data := payload.values
+
 	filingDate := time.Unix(int64(data["_filing_date"]), 0)
 	endDate := time.Unix(int64(data["_end_date"]), 0)
 
+	// Default empty currency to USD — preserves backward compat for periods
+	// where every fact happens to be dimensionless (purely shares-only) and
+	// for legacy callers that haven't been wired through Phase B5 yet.
+	reportingCurrency := payload.currency
+	if reportingCurrency == "" {
+		reportingCurrency = "USD"
+	}
+
 	financialData := &entities.FinancialData{
-		CIK:          cik,
-		FilingPeriod: period,
-		FilingDate:   filingDate,
-		AsOf:         endDate,
+		CIK:               cik,
+		FilingPeriod:      period,
+		FilingDate:        filingDate,
+		AsOf:              endDate,
+		ReportingCurrency: reportingCurrency,
 	}
 
 	var missingFields []string
 
-	// Extract income statement items
+	// Extract income statement items.
+	// Order: US-GAAP first (preserving domestic-filer priority), then IFRS-full.
 	if val, exists := p.findValue(data, []string{
 		"OperatingIncomeLoss",
 		"IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
 		"IncomeLossFromContinuingOperationsBeforeIncomeTaxes",
+		// IFRS-full equivalents (Phase B6).
+		"ProfitLossFromOperatingActivities",
+		"ProfitBeforeTax",
 	}); exists {
 		financialData.OperatingIncome = val
 	} else {
@@ -223,6 +482,9 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		"Revenues",
 		"RevenueFromContractWithCustomerExcludingAssessedTax",
 		"SalesRevenueNet",
+		// IFRS-full equivalents (Phase B6).
+		"Revenue",
+		"RevenueFromContractsWithCustomers",
 	}); exists {
 		financialData.Revenue = val
 	} else {
@@ -232,6 +494,8 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	if val, exists := p.findValue(data, []string{
 		"InterestExpense",
 		"InterestExpenseDebt",
+		// IFRS-full equivalent (Phase B6).
+		"FinanceCosts",
 	}); exists {
 		financialData.InterestExpense = val
 	}
@@ -241,6 +505,10 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		"NetIncomeLoss",
 		"ProfitLoss",
 		"NetIncomeLossAvailableToCommonStockholdersBasic",
+		// IFRS-full equivalent (Phase B6) — `ProfitLoss` already on the list
+		// above is also valid IFRS-full; `ProfitLossAttributableToOwnersOfParent`
+		// is the parent-only flavor that we prefer when present.
+		"ProfitLossAttributableToOwnersOfParent",
 	}); exists {
 		financialData.NetIncome = val
 	}
@@ -267,6 +535,9 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		"DepreciationDepletionAndAmortization",
 		"DepreciationAndAmortization",
 		"Depreciation",
+		// IFRS-full equivalents (Phase B6).
+		"DepreciationAndAmortisationExpense",
+		"DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss",
 	}); exists {
 		financialData.DepreciationAndAmortization = val
 	}
@@ -274,6 +545,8 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	if val, exists := p.findValue(data, []string{
 		"PaymentsToAcquirePropertyPlantAndEquipment",
 		"PaymentsToAcquireProductiveAssets",
+		// IFRS-full equivalent (Phase B6).
+		"PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
 	}); exists {
 		financialData.CapitalExpenditures = val
 	}
@@ -281,6 +554,8 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	if val, exists := p.findValue(data, []string{
 		"NetCashProvidedByOperatingActivities",
 		"CashProvidedByOperatingActivities",
+		// IFRS-full equivalent (Phase B6).
+		"CashFlowsFromUsedInOperatingActivities",
 	}); exists {
 		financialData.OperatingCashFlow = val
 	}
@@ -298,12 +573,16 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 
 	if val, exists := p.findValue(data, []string{
 		"AssetsCurrent",
+		// IFRS-full equivalent (Phase B6).
+		"CurrentAssets",
 	}); exists {
 		financialData.CurrentAssets = val
 	}
 
 	if val, exists := p.findValue(data, []string{
 		"LiabilitiesCurrent",
+		// IFRS-full equivalent (Phase B6).
+		"CurrentLiabilities",
 	}); exists {
 		financialData.CurrentLiabilities = val
 	}
@@ -312,6 +591,10 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		"CashAndCashEquivalentsAtCarryingValue",
 		"CashCashEquivalentsAndShortTermInvestments",
 		"Cash",
+		// IFRS-full equivalent (Phase B6) — `Cash` already on the list above
+		// is also valid IFRS-full; `CashAndCashEquivalents` is the standard
+		// IFRS-full balance-sheet line.
+		"CashAndCashEquivalents",
 	}); exists {
 		financialData.CashAndCashEquivalents = val
 	}
@@ -320,6 +603,9 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	if val, exists := p.findValue(data, []string{
 		"StockholdersEquity",
 		"StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+		// IFRS-full equivalents (Phase B6).
+		"Equity",
+		"EquityAttributableToOwnersOfParent",
 	}); exists {
 		financialData.StockholdersEquity = val
 	}
@@ -330,6 +616,8 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	if val, exists := p.findValue(data, []string{
 		"MinorityInterest",
 		"MinorityInterestInLimitedPartnerships",
+		// IFRS-full equivalent (Phase B6).
+		"NoncontrollingInterests",
 	}); exists {
 		financialData.MinorityInterest = val
 	}
@@ -345,6 +633,8 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 
 	if val, exists := p.findValue(data, []string{
 		"Goodwill",
+		// `Goodwill` is identical between US-GAAP and IFRS-full; listed once
+		// suffices and the spec confirms this — kept here as a marker.
 	}); exists {
 		financialData.Goodwill = val
 	}
@@ -352,6 +642,8 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	if val, exists := p.findValue(data, []string{
 		"IntangibleAssetsNetExcludingGoodwill",
 		"IntangibleAssetsNet",
+		// IFRS-full equivalent (Phase B6).
+		"IntangibleAssetsOtherThanGoodwill",
 	}); exists {
 		financialData.OtherIntangibles = val
 	}
@@ -362,6 +654,19 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		"LongTermDebtCurrent",
 		"LongTermDebtAndCapitalLeaseObligations",
 		"DebtCurrent",
+		// IFRS-full equivalents (Phase B6).
+		// NOTE: ifrs-full:LeaseLiabilities is intentionally NOT in this list.
+		// Lease liabilities are operating obligations under IFRS 16, not
+		// financing debt. They map ONLY to OperatingLeaseLiability below
+		// (mirroring the US-GAAP convention where the LongTermDebt family
+		// excludes ASC 842 operating-lease liabilities). Including it here
+		// would double-count lease liabilities in the EV→equity bridge —
+		// once subtracted as debt, once as a lease obligation in
+		// adjustments — crushing equity for lease-heavy filers like TSM
+		// (Phase B post-launch hotfix).
+		"Borrowings",
+		"NoncurrentBorrowings",
+		"CurrentBorrowings",
 	}); exists {
 		financialData.TotalDebt = val
 		financialData.InterestBearingDebt = val // Assume all debt is interest-bearing
@@ -370,6 +675,8 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	if val, exists := p.findValue(data, []string{
 		"InventoryNet",
 		"Inventory",
+		// IFRS-full equivalent (Phase B6).
+		"Inventories",
 	}); exists {
 		financialData.Inventory = val
 	}
@@ -378,6 +685,8 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 	if val, exists := p.findValue(data, []string{
 		"DeferredTaxAssetsNet",
 		"DeferredIncomeTaxAssetsNet",
+		// IFRS-full equivalent (Phase B6).
+		"DeferredTaxAssets",
 	}); exists {
 		financialData.DeferredTaxAssets = val
 	}
@@ -387,6 +696,9 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		"OperatingLeaseLiability",
 		"OperatingLeaseLiabilityCurrent",
 		"OperatingLeaseLiabilityNoncurrent",
+		// IFRS-full equivalent (Phase B6) — IFRS 16 puts all lease
+		// liabilities under one umbrella tag.
+		"LeaseLiabilities",
 	}); exists {
 		financialData.OperatingLeaseLiability = val
 	}
@@ -396,6 +708,8 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		"DefinedBenefitPlanPensionPlansProjectedBenefitObligationIncrease",
 		"ProjectedBenefitObligation",
 		"PensionAndOtherPostretirementBenefitPlansProjectedBenefitObligation",
+		// IFRS-full equivalent (Phase B6).
+		"DefinedBenefitObligationAtPresentValue",
 	}); exists {
 		financialData.ProjectedBenefitObligation = val
 	}
@@ -408,10 +722,17 @@ func (p *Parser) parsePeriodData(cik, period string, data map[string]float64) (*
 		financialData.PensionPlanAssets = val
 	}
 
-	// Extract share information
+	// Extract share information.
+	// Order: US-GAAP `CommonStock*` first (preserving domestic-filer
+	// priority), then DEI's `EntityCommonStockSharesOutstanding` which is
+	// what 20-F filers (TSM, ASML, BABA, …) typically populate. DEI is a
+	// dimensionless-shares concept on the cover page so it lives under
+	// `Units["shares"]` regardless of the body taxonomy (US-GAAP or IFRS).
 	if val, exists := p.findValue(data, []string{
 		"CommonStockSharesOutstanding",
 		"CommonStockSharesIssued",
+		// DEI cover-page shares — primary source for IFRS/20-F filers.
+		"EntityCommonStockSharesOutstanding",
 	}); exists {
 		financialData.SharesOutstanding = val
 	} else {
@@ -496,9 +817,16 @@ func (p *Parser) calculateDeadInventoryWritedown(data *entities.FinancialData) f
 	return 0
 }
 
-// GetSupportedConcepts returns the list of SEC XBRL concepts we can parse
+// GetSupportedConcepts returns the list of SEC XBRL concepts we can parse.
+//
+// The list is grouped by taxonomy. US-GAAP concepts come first (preserving
+// historical reporting behavior); IFRS-full concepts were added in Phase B6
+// of the IFRS / foreign-private-issuer support plan
+// (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md) so 20-F
+// filers like TSM, ASML, BABA, NVO, AZN, SAP can be parsed.
 func (p *Parser) GetSupportedConcepts() []string {
 	return []string{
+		// ---- US-GAAP -------------------------------------------------------
 		// Income Statement - Core P&L Items
 		"us-gaap:OperatingIncomeLoss",
 		"us-gaap:IncomeLossFromContinuingOperationsBeforeIncomeTaxes",
@@ -558,6 +886,44 @@ func (p *Parser) GetSupportedConcepts() []string {
 		// Cash Flow Statement
 		"us-gaap:CashAndCashEquivalentsAtCarryingValue",
 		"us-gaap:NetCashProvidedByUsedInOperatingActivities",
+
+		// ---- IFRS-full (Phase B6) -------------------------------------------
+		// Income Statement
+		"ifrs-full:Revenue",
+		"ifrs-full:RevenueFromContractsWithCustomers",
+		"ifrs-full:ProfitLossFromOperatingActivities",
+		"ifrs-full:ProfitBeforeTax",
+		"ifrs-full:ProfitLoss",
+		"ifrs-full:ProfitLossAttributableToOwnersOfParent",
+		"ifrs-full:FinanceCosts",
+
+		// Balance Sheet
+		"ifrs-full:CashAndCashEquivalents",
+		"ifrs-full:Cash",
+		"ifrs-full:CurrentAssets",
+		"ifrs-full:CurrentLiabilities",
+		"ifrs-full:Goodwill",
+		"ifrs-full:IntangibleAssetsOtherThanGoodwill",
+		"ifrs-full:Inventories",
+		"ifrs-full:DeferredTaxAssets",
+		"ifrs-full:Equity",
+		"ifrs-full:EquityAttributableToOwnersOfParent",
+		"ifrs-full:NoncontrollingInterests",
+
+		// Debt / lease liabilities
+		"ifrs-full:Borrowings",
+		"ifrs-full:NoncurrentBorrowings",
+		"ifrs-full:CurrentBorrowings",
+		"ifrs-full:LeaseLiabilities",
+
+		// Cash Flow Statement
+		"ifrs-full:CashFlowsFromUsedInOperatingActivities",
+		"ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+		"ifrs-full:DepreciationAndAmortisationExpense",
+		"ifrs-full:DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss",
+
+		// Pension
+		"ifrs-full:DefinedBenefitObligationAtPresentValue",
 
 		// TODO: Add dynamic mapping framework for future extensibility
 		// This static approach should be replaced with configurable mapping

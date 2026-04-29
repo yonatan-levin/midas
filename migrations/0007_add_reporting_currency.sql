@@ -1,0 +1,20 @@
+-- Migration 0007: Add reporting_currency column for IFRS / foreign-private-issuer support.
+-- Phase B5 of docs/refactoring/ifrs-foreign-private-issuer-support-spec.md.
+--
+-- The column captures the ISO-4217 code of the currency that every monetary
+-- field on FinancialData (Revenue, Assets, OperatingIncome, etc.) is
+-- denominated in, as parsed from the SEC XBRL Units key. Domestic 10-K
+-- filers report in USD. Foreign private issuers filing 20-F report in their
+-- presentation currency (TSM uses TWD, ASML uses EUR, BABA uses CNY, NVO uses DKK).
+-- Conversion to USD happens at the service layer (currency.go, Phase B9)
+-- before any DCF math runs. The database stores the raw reporting-currency
+-- values plus the code so the FX conversion is auditable and re-runnable.
+--
+-- Default USD keeps all pre-migration rows valid. Every record persisted
+-- before this migration came from a parser that only read US-GAAP data,
+-- so USD is the correct retroactive label.
+--
+-- NOTE keep comment text free of statement terminators. cmd/migrate splits
+-- the file on the SQL terminator before stripping comment lines, so any
+-- stray terminator inside a comment would fragment the ALTER TABLE.
+ALTER TABLE financial_data ADD COLUMN reporting_currency VARCHAR(3) NOT NULL DEFAULT 'USD';

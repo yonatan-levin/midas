@@ -74,6 +74,79 @@ func TestFinancialDataRepository_MinorityInterestPreferredEquity_RoundTrip(t *te
 	})
 }
 
+// TestFinancialDataRepository_ReportingCurrency_RoundTrip pins the IFRS-FPI
+// Phase B5 contract: ReportingCurrency must survive Store → GetLatest /
+// GetHistorical / GetByPeriod, and an unset field must default to "USD"
+// rather than empty string so downstream FX conversion (Phase B9) can rely
+// on a non-empty value.
+//
+// Two scenarios:
+//   1. TSM-shape: ReportingCurrency="TWD" → must round-trip as "TWD".
+//   2. Domestic-shape: ReportingCurrency="" → must round-trip as "USD"
+//      (column NOT NULL DEFAULT 'USD' + storeWith short-circuit).
+func TestFinancialDataRepository_ReportingCurrency_RoundTrip(t *testing.T) {
+	db := setupTestDatabase(t)
+	defer cleanupTestDatabase(db)
+
+	repo := NewFinancialDataRepository(db)
+	ctx := context.Background()
+
+	t.Run("TSM_TWD_explicit", func(t *testing.T) {
+		data := &entities.FinancialData{
+			Ticker:                   "TSM",
+			CIK:                      "0001046179",
+			FilingPeriod:             "2024FY",
+			FilingDate:               time.Date(2025, 4, 17, 0, 0, 0, 0, time.UTC),
+			AsOf:                     time.Now(),
+			OperatingIncome:          1321714000000,
+			Revenue:                  2894308000000,
+			ReportingCurrency:        "TWD",
+			SharesOutstanding:        25932733242,
+			DilutedSharesOutstanding: 25932733242,
+		}
+		require.NoError(t, repo.Store(ctx, data))
+
+		got, err := repo.GetLatest(ctx, "TSM")
+		require.NoError(t, err)
+		assert.Equal(t, "TWD", got.ReportingCurrency,
+			"reporting_currency must survive Store→GetLatest")
+
+		hist, err := repo.GetHistorical(ctx, "TSM", 5)
+		require.NoError(t, err)
+		require.Contains(t, hist.Data, "2024FY")
+		assert.Equal(t, "TWD", hist.Data["2024FY"].ReportingCurrency,
+			"reporting_currency must survive Store→GetHistorical")
+
+		byPeriod, err := repo.GetByPeriod(ctx, "TSM", "2024FY")
+		require.NoError(t, err)
+		assert.Equal(t, "TWD", byPeriod.ReportingCurrency,
+			"reporting_currency must survive Store→GetByPeriod")
+	})
+
+	t.Run("AAPL_unset_defaults_to_USD", func(t *testing.T) {
+		data := &entities.FinancialData{
+			Ticker:          "AAPL",
+			CIK:             "0000320193",
+			FilingPeriod:    "2024FY",
+			FilingDate:      time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC),
+			AsOf:            time.Now(),
+			OperatingIncome: 114000000000,
+			Revenue:         391000000000,
+			// ReportingCurrency intentionally unset — domestic 10-K path.
+			SharesOutstanding:        15400000000,
+			DilutedSharesOutstanding: 15400000000,
+		}
+		require.NoError(t, repo.Store(ctx, data))
+
+		got, err := repo.GetLatest(ctx, "AAPL")
+		require.NoError(t, err)
+		assert.Equal(t, "USD", got.ReportingCurrency,
+			"unset reporting_currency must default to USD on read; got %q", got.ReportingCurrency)
+		assert.NotEqual(t, "", got.ReportingCurrency,
+			"empty string would break Phase B9 FX conversion lookups")
+	})
+}
+
 func TestFinancialDataRepository_Store(t *testing.T) {
 	db := setupTestDatabase(t)
 	defer cleanupTestDatabase(db)

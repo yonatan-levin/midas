@@ -208,7 +208,17 @@ data/                   # SQLite database files (gitignored)
 - Windows tests skip some E2E tests (gated by `E2E_LIVE=1`)
 - SEC API requires a valid `User-Agent` header with contact email
 - SEC EDGAR inconsistently serializes the `cik` field: numeric for some filers (e.g. AAPL: `320193`), zero-padded quoted string for others (e.g. XRTX: `"0001729214"`). Handled by `ports.FlexibleCIK` — do NOT change `SECCompanyFacts.CIK` back to `json.Number` or decode will fail for affected tickers
-- Tickers whose SEC response has no usable US-GAAP XBRL (foreign private issuers filing 20-F, some pre-revenue issuers) return `HTTP 422 INSUFFICIENT_DATA`, not `404 TICKER_NOT_FOUND`. Both `sec/client.go` (HTTP 404) and `sec/parser.go` (empty US-GAAP) wrap `ports.ErrCompanyFactsNotFound`; the valuation service classifies via `hasCompanyFactsNotFoundError`
+- **Foreign private issuers (20-F filers) — fully supported as of Phase B of the IFRS-FPI plan** (`docs/refactoring/ifrs-foreign-private-issuer-support-spec.md`). Tickers like TSM (Taiwan Semiconductor), ASML, NVO, AZN, SAP, BABA, BIDU, TM, RIO, BHP, NVS, SHEL, BP all produce real USD per-ADR fair values. The pipeline:
+  1. `sec/parser.go` reads any ISO-4217 currency unit and IFRS-full taxonomy concepts; stamps `FinancialData.ReportingCurrency` with the source currency (e.g., TWD).
+  2. `valuation/currency.go: convertFinancialsToUSD` FX-converts every monetary field via `MacroDataGateway.GetFXRate` (FRED daily series, falling back to `config/fx_rates.json` when FRED is unavailable). After this step `ReportingCurrency = "USD"`.
+  3. `valuation/currency.go: applyADRRatio` divides ordinary-share counts by the configured ratio in `config/adr_ratios.json` (TSM=5, BABA=8, …). Yahoo's reported sharesOutstanding is cross-checked; >10% deviation logs a WARN.
+  4. `FairValueResponse` carries `currency: "USD"` and `adr_ratio_applied: <ratio>` for transparency.
+
+  **The `ports.ErrForeignPrivateIssuer` 422 still ships for**: (a) tickers using genuinely-unmapped taxonomies (JGAAP, K-IFRS, ifrs-smes), (b) currencies with no FRED series AND not present in `config/fx_rates.json`. Both are config-extensible — see `sec/parser.go: findValue` for taxonomy coverage and `internal/infra/gateways/macro/gateway.go: fredSeriesFor` for currency coverage.
+
+  **For new ADR tickers**: verify the depositary ratio against the prospectus before adding to `config/adr_ratios.json` — a wrong ratio silently corrupts per-share values.
+
+  **Distinct from `INSUFFICIENT_DATA`**: clinical-stage biotechs / pre-revenue US companies with `us-gaap` present but no Revenue/OperatingIncome → `HTTP 422 INSUFFICIENT_DATA` (wraps `ports.ErrCompanyFactsNotFound` → `valuation.ErrInsufficientData`, same path as a genuine SEC 404 from `sec/client.go`). The handler **must check FPI first** because it is the more specific case; falling through to INSUFFICIENT_DATA would mask the actionable diagnostic.
 - SQLite driver is `github.com/mattn/go-sqlite3` (requires CGO)
 - The `config.env.example` file is blocked by a pre-read hook; get config info from `internal/config/config.go` defaults instead
 - **Two parallel industry classifiers today** — `Classify(sic, …)` drives the valuation model router and is the canonical label; `ClassifyIndustry(ticker, data)` is a balance-sheet heuristic that drives industry-specific datacleaner rules. They can disagree on the same ticker. The `FairValueResponse.Industry` field surfaces both plus a `match` flag. Do NOT refactor `getIndustryCode` in `datacleaner/service.go` to prefer SIC — that's tracked as the unification refactor in `docs/refactoring/industry-classification-unification-spec.md` and is out of scope for incidental changes

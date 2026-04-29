@@ -45,6 +45,14 @@ func (r *FinancialDataRepository) storeWith(ctx context.Context, exec namedExece
 		return fmt.Errorf("failed to marshal missing fields: %w", err)
 	}
 
+	// Default ReportingCurrency to USD when unset, so domestic 10-K paths
+	// (which never populate the field) keep writing 'USD' explicitly. This
+	// keeps the column contract simple: NOT NULL, never empty string.
+	reportingCurrency := data.ReportingCurrency
+	if reportingCurrency == "" {
+		reportingCurrency = "USD"
+	}
+
 	query := `
 		INSERT INTO financial_data (
 			ticker, cik, filing_period, filing_date, as_of_date,
@@ -59,6 +67,7 @@ func (r *FinancialDataRepository) storeWith(ctx context.Context, exec namedExece
 			cash_and_cash_equivalents, stockholders_equity,
 			minority_interest, preferred_equity,
 			shares_outstanding, diluted_shares_outstanding,
+			reporting_currency,
 			has_normalized_data, missing_fields, created_at, updated_at
 		) VALUES (
 			:ticker, :cik, :filing_period, :filing_date, :as_of_date,
@@ -73,6 +82,7 @@ func (r *FinancialDataRepository) storeWith(ctx context.Context, exec namedExece
 			:cash_and_cash_equivalents, :stockholders_equity,
 			:minority_interest, :preferred_equity,
 			:shares_outstanding, :diluted_shares_outstanding,
+			:reporting_currency,
 			:has_normalized_data, :missing_fields, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
 		)`
 
@@ -110,6 +120,7 @@ func (r *FinancialDataRepository) storeWith(ctx context.Context, exec namedExece
 		"preferred_equity":              data.PreferredEquity,
 		"shares_outstanding":            data.SharesOutstanding,
 		"diluted_shares_outstanding":    data.DilutedSharesOutstanding,
+		"reporting_currency":            reportingCurrency,
 		"has_normalized_data":           data.HasNormalizedData,
 		"missing_fields":                string(missingFieldsJSON),
 	}
@@ -141,6 +152,7 @@ func (r *FinancialDataRepository) GetLatest(ctx context.Context, ticker string) 
 			cash_and_cash_equivalents, stockholders_equity,
 			COALESCE(minority_interest, 0), COALESCE(preferred_equity, 0),
 			shares_outstanding, diluted_shares_outstanding,
+			COALESCE(reporting_currency, 'USD'),
 			has_normalized_data, missing_fields
 		FROM financial_data
 		WHERE ticker = ?
@@ -163,6 +175,7 @@ func (r *FinancialDataRepository) GetLatest(ctx context.Context, ticker string) 
 		&data.CashAndCashEquivalents, &data.StockholdersEquity,
 		&data.MinorityInterest, &data.PreferredEquity,
 		&data.SharesOutstanding, &data.DilutedSharesOutstanding,
+		&data.ReportingCurrency,
 		&data.HasNormalizedData, &missingFieldsJSON,
 	)
 
@@ -200,6 +213,7 @@ func (r *FinancialDataRepository) GetHistorical(ctx context.Context, ticker stri
 			cash_and_cash_equivalents, stockholders_equity,
 			COALESCE(minority_interest, 0), COALESCE(preferred_equity, 0),
 			shares_outstanding, diluted_shares_outstanding,
+			COALESCE(reporting_currency, 'USD'),
 			has_normalized_data, missing_fields
 		FROM financial_data
 		WHERE ticker = ?
@@ -234,6 +248,7 @@ func (r *FinancialDataRepository) GetHistorical(ctx context.Context, ticker stri
 			&data.CashAndCashEquivalents, &data.StockholdersEquity,
 			&data.MinorityInterest, &data.PreferredEquity,
 			&data.SharesOutstanding, &data.DilutedSharesOutstanding,
+			&data.ReportingCurrency,
 			&data.HasNormalizedData, &missingFieldsJSON,
 		)
 		if err != nil {
@@ -274,6 +289,7 @@ func (r *FinancialDataRepository) GetByPeriod(ctx context.Context, ticker, perio
 			cash_and_cash_equivalents, stockholders_equity,
 			COALESCE(minority_interest, 0), COALESCE(preferred_equity, 0),
 			shares_outstanding, diluted_shares_outstanding,
+			COALESCE(reporting_currency, 'USD'),
 			has_normalized_data, missing_fields
 		FROM financial_data
 		WHERE ticker = ? AND filing_period = ?`
@@ -294,6 +310,7 @@ func (r *FinancialDataRepository) GetByPeriod(ctx context.Context, ticker, perio
 		&data.CashAndCashEquivalents, &data.StockholdersEquity,
 		&data.MinorityInterest, &data.PreferredEquity,
 		&data.SharesOutstanding, &data.DilutedSharesOutstanding,
+		&data.ReportingCurrency,
 		&data.HasNormalizedData, &missingFieldsJSON,
 	)
 
