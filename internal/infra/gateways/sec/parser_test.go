@@ -1341,3 +1341,190 @@ func TestParser_ParsePeriodData_IFRS_LeaseLiabilities_NoDoubleCount(t *testing.T
 	assert.NotEqual(t, 740000000000.0, result.TotalDebt,
 		"TotalDebt must NOT equal Borrowings + LeaseLiabilities — that is the pre-fix double-count bug")
 }
+
+// TestParser_ParsePeriodData_TSM_IFRS_DA_Extraction pins the Phase B
+// post-launch follow-up that taught the parser to read TSM's actual
+// D&A tag (`ifrs-full:DepreciationExpense`).
+//
+// Bug context (logs/midas.log 2026-04-29 16:47:46): TSM's calc trace
+// emitted `avg_da:0` because the original Phase B6 mapping looked for
+// `DepreciationAndAmortisationExpense` and the long
+// `DepreciationAmortisationAndImpairmentLoss…` umbrella concept — TSM
+// publishes neither. This caused FCF to be over-stated by ~NT$420B/yr
+// in the smoothed projection (capex deducted, no D&A added back).
+//
+// The fixture uses TSM's real 2024FY value
+// (`DepreciationExpense` = NT$653.6B from the captured artifact) and
+// asserts that the new fallback resolves it. The double-count guard
+// asserts `OperatingLeaseLiability == 0` when no LeaseLiabilities tag
+// is present — the Phase B hotfix invariant must hold for ALL
+// regression tests, not only the one that explicitly exercises it.
+func TestParser_ParsePeriodData_TSM_IFRS_DA_Extraction(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	// IFRS-only fixture (no lease tags at all — proves no double-count).
+	data := map[string]float64{
+		"_filing_date": float64(time.Date(2025, 4, 17, 0, 0, 0, 0, time.UTC).Unix()),
+		"_end_date":    float64(time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC).Unix()),
+
+		// Minimum income-statement fields required for parsePeriodData to succeed.
+		"Revenue":         2894308000000,
+		"OperatingIncome": 1321714000000,
+
+		// The fix surface: TSM publishes D&A under `DepreciationExpense`.
+		// Pre-fix the parser returned 0 for D&A — making true-FCF over-stated
+		// by capex (no addback). Post-fix the value is extracted directly.
+		"DepreciationExpense": 653610500000, // NT$653.6B (real TSM 2024FY)
+
+		"SharesOutstanding": 25932733242,
+	}
+
+	result, err := parser.parsePeriodData("0001046179", "2024FY", &periodPayload{
+		values:   data,
+		currency: "TWD",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Primary invariant: D&A is populated and ~NT$420B+ (TSM's real value
+	// is NT$653.6B; a magnitude check tolerates filers that publish lower
+	// D&A while still proving the fallback fired).
+	assert.Greater(t, result.DepreciationAndAmortization, 0.0,
+		"D&A must be populated from ifrs-full:DepreciationExpense (TSM-style filers)")
+	assert.Equal(t, 653610500000.0, result.DepreciationAndAmortization,
+		"D&A must equal the DepreciationExpense fixture value (NT$653.6B)")
+	assert.Greater(t, result.DepreciationAndAmortization, 420000000000.0,
+		"D&A must be in the right magnitude for TSM 2024FY (≥ NT$420B target floor)")
+
+	// Phase B hotfix invariant: lease liabilities are NOT in this fixture,
+	// so OperatingLeaseLiability must remain 0. This is the regression
+	// guard that proves the D&A fallback didn't accidentally pick up a
+	// lease tag (defense-in-depth for the no-double-count contract).
+	assert.Equal(t, 0.0, result.OperatingLeaseLiability,
+		"OperatingLeaseLiability must remain 0 when no LeaseLiabilities tag present (no double-count regression)")
+	assert.Equal(t, 0.0, result.TotalDebt,
+		"TotalDebt must remain 0 when no debt tags present (no double-count regression)")
+}
+
+// TestParser_ParsePeriodData_TSM_IFRS_Debt_Extraction pins the Phase B
+// post-launch follow-up that taught the parser to sum TSM's actual
+// borrowing component tags (`LongtermBorrowings`,
+// `CurrentPortionOfLongtermBorrowings`,
+// `NoncurrentPortionOfNoncurrentBondsIssued`,
+// `CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued`,
+// `ShorttermBorrowings`).
+//
+// Bug context (logs/midas.log 2026-04-29 16:47:46): TSM's calc trace
+// emitted `debt:992294160` (~$0.99B), which is the operating-lease PV
+// the datacleaner adds back when TotalDebt is 0 — NOT actual debt. The
+// real 2024FY TSM debt is ~NT$1.075T (~$33B at TWD→USD = 0.0312); the
+// component tags are mutually disjoint, so summing them is correct.
+//
+// The smoking-gun symptom was cost_of_debt = 26.07% (interest_expense ÷
+// tiny denominator). Post-fix the denominator is realistic and the
+// ratio falls back into single-digit territory.
+//
+// The double-count guard asserts `OperatingLeaseLiability == 0` to
+// prove the new debt path doesn't incidentally pick up lease tags
+// (preserving the Phase B hotfix invariant from
+// TestParser_ParsePeriodData_IFRS_LeaseLiabilities_NoDoubleCount).
+func TestParser_ParsePeriodData_TSM_IFRS_Debt_Extraction(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	// IFRS-only fixture using TSM's actual 2024FY component values
+	// from the captured artifact (artifacts/2026-04-26/.../05-fetch-sec.parsed.json).
+	data := map[string]float64{
+		"_filing_date": float64(time.Date(2025, 4, 17, 0, 0, 0, 0, time.UTC).Unix()),
+		"_end_date":    float64(time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC).Unix()),
+
+		// Minimum income-statement fields required for parsePeriodData to succeed.
+		"Revenue":         2894308000000,
+		"OperatingIncome": 1321714000000,
+
+		// The fix surface: TSM splits debt across five disjoint component tags.
+		// Pre-fix the parser found NONE of these and returned TotalDebt = 0,
+		// triggering the datacleaner's lease-PV fallback (which produced the
+		// $992M smoking-gun debt value seen in the live TSM trace).
+		// Post-fix, sumValues aggregates them to the correct face-value.
+		"LongtermBorrowings":                                         31824400000,  // NT$31.8B
+		"CurrentPortionOfLongtermBorrowings":                         59857900000,  // NT$59.9B
+		"NoncurrentPortionOfNoncurrentBondsIssued":                   926604500000, // NT$926.6B (the bulk)
+		"CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued": 57148000000,  // NT$57.1B
+		// ShorttermBorrowings deliberately omitted — TSM has none in 2024FY,
+		// so the test exercises the "skip-missing-component" branch.
+
+		"SharesOutstanding": 25932733242,
+	}
+
+	result, err := parser.parsePeriodData("0001046179", "2024FY", &periodPayload{
+		values:   data,
+		currency: "TWD",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Primary invariant: TotalDebt equals the sum of the four present
+	// component tags = NT$1,075,434,800,000 (~$33.5B at TWD→USD = 0.0312).
+	const expectedTotalDebt = 31824400000.0 + 59857900000.0 + 926604500000.0 + 57148000000.0
+	assert.Greater(t, result.TotalDebt, 0.0,
+		"TotalDebt must be populated by sumValues over the IFRS component tags")
+	assert.Equal(t, expectedTotalDebt, result.TotalDebt,
+		"TotalDebt must equal the sum of the four present component tags (NT$1,075B)")
+	assert.Greater(t, result.TotalDebt, 480000000000.0,
+		"TotalDebt must be in the right magnitude for TSM 2024FY (≥ NT$480B floor)")
+
+	// InterestBearingDebt must mirror TotalDebt (both are set together).
+	assert.Equal(t, expectedTotalDebt, result.InterestBearingDebt,
+		"InterestBearingDebt must equal TotalDebt after sumValues fallback fires")
+
+	// Phase B hotfix invariant: lease liabilities are NOT in this fixture,
+	// so OperatingLeaseLiability must remain 0. This is the critical guard
+	// that proves the new debt path doesn't accidentally pick up a lease
+	// tag — the canonical regression we must never reintroduce.
+	assert.Equal(t, 0.0, result.OperatingLeaseLiability,
+		"OperatingLeaseLiability must remain 0 when no LeaseLiabilities tag present (no double-count regression)")
+}
+
+// TestParser_ParsePeriodData_IFRS_Borrowings_Umbrella_Wins_Over_Components
+// pins the precedence rule between path-1 (findValue umbrella) and path-2
+// (sumValues component fallback) for TotalDebt.
+//
+// When a filer publishes BOTH `ifrs-full:Borrowings` (the umbrella concept)
+// AND component tags like `LongtermBorrowings`, the umbrella tag must win
+// — the components are summed ONLY when the umbrella is absent. Otherwise
+// we'd double-count for filers who publish both for redundancy.
+func TestParser_ParsePeriodData_IFRS_Borrowings_Umbrella_Wins_Over_Components(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	data := map[string]float64{
+		"_filing_date":    float64(time.Date(2025, 4, 17, 0, 0, 0, 0, time.UTC).Unix()),
+		"_end_date":       float64(time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC).Unix()),
+		"Revenue":         500000000000,
+		"OperatingIncome": 100000000000,
+
+		// Both populated: umbrella value is the truth, components are
+		// (in this hypothetical filer) a parallel breakdown — we must
+		// NOT add them on top of the umbrella.
+		"Borrowings":          300000000000, // NT$300B umbrella
+		"LongtermBorrowings":  200000000000, // would inflate to NT$500B if summed
+		"ShorttermBorrowings": 100000000000,
+
+		"SharesOutstanding": 1000000000,
+	}
+
+	result, err := parser.parsePeriodData("0009999999", "2024FY", &periodPayload{
+		values:   data,
+		currency: "TWD",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Path-1 (findValue) wins because Borrowings is present in its lookup list.
+	assert.Equal(t, 300000000000.0, result.TotalDebt,
+		"TotalDebt must equal the umbrella `Borrowings` value (NT$300B); components must NOT be summed on top")
+	assert.NotEqual(t, 600000000000.0, result.TotalDebt,
+		"TotalDebt must NOT equal Borrowings + components — that would be the double-count regression")
+}

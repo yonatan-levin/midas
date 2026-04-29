@@ -530,14 +530,37 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		financialData.GainOnPropertySales = val
 	}
 
-	// Cash flow statement items (for true FCF calculation)
+	// Cash flow statement items (for true FCF calculation).
+	//
+	// Phase B post-launch follow-up (TSM live verification, 2026-04-29):
+	// TSM publishes D&A as `ifrs-full:DepreciationExpense` (NT$653.6B for
+	// 2024FY) — NOT under the umbrella `DepreciationAndAmortisationExpense`
+	// concept the original Phase B6 mapping anticipated. The Phase B6 fallback
+	// list is preserved (other IFRS-full filers may use it), and
+	// `DepreciationExpense` is appended so TSM-style filers extract correctly.
+	// `findValue` is first-hit, so the existing US-GAAP and umbrella IFRS
+	// names are still tried first before falling through to this tag.
+	//
+	// `AmortisationExpense` is intentionally NOT in this list: TSM's
+	// AmortisationExpense (~NT$9B) is < 1.5% of DepreciationExpense, so
+	// adding it would only marginally improve coverage but would also
+	// double-count for filers that publish BOTH the umbrella tag (with
+	// amortisation already included) AND the separate AmortisationExpense
+	// (would never hit because findValue is first-hit, but kept out for
+	// clarity).
+	//
+	// `DepreciationAmortizationAndAccretionNet` is added per
+	// docs/columns name.txt (line 135) as a US-GAAP fallback for
+	// energy/utility filers with depletion-accretion components.
 	if val, exists := p.findValue(data, []string{
 		"DepreciationDepletionAndAmortization",
 		"DepreciationAndAmortization",
+		"DepreciationAmortizationAndAccretionNet",
 		"Depreciation",
-		// IFRS-full equivalents (Phase B6).
+		// IFRS-full equivalents (Phase B6 + post-launch follow-up).
 		"DepreciationAndAmortisationExpense",
 		"DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss",
+		"DepreciationExpense",
 	}); exists {
 		financialData.DepreciationAndAmortization = val
 	}
@@ -648,28 +671,72 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		financialData.OtherIntangibles = val
 	}
 
+	// TotalDebt extraction has two paths:
+	//
+	// 1) US-GAAP / umbrella IFRS: a single concept already aggregates the
+	//    full debt balance (e.g., `us-gaap:LongTermDebt` for AAPL,
+	//    `ifrs-full:Borrowings` when the filer publishes the umbrella). The
+	//    findValue first-hit semantic is correct here.
+	//
+	// 2) IFRS component-level filers (TSM is the canonical case): no single
+	//    concept aggregates everything — TSM splits debt across
+	//    `LongtermBorrowings`, `CurrentPortionOfLongtermBorrowings`,
+	//    `NoncurrentPortionOfNoncurrentBondsIssued`,
+	//    `CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued`, and
+	//    `ShorttermBorrowings`. Path (1) misses everything for these filers
+	//    (returns 0); the datacleaner then injects the operating-lease PV
+	//    as a stand-in, which is wrong (lease ≠ financing debt) and produces
+	//    a tiny denominator → cost_of_debt explodes (26% for TSM in the
+	//    2026-04-29 live trace). Path (2) sums the components to recover
+	//    the correct face-value debt.
+	//
+	// Path-2 component tags are mutually disjoint: each represents a
+	// distinct slice of TSM's balance sheet (current vs noncurrent,
+	// borrowings vs bonds). The `Borrowings` umbrella is NOT summed with
+	// the components — if it's present, it already replaced them in the
+	// filer's reporting. Path-1 captures that umbrella case; the components
+	// in path-2 only fire when path-1 returned nothing (i.e., umbrella
+	// absent).
+	//
+	// Hard exclusion: ifrs-full:LeaseLiabilities and us-gaap:FinanceLeaseLiability*
+	// are intentionally NOT in either list. Lease liabilities are operating
+	// obligations under IFRS 16 / ASC 842, not financing debt. They map
+	// only to OperatingLeaseLiability below — mirroring the US-GAAP
+	// convention where the LongTermDebt family excludes operating leases.
+	// Including them here would double-count for lease-heavy filers like
+	// TSM, once as debt and once as a lease obligation in adjustments
+	// (Phase B post-launch hotfix preserved).
+	//
+	// Cross-checked against docs/columns name.txt: added
+	// `DebtInstrumentCarryingAmount` (line 89) and `OtherShortTermBorrowings`
+	// (line 348) as US-GAAP fallbacks for filers that don't use the
+	// `LongTermDebt*` family but still publish debt under those concepts.
 	if val, exists := p.findValue(data, []string{
 		"LongTermDebt",
 		"LongTermDebtNoncurrent",
 		"LongTermDebtCurrent",
 		"LongTermDebtAndCapitalLeaseObligations",
 		"DebtCurrent",
-		// IFRS-full equivalents (Phase B6).
-		// NOTE: ifrs-full:LeaseLiabilities is intentionally NOT in this list.
-		// Lease liabilities are operating obligations under IFRS 16, not
-		// financing debt. They map ONLY to OperatingLeaseLiability below
-		// (mirroring the US-GAAP convention where the LongTermDebt family
-		// excludes ASC 842 operating-lease liabilities). Including it here
-		// would double-count lease liabilities in the EV→equity bridge —
-		// once subtracted as debt, once as a lease obligation in
-		// adjustments — crushing equity for lease-heavy filers like TSM
-		// (Phase B post-launch hotfix).
+		"DebtInstrumentCarryingAmount",
+		"OtherShortTermBorrowings",
+		// IFRS-full umbrella concepts (filers using the aggregate tag).
 		"Borrowings",
 		"NoncurrentBorrowings",
 		"CurrentBorrowings",
 	}); exists {
 		financialData.TotalDebt = val
 		financialData.InterestBearingDebt = val // Assume all debt is interest-bearing
+	} else if ifrsDebt, ok := p.sumValues(data, []string{
+		// IFRS-full component-level concepts (TSM-style filers).
+		// Sum order doesn't matter — these are disjoint balance-sheet slices.
+		"LongtermBorrowings",
+		"ShorttermBorrowings",
+		"CurrentPortionOfLongtermBorrowings",
+		"NoncurrentPortionOfNoncurrentBondsIssued",
+		"CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued",
+	}); ok {
+		financialData.TotalDebt = ifrsDebt
+		financialData.InterestBearingDebt = ifrsDebt
 	}
 
 	if val, exists := p.findValue(data, []string{
@@ -778,6 +845,42 @@ func (p *Parser) findValue(data map[string]float64, fieldNames []string) (float6
 	return 0, false
 }
 
+// sumValues returns the SUM of all matching field values present in the
+// data map (vs `findValue`, which returns the first hit only).
+//
+// Use this when the underlying XBRL taxonomy splits a single economic
+// quantity across multiple disjoint concepts and the filer publishes
+// each component independently. The canonical example is TSM, which
+// splits interest-bearing debt across `LongtermBorrowings`,
+// `CurrentPortionOfLongtermBorrowings`,
+// `NoncurrentPortionOfNoncurrentBondsIssued`,
+// `CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued`, and
+// `ShorttermBorrowings` — no umbrella tag aggregates them, so first-hit
+// would miss the bulk of debt and produce a wildly wrong cost-of-debt
+// denominator.
+//
+// The caller is responsible for ensuring the supplied tag list is
+// mutually disjoint (no double-counting). For TotalDebt this is the
+// case: each tag represents a distinct slice of the balance sheet
+// (current vs noncurrent, borrowings vs bonds). Umbrella concepts like
+// `ifrs-full:Borrowings` are handled by the first-hit `findValue` path
+// BEFORE the component-sum fallback fires, so they never combine with
+// the components.
+//
+// Returns (0, false) if no fields matched, so callers can branch on the
+// boolean exactly like findValue.
+func (p *Parser) sumValues(data map[string]float64, fieldNames []string) (float64, bool) {
+	var sum float64
+	found := false
+	for _, fieldName := range fieldNames {
+		if val, exists := data[fieldName]; exists {
+			sum += val
+			found = true
+		}
+	}
+	return sum, found
+}
+
 // normalizeOperatingIncome removes non-recurring items from operating income
 func (p *Parser) normalizeOperatingIncome(operatingIncome float64) float64 {
 	// For now, return the operating income as-is
@@ -857,6 +960,9 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"us-gaap:LongTermDebt",
 		"us-gaap:LongTermDebtNoncurrent",
 		"us-gaap:LongTermDebtCurrent",
+		// Phase B post-launch: cross-checked against docs/columns name.txt.
+		"us-gaap:DebtInstrumentCarryingAmount",
+		"us-gaap:OtherShortTermBorrowings",
 		"us-gaap:Liabilities",
 		"us-gaap:LiabilitiesCurrent",
 		"us-gaap:LiabilitiesNoncurrent",
@@ -886,6 +992,8 @@ func (p *Parser) GetSupportedConcepts() []string {
 		// Cash Flow Statement
 		"us-gaap:CashAndCashEquivalentsAtCarryingValue",
 		"us-gaap:NetCashProvidedByUsedInOperatingActivities",
+		// Phase B post-launch: D&A umbrella for energy/utility filers.
+		"us-gaap:DepreciationAmortizationAndAccretionNet",
 
 		// ---- IFRS-full (Phase B6) -------------------------------------------
 		// Income Statement
@@ -914,6 +1022,12 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"ifrs-full:Borrowings",
 		"ifrs-full:NoncurrentBorrowings",
 		"ifrs-full:CurrentBorrowings",
+		// Component-level debt tags (TSM-style filers — summed via sumValues).
+		"ifrs-full:LongtermBorrowings",
+		"ifrs-full:ShorttermBorrowings",
+		"ifrs-full:CurrentPortionOfLongtermBorrowings",
+		"ifrs-full:NoncurrentPortionOfNoncurrentBondsIssued",
+		"ifrs-full:CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued",
 		"ifrs-full:LeaseLiabilities",
 
 		// Cash Flow Statement
@@ -921,6 +1035,8 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"ifrs-full:PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
 		"ifrs-full:DepreciationAndAmortisationExpense",
 		"ifrs-full:DepreciationAmortisationAndImpairmentLossReversalOfImpairmentLossRecognisedInProfitOrLoss",
+		// Component-level depreciation (TSM-style filers — first-hit fallback).
+		"ifrs-full:DepreciationExpense",
 
 		// Pension
 		"ifrs-full:DefinedBenefitObligationAtPresentValue",

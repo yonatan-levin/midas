@@ -422,6 +422,33 @@ All paths in this plan are relative to the repo root regardless of which directo
 
   *Skip* fields with no clean IFRS equivalent (e.g., `GainLossOnSaleOfProperties` — IFRS REITs are rare in our universe; defer until a 20-F REIT shows up).
 
+  **Phase B post-launch follow-up (2026-04-29):** the Phase B6 mapping table above
+  was incomplete for TSM-style filers that publish component-level concepts
+  instead of the IFRS-full umbrella tags. Two additional mappings shipped after
+  the live TSM verification (logs/midas.log 2026-04-29 16:47:46) revealed
+  `avg_da:0` and a single-component debt extraction:
+
+  | Field | Additional IFRS tags (Phase B follow-up) | Lookup mode |
+  |---|---|---|
+  | DepreciationAndAmortization | `DepreciationExpense` | findValue (first-hit fallback after the Phase B6 umbrella tags) |
+  | TotalDebt | `LongtermBorrowings`, `ShorttermBorrowings`, `CurrentPortionOfLongtermBorrowings`, `NoncurrentPortionOfNoncurrentBondsIssued`, `CurrentBondsIssuedAndCurrentPortionOfNoncurrentBondsIssued` | sumValues (component sum, fires only when umbrella `Borrowings` family is absent) |
+
+  The `sumValues` helper was added to `parser.go` for this case — TSM splits debt
+  across five disjoint balance-sheet slices with no umbrella concept. The
+  precedence rule is: path-1 (`findValue` over `Borrowings` family) wins when the
+  umbrella is present; path-2 (`sumValues` over components) fires only when path-1
+  returned nothing. This avoids double-counting for filers who publish both.
+
+  Hard exclusion preserved: `LeaseLiabilities` and `FinanceLeaseLiability*` are
+  still NOT in either TotalDebt path. They map ONLY to `OperatingLeaseLiability`
+  (Phase B post-launch hotfix `2d15e9e`).
+
+  Cross-checked against `docs/columns name.txt`: also added
+  `us-gaap:DepreciationAmortizationAndAccretionNet` (D&A umbrella for
+  energy/utility filers), `us-gaap:DebtInstrumentCarryingAmount`, and
+  `us-gaap:OtherShortTermBorrowings` to the corresponding US-GAAP lookup lists
+  for completeness.
+
 - [ ] **Step B6.4: Update `GetSupportedConcepts()`** to include the IFRS tags as `"ifrs-full:Revenue"`, `"ifrs-full:ProfitLossFromOperatingActivities"`, etc. so the documentation surface stays accurate.
 
 - [ ] **Step B6.5: Add `TestParser_ParseFinancialData_TSM_IFRS_HappyPath`** using `testdata/tsm_ifrs_minimal.json`. Asserts:
