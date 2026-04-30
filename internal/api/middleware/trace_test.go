@@ -1094,6 +1094,99 @@ func TestTrace_OnQualityFlag_AutoBundle_WhenThresholdExceeded(t *testing.T) {
 		"auto-triggered bundle must record trigger=on_quality_flag")
 }
 
+// TestTrace_OnQualityFlag_HandlerPanic_StillBundles is the on_quality_flag
+// twin of TestTrace_OnError_HandlerPanic_StillBundles (REVIEWER HIGH-4).
+// The Phase 2.A defer+recover() that wraps the post-c.Next() block is
+// structurally trigger-agnostic: it finalises the deferred bundle no matter
+// which auto-trigger ends up winning the precedence ladder. This test pins
+// that contract for the on_quality_flag path so a future refactor that
+// (e.g.) accidentally moves the Promote/Close logic out of the defer is
+// caught for BOTH triggers, not just on_error. QA flagged this as
+// MINOR Finding #1 — implicit coverage exists via the trigger-agnostic
+// defer, but a dedicated test documents intent and tightens the seam.
+//
+// Setup mirrors the on_error panic test EXCEPT:
+//   - Only QualityFlagThreshold is configured (OnError is OFF). Otherwise
+//     the on_error fallback branch in trace.go's precedence ladder could
+//     mask a regression in the on_quality_flag branch — both branches
+//     would fire on a panic and on_quality_flag would still "win" by
+//     precedence, hiding the on_error fallback even working.
+//   - The handler records 2 qualifying flags via the bundle API BEFORE
+//     panicking. Without a non-zero count the on_quality_flag branch
+//     short-circuits (count==0) and no auto-trigger fires, so we'd be
+//     testing the dissolve path instead of the promote path.
+//
+// Verifies:
+//   - The bundle directory exists on disk (the panic must NOT skip Promote).
+//   - The manifest's trigger is "on_quality_flag" (NOT "on_error" — with
+//     OnError off there is no on_error fallback to win precedence; this
+//     pins that the panic forcing respOutcome=error doesn't accidentally
+//     route to a non-existent on_error trigger).
+//   - The manifest's outcome is "error" (panic forces it via the defer's
+//     `panicked || status>=500` check, even when no outer recovery has yet
+//     translated the panic to a 500 response).
+//   - gin.Recovery — registered OUTSIDE trace, mirroring the on_error
+//     panic test — still translates the re-raised panic into a 500.
+func TestTrace_OnQualityFlag_HandlerPanic_StillBundles(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-panic-onqualityflag"))
+	// Recovery is registered FIRST (outside trace), so a panic from the
+	// handler propagates back through trace's c.Next() to here. Pre-fix,
+	// trace's post-c.Next() block — including Promote — was skipped.
+	// Post-fix, the defer captures the panic, runs Promote, then re-raises
+	// for Recovery to translate into a 500.
+	r.Use(gin.Recovery())
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				// ONLY on_quality_flag — see test doc above for why we
+				// deliberately leave OnError off.
+				QualityFlagThreshold: "warning",
+			},
+		},
+	))
+	r.GET("/boom", func(c *gin.Context) {
+		// Record qualifying flags BEFORE panicking so the deferred bundle
+		// has a non-zero count when the defer's precedence ladder runs.
+		// Without this the on_quality_flag branch's `count > 0` guard
+		// would short-circuit and no auto-trigger would fire.
+		if b := artifact.From(c.Request.Context()); b != nil {
+			b.RecordQualityFlagCount(2)
+		}
+		// Synthetic panic — same shape as the on_error panic test.
+		panic("synthetic handler panic for trace HIGH-4 (on_quality_flag)")
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	r.ServeHTTP(w, req)
+
+	// gin.Recovery translates the re-raised panic into a 500.
+	require.Equal(t, http.StatusInternalServerError, w.Code,
+		"outer Recovery middleware must still see the re-raised panic")
+
+	// Bundle directory must exist on disk despite the panic.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath,
+		"on_quality_flag bundle must exist on disk even when the handler panics")
+
+	// Manifest must reflect the on_quality_flag auto-trigger and the error
+	// outcome forced by the panic.
+	body, err := os.ReadFile(mfPath)
+	require.NoError(t, err)
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(body, &mf))
+	assert.Equal(t, "on_quality_flag", mf.Trigger,
+		"panicking handler that pre-recorded flags must promote with trigger=on_quality_flag")
+	assert.Equal(t, "error", mf.Outcome,
+		"panicked request must record outcome=error in the manifest")
+}
+
 // TestTrace_OnQualityFlag_NoBundle_WhenUnderThreshold — handler records
 // zero qualifying flags, status 200, on_error off. NO bundle directory may
 // be created. This is the dominant production path when the trigger is
