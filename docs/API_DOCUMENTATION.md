@@ -1185,9 +1185,10 @@ When deeper forensics are needed than the structured log stream alone provides �
 |---------|---------------|---------------|--------------------------|
 | Header  | `X-Midas-Trace: 1` on the request | Always (when client opts in) | `header` |
 | Query   | `?trace=1` on the request URL | Always (when client opts in) | `query`  |
+| On-quality-flag | `logging.artifact_store.triggers.quality_flag_threshold=<severity>` config | Cleaner output contains 1+ flags at-or-above the configured severity (`info`/`low`/`warning`/`medium`/`high`/`critical`) | `on_quality_flag` |
 | On-error | `logging.artifact_store.triggers.on_error=true` config | Response status >= 500 | `on_error` |
 
-Without any trigger fired, **no bundle is written** and there is zero per-request disk overhead. Manual triggers (header/query) take precedence over `on_error` for the manifest's `trigger` field — a manually-traced 5xx is still attributed to the client.
+Without any trigger fired, **no bundle is written** and there is zero per-request disk overhead. Precedence ladder when multiple triggers fire on the same request: **manual (header/query) > on_quality_flag > on_error**. `Promote()` is called exactly once per request — a manually-traced 5xx with quality flags is still attributed to the client; a 5xx with quality flags is attributed to `on_quality_flag` (more diagnostic than just "5xx happened").
 
 #### Opt-in by client (per request)
 
@@ -1211,14 +1212,42 @@ Set `logging.artifact_store.triggers.on_error=true` (or env var `LOGGING_ARTIFAC
 
 If `Promote()` itself fails (disk-full, mkdir error), a `trace.bundle.promote_failed` Warn line fires with the request_id and error; the response still completes normally with the original 5xx status, and the `response.sent` narrate line omits the `artifact_path` field so operators don't follow a dead link.
 
+#### Auto-capture on data-quality flags (server-driven)
+
+Set `logging.artifact_store.triggers.quality_flag_threshold` to a severity level (or env var `LOGGING_ARTIFACT_STORE_TRIGGERS_QUALITY_FLAG_THRESHOLD=warning`) and any request whose data cleaner produces 1+ flags at-or-above that severity will produce a bundle, even without `?trace=1`. Accepted values: `info`, `low`, `warning`, `medium`, `high`, `critical`. Default `""` (disabled).
+
+The threshold uses **at-or-above** semantics on a unified rank: `info`/`low`=1, `warning`/`medium`=2, `high`=3, `critical`=4. So `quality_flag_threshold=warning` catches `warning`, `medium`, `high`, AND `critical` flags — not just warnings. The two parallel severity vocabularies (`info`/`warning` legacy + `low`/`medium`/`high` modern) are collapsed; a flag's vocabulary doesn't matter, only its rank.
+
+**Operator-friendly value normalisation**: the configured value is lowercased and trimmed at config-load, so `LOGGING_ARTIFACT_STORE_TRIGGERS_QUALITY_FLAG_THRESHOLD=Warning` (uppercase, the conventional env-var style) and `" warning "` (YAML-quoting whitespace) both resolve to canonical `warning`. **Typos fail loud, not silently**: an unknown value like `warnng` triggers a startup Warn line `config.artifact_store.quality_flag_threshold.unknown` so operators learn from the boot log instead of from a missing bundle during an incident. The trigger then fails closed (no bundles produced) until the typo is corrected.
+
+The cleaner counts qualifying flags on BOTH the cache-miss AND cache-hit paths via a shared helper, so a repeat-ticker request whose cleaning result is served from cache (default 6h TTL) still triggers the bundle. This is the dominant production path for triage — operators querying the same suspect ticker repeatedly get a bundle every time, not just on first touch.
+
+#### Operator log signal — `trace.bundle.promoted`
+
+After any auto-trigger Promote succeeds (`on_error` OR `on_quality_flag`), the trace middleware emits a structured Info line:
+
+```json
+{
+  "level": "info",
+  "msg": "trace.bundle.promoted",
+  "request_id": "req_01HW8ZQXKR...",
+  "trigger": "on_quality_flag",
+  "artifact_path": "/var/midas/artifacts/2026-04-29/AAPL/req_01HW8ZQXKR.../"
+}
+```
+
+Operators tailing the host log can `grep trace.bundle.promoted host.log | jq '.artifact_path'` to enumerate every auto-bundle created today and navigate directly to its directory. Manual triggers (`?trace=1`/`X-Midas-Trace`) do NOT emit this line because the client already knows the bundle is being created — the line exists specifically for the auto-trigger surprise case where the operator didn't ask for capture but got one anyway.
+
+The line does NOT fire when Promote itself fails — that path emits `trace.bundle.promote_failed` Warn instead, so the two log keys are mutually exclusive on a given request.
+
 #### Server-side gate
 
 Capture is also gated by `logging.artifact_store.enabled` (master switch). Defaults:
 
 | Environment | `artifact_store.enabled` | Effect |
 |-------------|--------------------------|--------|
-| `development` | `true` | Per-request bundles honored when client opts in OR when `triggers.on_error` fires |
-| `staging`, `production` | `false` | Opt-in flag is recognized but the bundle is suppressed (logged as `trace_enabled=false reason=disabled`); `on_error` trigger inert |
+| `development` | `true` | Per-request bundles honored when client opts in OR when `triggers.on_error` / `triggers.quality_flag_threshold` fires |
+| `staging`, `production` | `false` | Opt-in flag is recognized but the bundle is suppressed (logged as `trace_enabled=false reason=disabled`); both `on_error` and `on_quality_flag` triggers inert |
 
 Override via `LOGGING_ARTIFACT_STORE_ENABLED=true|false`.
 
@@ -1295,7 +1324,7 @@ The numeric prefix matches the narrate phase number (see `internal/observability
 | `bundle_version` | Bundle layout version (`"1.0"` for Phase 1) |
 | `request_id` | Same value carried on every log line and the response header |
 | `ticker` | Late-bound after URL parsing; may be `_no-ticker` for early-failing requests |
-| `trigger` | `header` (X-Midas-Trace: 1), `query` (?trace=1), or `on_error` (auto-capture on HTTP >= 500). Manual triggers always win when both fire on the same request |
+| `trigger` | `header` (X-Midas-Trace: 1), `query` (?trace=1), `on_quality_flag` (auto-capture when cleaner raises 1+ flags at-or-above configured severity), or `on_error` (auto-capture on HTTP >= 500). Precedence when multiple fire on the same request: manual > on_quality_flag > on_error |
 | `outcome` | `ok` / `partial` (some snapshots failed to write, were dropped, or exceeded the per-line cap — see `notes`) / `error` (HTTP status >= 500) |
 | `notes` | Human-readable annotation. When any of `write_failures`, `queue_drops`, or `oversize_lines` is non-zero, formatted as `"write_failures=N queue_drops=M oversize_lines=O"` |
 | `phases_recorded[]` | Index of which pipeline phases contributed files |
