@@ -92,6 +92,15 @@ func NewServer(
 		metricsService:   metricsService,
 	}
 
+	// Phase 2.B post-launch (REVIEWER MEDIUM-1): emit a Warn during boot when
+	// an operator set logging.artifact_store.triggers.quality_flag_threshold
+	// to an unknown value (typo, unsupported severity). config.Load already
+	// normalised case + whitespace, so anything still unrecognised here is a
+	// genuine misconfiguration that would silently disable the trigger.
+	// Surfacing it on the boot log turns a multi-day post-incident mystery
+	// into a five-second log search.
+	config.ValidateArtifactTriggers(cfg.Logging.ArtifactStore.Triggers, logger)
+
 	// Setup all middleware in setupMiddleware (single source of truth for the chain)
 	server.setupMiddleware()
 

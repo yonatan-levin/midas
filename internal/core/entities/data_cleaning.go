@@ -63,6 +63,33 @@ const (
 	Critical FlagSeverity = "critical"
 )
 
+// KnownFlagSeverities is the canonical list of every FlagSeverity value
+// the system understands. It exists so external consumers (config
+// validation, severity-rank exhaustiveness tests, observability triggers)
+// can iterate the set without reflecting over the package or hard-coding
+// a duplicate list.
+//
+// Order is deliberate: increasing severity (with the legacy aliases
+// adjacent to their modern counterparts), but callers must not depend on
+// order — treat this as a set.
+//
+// IMPORTANT: any new FlagSeverity constant added above MUST also be
+// appended here, or it will silently fall outside config validation and
+// severity-rank coverage. The TestSeverityRank_AllKnownSeveritiesRank_NonZero
+// test pins this contract.
+//
+//nolint:gochecknoglobals // immutable canonical-set sentinel; not mutable state
+var KnownFlagSeverities = []FlagSeverity{
+	Info,
+	FlagSeverityLow,
+	Warning,
+	FlagSeverityMedium,
+	FlagSeverityHigh,
+	FlagSeverityCritical,
+	// Critical is the same string ("critical") as FlagSeverityCritical;
+	// listing it again would be a duplicate entry, not a separate value.
+}
+
 // ThresholdConfig defines conditional logic for rule application
 type ThresholdConfig struct {
 	// Percentage-based thresholds

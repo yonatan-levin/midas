@@ -351,6 +351,14 @@ func Load() (*Config, error) {
 		config.Logging.Level = config.LogLevel
 	}
 
+	// Phase 2.B post-launch (REVIEWER MEDIUM-1): canonicalise operator-set
+	// auto-trigger thresholds (lowercase + trim) so case/whitespace typos
+	// in env vars or YAML resolve to the same comparison vocabulary the
+	// runtime uses. The matching warn-on-unknown step lives in
+	// ValidateArtifactTriggers, called from server boot where the singleton
+	// *zap.Logger is in scope.
+	normalizeArtifactTriggers(&config.Logging.ArtifactStore.Triggers)
+
 	// Validate configuration
 	if err := validate(&config); err != nil {
 		return nil, fmt.Errorf("config validation failed: %w", err)
