@@ -163,6 +163,86 @@ func TestCleanService_RecordsQualityFlagCount_WhenBundleOnContext(t *testing.T) 
 		"bundle's QualityFlagCount must equal the cleaner's qualifying-flag count")
 }
 
+// TestCleanService_RecordsQualityFlagCount_OnCacheHit — REVIEWER HIGH-1
+// regression pin. When EnableCaching is on (the default) and a cleaning
+// result is already cached for the input, CleanFinancialData previously
+// returned the cached result BEFORE reaching the post-clean
+// RecordQualityFlagCount hook. Net effect: the FIRST request for a
+// flagged ticker captured correctly, but every subsequent (cached) request
+// fell through with QualityFlagCount() == 0 and the deferred bundle
+// dissolved.
+//
+// This test exercises the cache path explicitly: two back-to-back calls
+// against the same service instance, with a deferred bundle on ctx for
+// each. Both bundles must end with the SAME (non-zero) qualifying-flag
+// count. The second call IS the cache-hit path — ProcessingTime on the
+// second result will be near-instantaneous, confirming the cache served
+// it (rather than a re-run).
+func TestCleanService_RecordsQualityFlagCount_OnCacheHit(t *testing.T) {
+	cfg := createTestConfig()
+	// Caching is enabled by createTestConfig(), and we want it ON — the
+	// whole point of this test is to exercise the cache-hit path.
+	require.True(t, cfg.DataCleaner.EnableCaching,
+		"test prerequisite: DataCleaner.EnableCaching must be true to exercise the cache-hit path")
+	svc, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
+	require.NoError(t, err)
+
+	// Single FinancialData reused across both calls — generateCacheKey
+	// hashes (Ticker, FilingPeriod, FilingDate.Unix()) so identical input
+	// hits the same cache entry.
+	data := &entities.FinancialData{
+		Ticker:                   "TEST1",
+		Revenue:                  500_000_000,
+		TotalAssets:              1_000_000_000,
+		Goodwill:                 400_000_000, // 40% — triggers excessive_goodwill_warning (severity=warning)
+		SharesOutstanding:        100_000_000,
+		DilutedSharesOutstanding: 100_000_000,
+		FilingPeriod:             "2024Q3",
+		FilingDate:               time.Now().AddDate(0, -3, 0),
+		HasNormalizedData:        true,
+	}
+
+	// Helper: open a fresh deferred bundle, run CleanFinancialData with it
+	// on ctx, return the bundle and the cleaning result.
+	runOnce := func(rid string) (*artifact.Bundle, *entities.CleaningResult) {
+		bundleCfg := artifact.Config{
+			Enabled:  true,
+			RootPath: t.TempDir(),
+			Triggers: artifact.TriggerConfig{
+				QualityFlagThreshold: "warning",
+			},
+		}
+		b, err := artifact.OpenDeferredBundle(bundleCfg, rid, "TEST", artifact.TriggerOnQualityFlag)
+		require.NoError(t, err)
+		require.NotNil(t, b)
+		t.Cleanup(func() { _ = b.Close() })
+
+		ctx := artifact.Inject(context.Background(), b)
+		result, err := svc.CleanFinancialData(ctx, data)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		return b, result
+	}
+
+	// First call — cache MISS. Walks the full pipeline and records the
+	// count via the post-clean hook.
+	b1, r1 := runOnce("rid-cache-miss")
+	require.NotEmpty(t, r1.Flags, "test data must produce at least one cleaner flag for this assertion to be meaningful")
+	count1 := b1.QualityFlagCount()
+	require.Greater(t, count1, int64(0),
+		"first (cache-miss) call must record a non-zero qualifying-flag count")
+
+	// Second call — cache HIT. PRE-FIX behaviour: returns cached result
+	// before reaching the hook, so b2.QualityFlagCount() == 0 and the
+	// trigger silently dissolves. POST-FIX: the cache-hit path records the
+	// count too, so b2 sees the same total as b1.
+	b2, _ := runOnce("rid-cache-hit")
+	count2 := b2.QualityFlagCount()
+	assert.Equal(t, count1, count2,
+		"cache-hit path must record the same qualifying-flag count as the cache-miss path; got first=%d second=%d (HIGH-1 regression)",
+		count1, count2)
+}
+
 // TestCleanService_NoOpWhenBundleAbsent — the cleaner must not panic and
 // must not allocate when no bundle is on ctx (the dominant production path
 // when the trigger is disabled). This guards against a regression that

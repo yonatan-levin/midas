@@ -137,6 +137,16 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 		if cachedResult := s.getCachedResult(cacheKey); cachedResult != nil {
 			// Update processing time for the cache hit
 			cachedResult.ProcessingTime = time.Since(startTime)
+			// Phase 2.B fix (REVIEWER HIGH-1): record qualifying flag count
+			// on cache HITS too. Without this, the auto-on-quality-flag
+			// trigger only ever fires on the FIRST request for a flagged
+			// ticker — every subsequent (cached) request returns here with
+			// QualityFlagCount() == 0 and the deferred bundle dissolves at
+			// request-end even though the response carried flagged data.
+			// Repeat queries on the same suspect ticker are precisely the
+			// requests operators are most likely to be diagnosing, so they
+			// must not be silently dropped from the trigger path.
+			recordQualityFlagCount(ctx, cachedResult.Flags)
 			return cachedResult, nil
 		}
 	}
@@ -279,14 +289,16 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 		// back to the bundle. The trace middleware reads this post-c.Next()
 		// to decide whether to Promote with TriggerOnQualityFlag.
 		//
-		// We skip the count when the threshold is empty so we don't pay the
-		// rank-comparison cost on every clean call when the trigger is off.
-		// countQualifyingFlags itself short-circuits on empty threshold, but
-		// the explicit gate keeps the intent obvious to readers and avoids
-		// even the slice walk.
-		if threshold := b.QualityFlagThreshold(); threshold != "" {
-			b.RecordQualityFlagCount(countQualifyingFlags(result.Flags, threshold))
-		}
+		// LOW-2 note: the count is recorded unconditionally on any bundle
+		// (eager OR deferred). On EAGER bundles (manual ?trace=1 / header
+		// path) the recorded count is dead state — manual promotion already
+		// flushed the bundle to disk and the trigger ladder never consults
+		// the count. We accept that wasted state because (a) the alternative
+		// is plumbing a "is-deferred" flag through the bundle API just to
+		// gate one Add(), and (b) the count fields are atomic.Int64 so the
+		// eager-bundle write is a single atomic op — cheaper than the gate
+		// would be.
+		recordQualityFlagCount(ctx, result.Flags)
 	}
 
 	return result, nil

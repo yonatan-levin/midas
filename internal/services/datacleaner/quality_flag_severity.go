@@ -30,7 +30,10 @@ package datacleaner
 // firing) rather than open (firing on every request).
 
 import (
+	"context"
+
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 )
 
 // severityRank returns the numeric rank for a FlagSeverity value.
@@ -54,6 +57,40 @@ func severityRank(s entities.FlagSeverity) int {
 	default:
 		return 0
 	}
+}
+
+// recordQualityFlagCount looks up the artifact bundle on ctx (if any),
+// counts the qualifying flags at or above the bundle's configured severity
+// threshold, and reports the count to the bundle via RecordQualityFlagCount.
+//
+// Single hook used by BOTH the cache-miss post-clean path AND the cache-hit
+// short-circuit (REVIEWER HIGH-1 fix). Routing both call sites through the
+// same helper guarantees that a cached-result return path can never silently
+// drop the count and let the auto-on-quality-flag trigger dissolve.
+//
+// No-op when:
+//   - no bundle is on ctx (the dominant production path when the trigger is
+//     off — middleware only opens a deferred bundle when at least one auto-
+//     trigger is configured),
+//   - the bundle is nil (defensive),
+//   - the bundle's threshold is empty (trigger disabled at config time).
+//
+// Cheap and concurrency-safe: artifact.From is a context lookup,
+// QualityFlagThreshold is a struct-field read, and RecordQualityFlagCount
+// uses atomic.Int64 internally.
+func recordQualityFlagCount(ctx context.Context, flags []entities.Flag) {
+	b := artifact.From(ctx)
+	if b == nil {
+		return
+	}
+	threshold := b.QualityFlagThreshold()
+	if threshold == "" {
+		// Skip the slice walk when the trigger is off. countQualifyingFlags
+		// itself short-circuits on empty threshold, but the explicit gate
+		// keeps intent obvious to readers and avoids the no-op call.
+		return
+	}
+	b.RecordQualityFlagCount(countQualifyingFlags(flags, threshold))
 }
 
 // countQualifyingFlags returns the count of flags whose severity ranks
