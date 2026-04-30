@@ -1,28 +1,16 @@
 {
   "info": {
     "name": "Midas DCF Valuation API",
-    "description": "REST API for equity valuation using Discounted Cash Flow (DCF) analysis.\n\nComputes intrinsic value per share from SEC filings, Yahoo Finance market data, and FRED macro indicators.",
+    "description": "REST API for equity valuation using Discounted Cash Flow (DCF) analysis.\n\nComputes intrinsic value per share from SEC filings, Yahoo Finance market data, and FRED macro indicators. Domestic 10-K filers and most foreign-private-issuer ADRs (TSM, ASML, BABA, …) are supported via the IFRS-FPI pipeline; per-ADR fair values are FX-converted to USD and divided by the configured depositary ratio so they compare like-for-like with the listed exchange price.\n\nEvery successful response carries `current_price`, `currency`, and `adr_ratio_applied` so consumers can compute the upside/downside discount without a second quote lookup.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
     "_exporter_id": "midas-dcf-api"
   },
   "auth": {
     "type": "apikey",
     "apikey": [
-      {
-        "key": "key",
-        "value": "X-API-Key",
-        "type": "string"
-      },
-      {
-        "key": "value",
-        "value": "{{api_key}}",
-        "type": "string"
-      },
-      {
-        "key": "in",
-        "value": "header",
-        "type": "string"
-      }
+      { "key": "key", "value": "X-API-Key", "type": "string" },
+      { "key": "value", "value": "{{api_key}}", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
     ]
   },
   "variable": [
@@ -34,13 +22,14 @@
     {
       "key": "api_key",
       "value": "dcf_demo_3a4a5b6c7d8e9f00112233445566778899aabbccddeeff001122334455667788",
-      "type": "string"
+      "type": "string",
+      "description": "Default demo key created by `cmd/migrate`. For production, replace with a key minted via POST /api/v1/auth/keys."
     }
   ],
   "item": [
     {
       "name": "Health",
-      "description": "Health check and readiness endpoints (no auth required)",
+      "description": "Health, readiness, and version endpoints. The first three are public; `/api/v1/health/detailed` requires `read:health`.",
       "item": [
         {
           "name": "Liveness Probe",
@@ -53,7 +42,7 @@
               "host": ["{{base_url}}"],
               "path": ["health"]
             },
-            "description": "Basic liveness check. Returns 200 if the service is running."
+            "description": "Basic liveness check. Returns 200 if the service process is running. No auth, no DB hit — safe to poll from a load-balancer."
           }
         },
         {
@@ -67,7 +56,7 @@
               "host": ["{{base_url}}"],
               "path": ["ready"]
             },
-            "description": "Readiness check. Verifies database, cache, and external API connectivity."
+            "description": "Readiness check. Verifies the database is reachable and the cache is up. Use this for Kubernetes readiness probes."
           }
         },
         {
@@ -81,7 +70,7 @@
               "host": ["{{base_url}}"],
               "path": ["version"]
             },
-            "description": "Returns application version, environment, build time, and git commit."
+            "description": "Returns application version, environment, build time, and git commit. No auth required."
           }
         },
         {
@@ -94,17 +83,17 @@
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "health", "detailed"]
             },
-            "description": "Detailed component health check. Returns 200 (healthy), 206 (degraded), or 503 (unhealthy). Requires `read:health` permission."
+            "description": "Per-component health: SEC EDGAR, Yahoo Finance, FRED, database, cache. Returns 200 (healthy), 206 (degraded), or 503 (unhealthy). Requires `read:health` permission."
           }
         }
       ]
     },
     {
       "name": "Fair Value",
-      "description": "DCF valuation endpoints. Requires `read:fair_value` permission.",
+      "description": "DCF valuation endpoints. All require `read:fair_value`. Responses include `current_price` (live quote), `currency` (always USD post-conversion), `adr_ratio_applied` (1 for domestic; 5/8/10/… for ADRs), and `sanity_check` (DCF-implied multiples vs sector medians).",
       "item": [
         {
-          "name": "Get Fair Value (Single Ticker)",
+          "name": "Fair Value — Domestic (AAPL)",
           "request": {
             "method": "GET",
             "header": [],
@@ -113,11 +102,64 @@
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "fair-value", "AAPL"]
             },
-            "description": "Calculate intrinsic fair value for a single stock using DCF and net tangible assets.\n\nReturns WACC, growth rate, tangible value per share, DCF value per share, and data quality metrics."
-          }
+            "description": "Calculate intrinsic fair value for a single domestic 10-K filer. Response includes `dcf_value_per_share`, `current_price` (live quote), `tangible_value_per_share`, plus WACC and growth assumptions. `adr_ratio_applied` is 1 for domestic filers."
+          },
+          "response": [
+            {
+              "name": "200 OK — Domestic ticker",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/fair-value/AAPL",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "v1", "fair-value", "AAPL"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"ticker\": \"AAPL\",\n  \"wacc\": 0.0929,\n  \"growth_rate\": 0.0685,\n  \"growth_rates\": [0.0685, 0.0685, 0.0685, 0.0685, 0.0685, 0.0685, 0.0685],\n  \"growth_source\": \"analyst_blend\",\n  \"growth_confidence\": \"high\",\n  \"tangible_value_per_share\": 25.84,\n  \"dcf_value_per_share\": 48.78,\n  \"as_of\": \"2026-04-30T10:48:05Z\",\n  \"data_quality_score\": 100,\n  \"data_quality_grade\": \"A\",\n  \"calculation_method\": \"multi_stage_dcf\",\n  \"calculation_version\": \"4.0\",\n  \"sanity_check\": {\n    \"implied_pe\": 17.16,\n    \"sector_median_pe\": 28,\n    \"implied_ev_ebitda\": 14.16,\n    \"sector_median_ev_ebitda\": 18,\n    \"implied_pfcf\": 16.82,\n    \"sector_median_pfcf\": 32,\n    \"is_reasonable\": true\n  },\n  \"industry\": {\n    \"sic_code\": \"3571\",\n    \"sic\": \"TECH\",\n    \"heuristic_code\": \"45\",\n    \"heuristic_name\": \"Information Technology\",\n    \"match\": true\n  },\n  \"currency\": \"USD\",\n  \"adr_ratio_applied\": 1,\n  \"current_price\": 270.17\n}"
+            }
+          ]
         },
         {
-          "name": "Get Fair Value (with Overrides)",
+          "name": "Fair Value — ADR / IFRS (TSM)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/fair-value/TSM",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "fair-value", "TSM"]
+            },
+            "description": "Calculate fair value for a foreign-private-issuer ADR (Taiwan Semiconductor). Demonstrates the IFRS-FPI pipeline: SEC's IFRS-full XBRL is parsed, monetary values are FX-converted from TWD to USD via FRED, and ordinary-share counts are divided by the depositary ratio (TSM=5) so `dcf_value_per_share` and `current_price` are both per-ADR USD and directly comparable.\n\nNote `adr_ratio_applied: 5` and `currency: \"USD\"` on the response."
+          },
+          "response": [
+            {
+              "name": "200 OK — ADR (TSM)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/fair-value/TSM",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "v1", "fair-value", "TSM"]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"ticker\": \"TSM\",\n  \"wacc\": 0.1034,\n  \"growth_rate\": 0.1928,\n  \"growth_rates\": [0.2393, 0.2393, 0.2393, 0.2074, 0.1756, 0.1437, 0.1119],\n  \"growth_source\": \"analyst_blend\",\n  \"growth_confidence\": \"high\",\n  \"tangible_value_per_share\": 40.26,\n  \"dcf_value_per_share\": 114.79,\n  \"as_of\": \"2026-04-30T10:48:13Z\",\n  \"data_quality_score\": 100,\n  \"data_quality_grade\": \"A\",\n  \"calculation_method\": \"multi_stage_dcf\",\n  \"calculation_version\": \"4.0\",\n  \"sanity_check\": {\n    \"implied_pe\": 16.49,\n    \"sector_median_pe\": 16,\n    \"implied_ev_ebitda\": 9.16,\n    \"sector_median_ev_ebitda\": 10,\n    \"implied_pfcf\": 22.32,\n    \"sector_median_pfcf\": 18,\n    \"is_reasonable\": true\n  },\n  \"industry\": {\n    \"sic_code\": \"3674\",\n    \"sic\": \"MFG\",\n    \"heuristic_code\": \"20\",\n    \"heuristic_name\": \"Industrials\",\n    \"match\": true\n  },\n  \"currency\": \"USD\",\n  \"adr_ratio_applied\": 5,\n  \"current_price\": 393.83\n}"
+            }
+          ]
+        },
+        {
+          "name": "Fair Value — With Overrides (MSFT)",
           "request": {
             "method": "GET",
             "header": [],
@@ -129,28 +171,23 @@
                 {
                   "key": "override_beta",
                   "value": "1.1",
-                  "description": "Override beta for WACC calculation (0-3)"
+                  "description": "Override beta for WACC calculation (0 - 3.0). Bypasses the cached Yahoo-derived beta — useful when you want to test sensitivity or skip cached data."
                 },
                 {
                   "key": "override_rf",
                   "value": "0.045",
-                  "description": "Override risk-free rate (0-0.2)"
+                  "description": "Override risk-free rate (0 - 0.20). Bypasses the FRED 10Y Treasury — useful for stress-testing under hypothetical rate scenarios."
                 }
               ]
             },
-            "description": "Calculate fair value with custom beta and risk-free rate overrides."
+            "description": "Calculate fair value with custom beta and risk-free rate overrides. Setting either override also bypasses the response cache, which is the recommended way to force a fresh computation when debugging."
           }
         },
         {
-          "name": "Bulk Fair Value",
+          "name": "Fair Value — Bulk",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"tickers\": [\"AAPL\", \"MSFT\", \"GOOGL\"],\n  \"override_beta\": null,\n  \"override_rf\": null\n}"
@@ -160,14 +197,71 @@
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "fair-value", "bulk"]
             },
-            "description": "Calculate fair values for multiple stocks (max 10) in a single request.\n\nReturns individual results plus a summary with success/failure counts."
-          }
+            "description": "Calculate fair values for up to 10 tickers in one round-trip. HTTP status reflects outcome: 200 (all succeeded), 207 (partial — `failures` list explains per-ticker errors), or 422 (all failed). Each result has the same shape as the single-ticker response, including `current_price`, `currency`, and `adr_ratio_applied`."
+          },
+          "response": [
+            {
+              "name": "207 Multi-Status — Partial success",
+              "originalRequest": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\"tickers\":[\"AAPL\",\"TSM\",\"NOPE1\"]}"
+                },
+                "url": {
+                  "raw": "{{base_url}}/api/v1/fair-value/bulk",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "v1", "fair-value", "bulk"]
+                }
+              },
+              "status": "Multi-Status",
+              "code": 207,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/json" }],
+              "cookie": [],
+              "body": "{\n  \"results\": [\n    { \"ticker\": \"AAPL\", \"dcf_value_per_share\": 48.78, \"current_price\": 270.17, \"currency\": \"USD\", \"adr_ratio_applied\": 1, \"data_quality_grade\": \"A\" },\n    { \"ticker\": \"TSM\",  \"dcf_value_per_share\": 114.79, \"current_price\": 393.83, \"currency\": \"USD\", \"adr_ratio_applied\": 5, \"data_quality_grade\": \"A\" }\n  ],\n  \"failures\": [\n    { \"ticker\": \"NOPE1\", \"error_code\": \"TICKER_NOT_FOUND\", \"message\": \"Ticker not found in any data source\" }\n  ],\n  \"summary\": { \"total_requested\": 3, \"successful\": 2, \"failed\": 1 }\n}"
+            }
+          ]
+        },
+        {
+          "name": "Fair Value — FPI Unsupported (example error)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/fair-value/SONY",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "fair-value", "SONY"]
+            },
+            "description": "Illustrates the `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` 422 returned for 20-F filers using a taxonomy or reporting currency the IFRS-FPI pipeline does not yet cover (JGAAP, K-IFRS, ifrs-smes, or currencies absent from FRED + `config/fx_rates.json`).\n\nThis is distinct from `INSUFFICIENT_DATA` — most ADRs (TSM, ASML, NVO, AZN, BABA, BIDU, TM, RIO, BHP, NVS, SHEL, BP) are fully supported and produce real per-ADR USD valuations."
+          },
+          "response": [
+            {
+              "name": "422 Unprocessable Entity — FPI unsupported",
+              "originalRequest": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{base_url}}/api/v1/fair-value/SONY",
+                  "host": ["{{base_url}}"],
+                  "path": ["api", "v1", "fair-value", "SONY"]
+                }
+              },
+              "status": "Unprocessable Entity",
+              "code": 422,
+              "_postman_previewlanguage": "json",
+              "header": [{ "key": "Content-Type", "value": "application/problem+json" }],
+              "cookie": [],
+              "body": "{\n  \"type\": \"https://problems.midas.dev/FOREIGN_PRIVATE_ISSUER_UNSUPPORTED\",\n  \"title\": \"Foreign private issuer not covered\",\n  \"status\": 422,\n  \"detail\": \"This ticker files using a taxonomy or currency pair Midas does not yet cover. Supported: ifrs-full taxonomy with FRED-tracked currencies (TWD, EUR, JPY, GBP, HKD, CNY, KRW, CHF, CAD, AUD, INR, BRL, DKK).\",\n  \"instance\": \"/api/v1/fair-value/SONY\",\n  \"context\": { \"ticker\": \"SONY\", \"filing_type\": \"20-F\", \"taxonomy\": \"ifrs-full\" },\n  \"code\": \"FOREIGN_PRIVATE_ISSUER_UNSUPPORTED\",\n  \"timestamp\": \"2026-04-30T10:50:00Z\",\n  \"method\": \"GET\"\n}"
+            }
+          ]
         }
       ]
     },
     {
       "name": "Metrics",
-      "description": "Application and business metrics endpoints.",
+      "description": "Application and business metrics. Prometheus endpoint is public; the JSON application metrics require `read:metrics`.",
       "item": [
         {
           "name": "Prometheus Metrics",
@@ -180,7 +274,7 @@
               "host": ["{{base_url}}"],
               "path": ["metrics"]
             },
-            "description": "Prometheus-format metrics for monitoring systems. No authentication required."
+            "description": "Prometheus-format metrics exposition. Scrape this endpoint from your Prometheus server. No authentication required (lock down at the network layer if needed)."
           }
         },
         {
@@ -193,25 +287,20 @@
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "metrics"]
             },
-            "description": "Application and business metrics in JSON format. Requires `read:metrics` permission."
+            "description": "Application and business metrics in JSON form: request counts, valuation success/failure breakdowns, cache hit ratios, gateway latencies. Requires `read:metrics` permission."
           }
         }
       ]
     },
     {
       "name": "Auth",
-      "description": "API key management. Requires `manage:keys` permission.",
+      "description": "API key management. Requires `manage:keys` permission. The raw key is only returned in the response body of `POST /keys` — store it immediately, the system only persists the hash.",
       "item": [
         {
           "name": "Create API Key",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"user_id\": \"service-account-1\",\n  \"permissions\": [\"read:fair_value\", \"read:health\"]\n}"
@@ -221,7 +310,7 @@
               "host": ["{{base_url}}"],
               "path": ["api", "v1", "auth", "keys"]
             },
-            "description": "Create a new API key. Returns the raw key (only visible once). Requires `manage:keys` permission.\n\nAvailable permissions: `read:fair_value`, `read:health`, `read:metrics`, `manage:keys`, `admin`."
+            "description": "Mint a new API key. The plaintext value is only returned once — capture it from the response body and store it in your secrets manager. Available permissions: `read:fair_value`, `read:health`, `read:metrics`, `manage:keys`, `admin`."
           }
         }
       ]
