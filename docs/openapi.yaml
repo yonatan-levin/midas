@@ -282,6 +282,19 @@ components:
             share counts by before computing per-share values. 1 for domestic
             10-K filers and unknown tickers; non-1 for configured ADRs (TSM=5,
             BABA=8, ...). Phase B10 of the IFRS-FPI plan. Omitted when zero.
+        current_price:
+          type: number
+          format: float
+          example: 190.25
+          description: |
+            Live per-share market price captured from the market-data gateway
+            (Yahoo Finance / Finzive) at the moment the valuation was computed.
+            Same denomination and per-share basis as dcf_value_per_share and
+            tangible_value_per_share — for ADRs this is the per-ADR exchange
+            price, directly comparable to the per-ADR DCF value the engine
+            produces after applyADRRatio. Surfaced so consumers can compute
+            the upside/downside discount ((dcf - price) / price) without a
+            second quote lookup. Omitted when zero (delisted or unavailable).
     BulkFairValueRequest:
       type: object
       required: [tickers]

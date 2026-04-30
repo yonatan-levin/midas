@@ -87,6 +87,18 @@ type ValuationResult struct {
 	// guessing the ratio.
 	ReportingCurrency string `json:"reporting_currency,omitempty"`
 	ADRRatioApplied   int    `json:"adr_ratio_applied,omitempty"`
+
+	// CurrentPrice is the live per-share market price captured from the
+	// market-data gateway (Yahoo Finance / Finzive) at the moment the
+	// valuation was computed. Denominated in the same units as
+	// DCFValuePerShare and TangibleValuePerShare (USD), and on the same
+	// per-share basis — for ADRs this is the per-ADR price the exchange
+	// publishes (e.g., TSM ≈ $402), which is directly comparable to the
+	// per-ADR DCFValuePerShare produced after applyADRRatio. Surfaced so
+	// API consumers can compute the upside/downside discount in one step
+	// without a separate quote lookup. Zero when no market data was
+	// available; omitempty keeps the JSON clean in that case.
+	CurrentPrice float64 `json:"current_price,omitempty"`
 }
 
 // SanityCheck contains cross-check multiples that compare the DCF-implied valuation

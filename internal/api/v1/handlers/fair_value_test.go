@@ -49,6 +49,12 @@ func newTestFairValueHandler(svc *mockValuationService) *FairValueHandler {
 }
 
 // sampleValuationResult returns a realistic ValuationResult for AAPL.
+//
+// CurrentPrice is set so handler-level tests can verify the
+// market-price plumbing end-to-end: the valuation engine captures
+// the live quote on the result struct, and the HTTP handler must
+// copy it onto FairValueResponse so consumers don't need a second
+// quote lookup to compute upside/downside.
 func sampleValuationResult(ticker string) *entities.ValuationResult {
 	return &entities.ValuationResult{
 		Ticker:                ticker,
@@ -56,6 +62,7 @@ func sampleValuationResult(ticker string) *entities.ValuationResult {
 		GrowthRate:            0.045,
 		TangibleValuePerShare: 24.73,
 		DCFValuePerShare:      156.42,
+		CurrentPrice:          190.25,
 		CalculatedAt:          time.Date(2025, 8, 13, 22, 15, 34, 0, time.UTC),
 		DataQualityScore:      85.5,
 		DataQualityGrade:      "B",
@@ -271,6 +278,11 @@ func TestFairValueHandler_GetFairValue(t *testing.T) {
 				assert.NotEmpty(t, resp.AsOf)
 				assert.InDelta(t, 85.5, resp.DataQualityScore, 1e-6)
 				assert.Equal(t, "B", resp.DataQualityGrade)
+				// CurrentPrice must round-trip from ValuationResult to the
+				// HTTP response so consumers can compute the DCF/market
+				// discount without a second quote lookup. Pinned to the
+				// fixture value in sampleValuationResult.
+				assert.InDelta(t, 190.25, resp.CurrentPrice, 1e-6)
 			},
 		},
 		{

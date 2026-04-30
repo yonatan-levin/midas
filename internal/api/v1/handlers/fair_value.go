@@ -161,6 +161,16 @@ type FairValueResponse struct {
 	// stamps a positive int via ADRRatios.Get, but omitempty keeps the
 	// response clean if a future bug produces 0).
 	ADRRatioApplied int `json:"adr_ratio_applied,omitempty" example:"5"`
+
+	// CurrentPrice is the live per-share market price captured from the
+	// market-data gateway (Yahoo Finance / Finzive) at the moment the
+	// valuation was computed. Same denomination and per-share basis as
+	// DCFValuePerShare and TangibleValuePerShare — for ADRs this is the
+	// per-ADR exchange price, directly comparable to the per-ADR DCF
+	// value the engine produces after applyADRRatio. Surfaced so a
+	// consumer can compute the upside/downside discount ((dcf - price)
+	// / price) without a second quote lookup. Omitted when zero.
+	CurrentPrice float64 `json:"current_price,omitempty" example:"190.25"`
 }
 
 // BulkFairValueRequest represents the request structure for bulk fair value requests
@@ -378,6 +388,7 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		// (defense in depth — the valuation service guarantees "USD" today).
 		Currency:        currencyOrUSD(result.ReportingCurrency),
 		ADRRatioApplied: result.ADRRatioApplied,
+		CurrentPrice:    result.CurrentPrice,
 	}
 
 	// Tier-1 narrate: valuation.computed success line. Carries the headline
@@ -515,6 +526,7 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 			// Phase B12 (IFRS-FPI): mirror single-ticker handler for parity.
 			Currency:        currencyOrUSD(result.ReportingCurrency),
 			ADRRatioApplied: result.ADRRatioApplied,
+			CurrentPrice:    result.CurrentPrice,
 		}
 
 		results = append(results, response)
