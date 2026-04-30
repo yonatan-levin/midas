@@ -1309,3 +1309,174 @@ func TestTrace_OnQualityFlag_PromoteOnce(t *testing.T) {
 	assert.Equal(t, "on_quality_flag", readManifestTrigger(t, root),
 		"single Promote call must use the precedence-winning trigger")
 }
+
+// TestTrace_OnQualityFlag_PromotedLogLine pins REVIEWER MEDIUM-2: after a
+// successful auto-trigger Promote, the trace middleware MUST emit a host-log
+// Info line keyed "trace.bundle.promoted" so operators tailing the host log
+// stream can see WHICH requests created bundles today and WHY without
+// walking the artifacts directory or grepping 99-narrate.jsonl files inside
+// each bundle. The line must carry request_id, trigger, and artifact_path
+// — symmetrical with the existing trace.bundle.promote_failed Warn shape.
+func TestTrace_OnQualityFlag_PromotedLogLine(t *testing.T) {
+	root := t.TempDir()
+
+	// Capture every entry the request-scoped logger emits at Info+ so we
+	// see the new promoted line. Debug level is fine — Info entries pass through.
+	core, recorded := observer.New(zapcore.InfoLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-promoted-line"))
+	// Inject the observer logger via logctx so trace.go's
+	// logctx.From(c.Request.Context()) picks it up for the Info line.
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				QualityFlagThreshold: "warning",
+			},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// Fire the on_quality_flag auto-trigger by recording flags via the
+		// bundle API directly (cleaner integration is exercised in the
+		// datacleaner package tests).
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b, "deferred bundle must be on ctx when threshold configured")
+		b.RecordQualityFlagCount(2)
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Bundle must exist on disk (sanity — without this the promoted line
+	// wouldn't be expected to fire).
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath, "bundle must be on disk for the promote-success path")
+
+	// The promoted Info line MUST have been emitted with request_id,
+	// trigger=on_quality_flag, and artifact_path. We FilterMessage by the
+	// stable greppable identifier — the symmetric shape with
+	// trace.bundle.promote_failed (Warn) gives operators one field set to
+	// learn for both outcomes.
+	infoLogs := recorded.FilterMessage("trace.bundle.promoted").All()
+	require.Len(t, infoLogs, 1,
+		"expected exactly one trace.bundle.promoted Info line on successful auto-promote")
+	entry := infoLogs[0]
+	assert.Equal(t, zapcore.InfoLevel, entry.Level,
+		"trace.bundle.promoted must be Info (not Debug) so default-level operators see it")
+
+	fields := entry.ContextMap()
+	assert.Equal(t, "req-promoted-line", fields["request_id"],
+		"trace.bundle.promoted must carry request_id for correlation")
+	assert.Equal(t, "on_quality_flag", fields["trigger"],
+		"trace.bundle.promoted must carry the auto-trigger name")
+	artifactPath, ok := fields["artifact_path"].(string)
+	require.True(t, ok, "artifact_path must be a string field; got %T", fields["artifact_path"])
+	assert.NotEmpty(t, artifactPath,
+		"trace.bundle.promoted must carry artifact_path so operators can navigate to the bundle directory")
+}
+
+// TestTrace_OnError_PromotedLogLine — symmetry pin: the promoted Info
+// line MUST also fire for the on_error auto-trigger (not just
+// on_quality_flag). Otherwise operators would only see promote events
+// for the newer trigger and silently miss every on_error capture, which
+// is the more common production trigger.
+func TestTrace_OnError_PromotedLogLine(t *testing.T) {
+	root := t.TempDir()
+
+	core, recorded := observer.New(zapcore.InfoLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-promoted-onerror"))
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{OnError: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	require.NotEmpty(t, findManifest(root), "bundle must be on disk for the on_error promote-success path")
+
+	infoLogs := recorded.FilterMessage("trace.bundle.promoted").All()
+	require.Len(t, infoLogs, 1,
+		"expected exactly one trace.bundle.promoted Info line on successful on_error auto-promote")
+	fields := infoLogs[0].ContextMap()
+	assert.Equal(t, "on_error", fields["trigger"],
+		"on_error path must record trigger=on_error in trace.bundle.promoted")
+}
+
+// TestTrace_OnError_PromoteFailed_NoPromotedLogLine pins the negative
+// case: when Promote() FAILS (mkdir error), the promoted Info line MUST
+// NOT fire — the existing trace.bundle.promote_failed Warn line is the
+// correlation point for that case. Emitting both would mislead operators
+// into thinking the bundle landed on disk.
+func TestTrace_OnError_PromoteFailed_NoPromotedLogLine(t *testing.T) {
+	tmpDir := t.TempDir()
+	rootAsFile := filepath.Join(tmpDir, "artifacts-but-actually-a-file")
+	require.NoError(t, os.WriteFile(rootAsFile, []byte("not a dir"), 0o644))
+
+	core, recorded := observer.New(zapcore.DebugLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-promoted-fail"))
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: rootAsFile,
+			Triggers: artifact.TriggerConfig{OnError: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+
+	// promote_failed Warn MUST have fired (sanity — confirms the
+	// promote-failure branch was actually exercised).
+	require.NotEmpty(t, recorded.FilterMessage("trace.bundle.promote_failed").All(),
+		"promote-failure branch must have fired for this test to be meaningful")
+	// And the promoted Info line MUST NOT have fired — otherwise log
+	// readers would chase a non-existent artifact_path.
+	assert.Empty(t, recorded.FilterMessage("trace.bundle.promoted").All(),
+		"trace.bundle.promoted must NOT fire when Promote failed")
+}

@@ -309,6 +309,24 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 						// because their payload_ref fields would have pointed
 						// at a nonexistent path anyway.
 						emitter.WithPayloadRoot(bundle.Root())
+
+						// REVIEWER MEDIUM-2: emit a host-log Info line so
+						// operators tailing the host log stream can see WHICH
+						// requests created bundles today and WHY, without
+						// having to walk the artifacts directory or grep
+						// 99-narrate.jsonl files inside each bundle. Symmetrical
+						// shape with trace.bundle.promote_failed (Warn) above
+						// — operators only need to learn one field set.
+						//
+						// Goes through logctx so it inherits request_id +
+						// any auth fields baked into the request-scoped
+						// logger (per CLAUDE.md "request-path logs via
+						// logctx.From(ctx)" rule).
+						logctx.From(c.Request.Context()).Info("trace.bundle.promoted",
+							zap.String("request_id", requestID),
+							zap.String("trigger", string(autoTrigger)),
+							zap.String("artifact_path", bundle.Root()),
+						)
 					}
 				}
 				// If autoTrigger stayed empty we DON'T call Promote: the
