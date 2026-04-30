@@ -522,8 +522,6 @@ var SwaggerInfo = &swag.Spec{
 	Description:      "DCF (Discounted Cash Flow) Valuation API provides intrinsic value calculations for publicly traded companies.\nThe API computes Net Tangible Asset Value and DCF Fair Value per share using SEC filings and market data.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
-	LeftDelim:        "{{",
-	RightDelim:       "}}",
 }
 
 func init() {
