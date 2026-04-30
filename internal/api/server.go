@@ -180,6 +180,10 @@ func (s *Server) setupMiddleware() {
 			Triggers: artifact.TriggerConfig{
 				OnError:              s.config.Logging.ArtifactStore.Triggers.OnError,
 				QualityFlagThreshold: s.config.Logging.ArtifactStore.Triggers.QualityFlagThreshold,
+				// Phase 2.C — always-on knob. Wired here so operators can flip
+				// LOGGING_ARTIFACT_STORE_TRIGGERS_ALWAYS=true at runtime for a
+				// debugging session without touching the trace middleware.
+				Always: s.config.Logging.ArtifactStore.Triggers.Always,
 			},
 			GitSHA:       s.config.GitCommit,
 			BuildVersion: s.config.Version,

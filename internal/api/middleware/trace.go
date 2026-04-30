@@ -80,9 +80,15 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 		// defer below.
 		trigger, traceFlag := detectTraceTrigger(c)
 		// autoTriggerActive is true when ANY auto-trigger is configured
-		// (on_error and/or on_quality_flag). Used to decide whether to
-		// open a deferred bundle even when no manual flag is present.
-		autoTriggerActive := cfgA.Triggers.OnError || cfgA.Triggers.QualityFlagThreshold != ""
+		// (on_error, on_quality_flag, and/or always). Used to decide
+		// whether to open a deferred bundle even when no manual flag is
+		// present. Phase 2.C adds the `Always` clause: when the operator
+		// has flipped the always-on knob, every request must open a
+		// deferred bundle so it can be promoted at request-end as the
+		// catch-all fallback in the precedence ladder.
+		autoTriggerActive := cfgA.Triggers.OnError ||
+			cfgA.Triggers.QualityFlagThreshold != "" ||
+			cfgA.Triggers.Always
 		var bundle *artifact.Bundle
 		// deferredBundle tracks whether we opened in deferred mode. Used
 		// post-c.Next to decide between Promote() and Close()-without-flush.
@@ -261,11 +267,18 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 			//      points at WHY the upstream data was suspicious.
 			//   2. on_error — response status >= 500 (or panic). Last-resort
 			//      capture for failures the cleaner didn't catch.
+			//   3. always (Phase 2.C) — operator flipped the always-on knob
+			//      for a debugging session. Lowest precedence: only fires when
+			//      no other trigger does, so operators can tell at a glance
+			//      from the manifest's trigger field which bundles are "noise"
+			//      (always) vs "interesting" (on_error / on_quality_flag).
+			//      When always is the only configured trigger, EVERY request
+			//      lands here and gets bundled.
 			//
-			// We evaluate both ONCE, choose the higher-precedence trigger, and
-			// call Promote EXACTLY once. The bundle's Promote is idempotent so
-			// a bug here would be self-healing for correctness but would still
-			// muddy the manifest's trigger field.
+			// We evaluate all three ONCE, choose the highest-precedence
+			// trigger, and call Promote EXACTLY once. The bundle's Promote is
+			// idempotent so a bug here would be self-healing for correctness
+			// but would still muddy the manifest's trigger field.
 			//
 			// promoteSucceeded gates the artifact_path field on response.sent
 			// below. It stays false for the dissolve path (no auto-trigger
@@ -276,14 +289,24 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 			// is on disk.
 			promoteSucceeded := false
 			if deferredBundle && bundle != nil {
-				// Decide which auto-trigger (if any) fired. Quality flag wins
-				// over on_error per the precedence ladder above.
+				// Decide which auto-trigger (if any) fired per the precedence
+				// ladder above. Switch order = precedence order (highest first):
+				// on_quality_flag > on_error > always. Adding always as the
+				// LOWEST-precedence case is the entire promote-time delta of
+				// Phase 2.C — every other line in this block is unchanged.
 				var autoTrigger artifact.Trigger
 				switch {
 				case cfgA.Triggers.QualityFlagThreshold != "" && bundle.QualityFlagCount() > 0:
 					autoTrigger = artifact.TriggerOnQualityFlag
 				case cfgA.Triggers.OnError && respOutcome == narrate.OutcomeError:
 					autoTrigger = artifact.TriggerOnError
+				case cfgA.Triggers.Always:
+					// Catch-all: no other trigger fired but the operator
+					// asked for every-request capture. Stamps trigger=always
+					// on the manifest so postmortem readers can tell the
+					// bundle from a "this 5xx'd" or "this had bad data"
+					// capture at a glance.
+					autoTrigger = artifact.TriggerAlways
 				}
 
 				if autoTrigger != "" {

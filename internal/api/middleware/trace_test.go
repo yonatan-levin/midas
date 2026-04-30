@@ -1573,3 +1573,229 @@ func TestTrace_OnError_PromoteFailed_NoPromotedLogLine(t *testing.T) {
 	assert.Empty(t, recorded.FilterMessage("trace.bundle.promoted").All(),
 		"trace.bundle.promoted must NOT fire when Promote failed")
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2.C — auto-on-always trigger tests
+// ---------------------------------------------------------------------------
+//
+// Behaviour matrix for Phase 2.C (extending Phase 2.B):
+//
+//   manual flag | qty_flag thr | qty count | on_error | always | status   | bundle? | trigger
+//   ------------|--------------|-----------|----------|--------|----------|---------|----------------
+//   yes         | any          | any       | any      | any    | any      | yes     | header/query
+//   no          | "warning"    | >=1       | any      | any    | any      | yes     | on_quality_flag
+//   no          | any          | 0         | true     | any    | >=500    | yes     | on_error
+//   no          | ""           | 0         | false    | true   | <500     | yes     | always   <-- NEW
+//   no          | ""           | 0         | false    | true   | 200      | yes     | always   <-- NEW
+//   no          | "warning"    | >=1       | true     | true   | any      | yes     | on_quality_flag (precedence)
+//   no          | ""           | 0         | true     | true   | >=500    | yes     | on_error (precedence)
+//   no          | ""           | 0         | false    | false  | 200      | no      | —
+//
+// The precedence ladder (highest to lowest) becomes:
+//   manual (header/query) > on_quality_flag > on_error > always
+//
+// Always sits at the BOTTOM because it is the fallback "noise" capture
+// for a sustained debugging session. When any more diagnostic trigger also
+// fires for the same request, that trigger should win the manifest's
+// trigger field — operators reading bundles want to see WHY the bundle is
+// interesting, not just that the always-knob was on.
+
+// TestTrace_Always_AutoBundle_OnSuccessfulRequest — handler returns 200, no
+// flags, no manual flag, but always=true. Bundle MUST appear on disk and the
+// manifest's trigger MUST be "always". This is the "operator flipped the knob
+// for a debugging session" path; getting it wrong means the knob does
+// nothing and the operator has no way to capture noise.
+func TestTrace_Always_AutoBundle_OnSuccessfulRequest(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-always-200"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{Always: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// No flags recorded, no error — purely the always path.
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b, "deferred bundle must be on ctx when always=true")
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	// NB: NO ?trace=1 and NO X-Midas-Trace header — pin the auto-trigger.
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Bundle must exist on disk even though nothing went wrong.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath, "bundle must be on disk for 200 + always=true")
+
+	// Trigger must be always — no other auto-trigger fired so the catch-all
+	// wins the precedence ladder.
+	assert.Equal(t, "always", readManifestTrigger(t, root),
+		"auto-triggered bundle must record trigger=always when no other trigger applies")
+}
+
+// TestTrace_Always_Disabled_NoBundle — always=false, no other triggers,
+// status 200. NO bundle must be created. Pins the off-by-default invariant:
+// enabling artifact_store alone (without flipping always) does NOT auto-
+// capture every request. Symmetrical with TestTrace_OnError_Disabled_*
+// and TestTrace_OnQualityFlag_Disabled_NoBundle.
+func TestTrace_Always_Disabled_NoBundle(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-always-off"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			// Always NOT set — defaults to false.
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// No deferred bundle exists when no trigger is configured.
+		assert.Nil(t, artifact.From(c.Request.Context()),
+			"no bundle expected when no trigger is configured")
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	assert.Empty(t, entries,
+		"disabled always trigger must NOT auto-capture; got %v", entries)
+}
+
+// TestTrace_Always_PrecedenceOnError — request returns 500 AND always=true
+// AND on_error=true. on_error MUST win the manifest's trigger field
+// because it is the more diagnostic signal — operators reading the bundle
+// want to know "this request 5xx'd" rather than the less-informative "the
+// always knob was on".
+//
+// Pre-test invariant: bundle is opened deferred (no manual flag), the
+// handler returns 500, and BOTH always + on_error are configured.
+func TestTrace_Always_PrecedenceOnError(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-precedence-always-onerror"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				OnError: true,
+				Always:  true,
+			},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+
+	trigger := readManifestTrigger(t, root)
+	require.NotEmpty(t, trigger, "bundle must exist (both triggers fired)")
+	assert.Equal(t, "on_error", trigger,
+		"on_error must outrank always in the precedence ladder")
+}
+
+// TestTrace_Always_PrecedenceOnQualityFlag — request records qualifying
+// flags AND always=true AND quality_flag_threshold configured. on_quality
+// _flag MUST win the manifest's trigger field — same precedence logic as
+// TestTrace_Always_PrecedenceOnError, but for the higher-precedence
+// quality-flag trigger.
+func TestTrace_Always_PrecedenceOnQualityFlag(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-precedence-always-qflag"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				QualityFlagThreshold: "warning",
+				Always:               true,
+			},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b)
+		b.RecordQualityFlagCount(3)
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	trigger := readManifestTrigger(t, root)
+	require.NotEmpty(t, trigger, "bundle must exist (both triggers fired)")
+	assert.Equal(t, "on_quality_flag", trigger,
+		"on_quality_flag must outrank always in the precedence ladder")
+}
+
+// TestTrace_Manual_PrecedenceOverAlways — manual flag (?trace=1) + always
+// =true. Manual must STILL win so debug sessions stay attributable to the
+// operator who flipped the per-request flag, even when the always knob is
+// also on. Symmetrical with TestTrace_Manual_PrecedenceOverOnQualityFlag.
+//
+// Important: when the manual flag is set, the bundle is opened EAGER (not
+// deferred), so the trigger value is locked in at OpenBundle-time and the
+// post-c.Next promote-time switch is bypassed entirely. This test pins
+// that contract — adding always to the precedence ladder must not regress
+// the manual-flag eager path.
+func TestTrace_Manual_PrecedenceOverAlways(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-manual-vs-always"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{Always: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x?trace=1", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	trigger := readManifestTrigger(t, root)
+	require.NotEmpty(t, trigger, "bundle must exist (eager manual path)")
+	assert.NotEqual(t, "always", trigger,
+		"manifest trigger must NOT be always when manual flag was also set")
+	assert.Contains(t, []string{"query", "header"}, trigger,
+		"manifest trigger must be the manual source (query/header)")
+}

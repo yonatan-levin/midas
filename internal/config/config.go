@@ -121,8 +121,7 @@ type ArtifactStoreConfig struct {
 
 // ArtifactTriggers enumerates the per-request conditions that open a
 // bundle. Phase 1 supports only Manual; Phase 2.A added OnError; Phase 2.B
-// adds QualityFlagThreshold. Phase 2.C (Always) is still deferred (see
-// spec §13).
+// adds QualityFlagThreshold; Phase 2.C adds Always (see spec §13.C).
 type ArtifactTriggers struct {
 	// Manual = ?trace=1 query OR X-Midas-Trace: 1 header.
 	Manual bool `mapstructure:"manual"`
@@ -140,11 +139,29 @@ type ArtifactTriggers struct {
 	// Off by default to keep the trigger opt-in and protect operators
 	// who haven't sized disk for the expected flag-volume.
 	//
-	// Precedence at request-end: manual > on_quality_flag > on_error.
+	// Precedence at request-end: manual > on_quality_flag > on_error > always.
 	// A request that satisfies both quality_flag and on_error promotes
 	// with on_quality_flag because the flag list is more diagnostic than
 	// the bare 5xx signal.
 	QualityFlagThreshold string `mapstructure:"quality_flag_threshold"`
+
+	// Always = auto-trigger for EVERY request regardless of status or
+	// flag count (Phase 2.C; spec §13.C). Intended for sustained
+	// debugging sessions — "flip on for an hour, flip off when done".
+	// Off by default. When on alongside other triggers, sits at the
+	// BOTTOM of the precedence ladder: a 5xx request still records
+	// trigger=on_error in its manifest, a flagging request still
+	// records trigger=on_quality_flag — only requests that fire NO
+	// other trigger get trigger=always. This is intentional so operators
+	// reading bundles can tell which ones are interesting (errors / data
+	// issues) vs which are noise from the debugging session.
+	//
+	// CAUTION: enabling this without sizing the disk for the expected
+	// request volume will fill the bundle root's max_total_bytes cap
+	// fast and force the reaper to evict aggressively. Recommend
+	// pairing with a tightened MaxTotalBytes (or a per-request rate
+	// limit upstream) when using in production.
+	Always bool `mapstructure:"always"`
 }
 
 // LogFileConfig controls the rolling log-file sink backed by lumberjack.
@@ -415,6 +432,12 @@ func setDefaults() {
 	// QUALITY_FLAG_THRESHOLD=warning, etc.) once they've sized disk for
 	// the expected flag volume.
 	viper.SetDefault("logging.artifact_store.triggers.quality_flag_threshold", "")
+	// Phase 2.C — always-on knob: OFF by default everywhere. Operators opt
+	// in via env var (LOGGING_ARTIFACT_STORE_TRIGGERS_ALWAYS=true) for the
+	// duration of a debugging session. Shipping with this on by default
+	// would fill the 5 GiB max_total_bytes cap fast in any environment
+	// with non-trivial request volume.
+	viper.SetDefault("logging.artifact_store.triggers.always", false)
 
 	// Server defaults
 	viper.SetDefault("server.port", "8080")
