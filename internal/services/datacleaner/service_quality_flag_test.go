@@ -24,6 +24,30 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 )
 
+// TestSeverityRank_AllKnownSeveritiesRank_NonZero pins LOW-1: every value
+// in entities.KnownFlagSeverities MUST rank > 0 in severityRank. There is
+// no compile-time link between the FlagSeverity constant set in
+// internal/core/entities/data_cleaning.go and the switch arms in
+// quality_flag_severity.go — a future severity addition would otherwise
+// silently rank 0, fail the threshold check on every request, and
+// disable the on_quality_flag trigger for any flag carrying that
+// severity. This test fails CI when a new severity is added without
+// extending severityRank.
+//
+// The contract is: KnownFlagSeverities is the canonical source of
+// truth. severityRank's switch must cover every value listed there.
+func TestSeverityRank_AllKnownSeveritiesRank_NonZero(t *testing.T) {
+	require.NotEmpty(t, entities.KnownFlagSeverities,
+		"entities.KnownFlagSeverities must list at least one severity (sanity)")
+	for _, s := range entities.KnownFlagSeverities {
+		t.Run(string(s), func(t *testing.T) {
+			rank := severityRank(s)
+			assert.Greater(t, rank, 0,
+				"severityRank(%q) must be > 0 — extend the switch in quality_flag_severity.go to include this value", s)
+		})
+	}
+}
+
 // TestCountQualifyingFlags_RanksSeveritiesConsistently pins the rank
 // comparator. The two parallel vocabularies must collapse to the same
 // numeric ranks so the threshold check is deterministic regardless of
