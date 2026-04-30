@@ -349,7 +349,10 @@ curl -H "X-API-Key: <key>" \
     "heuristic_code": "45",
     "heuristic_name": "Information Technology",
     "match": true
-  }
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 270.17
 }
 ```
 
@@ -369,6 +372,9 @@ curl -H "X-API-Key: <key>" \
 | `calculation_method` | Model used: `multi_stage_dcf`, `ddm`, `ffo`, `revenue_multiple` |
 | `sanity_check` | Cross-validation against sector median multiples |
 | `industry` | Dual industry classification (SIC + heuristic) — see [Industry Classification](#421-industry-classification) |
+| `currency` | ISO-4217 code that all monetary per-share fields are denominated in. Always `"USD"` — non-USD reporting currencies are FX-converted upstream by the IFRS-FPI pipeline |
+| `adr_ratio_applied` | Ordinary-shares-per-ADR multiplier the engine divided SEC share counts by before computing per-share values. `1` for domestic 10-K filers; non-1 for ADRs (TSM=5, BABA=8). Omitted when zero |
+| `current_price` | Live per-share market price from Yahoo/Finzive at calculation time, in the same per-share basis as `dcf_value_per_share` (per-ADR for ADRs). Compute upside/downside as `(dcf_value_per_share - current_price) / current_price` without a second quote lookup. Omitted when unavailable |
 
 ##### 4.2.1 Industry Classification
 
@@ -415,8 +421,9 @@ The feature's purpose is drift detection. When `match: false`, consult the gaps 
 | 400 | `INVALID_TICKER` | Ticker format is invalid |
 | 400 | `INVALID_PARAMETER` | override_beta or override_rf out of range |
 | 404 | `TICKER_NOT_FOUND` | Ticker is not present in SEC's ticker→CIK index (genuinely unknown symbol) |
-| 422 | `INSUFFICIENT_DATA` | Ticker exists but cannot be valued — e.g. SEC has no usable US-GAAP XBRL facts (common for foreign private issuers filing 20-F and some pre-revenue issuers), or fewer than the required financial periods |
+| 422 | `INSUFFICIENT_DATA` | Ticker exists but cannot be valued — e.g. SEC has no usable XBRL facts (some pre-revenue issuers, clinical-stage biotechs), or fewer than the required financial periods |
 | 422 | `MODEL_NOT_APPLICABLE` | No valuation model can be applied |
+| 422 | `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` | 20-F filer using a taxonomy or currency Midas does not yet cover. Most ADRs (TSM, ASML, BABA, …) are supported via the IFRS-FPI pipeline; this code only fires for genuinely unmapped taxonomies (JGAAP, K-IFRS, ifrs-smes) or currencies absent from FRED + `config/fx_rates.json` |
 | 429 | `RATE_LIMIT_EXCEEDED` | Rate limit exceeded |
 | 500 | `CALCULATION_ERROR` | Internal calculation failure |
 
@@ -1370,8 +1377,9 @@ All error responses follow the [RFC 7807](https://tools.ietf.org/html/rfc7807) P
 | `INVALID_PARAMETER` | 400 | Query or body parameter is out of valid range |
 | `INVALID_REQUEST` | 400 | Request body doesn't match expected schema |
 | `TICKER_NOT_FOUND` | 404 | Ticker is not present in SEC's ticker→CIK index (genuinely unknown symbol) |
-| `INSUFFICIENT_DATA` | 422 | Ticker resolves but cannot be valued: SEC has no usable US-GAAP XBRL facts (foreign private issuers, some pre-revenue issuers) or too few financial periods |
+| `INSUFFICIENT_DATA` | 422 | Ticker resolves but cannot be valued: SEC has no usable XBRL facts (some pre-revenue / clinical-stage issuers) or too few financial periods |
 | `MODEL_NOT_APPLICABLE` | 422 | No valuation model can be applied to this company |
+| `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` | 422 | 20-F filer using a taxonomy (JGAAP, K-IFRS, ifrs-smes) or reporting currency (no FRED series + missing from `config/fx_rates.json`) the IFRS-FPI pipeline does not yet cover |
 | `CALCULATION_ERROR` | 500 | Internal error during valuation calculation |
 | `RATE_LIMIT_EXCEEDED` | 429 | Rate limit exceeded (check Retry-After header) |
 | `AUTH_001` - `AUTH_008` | 401/403 | Authentication/authorization errors (see [Auth section](#3-authentication)) |
@@ -1604,8 +1612,9 @@ CGO_ENABLED=1 go build ./cmd/server
 **Empty valuation results**
 - Verify the ticker exists in SEC EDGAR
 - Check that financial data is available (at least 2 periods)
-- Look for `INSUFFICIENT_DATA` or `MODEL_NOT_APPLICABLE` errors
-- `INSUFFICIENT_DATA` (422) with a `no US-GAAP XBRL facts` message indicates the ticker is real but SEC has no usable financial data — commonly foreign private issuers (e.g. Canadian pharmas filing 20-F) or early-stage pre-revenue companies. Not a bug; Midas cannot value these without a US-GAAP source.
+- Look for `INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`, or `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` errors
+- `INSUFFICIENT_DATA` (422) indicates SEC has filings for the ticker but no usable XBRL facts (e.g. clinical-stage biotechs, pre-revenue issuers) or too few periods. Distinct from FPI cases — most ADRs (TSM, ASML, BABA, …) are now supported via the IFRS-FPI pipeline and produce real per-ADR valuations.
+- `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` (422) indicates a 20-F filer whose taxonomy (JGAAP, K-IFRS, ifrs-smes) or reporting currency falls outside the IFRS-FPI pipeline's coverage. Both are config-extensible — see `internal/infra/gateways/macro/gateway.go: fredSeriesFor` and `config/fx_rates.json` for currencies, `internal/infra/gateways/sec/parser.go: findValue` for taxonomies.
 
 **Stale data warnings**
 - Run the scheduler (`SCHEDULER_ENABLED=true`) for automatic refresh

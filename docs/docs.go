@@ -184,6 +184,60 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "entities.SanityCheck": {
+            "type": "object",
+            "properties": {
+                "flags": {
+                    "description": "Specific warnings about divergences",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "implied_ev_ebitda": {
+                    "description": "DCF enterprise value / EBITDA",
+                    "type": "number"
+                },
+                "implied_pe": {
+                    "description": "DCF value / EPS",
+                    "type": "number"
+                },
+                "implied_pfcf": {
+                    "description": "DCF value per share / FCF per share (omitted when zero FCF)",
+                    "type": "number"
+                },
+                "is_reasonable": {
+                    "description": "True if implied multiples are within 0.5x-2x of sector medians",
+                    "type": "boolean"
+                },
+                "sector_median_ev_ebitda": {
+                    "description": "Sector median EV/EBITDA",
+                    "type": "number"
+                },
+                "sector_median_pe": {
+                    "description": "Sector median P/E ratio",
+                    "type": "number"
+                },
+                "sector_median_pfcf": {
+                    "description": "Sector median P/FCF ratio (omitted when unknown)",
+                    "type": "number"
+                }
+            }
+        },
+        "handlers.BulkFailure": {
+            "type": "object",
+            "properties": {
+                "error_code": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "ticker": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.BulkFairValueRequest": {
             "description": "Bulk fair value calculation request for multiple tickers",
             "type": "object",
@@ -220,6 +274,12 @@ const docTemplate = `{
         "handlers.BulkFairValueResponse": {
             "type": "object",
             "properties": {
+                "failures": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.BulkFailure"
+                    }
+                },
                 "results": {
                     "type": "array",
                     "items": {
@@ -249,6 +309,11 @@ const docTemplate = `{
             "description": "Standard error response following RFC 7807 Problem Details",
             "type": "object",
             "properties": {
+                "code": {
+                    "description": "Error code (RFC 7807 extension)",
+                    "type": "string",
+                    "example": "INVALID_TICKER"
+                },
                 "context": {
                     "description": "Additional context information",
                     "type": "object",
@@ -264,10 +329,19 @@ const docTemplate = `{
                     "type": "string",
                     "example": "/api/v1/fair-value/INVALID"
                 },
+                "method": {
+                    "description": "HTTP method (RFC 7807 extension)",
+                    "type": "string",
+                    "example": "GET"
+                },
                 "status": {
                     "description": "HTTP status code",
                     "type": "integer",
                     "example": 400
+                },
+                "timestamp": {
+                    "description": "ISO 8601 timestamp (RFC 7807 extension)",
+                    "type": "string"
                 },
                 "title": {
                     "description": "Human-readable title",
@@ -285,10 +359,35 @@ const docTemplate = `{
             "description": "Fair value calculation response with intrinsic valuation metrics",
             "type": "object",
             "properties": {
+                "adr_ratio_applied": {
+                    "description": "ADRRatioApplied is the ordinary-shares-per-ADR multiplier that the\nvaluation engine divided SEC-reported share counts by before\ncomputing per-share values, so the resulting fair value compares\nlike-for-like with the listed ADR price. 1 for domestic 10-K filers\n(and any ticker absent from config/adr_ratios.json); non-1 for\nconfigured ADRs (TSM=5, BABA=8, …). Phase B10 of the IFRS-FPI plan.\nOmitted from the JSON when zero (defensive — the service always\nstamps a positive int via ADRRatios.Get, but omitempty keeps the\nresponse clean if a future bug produces 0).",
+                    "type": "integer",
+                    "example": 5
+                },
                 "as_of": {
                     "description": "Timestamp of calculation",
                     "type": "string",
                     "example": "2025-08-13T22:15:34.402652598Z"
+                },
+                "calculation_method": {
+                    "description": "Model used: multi_stage_dcf, ddm, ffo, revenue_multiple",
+                    "type": "string",
+                    "example": "multi_stage_dcf"
+                },
+                "calculation_version": {
+                    "description": "Engine version that produced this result",
+                    "type": "string",
+                    "example": "4.0"
+                },
+                "currency": {
+                    "description": "Currency is the ISO-4217 code that dcf_value_per_share and\ntangible_value_per_share are denominated in. Always \"USD\" — the\nvaluation service FX-converts each period's reporting-currency\nmonetary fields to USD via Phase B9 of the IFRS-FPI plan\n(docs/refactoring/ifrs-foreign-private-issuer-support-spec.md), so\nAPI consumers MUST NOT re-convert. Surfaced so a downstream client\ncan display \"USD\" alongside the per-share value rather than guessing.",
+                    "type": "string",
+                    "example": "USD"
+                },
+                "current_price": {
+                    "description": "CurrentPrice is the live per-share market price captured from the\nmarket-data gateway (Yahoo Finance / Finzive) at the moment the\nvaluation was computed. Same denomination and per-share basis as\nDCFValuePerShare and TangibleValuePerShare — for ADRs this is the\nper-ADR exchange price, directly comparable to the per-ADR DCF\nvalue the engine produces after applyADRRatio. Surfaced so a\nconsumer can compute the upside/downside discount ((dcf - price)\n/ price) without a second quote lookup. Omitted when zero.",
+                    "type": "number",
+                    "example": 190.25
                 },
                 "data_quality_grade": {
                     "description": "Data quality grade (A-F)",
@@ -305,10 +404,43 @@ const docTemplate = `{
                     "type": "number",
                     "example": 156.42
                 },
+                "growth_confidence": {
+                    "description": "Growth estimation confidence",
+                    "type": "string",
+                    "example": "high"
+                },
                 "growth_rate": {
-                    "description": "Expected growth rate (5-year CAGR)",
+                    "description": "Summary growth rate (CAGR of projected rates)",
                     "type": "number",
                     "example": 0.045
+                },
+                "growth_rates": {
+                    "description": "Per-year projected growth rates",
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "growth_source": {
+                    "description": "Growth estimation source",
+                    "type": "string",
+                    "example": "analyst_blend"
+                },
+                "industry": {
+                    "description": "Dual industry classification (SIC + heuristic) for drift detection",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/handlers.Industry"
+                        }
+                    ]
+                },
+                "sanity_check": {
+                    "description": "Multiples cross-check against sector medians",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/entities.SanityCheck"
+                        }
+                    ]
                 },
                 "tangible_value_per_share": {
                     "description": "Net tangible book value per share",
@@ -324,6 +456,44 @@ const docTemplate = `{
                     "description": "Weighted Average Cost of Capital",
                     "type": "number",
                     "example": 0.092
+                },
+                "warnings": {
+                    "description": "Data quality or assumption warnings",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.Industry": {
+            "description": "Dual industry classification (SIC + heuristic) with a Match flag",
+            "type": "object",
+            "properties": {
+                "heuristic_code": {
+                    "description": "GICS sector code from IndustryClassifier.ClassifyIndustry",
+                    "type": "string",
+                    "example": "45"
+                },
+                "heuristic_name": {
+                    "description": "GICS sector name",
+                    "type": "string",
+                    "example": "Information Technology"
+                },
+                "match": {
+                    "description": "true when SIC and heuristic agree per the canonical mapping",
+                    "type": "boolean",
+                    "example": true
+                },
+                "sic": {
+                    "description": "SIC-derived industry label from IndustryClassifier.Classify",
+                    "type": "string",
+                    "example": "MFG"
+                },
+                "sic_code": {
+                    "description": "Raw SIC code from SEC (may be empty if SEC data lacked it)",
+                    "type": "string",
+                    "example": "3674"
                 }
             }
         }
@@ -352,6 +522,8 @@ var SwaggerInfo = &swag.Spec{
 	Description:      "DCF (Discounted Cash Flow) Valuation API provides intrinsic value calculations for publicly traded companies.\nThe API computes Net Tangible Asset Value and DCF Fair Value per share using SEC filings and market data.",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
+	LeftDelim:        "{{",
+	RightDelim:       "}}",
 }
 
 func init() {

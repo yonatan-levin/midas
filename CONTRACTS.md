@@ -100,8 +100,12 @@ Out-of-range values return 400 `INVALID_PARAMETER`.
 | `calculation_version` | string | Engine version (e.g., `"4.0"`) (optional) |
 | `warnings` | string[] | Data quality or assumption warnings (optional, omitted if empty) |
 | `sanity_check` | object | Multiples cross-check: `implied_pe`, `sector_median_pe`, `implied_ev_ebitda`, `sector_median_ev_ebitda`, `is_reasonable`, `flags` (optional) |
+| `industry` | object | Dual classification — `sic_code`, `sic`, `heuristic_code`, `heuristic_name`, `match` flag for drift detection (optional) |
+| `currency` | string | ISO-4217 code that all monetary per-share fields are denominated in. Always `"USD"` — engine FX-converts non-USD reporting currencies upstream |
+| `adr_ratio_applied` | integer | Ordinary-shares-per-ADR multiplier the engine divided SEC share counts by before computing per-share values. `1` for domestic 10-K filers; non-1 for configured ADRs (TSM=5, BABA=8). Omitted when zero |
+| `current_price` | float | Live per-share market price from Yahoo/Finzive at calculation time, in the same per-share basis as `dcf_value_per_share` (per-ADR for ADRs). Lets consumers compute the upside/downside discount without a second quote lookup. Omitted when unavailable |
 
-**Error Responses**: 400 (`INVALID_TICKER`, `INVALID_PARAMETER`), 401, 404 (`TICKER_NOT_FOUND`), 422 (`INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`)
+**Error Responses**: 400 (`INVALID_TICKER`, `INVALID_PARAMETER`), 401, 404 (`TICKER_NOT_FOUND`), 422 (`INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`, `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED`)
 
 ---
 
