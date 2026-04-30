@@ -1799,3 +1799,161 @@ func TestTrace_Manual_PrecedenceOverAlways(t *testing.T) {
 	assert.Contains(t, []string{"query", "header"}, trigger,
 		"manifest trigger must be the manual source (query/header)")
 }
+
+// TestTrace_Always_NoPromotedLogLine pins REVIEWER HIGH-F (Phase 2.C
+// follow-up). The trace.bundle.promoted Info line was added in Phase 2.B
+// (REVIEWER MEDIUM-2) so operators tailing the host log could see WHICH
+// requests created bundles and WHY. That contract holds for rare auto-
+// triggers (on_error, on_quality_flag) but inverts under always=true:
+// every request creates a bundle, every line carries trigger=always, and
+// the operator-grep target loses its discriminating power. At 100 req/s
+// it would emit 6,000 Info lines/min, all noise.
+//
+// Post-fix: the Info line is gated by `autoTrigger != TriggerAlways`. The
+// bundle still lands on disk (verified via findManifest), the manifest
+// still records trigger=always (the on-disk operator-grep target stays
+// intact), only the host-log line is suppressed for the always path.
+//
+// This is the negative pin — without it a future refactor that drops the
+// gate would silently re-introduce the noise stream.
+func TestTrace_Always_NoPromotedLogLine(t *testing.T) {
+	root := t.TempDir()
+
+	// Capture every Info+ entry the request-scoped logger emits so we can
+	// assert NO trace.bundle.promoted line fires on the always path.
+	core, recorded := observer.New(zapcore.InfoLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-always-no-promoted-line"))
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			// ONLY always — no other triggers, so the always branch is the
+			// one that fires. If on_error or quality_flag also fired, the
+			// promoted line would correctly emit (REVIEWER's gate is
+			// trigger-specific) and the negative assertion below would
+			// pass for the wrong reason.
+			Triggers: artifact.TriggerConfig{Always: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Sanity: bundle MUST still exist on disk with trigger=always. The
+	// gate suppresses only the host-log line, not the on-disk artifact.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath,
+		"always-trigger bundle must still land on disk; the suppression is host-log-only")
+	assert.Equal(t, "always", readManifestTrigger(t, root),
+		"manifest trigger must remain 'always' — operators still grep the manifest, only the host-log signal is suppressed")
+
+	// The actual REVIEWER HIGH-F pin: NO trace.bundle.promoted Info line
+	// on the always path. Symmetrical with TestTrace_OnError_PromoteFailed_
+	// NoPromotedLogLine (which pins the negative case for promote failures).
+	assert.Empty(t, recorded.FilterMessage("trace.bundle.promoted").All(),
+		"trace.bundle.promoted must NOT fire for trigger=always — at production rates it would flood the host log with redundant signal (every line would carry trigger=always)")
+}
+
+// TestTrace_Always_HandlerPanic_StillBundles pins REVIEWER MEDIUM-B.4
+// (Phase 2.C follow-up). Phase 2.A introduced the defer+recover() that
+// wraps the post-c.Next() Promote/Close block; Phase 2.A pinned this for
+// on_error (TestTrace_OnError_HandlerPanic_StillBundles) and Phase 2.B
+// pinned it for on_quality_flag (TestTrace_OnQualityFlag_HandlerPanic_
+// StillBundles). Phase 2.C did NOT add the analogous pin for always —
+// without one, a future refactor that restructures the precedence switch
+// could silently break the panic-only-always path with no test catching it.
+//
+// The defer+recover is structurally trigger-agnostic, so the test is
+// covered IMPLICITLY today by the on_error/on_quality_flag tests, but
+// covering it EXPLICITLY documents intent and tightens the seam.
+//
+// Setup mirrors the on_quality_flag panic test EXCEPT:
+//   - Only Always=true is configured (OnError off, QualityFlagThreshold
+//     unset). This guarantees the always branch is the one that wins
+//     precedence — the on_error fallback won't accidentally mask a
+//     regression in the always path.
+//   - The handler panics WITHOUT recording any flags (because flags would
+//     route through on_quality_flag at the precedence switch).
+//
+// Verifies:
+//   - The bundle directory exists on disk despite the panic (the panic
+//     must NOT skip Promote — Phase 2.A's defer guarantees this).
+//   - The manifest's trigger is "always" (NOT "on_error", because OnError
+//     is off in this config — the panic forces respOutcome=error but with
+//     no on_error trigger configured, the precedence ladder drops to
+//     always as the catch-all).
+//   - The manifest's outcome is "error" (panic forces it via the defer's
+//     `panicked || status>=500` check).
+//   - gin.Recovery — registered OUTSIDE trace, mirroring the Phase 2.A
+//     and 2.B panic tests — still translates the re-raised panic into 500.
+func TestTrace_Always_HandlerPanic_StillBundles(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-panic-always"))
+	// Recovery is registered FIRST (outside trace), so a panic from the
+	// handler propagates back through trace's c.Next() to here. The defer
+	// inside trace captures the panic, runs Promote, then re-raises for
+	// Recovery to translate into a 500. Same ordering as the on_error /
+	// on_quality_flag panic tests.
+	r.Use(gin.Recovery())
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				// ONLY always — see test doc above for why we deliberately
+				// leave OnError + QualityFlagThreshold off.
+				Always: true,
+			},
+		},
+	))
+	r.GET("/boom", func(c *gin.Context) {
+		// Synthetic panic — same shape as the on_error / on_quality_flag
+		// panic tests. NO RecordQualityFlagCount call: that would route
+		// to on_quality_flag at the precedence switch and we'd be testing
+		// that path instead of always.
+		panic("synthetic handler panic for trace MEDIUM-B.4 (always)")
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	r.ServeHTTP(w, req)
+
+	// gin.Recovery translates the re-raised panic into a 500.
+	require.Equal(t, http.StatusInternalServerError, w.Code,
+		"outer Recovery middleware must still see the re-raised panic")
+
+	// Bundle directory must exist on disk despite the panic — this is
+	// the entire point of Phase 2.A's defer wrap.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath,
+		"always-trigger bundle must exist on disk even when the handler panics")
+
+	// Manifest must reflect the always auto-trigger and the error
+	// outcome forced by the panic.
+	body, err := os.ReadFile(mfPath)
+	require.NoError(t, err)
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(body, &mf))
+	assert.Equal(t, "always", mf.Trigger,
+		"panicking handler with only Always=true must promote with trigger=always (OnError is off; precedence ladder drops to always as catch-all)")
+	assert.Equal(t, "error", mf.Outcome,
+		"panicked request must record outcome=error in the manifest")
+}

@@ -345,11 +345,26 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 						// any auth fields baked into the request-scoped
 						// logger (per CLAUDE.md "request-path logs via
 						// logctx.From(ctx)" rule).
-						logctx.From(c.Request.Context()).Info("trace.bundle.promoted",
-							zap.String("request_id", requestID),
-							zap.String("trigger", string(autoTrigger)),
-							zap.String("artifact_path", bundle.Root()),
-						)
+						//
+						// REVIEWER HIGH-F (Phase 2.C follow-up): suppress this
+						// line for the always path. The line's contract is
+						// "operators tailing the host log can see WHICH
+						// requests created bundles and WHY" — but with
+						// always=true EVERY request creates a bundle for the
+						// SAME trigger, so the line stops carrying signal and
+						// becomes pure noise (6,000 Info/min at 100 rps).
+						// Worse, the contract inverts: every request created
+						// a bundle, so the line tells operators nothing they
+						// don't already know from flipping the knob. The
+						// other auto-triggers (on_error, on_quality_flag) stay
+						// rare-by-construction and keep emitting the line.
+						if autoTrigger != artifact.TriggerAlways {
+							logctx.From(c.Request.Context()).Info("trace.bundle.promoted",
+								zap.String("request_id", requestID),
+								zap.String("trigger", string(autoTrigger)),
+								zap.String("artifact_path", bundle.Root()),
+							)
+						}
 					}
 				}
 				// If autoTrigger stayed empty we DON'T call Promote: the
