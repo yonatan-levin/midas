@@ -54,16 +54,36 @@ const (
 	// flag AND an error happen for the same request, the manifest's trigger
 	// stays "header"/"query" so debug sessions remain attributable.
 	TriggerOnError Trigger = "on_error"
+	// TriggerOnQualityFlag — request emitted at least one data-cleaner flag
+	// at or above the configured severity threshold (Phase 2.B; see spec
+	// §13.B). Set on the manifest at Promote()-time for bundles opened in
+	// deferred mode. Precedence (lowest to highest):
+	//   on_error  <  on_quality_flag  <  manual (header/query)
+	// Quality flags outrank on_error because a 500 alone tells you the
+	// request failed; a quality flag tells you WHY the upstream data was
+	// suspicious — which is more actionable for postmortem reading.
+	TriggerOnQualityFlag Trigger = "on_quality_flag"
 )
 
 // TriggerConfig groups the per-request conditions that may open a bundle.
-// Phase 1 honoured only the manual flag; Phase 2.A adds OnError. The shape
-// mirrors config.ArtifactTriggers so callers can copy field-by-field
-// without pulling the config package into artifact's import graph.
+// Phase 1 honoured only the manual flag; Phase 2.A adds OnError; Phase 2.B
+// adds QualityFlagThreshold. The shape mirrors config.ArtifactTriggers so
+// callers can copy field-by-field without pulling the config package into
+// artifact's import graph.
 type TriggerConfig struct {
 	// OnError: when true, requests that return HTTP status >=500 promote
 	// their in-memory deferred bundle to disk even without an opt-in flag.
 	OnError bool
+
+	// QualityFlagThreshold: when non-empty, requests whose data-cleaner
+	// raises one or more flags at or above this severity promote their
+	// in-memory deferred bundle to disk (Phase 2.B). Valid values mirror
+	// the FlagSeverity vocabulary (info / low / warning / medium / high /
+	// critical); empty string disables the trigger. The artifact package
+	// itself stays free of severity-ranking semantics — the cleaner reads
+	// the threshold via Bundle.QualityFlagThreshold and reports the
+	// qualifying-flag count via Bundle.RecordQualityFlagCount.
+	QualityFlagThreshold string
 }
 
 // Config holds artifact-store knobs mirrored from
@@ -178,6 +198,24 @@ type Bundle struct {
 	pendingBytes int64
 	pendingCap   int64
 	queueCap     int
+
+	// Phase 2.B — auto-on-quality-flag trigger.
+	//
+	// qualityFlagThreshold is the severity floor configured at construction
+	// time (copied from Config.Triggers.QualityFlagThreshold). The cleaner
+	// reads this via QualityFlagThreshold() to decide which flags qualify;
+	// stored as a plain string so the artifact package stays free of the
+	// FlagSeverity vocabulary (which lives in core/entities).
+	//
+	// qualityFlagCount accumulates the count of qualifying flags reported
+	// by the cleaner via RecordQualityFlagCount. The trace middleware reads
+	// it post-c.Next() via QualityFlagCount() and decides whether to call
+	// Promote(TriggerOnQualityFlag). atomic.Int64 because the cleaner may
+	// run from different goroutines than the middleware in future fan-out
+	// designs (today they share a goroutine, but pinning it now keeps the
+	// contract honest under -race).
+	qualityFlagThreshold string
+	qualityFlagCount     atomic.Int64
 }
 
 // snapshotJob is the unit of work passed from Snapshot() (request-thread,
@@ -245,12 +283,13 @@ func OpenBundle(cfg Config, requestID, ticker string, trigger Trigger) (*Bundle,
 	}
 
 	b := &Bundle{
-		root:       root,
-		manifest:   NewManifestBuilder(requestID, ticker, string(trigger), cfg.GitSHA, cfg.BuildVersion),
-		queue:      make(chan snapshotJob, queueSize),
-		requestID:  requestID,
-		pendingCap: pendingCap,
-		queueCap:   queueSize,
+		root:                 root,
+		manifest:             NewManifestBuilder(requestID, ticker, string(trigger), cfg.GitSHA, cfg.BuildVersion),
+		queue:                make(chan snapshotJob, queueSize),
+		requestID:            requestID,
+		pendingCap:           pendingCap,
+		queueCap:             queueSize,
+		qualityFlagThreshold: cfg.Triggers.QualityFlagThreshold,
 	}
 
 	// Single background worker keeps the file-write order deterministic and
@@ -311,12 +350,13 @@ func OpenDeferredBundle(cfg Config, requestID, ticker string, trigger Trigger) (
 	// defeating the point of deferred mode.
 
 	b := &Bundle{
-		root:       root,
-		manifest:   NewManifestBuilder(requestID, ticker, string(trigger), cfg.GitSHA, cfg.BuildVersion),
-		queue:      make(chan snapshotJob, queueSize),
-		requestID:  requestID,
-		pendingCap: pendingCap,
-		queueCap:   queueSize,
+		root:                 root,
+		manifest:             NewManifestBuilder(requestID, ticker, string(trigger), cfg.GitSHA, cfg.BuildVersion),
+		queue:                make(chan snapshotJob, queueSize),
+		requestID:            requestID,
+		pendingCap:           pendingCap,
+		queueCap:             queueSize,
+		qualityFlagThreshold: cfg.Triggers.QualityFlagThreshold,
 		// pendingStreams is allocated lazily on first AppendStream so the
 		// common case (no stream activity) carries zero map overhead.
 	}
@@ -1041,6 +1081,46 @@ func (b *Bundle) OversizeLines() int64 {
 		return 0
 	}
 	return b.oversizeLines.Load()
+}
+
+// QualityFlagThreshold returns the configured severity floor (Phase 2.B).
+// The data cleaner reads this from the bundle attached to ctx so it can
+// count flags that match or exceed the operator's chosen severity without
+// pulling the artifact-package config into the cleaner. Empty string means
+// the trigger is disabled — callers should skip their hook entirely.
+//
+// Nil-safe: nil bundle returns "".
+func (b *Bundle) QualityFlagThreshold() string {
+	if b == nil {
+		return ""
+	}
+	return b.qualityFlagThreshold
+}
+
+// RecordQualityFlagCount adds n to the bundle's running count of qualifying
+// flags (flags at or above QualityFlagThreshold). Negative values are
+// ignored — they would silently disable the trigger by dragging the
+// running total below zero, which is strictly worse than a no-op.
+//
+// Idempotent and concurrency-safe (atomic.Int64). Nil-safe so the cleaner
+// can call this on `artifact.From(ctx)` without a nil check.
+func (b *Bundle) RecordQualityFlagCount(n int) {
+	if b == nil || n <= 0 {
+		return
+	}
+	b.qualityFlagCount.Add(int64(n))
+}
+
+// QualityFlagCount returns the cumulative count of qualifying flags
+// recorded via RecordQualityFlagCount. The trace middleware reads this
+// post-c.Next() to decide whether to Promote with TriggerOnQualityFlag.
+//
+// Nil-safe: nil bundle returns 0.
+func (b *Bundle) QualityFlagCount() int64 {
+	if b == nil {
+		return 0
+	}
+	return b.qualityFlagCount.Load()
 }
 
 // safeRequestID strips characters that are problematic in directory names on

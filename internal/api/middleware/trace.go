@@ -63,16 +63,26 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 
 		// Decide whether to open a bundle.
 		//
-		// Precedence (spec §13 + Phase 2.A brief):
+		// Precedence (spec §13 + Phase 2.A/2.B briefs):
 		//   1. Manual flag (?trace=1 / X-Midas-Trace) — open eager bundle
 		//      with trigger=header/query. Always wins so debug sessions
 		//      stay attributable to the operator who flipped the flag.
-		//   2. on_error trigger enabled — open DEFERRED bundle. The bundle
-		//      is in-memory only; trace middleware decides at request-end
-		//      (post-c.Next) whether to Promote (status>=500) or Close
-		//      (status<500, dissolves the buffer).
+		//   2. Any auto-trigger configured (on_error OR on_quality_flag) —
+		//      open ONE deferred bundle. The bundle is in-memory only;
+		//      trace middleware decides at request-end (post-c.Next) which
+		//      auto-trigger to Promote with based on bundle state, or
+		//      Close()-without-flush if no auto-trigger fires.
 		//   3. Otherwise — no bundle.
+		//
+		// Phase 2.B note: a single deferred bundle covers BOTH auto-
+		// triggers — we never open two bundles for the same request. The
+		// per-trigger decision happens at Promote-time in the post-c.Next()
+		// defer below.
 		trigger, traceFlag := detectTraceTrigger(c)
+		// autoTriggerActive is true when ANY auto-trigger is configured
+		// (on_error and/or on_quality_flag). Used to decide whether to
+		// open a deferred bundle even when no manual flag is present.
+		autoTriggerActive := cfgA.Triggers.OnError || cfgA.Triggers.QualityFlagThreshold != ""
 		var bundle *artifact.Bundle
 		// deferredBundle tracks whether we opened in deferred mode. Used
 		// post-c.Next to decide between Promote() and Close()-without-flush.
@@ -102,14 +112,17 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 				bundle = b
 				emitter.WithPayloadRoot(b.Root())
 			}
-		case cfgA.Enabled && cfgA.Triggers.OnError:
-			// No manual flag, but on_error is on — open a deferred bundle.
-			// We pass TriggerOnError as the speculative trigger value so the
-			// manifest is correct if/when Promote() fires. If status<500,
-			// Close() drops the buffers and nothing lands on disk.
+		case cfgA.Enabled && autoTriggerActive:
+			// No manual flag, but at least one auto-trigger is on — open a
+			// deferred bundle. The speculative trigger value stamped on the
+			// manifest is TriggerOnError; Promote() at request-end will
+			// overwrite it with whichever auto-trigger actually fired
+			// (on_quality_flag if quality count > 0, otherwise on_error if
+			// status >= 500). If neither fires, Close() drops the buffers
+			// and nothing lands on disk.
 			//
 			// OpenDeferredBundle does NOT mkdir or spawn a goroutine, so
-			// non-erroring requests pay only buffer-allocation cost.
+			// non-firing requests pay only buffer-allocation cost.
 			b, err := artifact.OpenDeferredBundle(cfgA, requestID, "", artifact.TriggerOnError)
 			if err != nil {
 				// Same Warn shape as the eager path so log readers don't
@@ -229,7 +242,7 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 				respOutcome = narrate.OutcomeError
 			}
 
-			// Phase 2.A: deferred-bundle promote/discard decision.
+			// Phase 2.A/2.B: deferred-bundle promote/discard decision.
 			//
 			// MUST run BEFORE we emit response.sent so that:
 			//   - Promoted bundles include the response.sent narrate line in
@@ -239,19 +252,42 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 			//     pointing at the now-on-disk bundle directory.
 			//
 			// Manual triggers always opened in eager mode (deferredBundle=false)
-			// and reach this block as no-op. Only on_error-triggered bundles
-			// take the Promote/Close branch.
+			// and reach this block as no-op. Only auto-triggered (deferred)
+			// bundles take the Promote/Close branch.
+			//
+			// Precedence at promote-time (highest to lowest):
+			//   1. on_quality_flag — at least one cleaner flag at-or-above the
+			//      configured severity threshold. Wins because the flag list
+			//      points at WHY the upstream data was suspicious.
+			//   2. on_error — response status >= 500 (or panic). Last-resort
+			//      capture for failures the cleaner didn't catch.
+			//
+			// We evaluate both ONCE, choose the higher-precedence trigger, and
+			// call Promote EXACTLY once. The bundle's Promote is idempotent so
+			// a bug here would be self-healing for correctness but would still
+			// muddy the manifest's trigger field.
 			//
 			// promoteSucceeded gates the artifact_path field on response.sent
-			// below. It stays false for the dissolve path (status<500, no panic),
-			// for the Promote-failure path (mkdir error), and for non-deferred
-			// bundles (where the field is N/A — eager bundles take the
-			// `!deferredBundle` branch of the gate). It only flips true when
-			// Promote returns nil, signalling the bundle directory is on disk.
+			// below. It stays false for the dissolve path (no auto-trigger
+			// fired), for the Promote-failure path (mkdir error), and for
+			// non-deferred bundles (where the field is N/A — eager bundles
+			// take the `!deferredBundle` branch of the gate). It only flips
+			// true when Promote returns nil, signalling the bundle directory
+			// is on disk.
 			promoteSucceeded := false
 			if deferredBundle && bundle != nil {
-				if respOutcome == narrate.OutcomeError {
-					if perr := bundle.Promote(artifact.TriggerOnError); perr != nil {
+				// Decide which auto-trigger (if any) fired. Quality flag wins
+				// over on_error per the precedence ladder above.
+				var autoTrigger artifact.Trigger
+				switch {
+				case cfgA.Triggers.QualityFlagThreshold != "" && bundle.QualityFlagCount() > 0:
+					autoTrigger = artifact.TriggerOnQualityFlag
+				case cfgA.Triggers.OnError && respOutcome == narrate.OutcomeError:
+					autoTrigger = artifact.TriggerOnError
+				}
+
+				if autoTrigger != "" {
+					if perr := bundle.Promote(autoTrigger); perr != nil {
 						// Promote failed (mkdir error). Same Warn shape as the
 						// open-time failure so log readers don't have to learn
 						// two log lines. promoteSucceeded stays false so the
@@ -261,7 +297,7 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 						// MINOR-NEW 2026-04-26).
 						logctx.From(c.Request.Context()).Warn("trace.bundle.promote_failed",
 							zap.String("request_id", requestID),
-							zap.String("trigger", string(artifact.TriggerOnError)),
+							zap.String("trigger", string(autoTrigger)),
 							zap.Error(perr),
 						)
 					} else {
@@ -273,9 +309,27 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 						// because their payload_ref fields would have pointed
 						// at a nonexistent path anyway.
 						emitter.WithPayloadRoot(bundle.Root())
+
+						// REVIEWER MEDIUM-2: emit a host-log Info line so
+						// operators tailing the host log stream can see WHICH
+						// requests created bundles today and WHY, without
+						// having to walk the artifacts directory or grep
+						// 99-narrate.jsonl files inside each bundle. Symmetrical
+						// shape with trace.bundle.promote_failed (Warn) above
+						// — operators only need to learn one field set.
+						//
+						// Goes through logctx so it inherits request_id +
+						// any auth fields baked into the request-scoped
+						// logger (per CLAUDE.md "request-path logs via
+						// logctx.From(ctx)" rule).
+						logctx.From(c.Request.Context()).Info("trace.bundle.promoted",
+							zap.String("request_id", requestID),
+							zap.String("trigger", string(autoTrigger)),
+							zap.String("artifact_path", bundle.Root()),
+						)
 					}
 				}
-				// On status<500 (and no panic) we DON'T call Promote: the
+				// If autoTrigger stayed empty we DON'T call Promote: the
 				// deferred bundle is dropped via Close() below, releasing
 				// all in-memory state.
 			}
