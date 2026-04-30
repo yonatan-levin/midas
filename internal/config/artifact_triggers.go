@@ -80,30 +80,57 @@ func ValidateArtifactTriggers(t ArtifactTriggers, logger *zap.Logger) {
 	if logger == nil {
 		return
 	}
-	if t.QualityFlagThreshold == "" {
-		// Default = disabled. No warn.
-		return
+
+	// Threshold-typo validation (Phase 2.B). Empty = disabled = no warn.
+	// Known value = no warn. Unknown value = Warn so the operator learns
+	// from the boot log instead of from a missing bundle during an incident.
+	if t.QualityFlagThreshold != "" {
+		known := knownSeverityValues()
+		if _, ok := known[t.QualityFlagThreshold]; !ok {
+			// Build a sorted list of valid values for the operator-facing
+			// message. Avoids leaking map-iteration nondeterminism into log
+			// output (which would show up as flaky test diffs and confused
+			// operators).
+			valid := make([]string, 0, len(known))
+			for k := range known {
+				valid = append(valid, k)
+			}
+			// Stable order — sort.Strings would pull in `sort` for one
+			// call site. A two-line bubble sort or strings.Join after a
+			// sort.Strings call would be cleaner; use sortStrings here
+			// for clarity.
+			sortStrings(valid)
+			logger.Warn("config.artifact_store.quality_flag_threshold.unknown",
+				zap.String("configured_value", t.QualityFlagThreshold),
+				zap.Strings("valid_values", valid),
+				zap.String("effect", "trigger silently disabled — typo or unsupported severity; fix the env var / YAML key to enable"),
+			)
+		}
 	}
-	known := knownSeverityValues()
-	if _, ok := known[t.QualityFlagThreshold]; ok {
-		return
+
+	// Phase 2.C post-launch (REVIEWER HIGH-G): emit a Warn when the
+	// always-on knob is active. Combined with HIGH-F (suppression of the
+	// per-request trace.bundle.promoted Info line for trigger=always),
+	// the operator who flipped the knob would otherwise have NO in-process
+	// reminder it's still on — until their disk fills, the reaper starts
+	// evicting interesting bundles, and someone notices.
+	//
+	// The boot log is the canonical "what got turned on this restart"
+	// surface. Warn-level (not Info) so the line stands out in a default
+	// Info-level deployment and isn't lost in startup noise. Greppable
+	// stable identifier ("config.artifact_store.always_on_active") so
+	// runbooks can teach `grep` rather than full-text searches.
+	//
+	// We log this INDEPENDENTLY of the threshold check above — both can
+	// fire on the same boot if both knobs are misconfigured. Operators
+	// fixing one shouldn't have to restart twice to see the other.
+	if t.Always {
+		logger.Warn("config.artifact_store.always_on_active",
+			zap.String("effect", "every request will be bundled — disk will fill at the reaper's eviction rate; intended for short debugging sessions only"),
+			zap.Bool("on_error_also_active", t.OnError),
+			zap.String("quality_flag_threshold", t.QualityFlagThreshold),
+		)
 	}
-	// Build a sorted list of valid values for the operator-facing message.
-	// Avoids leaking map-iteration nondeterminism into log output (which
-	// would show up as flaky test diffs and confused operators).
-	valid := make([]string, 0, len(known))
-	for k := range known {
-		valid = append(valid, k)
-	}
-	// Stable order — sort.Strings would pull in `sort` for one call site.
-	// A two-line bubble sort or strings.Join after a sort.Strings call
-	// would be cleaner; use sort here for clarity.
-	sortStrings(valid)
-	logger.Warn("config.artifact_store.quality_flag_threshold.unknown",
-		zap.String("configured_value", t.QualityFlagThreshold),
-		zap.Strings("valid_values", valid),
-		zap.String("effect", "trigger silently disabled — typo or unsupported severity; fix the env var / YAML key to enable"),
-	)
 }
 
 // sortStrings is a tiny in-place sort to avoid pulling sort just for
