@@ -472,8 +472,19 @@ func TestNarrate_OnErrorAutoBundle(t *testing.T) {
 	require.NotEmpty(t, requestID, "X-Request-ID must be present")
 
 	// --- Assert (1): a bundle was created on disk under the on_error trigger.
+	// The synthetic NoRoute handler aborts BEFORE any handler-level SetTicker
+	// fires, so this request truly has no ticker; the bundle MUST land at the
+	// _no-ticker partition (NOT under any TICKER directory). Pins BUG-013's
+	// "no spurious ticker partition" invariant for the no-ticker path —
+	// the fix updates b.root in deferred mode but only when SetTicker is
+	// actually called.
 	bundleDir := findBundleDir(t, artifactRoot, "_no-ticker", requestID)
 	require.NotEmpty(t, bundleDir, "expected a bundle directory for request %s under %s after on_error auto-trigger", requestID, artifactRoot)
+	// Pin the on-disk PARENT segment is _no-ticker for this no-route request
+	// (the request never reached a handler that would call SetTicker).
+	parentSegment := filepath.Base(filepath.Dir(bundleDir))
+	assert.Equal(t, "_no-ticker", parentSegment,
+		"NoRoute handler request never calls SetTicker, so bundle must land under _no-ticker, got %s", parentSegment)
 
 	// --- Assert (2): manifest.trigger == "on_error" (NOT "header"/"query").
 	mfBody, err := os.ReadFile(filepath.Join(bundleDir, "00-manifest.json"))
@@ -717,6 +728,19 @@ func TestNarrate_OnQualityFlagAutoBundle(t *testing.T) {
 	bundleDir := findBundleDir(t, artifactRoot, "AAPL", requestID)
 	require.NotEmpty(t, bundleDir,
 		"expected a bundle directory for request %s under %s after on_quality_flag auto-trigger", requestID, artifactRoot)
+	// BUG-013 pin: the bundle MUST live under <date>/AAPL/, NOT under
+	// <date>/_no-ticker/. Pre-fix, every quality-flag-triggered bundle landed
+	// at _no-ticker because deferred-mode SetTicker silently failed its rename.
+	parentSegment := filepath.Base(filepath.Dir(bundleDir))
+	assert.Equal(t, "AAPL", parentSegment,
+		"BUG-013: on_quality_flag-triggered bundle for AAPL must live under <date>/AAPL/, got <date>/%s/", parentSegment)
+	// Belt-and-braces: the _no-ticker placeholder MUST NOT exist on disk for
+	// this request — Promote should have MkdirAll'd at the AAPL path directly.
+	dateSegment := filepath.Base(filepath.Dir(filepath.Dir(bundleDir)))
+	noTickerPath := filepath.Join(artifactRoot, dateSegment, "_no-ticker", "req_"+sanitiseID(requestID))
+	_, err = os.Stat(noTickerPath)
+	assert.True(t, os.IsNotExist(err),
+		"BUG-013: _no-ticker placeholder for req %s must NOT exist on disk; got stat err=%v", requestID, err)
 
 	// --- Assert (3): manifest.trigger == "on_quality_flag" (NOT on_error / header / query).
 	mfBody, err := os.ReadFile(filepath.Join(bundleDir, "00-manifest.json"))
@@ -855,6 +879,20 @@ func TestNarrate_AlwaysAutoBundle(t *testing.T) {
 	require.NotEmpty(t, bundleDir,
 		"expected a bundle directory for request %s under %s after always auto-trigger",
 		requestID, artifactRoot)
+	// BUG-013 pin: the bundle MUST live under <date>/AAPL/. Phase 2.C surfaced
+	// this bug — with always=true every request landed at _no-ticker/ because
+	// deferred-mode SetTicker silently no-op'd. After the fix b.root is
+	// updated in memory before Promote MkdirAll's.
+	parentSegment := filepath.Base(filepath.Dir(bundleDir))
+	assert.Equal(t, "AAPL", parentSegment,
+		"BUG-013: always-triggered bundle for AAPL must live under <date>/AAPL/, got <date>/%s/", parentSegment)
+	// Belt-and-braces: the _no-ticker placeholder MUST NOT exist on disk for
+	// this request.
+	dateSegment := filepath.Base(filepath.Dir(filepath.Dir(bundleDir)))
+	noTickerPath := filepath.Join(artifactRoot, dateSegment, "_no-ticker", "req_"+sanitiseID(requestID))
+	_, err = os.Stat(noTickerPath)
+	assert.True(t, os.IsNotExist(err),
+		"BUG-013: _no-ticker placeholder for req %s must NOT exist on disk; got stat err=%v", requestID, err)
 
 	// --- Assert (2): manifest.trigger == "always" — no other trigger was
 	// configured so the catch-all wins the precedence ladder.

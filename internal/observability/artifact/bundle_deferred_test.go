@@ -834,3 +834,177 @@ func TestBundle_MaxStreamLineBytesConstant(t *testing.T) {
 	assert.Equal(t, 256*1024, artifact.MaxStreamLineBytes,
 		"MaxStreamLineBytes is part of the package's public surface — do not shrink without a deprecation cycle")
 }
+
+// --- BUG-013 regression pins -----------------------------------------------
+//
+// Deferred bundles have NO on-disk directory at construction time (Promote()
+// MkdirAll's at promote-time). The pre-fix SetTicker unconditionally called
+// os.Rename(b.root, newRoot) which ENOENT'd because b.root was an in-memory
+// placeholder, NOT an on-disk directory yet — the rename failure incremented
+// writeErrors, b.root was NOT updated, and the subsequent Promote MkdirAll'd
+// at the unchanged "_no-ticker/" placeholder. Every auto-triggered bundle
+// (on_error, on_quality_flag, always) landed at <date>/_no-ticker/req_<id>/
+// instead of <date>/<TICKER>/req_<id>/, breaking per-ticker forensics.
+//
+// Fix: in deferred mode SetTicker skips os.Rename and just updates b.root in
+// memory. Promote then MkdirAll's at the correct path. Eager mode (OpenBundle)
+// is unchanged — directory exists on disk so os.Rename still applies.
+//
+// These tests pin the four corner cases of the deferred-mode SetTicker
+// contract; the eager-mode regression pin lives in bundle_test.go's
+// TestSetTicker_EagerBundle_StillRenamesOnDisk and the existing
+// TestSetTicker_RenameFailureCountedAsWriteError still passes unchanged
+// because the eager rename code path is untouched by the fix.
+
+// TestSetTicker_DeferredBundle_UpdatesRootInMemory: opening a deferred bundle
+// with no ticker yields b.Root() under "_no-ticker/"; calling SetTicker("AAPL")
+// must move the in-memory root to "<date>/AAPL/req_<id>/" without touching disk.
+// Pin pre-Promote so we observe the in-memory state directly.
+func TestSetTicker_DeferredBundle_UpdatesRootInMemory(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	// Open with empty ticker — mirrors trace middleware behaviour where the
+	// bundle is opened BEFORE the handler parses :ticker from the URL path.
+	b, err := artifact.OpenDeferredBundle(cfg, "rid-deferred-set", "", artifact.TriggerOnError)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	defer b.Close()
+
+	// Pre-condition: root is under _no-ticker because no ticker was provided.
+	preRoot := b.Root()
+	parts := splitPath(t, preRoot, root)
+	require.Equal(t, "_no-ticker", parts[1],
+		"precondition: empty-ticker deferred bundle starts under _no-ticker")
+
+	// Late-bind the ticker — what the handler does at fair_value.go:258.
+	b.SetTicker("AAPL")
+
+	// Post-condition: root now lives under AAPL even though Promote hasn't run.
+	newRoot := b.Root()
+	newParts := splitPath(t, newRoot, root)
+	require.Len(t, newParts, 3, "expected 3 levels under root, got %v", newParts)
+	assert.Equal(t, "AAPL", newParts[1],
+		"deferred-mode SetTicker must update b.root to <date>/AAPL/, not leave it at _no-ticker")
+	assert.Equal(t, "req_rid-deferred-set", newParts[2],
+		"req_<id> segment must be preserved across the rebind")
+
+	// And the on-disk directory MUST still not exist — deferred mode means no
+	// disk I/O. The pre-fix bug masked itself partially because Promote later
+	// created the dir, but at the WRONG path.
+	_, statErr := os.Stat(newRoot)
+	assert.True(t, os.IsNotExist(statErr),
+		"deferred-mode SetTicker must not create the on-disk directory; got stat err=%v", statErr)
+}
+
+// TestSetTicker_DeferredBundle_PromoteCreatesAtTickerPath: the operator-visible
+// acceptance criterion from BUG-013. After SetTicker + Promote the on-disk
+// bundle MUST live at <date>/AAPL/req_<id>/, NOT at <date>/_no-ticker/req_<id>/.
+// Equivalent to: `ls artifacts/<date>/AAPL/` finds the bundle.
+func TestSetTicker_DeferredBundle_PromoteCreatesAtTickerPath(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	b, err := artifact.OpenDeferredBundle(cfg, "rid-promote-ticker", "", artifact.TriggerOnError)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	// Buffer a snapshot pre-SetTicker — exactly what request.received and the
+	// other early phases do before the handler parses the URL ticker.
+	b.Snapshot(context.Background(), "request.received", "01-request.json", map[string]string{"path": "/api/v1/fair-value/AAPL"})
+	require.NoError(t, b.AppendStream("99-narrate.jsonl", []byte(`{"event":"narrate","phase":"request.received"}`)))
+
+	// Late-bind ticker (handler.entry equivalent).
+	b.SetTicker("AAPL")
+
+	// Promote and Close — the trace middleware's defer block.
+	require.NoError(t, b.Promote(artifact.TriggerOnError))
+	require.NoError(t, b.Close())
+
+	// On-disk directory MUST be under <date>/AAPL/, NOT _no-ticker/.
+	finalRoot := b.Root()
+	parts := splitPath(t, finalRoot, root)
+	require.Len(t, parts, 3)
+	assert.Equal(t, "AAPL", parts[1],
+		"promoted deferred bundle must live at <date>/AAPL/req_<id>/, got <date>/%s/%s/", parts[1], parts[2])
+	assert.Equal(t, "req_rid-promote-ticker", parts[2])
+
+	// And the directory must actually exist on disk — Promote did the MkdirAll.
+	st, err := os.Stat(finalRoot)
+	require.NoError(t, err, "promoted bundle directory must exist at the ticker path")
+	assert.True(t, st.IsDir())
+
+	// _no-ticker MUST NOT have been created — Promote computed the path from
+	// the post-SetTicker b.root, so no placeholder dir lingers on disk.
+	noTickerPath := filepath.Join(root, parts[0], "_no-ticker")
+	_, err = os.Stat(noTickerPath)
+	assert.True(t, os.IsNotExist(err),
+		"_no-ticker placeholder must NOT be created on disk when SetTicker fired before Promote; got stat err=%v", err)
+
+	// Manifest must be at the new path AND carry the ticker.
+	mfBody, err := os.ReadFile(filepath.Join(finalRoot, "00-manifest.json"))
+	require.NoError(t, err, "manifest must exist at the AAPL path")
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(mfBody, &mf))
+	assert.Equal(t, "AAPL", mf.Ticker)
+	assert.Equal(t, "on_error", mf.Trigger)
+}
+
+// TestSetTicker_DeferredBundle_NoSpuriousWriteError: the secondary symptom of
+// BUG-013 — the failed os.Rename incremented writeErrors, which downgraded the
+// manifest outcome to "partial" with notes "write_failures=1 …" even though
+// no actual data was lost. Postmortem readers would misread the bundle as
+// data-incomplete when only the rename had failed (cosmetic).
+//
+// After the fix: deferred SetTicker doesn't attempt a rename, so writeErrors
+// stays 0 and the manifest outcome is "ok".
+func TestSetTicker_DeferredBundle_NoSpuriousWriteError(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	b, err := artifact.OpenDeferredBundle(cfg, "rid-no-spurious", "", artifact.TriggerOnError)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	// SetTicker before Promote — the deferred-mode case the fix addresses.
+	b.SetTicker("AAPL")
+
+	// writeErrors MUST be zero — no rename was attempted, so no failure to count.
+	assert.Equal(t, int64(0), b.WriteErrors(),
+		"deferred-mode SetTicker must NOT increment writeErrors (no os.Rename is attempted)")
+
+	// Promote + Close — manifest outcome must be "ok" (or at worst empty/unset),
+	// not "partial". Pre-fix this assertion would fail because the rename's
+	// writeErrors=1 cascaded into outcome="partial".
+	require.NoError(t, b.Promote(artifact.TriggerOnError))
+	require.NoError(t, b.Close())
+
+	mfBody, err := os.ReadFile(filepath.Join(b.Root(), "00-manifest.json"))
+	require.NoError(t, err)
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(mfBody, &mf))
+	assert.NotEqual(t, "partial", mf.Outcome,
+		"deferred SetTicker must not cause spurious outcome=partial via a phantom writeError; got %q with notes %q", mf.Outcome, mf.Notes)
+}
+
+// TestSetTicker_DeferredBundle_NoOpAfterClose pins safety: SetTicker on a
+// closed deferred bundle must not panic, must not move the in-memory root
+// (Close already released the buffers), and must not increment writeErrors.
+// Equivalent of TestSetTicker_NoOpAfterClose for the deferred path.
+func TestSetTicker_DeferredBundle_NoOpAfterClose(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	b, err := artifact.OpenDeferredBundle(cfg, "rid-deferred-after-close", "", artifact.TriggerOnError)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	rootBeforeClose := b.Root()
+	require.NoError(t, b.Close()) // dissolve path — never promoted
+
+	b.SetTicker("AAPL")
+	assert.Equal(t, rootBeforeClose, b.Root(),
+		"SetTicker after Close on a deferred bundle must not move the root")
+	assert.Equal(t, int64(0), b.WriteErrors(),
+		"closed-bundle SetTicker must not increment writeErrors")
+}

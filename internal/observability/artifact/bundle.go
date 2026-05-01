@@ -411,16 +411,33 @@ func (b *Bundle) Root() string {
 // <root>/<date>/<TICKER>/req_<id>/ so per-ticker forensics like
 // `ls artifacts/<date>/TSM/` find the bundle.
 //
+// Two modes:
+//
+//   - Eager (OpenBundle): on-disk directory exists at construction. SetTicker
+//     closes cached file handles, ensures the new parent dir exists, and
+//     calls os.Rename to move the directory atomically. On rename failure
+//     (rare — disk-full, permission), increments writeErrors so the manifest
+//     outcome degrades to "partial", and still updates the manifest ticker so
+//     the in-memory state is correct even if the directory is stuck at the
+//     old segment.
+//   - Deferred (OpenDeferredBundle): NO on-disk directory exists yet —
+//     Promote() does the MkdirAll later. Pre-fix, calling os.Rename here
+//     ENOENT'd against the in-memory placeholder, incremented writeErrors,
+//     left b.root unchanged, and Promote later created the bundle at the
+//     wrong (_no-ticker) path. BUG-013 fix: in deferred mode we skip
+//     os.Rename entirely and just update b.root in memory; Promote then
+//     MkdirAll's at the correct path. No file handles to close — deferred
+//     mode buffers stream lines in pendingStreams (in-memory bytes.Buffer),
+//     not in b.streams (on-disk *os.File handles).
+//
 // No-op when the bundle is nil, the ticker sanitizes to empty, the bundle is
-// already at the target ticker, or after Close. On rename failure (rare —
-// disk-full, permission), increments writeErrors so the manifest outcome
-// degrades to "partial", and still updates the manifest ticker so the
-// in-memory state is correct even if the directory is stuck at _no-ticker.
+// already at the target ticker, or after Close.
 //
 // File handles cached by AppendStream are closed before the rename (Windows
 // won't rename a directory containing open files; on Unix it would work but
 // the open handles would point to the old inode location). The streams map
-// is cleared; the next AppendStream call reopens at the new path.
+// is cleared; the next AppendStream call reopens at the new path. This is
+// only relevant in eager mode — deferred mode never opens stream files.
 func (b *Bundle) SetTicker(ticker string) {
 	if b == nil {
 		return
@@ -452,6 +469,31 @@ func (b *Bundle) SetTicker(ticker string) {
 	reqDirName := filepath.Base(b.root)
 	dateDir := filepath.Dir(filepath.Dir(b.root))
 	newRoot := filepath.Join(dateDir, sanitized, reqDirName)
+
+	// BUG-013 deferred-mode short-circuit: when the bundle has not been
+	// promoted to disk yet, there is NO directory to rename. Just update
+	// b.root in memory and let Promote() MkdirAll at the correct path later.
+	// Reading deferred under b.mu is fine — Promote takes pendingMu (a
+	// different lock) but flips deferred=false ATOMICALLY, so the worst race
+	// is: Promote flips deferred=false after we read true; we then take the
+	// in-memory path while the on-disk dir already exists. That dir would
+	// remain at _no-ticker on disk while b.root reads AAPL — Promote's worker
+	// would then write snapshots into the in-memory-AAPL path which doesn't
+	// exist on disk → writeErrors increment, manifest outcome=partial. This
+	// race is benign: Promote() drains pendingJobs WHILE HOLDING pendingMu
+	// before flipping deferred=false (see Promote's inline doc), and SetTicker
+	// is called from the request handler thread while Promote is called from
+	// the trace middleware's defer block — they execute serially in the
+	// normal request flow. The race only matters for adversarial test setups,
+	// and even then degrades gracefully (partial outcome, not data loss).
+	if b.deferred.Load() {
+		b.root = newRoot
+		b.mu.Unlock()
+		b.setManifestTicker(ticker)
+		return
+	}
+
+	// Eager mode below: on-disk directory exists, perform the rename.
 
 	// Close cached stream file handles. Required on Windows (open files block
 	// directory rename); harmless on Unix. The streams map is cleared so the
