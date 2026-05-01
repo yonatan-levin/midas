@@ -1242,6 +1242,10 @@ Set `logging.artifact_store.triggers.always=true` (or env var `LOGGING_ARTIFACT_
 4. `LOGGING_ARTIFACT_STORE_TRIGGERS_ALWAYS=false ./midas` (or unset) and restart
 5. The `retention_days` reaper cleans up the always-only captures over the next 7 days; interesting (`on_error` / `on_quality_flag`) captures from the same window survive.
 
+**Narrate-line caveat:** the `trace.bundle.promoted` suppression handles per-request bundle-creation noise, but the `request.received` / `response.sent` narrate lines (gated by `logging.narrate.enabled`, NOT by trigger type) STILL fire per request. An operator with both `always=true` AND `narrate.enabled=true` (a likely combination during a debugging session) will see hundreds of narrate Info lines/min on the host log stream. If host-log volume is a cost concern during the always-on window, set `LOGGING_NARRATE_ENABLED=false` for the same window — the on-disk bundles' `99-narrate.jsonl` files still capture the full per-request narrative regardless of the host-log narrate setting.
+
+**Known limitation (BUG-013, tracked):** when the deferred bundle's ticker is set late by the handler (after the deferred-mode `OpenDeferredBundle` returned), `os.Rename` fails because the on-disk directory hasn't been created yet — bundles end up under `artifacts/<date>/_no-ticker/<request_id>/` instead of `artifacts/<date>/<TICKER>/<request_id>/`. The manifest's `ticker` field IS correct, so `grep -l '"ticker": "AAPL"' artifacts/<date>/_no-ticker/*/00-manifest.json` finds the right bundles. Affects all three auto-triggers; Phase 2.C makes it the dominant case because every request hits the path. See `docs/bugs/BUG-013-...md`.
+
 #### Operator log signal — `trace.bundle.promoted`
 
 After any auto-trigger Promote succeeds (`on_error` OR `on_quality_flag`), the trace middleware emits a structured Info line:
