@@ -470,27 +470,74 @@ func (b *Bundle) SetTicker(ticker string) {
 	dateDir := filepath.Dir(filepath.Dir(b.root))
 	newRoot := filepath.Join(dateDir, sanitized, reqDirName)
 
-	// BUG-013 deferred-mode short-circuit: when the bundle has not been
-	// promoted to disk yet, there is NO directory to rename. Just update
-	// b.root in memory and let Promote() MkdirAll at the correct path later.
-	// Reading deferred under b.mu is fine — Promote takes pendingMu (a
-	// different lock) but flips deferred=false ATOMICALLY, so the worst race
-	// is: Promote flips deferred=false after we read true; we then take the
-	// in-memory path while the on-disk dir already exists. That dir would
-	// remain at _no-ticker on disk while b.root reads AAPL — Promote's worker
-	// would then write snapshots into the in-memory-AAPL path which doesn't
-	// exist on disk → writeErrors increment, manifest outcome=partial. This
-	// race is benign: Promote() drains pendingJobs WHILE HOLDING pendingMu
-	// before flipping deferred=false (see Promote's inline doc), and SetTicker
-	// is called from the request handler thread while Promote is called from
-	// the trace middleware's defer block — they execute serially in the
-	// normal request flow. The race only matters for adversarial test setups,
-	// and even then degrades gracefully (partial outcome, not data loss).
+	// REVIEWER MEDIUM-A (BUG-013 follow-up): the deferred check must be
+	// atomic with respect to Promote, which flips deferred=false under
+	// b.pendingMu. Pre-fix this code read b.deferred.Load() under b.mu only
+	// and entered the deferred branch unconditionally, opening a TOCTOU
+	// window:
+	//   1. SetTicker reads deferred=true under b.mu.
+	//   2. Promote concurrently takes pendingMu, snapshots b.root (still the
+	//      OLD path), flips deferred=false, MkdirAll's at OLD path.
+	//   3. SetTicker writes b.root = NEW path.
+	//   4. Promote's flush loop writes streams at NEW path → ENOENT →
+	//      writeErrors. Close.Finalize writes manifest at NEW path → fails.
+	//      The bundle ends up half-built at OLD path with no manifest.
+	//
+	// The fix below releases b.mu, takes pendingMu (Promote's lock),
+	// re-checks deferred, and only then re-takes b.mu to commit the b.root
+	// write. While we hold pendingMu, Promote cannot start (its first action
+	// is pendingMu.Lock); while Promote runs, we cannot enter pendingMu.
+	// Either we win and atomically commit the new b.root before Promote sees
+	// it, or Promote wins and we fall through to the eager rename path with
+	// the on-disk directory already created.
+	//
+	// Lock order: pendingMu → b.mu. This matches Promote's snapshot ordering
+	// (line ~895). The reverse direction (b.mu → pendingMu) is FORBIDDEN —
+	// bufferStream (line ~793) explicitly releases pendingMu before
+	// forwarding to AppendStream (which takes b.mu) precisely to avoid that
+	// nesting.
 	if b.deferred.Load() {
-		b.root = newRoot
 		b.mu.Unlock()
-		b.setManifestTicker(ticker)
-		return
+
+		b.pendingMu.Lock()
+		// Re-check under pendingMu — Promote may have flipped the flag
+		// between our b.mu drop and pendingMu acquisition.
+		if b.deferred.Load() {
+			b.mu.Lock()
+			// Re-check closed under b.mu so a Close racing in the gap is
+			// honoured (Close also takes b.mu when flushing streams).
+			if b.closed.Load() {
+				b.mu.Unlock()
+				b.pendingMu.Unlock()
+				return
+			}
+			b.root = newRoot
+			b.mu.Unlock()
+			b.pendingMu.Unlock()
+			b.setManifestTicker(ticker)
+			return
+		}
+		b.pendingMu.Unlock()
+
+		// Promote ran while we were dropping locks — the on-disk directory
+		// exists at the OLD path. Fall through to the eager rename branch
+		// after re-acquiring b.mu and re-validating preconditions.
+		b.mu.Lock()
+		// Re-check no-op (target ticker may already be where we want — e.g.
+		// Promote-then-eager-rename by another caller) and closed.
+		if filepath.Base(filepath.Dir(b.root)) == sanitized {
+			b.mu.Unlock()
+			b.setManifestTicker(ticker)
+			return
+		}
+		if b.closed.Load() {
+			b.mu.Unlock()
+			return
+		}
+		// Recompute newRoot in case b.root moved while we dropped the lock.
+		reqDirName = filepath.Base(b.root)
+		dateDir = filepath.Dir(filepath.Dir(b.root))
+		newRoot = filepath.Join(dateDir, sanitized, reqDirName)
 	}
 
 	// Eager mode below: on-disk directory exists, perform the rename.
@@ -886,12 +933,33 @@ func (b *Bundle) Promote(trigger Trigger) error {
 		return errors.New("artifact: promote on closed bundle")
 	}
 
-	// mkdir for the bundle root. We compute the parent up-front because the
+	// mkdir for the bundle root. We compute the path up-front because the
 	// MkdirAll target is the bundle's req_<id> directory, not just the
 	// ticker dir, so a single MkdirAll suffices.
-	if err := os.MkdirAll(b.root, 0o755); err != nil {
+	//
+	// REVIEWER HIGH-A (BUG-013 follow-up): snapshot b.root under b.mu so the
+	// MkdirAll target is observed atomically with SetTicker's deferred-branch
+	// write. Without synchronisation the race detector flags a data-race on
+	// the string header (Go strings are {ptr,len} two-word values, not atomic
+	// on amd64) and a torn read could in theory yield a spliced path.
+	//
+	// Lock-order: this is the established `pendingMu → mu` nesting direction
+	// for code paths that must observe the deferred flag and b.root together.
+	// SetTicker uses the SAME order in its TOCTOU re-check (see MEDIUM-A
+	// inline comments at line ~489). The reverse direction (mu → pendingMu)
+	// is FORBIDDEN — adding it would deadlock against either of these paths.
+	// bufferStream (line ~793) explicitly avoids both directions by releasing
+	// pendingMu before forwarding to AppendStream (which takes mu).
+	//
+	// Holding b.mu only for the string copy keeps the critical section
+	// trivial; we release it before MkdirAll so the disk operation does not
+	// block any concurrent SetTicker observers of b.root.
+	b.mu.Lock()
+	mkdirRoot := b.root
+	b.mu.Unlock()
+	if err := os.MkdirAll(mkdirRoot, 0o755); err != nil {
 		b.pendingMu.Unlock()
-		return fmt.Errorf("artifact: promote mkdir %s: %w", b.root, err)
+		return fmt.Errorf("artifact: promote mkdir %s: %w", mkdirRoot, err)
 	}
 
 	// Snapshot the buffers and clear them under the lock.
@@ -961,8 +1029,19 @@ func (b *Bundle) Promote(trigger Trigger) error {
 	// data loss. We do NOT cache the file handle here — subsequent
 	// AppendStream calls open their own handle via the eager path's handle
 	// cache.
+	// REVIEWER HIGH-A (BUG-013 follow-up): snapshot b.root once under b.mu
+	// for the whole flush loop. SetTicker writes b.root under b.mu, and the
+	// per-iteration filepath.Join here would otherwise race the writer. A
+	// single snapshot also guarantees all stream files in this Promote land
+	// in the same directory — a per-iteration read could split the writes
+	// across the pre- and post-rename paths if SetTicker fired mid-loop,
+	// which would be a genuinely surprising failure mode for postmortem
+	// readers.
+	b.mu.Lock()
+	flushRoot := b.root
+	b.mu.Unlock()
 	for filename, buf := range pendingStreams {
-		path := filepath.Join(b.root, filename)
+		path := filepath.Join(flushRoot, filename)
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			b.writeErrors.Add(1)

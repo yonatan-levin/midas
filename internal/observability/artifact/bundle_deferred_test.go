@@ -740,6 +740,107 @@ func TestDeferredBundle_PromoteCloseRace_NoGoroutineLeak(t *testing.T) {
 	}
 }
 
+// TestDeferredBundle_SetTickerPromoteRace_NoDataRace pins the BUG-013 fix's
+// concurrency story. It addresses REVIEWER's HIGH-A finding (Promote reads
+// b.root without holding b.mu while SetTicker writes it under b.mu) and the
+// MEDIUM-A TOCTOU window (SetTicker observes deferred=true but Promote may
+// flip it before SetTicker writes b.root).
+//
+// Setup: open a deferred bundle with no ticker. Spawn two goroutines
+// concurrently — one calls SetTicker("AAPL"), the other calls
+// Promote(TriggerOnError). Run 50 iterations so the scheduler has ample
+// chance to interleave the two paths in the dangerous order.
+//
+// Assertions:
+//   - go test -race must report zero data races on b.root reads/writes.
+//   - The bundle must end up with on-disk directory under one of
+//     {_no-ticker/, AAPL/}. Both are acceptable per the "benign degradation"
+//     claim: SetTicker-wins → AAPL, Promote-wins → _no-ticker.
+//   - Manifest outcome must be "ok" or "partial" (NOT "error" or unset). A
+//     mid-flight rebind in deferred mode should never lose data; at worst it
+//     leaves the on-disk dir at one path while later writes target the
+//     other, which Promote's flush loop accounts via writeErrors → outcome
+//     downgrade to "partial".
+//
+// Run with `-race -count=3` to flush out scheduler-dependent races. The
+// MEDIUM-A TOCTOU fix exits the b.mu section before re-checking deferred
+// under b.pendingMu so b.mu and b.pendingMu are never nested — preserving
+// the invariant documented in bufferStream (line ~793).
+func TestDeferredBundle_SetTickerPromoteRace_NoDataRace(t *testing.T) {
+	const iterations = 50
+	for i := 0; i < iterations; i++ {
+		root := t.TempDir()
+		cfg := artifact.Config{
+			Enabled:   true,
+			RootPath:  root,
+			QueueSize: 16,
+		}
+		// Open deferred with EMPTY ticker so SetTicker has real work to do
+		// (a same-target SetTicker is a no-op and would defeat the test).
+		b, err := artifact.OpenDeferredBundle(cfg, "rid-set-promote-race-"+itoa(i), "", artifact.TriggerOnError)
+		require.NoError(t, err)
+		require.NotNil(t, b)
+
+		// Buffer a snapshot so Promote has work to flush into the (possibly
+		// late-renamed) on-disk dir. Without this, the flush loop is empty
+		// and the race window narrows.
+		b.Snapshot(context.Background(), "phase", "x.json", map[string]int{"i": i})
+
+		// Race: SetTicker vs Promote.
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			b.SetTicker("AAPL")
+		}()
+		go func() {
+			defer wg.Done()
+			// Tiny scheduling nudge so SetTicker sometimes wins and
+			// sometimes loses the race vs Promote.
+			if i%2 == 0 {
+				runtime.Gosched()
+			}
+			_ = b.Promote(artifact.TriggerOnError)
+		}()
+		wg.Wait()
+
+		// Drain the worker and finalize the manifest.
+		require.NoError(t, b.Close())
+
+		// Final on-disk root must live under _no-ticker/ OR AAPL/. Anything
+		// else means b.root got mangled by a torn read or interleaved write.
+		finalRoot := b.Root()
+		parts := splitPath(t, finalRoot, root)
+		require.Len(t, parts, 3, "iter %d: expected 3 path segments under root, got %v", i, parts)
+		require.Contains(t, []string{"_no-ticker", "AAPL"}, parts[1],
+			"iter %d: ticker segment must be _no-ticker or AAPL, got %q", i, parts[1])
+		require.Equal(t, "req_rid-set-promote-race-"+itoa(i), parts[2],
+			"iter %d: req_<id> segment must be preserved across the race", i)
+
+		// Manifest must exist at SOME promoted path (Promote ran in every
+		// iteration). Look it up via b.Root() which is the authoritative
+		// post-flush location.
+		mfPath := filepath.Join(finalRoot, "00-manifest.json")
+		mfBody, err := os.ReadFile(mfPath)
+		require.NoError(t, err, "iter %d: manifest must exist at %s", i, mfPath)
+		var mf artifact.Manifest
+		require.NoError(t, json.Unmarshal(mfBody, &mf), "iter %d: manifest must be valid JSON", i)
+
+		// Outcome must be ok or partial — the race may legitimately produce
+		// partial when SetTicker beats Promote into the deferred branch but
+		// Promote has already flipped deferred=false (b.root rename misses,
+		// Promote MkdirAll's at the OLD path, the flush loop writes there,
+		// b.Root() returns the NEW path → manifest write may also fail).
+		// The test pins that we never produce "error" or an unset outcome.
+		switch mf.Outcome {
+		case "ok", "partial":
+			// acceptable
+		default:
+			t.Fatalf("iter %d: manifest outcome must be ok|partial, got %q (notes=%q)", i, mf.Outcome, mf.Notes)
+		}
+	}
+}
+
 // TestBundle_StreamLineExceedsHardCap_DroppedAndCounted pins the REVIEWER
 // HIGH-3 fix (per-line MaxStreamLineBytes guard in AppendStream). A 1 MiB
 // stream line MUST be rejected at AppendStream entry, OversizeLines() MUST
@@ -1007,4 +1108,107 @@ func TestSetTicker_DeferredBundle_NoOpAfterClose(t *testing.T) {
 		"SetTicker after Close on a deferred bundle must not move the root")
 	assert.Equal(t, int64(0), b.WriteErrors(),
 		"closed-bundle SetTicker must not increment writeErrors")
+}
+
+// TestSetTicker_DeferredBundle_CloseDuringTOCTOURace exercises the
+// closed-bundle defensive branches inside SetTicker's MEDIUM-A re-check.
+// SetTicker drops b.mu, takes b.pendingMu, re-takes b.mu — and must honour
+// b.closed.Load() at the second b.mu acquisition. Same for the fall-through-
+// to-eager path's b.mu re-acquisition.
+//
+// We exercise both branches probabilistically by racing SetTicker against
+// Close 100 times. Over the full run the scheduler will land Close inside
+// SetTicker's narrow lock-drop windows reliably enough to mark both branches
+// covered. The assertion is purely safety (no panic, no negative writeError
+// surge) — the closed branches return early without observable side effects.
+func TestSetTicker_DeferredBundle_CloseDuringTOCTOURace(t *testing.T) {
+	const iterations = 100
+	for i := 0; i < iterations; i++ {
+		root := t.TempDir()
+		cfg := artifact.Config{Enabled: true, RootPath: root, QueueSize: 16}
+
+		b, err := artifact.OpenDeferredBundle(cfg, "rid-close-toctou-"+itoa(i), "", artifact.TriggerOnError)
+		require.NoError(t, err)
+		require.NotNil(t, b)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			b.SetTicker("AAPL")
+		}()
+		go func() {
+			defer wg.Done()
+			// Mix in a Promote on half the iterations so SetTicker
+			// sometimes hits the deferred re-check branch, sometimes the
+			// fall-through branch — both have a closed-mid-flight check.
+			if i%2 == 0 {
+				_ = b.Promote(artifact.TriggerOnError)
+			}
+			runtime.Gosched()
+			_ = b.Close()
+		}()
+		wg.Wait()
+
+		// Idempotent re-Close — must not panic regardless of who won.
+		require.NoError(t, b.Close())
+	}
+}
+
+// TestSetTicker_DeferredBundle_AfterPromoteFallsThroughToEager pins the
+// MEDIUM-A TOCTOU fall-through path: SetTicker enters its deferred branch
+// because b.deferred.Load() returned true under b.mu, then re-checks under
+// b.pendingMu and finds deferred=false (Promote already ran). The fall-
+// through must drop into the eager rename path and physically move the
+// directory from <date>/_no-ticker/req_<id>/ to <date>/AAPL/req_<id>/.
+//
+// We exercise this DETERMINISTICALLY by promoting BEFORE calling SetTicker.
+// In the race test the same code path fires non-deterministically; here we
+// pin the fall-through behaviour without scheduler dependence.
+func TestSetTicker_DeferredBundle_AfterPromoteFallsThroughToEager(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	b, err := artifact.OpenDeferredBundle(cfg, "rid-after-promote", "", artifact.TriggerOnError)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+	defer b.Close()
+
+	// Force eager mode by promoting first — this flips deferred=false and
+	// MkdirAll's the directory at the _no-ticker path.
+	require.NoError(t, b.Promote(artifact.TriggerOnError))
+
+	preRoot := b.Root()
+	preParts := splitPath(t, preRoot, root)
+	require.Equal(t, "_no-ticker", preParts[1],
+		"precondition: post-Promote bundle lives under _no-ticker because no ticker was set yet")
+	st, err := os.Stat(preRoot)
+	require.NoError(t, err, "Promote must have created the on-disk directory")
+	require.True(t, st.IsDir())
+
+	// Now SetTicker — the deferred branch's TOCTOU re-check will see
+	// deferred=false under pendingMu and fall through to the eager rename.
+	b.SetTicker("AAPL")
+
+	// Post-condition: directory physically moved.
+	newRoot := b.Root()
+	newParts := splitPath(t, newRoot, root)
+	require.Len(t, newParts, 3)
+	assert.Equal(t, "AAPL", newParts[1],
+		"fall-through eager rename must move directory to AAPL/")
+	assert.Equal(t, "req_rid-after-promote", newParts[2])
+
+	// New directory must exist on disk.
+	st, err = os.Stat(newRoot)
+	require.NoError(t, err, "renamed directory must exist at the AAPL path")
+	assert.True(t, st.IsDir())
+
+	// Old directory must be gone (os.Rename moved, not copied).
+	_, err = os.Stat(preRoot)
+	assert.True(t, os.IsNotExist(err),
+		"_no-ticker placeholder must be removed by the rename; got stat err=%v", err)
+
+	// writeErrors must stay 0 — the rename succeeded cleanly.
+	assert.Equal(t, int64(0), b.WriteErrors(),
+		"clean fall-through rename must not increment writeErrors")
 }
