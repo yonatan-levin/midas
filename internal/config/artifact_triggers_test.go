@@ -169,4 +169,135 @@ func TestConfig_ValidateArtifactTriggers_NilLoggerIsSafe(t *testing.T) {
 	assert.NotPanics(t, func() {
 		ValidateArtifactTriggers(ArtifactTriggers{QualityFlagThreshold: "warnng"}, nil)
 	}, "nil logger must be a no-op, not a panic")
+	// HIGH-G follow-up: nil-safety must also hold when the always knob
+	// is the trigger that would otherwise produce a Warn line.
+	assert.NotPanics(t, func() {
+		ValidateArtifactTriggers(ArtifactTriggers{Always: true}, nil)
+	}, "nil logger must be a no-op for the always-on Warn path too")
+}
+
+// TestConfig_AlwaysOn_WarnsAtBoot pins REVIEWER HIGH-G (Phase 2.C
+// follow-up). When the always knob is flipped on, the boot log MUST
+// surface a Warn line so the operator has an in-process reminder it's
+// still active — combined with HIGH-F's suppression of the per-request
+// promoted Info line for trigger=always, the operator otherwise has
+// ZERO in-process signal between flipping the knob and the disk filling.
+//
+// The Warn must:
+//   - Be at WARN level (not Info) so it stands out in a default Info
+//     deployment and isn't lost in startup noise.
+//   - Carry a stable greppable identifier so runbooks can teach grep.
+//   - Include the operator-facing effect description so the human reading
+//     the boot log understands the cost without consulting docs.
+//   - Echo the on_error_also_active and quality_flag_threshold fields so
+//     the operator sees the FULL trigger picture in one line.
+func TestConfig_AlwaysOn_WarnsAtBoot(t *testing.T) {
+	core, recorded := observer.New(zapcore.WarnLevel)
+	logger := zap.New(core)
+
+	triggers := ArtifactTriggers{Always: true}
+	ValidateArtifactTriggers(triggers, logger)
+
+	entries := recorded.FilterMessage("config.artifact_store.always_on_active").All()
+	require.Len(t, entries, 1, "exactly one Warn line expected when Always=true")
+	entry := entries[0]
+	assert.Equal(t, zapcore.WarnLevel, entry.Level,
+		"always-on signal MUST be Warn so operators see it on a default Info-level boot")
+
+	// Walk the structured fields and assert all three diagnostic fields
+	// are present. Avoids depending on internal zap field-list ordering.
+	var sawEffect, sawOnError, sawQualityFlag bool
+	for _, f := range entry.Context {
+		switch f.Key {
+		case "effect":
+			assert.Contains(t, f.String, "every request will be bundled",
+				"effect field must spell out the per-request capture cost")
+			assert.Contains(t, f.String, "disk will fill",
+				"effect field must surface the disk-fill caveat")
+			sawEffect = true
+		case "on_error_also_active":
+			assert.False(t, f.Integer == 1,
+				"on_error_also_active must echo the configured value (false in this test)")
+			sawOnError = true
+		case "quality_flag_threshold":
+			assert.Equal(t, "", f.String,
+				"quality_flag_threshold must echo the configured value (empty in this test)")
+			sawQualityFlag = true
+		}
+	}
+	assert.True(t, sawEffect, "Warn line must carry effect field")
+	assert.True(t, sawOnError, "Warn line must carry on_error_also_active field")
+	assert.True(t, sawQualityFlag, "Warn line must carry quality_flag_threshold field")
+}
+
+// TestConfig_AlwaysOff_NoWarn pins the negative case for HIGH-G: when
+// Always=false (the default), the always-on Warn MUST NOT fire. Otherwise
+// every default deployment would emit a noise line at startup, training
+// operators to ignore the one signal that matters when the knob is
+// actually on.
+func TestConfig_AlwaysOff_NoWarn(t *testing.T) {
+	core, recorded := observer.New(zapcore.WarnLevel)
+	logger := zap.New(core)
+
+	ValidateArtifactTriggers(ArtifactTriggers{Always: false}, logger)
+
+	assert.Empty(t, recorded.FilterMessage("config.artifact_store.always_on_active").All(),
+		"Always=false (default) MUST NOT emit the always-on Warn — would train operators to ignore the one signal that matters")
+}
+
+// TestConfig_AlwaysOn_AndUnknownThreshold_BothWarn pins that the two
+// validation branches are independent — a misconfigured deployment that
+// flipped Always=true AND set an unknown quality_flag_threshold MUST
+// see BOTH Warns on a single boot. Otherwise the operator fixing one
+// problem would have to restart to discover the other, lengthening the
+// "incident → fixed" loop.
+func TestConfig_AlwaysOn_AndUnknownThreshold_BothWarn(t *testing.T) {
+	core, recorded := observer.New(zapcore.WarnLevel)
+	logger := zap.New(core)
+
+	triggers := ArtifactTriggers{
+		Always:               true,
+		QualityFlagThreshold: "warnng", // typo → threshold Warn fires
+	}
+	ValidateArtifactTriggers(triggers, logger)
+
+	assert.NotEmpty(t, recorded.FilterMessage("config.artifact_store.quality_flag_threshold.unknown").All(),
+		"threshold-typo Warn must still fire when Always is also active")
+	assert.NotEmpty(t, recorded.FilterMessage("config.artifact_store.always_on_active").All(),
+		"always-on Warn must fire even when threshold validation also has something to say")
+}
+
+// TestConfig_AlwaysOn_EchoesOtherTriggerFields pins the field-echoing
+// contract: when other triggers ARE configured alongside Always, the Warn
+// must echo their configured values. The operator reading the boot log
+// then sees the FULL trigger picture in one line — they don't need to
+// cross-reference YAML to understand precedence.
+func TestConfig_AlwaysOn_EchoesOtherTriggerFields(t *testing.T) {
+	core, recorded := observer.New(zapcore.WarnLevel)
+	logger := zap.New(core)
+
+	triggers := ArtifactTriggers{
+		Always:               true,
+		OnError:              true,
+		QualityFlagThreshold: "warning",
+	}
+	ValidateArtifactTriggers(triggers, logger)
+
+	entries := recorded.FilterMessage("config.artifact_store.always_on_active").All()
+	require.Len(t, entries, 1)
+	entry := entries[0]
+
+	var sawOnErrorTrue, sawThresholdWarning bool
+	for _, f := range entry.Context {
+		if f.Key == "on_error_also_active" && f.Integer == 1 {
+			sawOnErrorTrue = true
+		}
+		if f.Key == "quality_flag_threshold" && f.String == "warning" {
+			sawThresholdWarning = true
+		}
+	}
+	assert.True(t, sawOnErrorTrue,
+		"on_error_also_active MUST echo true when OnError is configured alongside Always")
+	assert.True(t, sawThresholdWarning,
+		"quality_flag_threshold MUST echo the configured value alongside the always-on signal")
 }

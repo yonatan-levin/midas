@@ -58,18 +58,30 @@ const (
 	// at or above the configured severity threshold (Phase 2.B; see spec
 	// §13.B). Set on the manifest at Promote()-time for bundles opened in
 	// deferred mode. Precedence (lowest to highest):
-	//   on_error  <  on_quality_flag  <  manual (header/query)
+	//   always  <  on_error  <  on_quality_flag  <  manual (header/query)
 	// Quality flags outrank on_error because a 500 alone tells you the
 	// request failed; a quality flag tells you WHY the upstream data was
 	// suspicious — which is more actionable for postmortem reading.
 	TriggerOnQualityFlag Trigger = "on_quality_flag"
+	// TriggerAlways — request was bundled because the operator flipped the
+	// always-on knob (logging.artifact_store.triggers.always=true) for a
+	// sustained debugging session (Phase 2.C; see spec §13.C). Lowest
+	// precedence in the auto-trigger ladder — when ANY other trigger also
+	// fires for the same request, that more-diagnostic trigger wins the
+	// manifest's Trigger field. Operators reading bundles want to see WHY
+	// a bundle is interesting, not just that the always-knob was on; so a
+	// 5xx with always=true reads as trigger="on_error", and a quality-flag
+	// hit with always=true reads as trigger="on_quality_flag". Only when
+	// no other trigger fires does the manifest read trigger="always" — the
+	// "this bundle is noise from a debugging session" case.
+	TriggerAlways Trigger = "always"
 )
 
 // TriggerConfig groups the per-request conditions that may open a bundle.
 // Phase 1 honoured only the manual flag; Phase 2.A adds OnError; Phase 2.B
-// adds QualityFlagThreshold. The shape mirrors config.ArtifactTriggers so
-// callers can copy field-by-field without pulling the config package into
-// artifact's import graph.
+// adds QualityFlagThreshold; Phase 2.C adds Always. The shape mirrors
+// config.ArtifactTriggers so callers can copy field-by-field without
+// pulling the config package into artifact's import graph.
 type TriggerConfig struct {
 	// OnError: when true, requests that return HTTP status >=500 promote
 	// their in-memory deferred bundle to disk even without an opt-in flag.
@@ -84,6 +96,18 @@ type TriggerConfig struct {
 	// the threshold via Bundle.QualityFlagThreshold and reports the
 	// qualifying-flag count via Bundle.RecordQualityFlagCount.
 	QualityFlagThreshold string
+
+	// Always: when true, EVERY request opens a deferred bundle and is
+	// promoted to disk at request-end regardless of status code or flag
+	// count (Phase 2.C; see spec §13.C). Intended for sustained debugging
+	// sessions: "flip on for an hour, flip off when done". Lowest
+	// precedence in the auto-trigger ladder — when on_error or
+	// on_quality_flag also fire for the same request, the manifest's
+	// Trigger field records that more-diagnostic value instead of
+	// "always". Off by default; turning it on without sizing the disk for
+	// the expected request volume will fill the bundle root's max_total_
+	// bytes cap fast and force the reaper to evict aggressively.
+	Always bool
 }
 
 // Config holds artifact-store knobs mirrored from

@@ -1573,3 +1573,387 @@ func TestTrace_OnError_PromoteFailed_NoPromotedLogLine(t *testing.T) {
 	assert.Empty(t, recorded.FilterMessage("trace.bundle.promoted").All(),
 		"trace.bundle.promoted must NOT fire when Promote failed")
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2.C — auto-on-always trigger tests
+// ---------------------------------------------------------------------------
+//
+// Behaviour matrix for Phase 2.C (extending Phase 2.B):
+//
+//   manual flag | qty_flag thr | qty count | on_error | always | status   | bundle? | trigger
+//   ------------|--------------|-----------|----------|--------|----------|---------|----------------
+//   yes         | any          | any       | any      | any    | any      | yes     | header/query
+//   no          | "warning"    | >=1       | any      | any    | any      | yes     | on_quality_flag
+//   no          | any          | 0         | true     | any    | >=500    | yes     | on_error
+//   no          | ""           | 0         | false    | true   | <500     | yes     | always   <-- NEW
+//   no          | ""           | 0         | false    | true   | 200      | yes     | always   <-- NEW
+//   no          | "warning"    | >=1       | true     | true   | any      | yes     | on_quality_flag (precedence)
+//   no          | ""           | 0         | true     | true   | >=500    | yes     | on_error (precedence)
+//   no          | ""           | 0         | false    | false  | 200      | no      | —
+//
+// The precedence ladder (highest to lowest) becomes:
+//   manual (header/query) > on_quality_flag > on_error > always
+//
+// Always sits at the BOTTOM because it is the fallback "noise" capture
+// for a sustained debugging session. When any more diagnostic trigger also
+// fires for the same request, that trigger should win the manifest's
+// trigger field — operators reading bundles want to see WHY the bundle is
+// interesting, not just that the always-knob was on.
+
+// TestTrace_Always_AutoBundle_OnSuccessfulRequest — handler returns 200, no
+// flags, no manual flag, but always=true. Bundle MUST appear on disk and the
+// manifest's trigger MUST be "always". This is the "operator flipped the knob
+// for a debugging session" path; getting it wrong means the knob does
+// nothing and the operator has no way to capture noise.
+func TestTrace_Always_AutoBundle_OnSuccessfulRequest(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-always-200"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{Always: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// No flags recorded, no error — purely the always path.
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b, "deferred bundle must be on ctx when always=true")
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	// NB: NO ?trace=1 and NO X-Midas-Trace header — pin the auto-trigger.
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Bundle must exist on disk even though nothing went wrong.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath, "bundle must be on disk for 200 + always=true")
+
+	// Trigger must be always — no other auto-trigger fired so the catch-all
+	// wins the precedence ladder.
+	assert.Equal(t, "always", readManifestTrigger(t, root),
+		"auto-triggered bundle must record trigger=always when no other trigger applies")
+}
+
+// TestTrace_Always_Disabled_NoBundle — always=false, no other triggers,
+// status 200. NO bundle must be created. Pins the off-by-default invariant:
+// enabling artifact_store alone (without flipping always) does NOT auto-
+// capture every request. Symmetrical with TestTrace_OnError_Disabled_*
+// and TestTrace_OnQualityFlag_Disabled_NoBundle.
+func TestTrace_Always_Disabled_NoBundle(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-always-off"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			// Always NOT set — defaults to false.
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		// No deferred bundle exists when no trigger is configured.
+		assert.Nil(t, artifact.From(c.Request.Context()),
+			"no bundle expected when no trigger is configured")
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	entries, err := os.ReadDir(root)
+	require.NoError(t, err)
+	assert.Empty(t, entries,
+		"disabled always trigger must NOT auto-capture; got %v", entries)
+}
+
+// TestTrace_Always_PrecedenceOnError — request returns 500 AND always=true
+// AND on_error=true. on_error MUST win the manifest's trigger field
+// because it is the more diagnostic signal — operators reading the bundle
+// want to know "this request 5xx'd" rather than the less-informative "the
+// always knob was on".
+//
+// Pre-test invariant: bundle is opened deferred (no manual flag), the
+// handler returns 500, and BOTH always + on_error are configured.
+func TestTrace_Always_PrecedenceOnError(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-precedence-always-onerror"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				OnError: true,
+				Always:  true,
+			},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.AbortWithStatus(http.StatusInternalServerError)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+
+	trigger := readManifestTrigger(t, root)
+	require.NotEmpty(t, trigger, "bundle must exist (both triggers fired)")
+	assert.Equal(t, "on_error", trigger,
+		"on_error must outrank always in the precedence ladder")
+}
+
+// TestTrace_Always_PrecedenceOnQualityFlag — request records qualifying
+// flags AND always=true AND quality_flag_threshold configured. on_quality
+// _flag MUST win the manifest's trigger field — same precedence logic as
+// TestTrace_Always_PrecedenceOnError, but for the higher-precedence
+// quality-flag trigger.
+func TestTrace_Always_PrecedenceOnQualityFlag(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-precedence-always-qflag"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				QualityFlagThreshold: "warning",
+				Always:               true,
+			},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		b := artifact.From(c.Request.Context())
+		require.NotNil(t, b)
+		b.RecordQualityFlagCount(3)
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	trigger := readManifestTrigger(t, root)
+	require.NotEmpty(t, trigger, "bundle must exist (both triggers fired)")
+	assert.Equal(t, "on_quality_flag", trigger,
+		"on_quality_flag must outrank always in the precedence ladder")
+}
+
+// TestTrace_Manual_PrecedenceOverAlways — manual flag (?trace=1) + always
+// =true. Manual must STILL win so debug sessions stay attributable to the
+// operator who flipped the per-request flag, even when the always knob is
+// also on. Symmetrical with TestTrace_Manual_PrecedenceOverOnQualityFlag.
+//
+// Important: when the manual flag is set, the bundle is opened EAGER (not
+// deferred), so the trigger value is locked in at OpenBundle-time and the
+// post-c.Next promote-time switch is bypassed entirely. This test pins
+// that contract — adding always to the precedence ladder must not regress
+// the manual-flag eager path.
+func TestTrace_Manual_PrecedenceOverAlways(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-manual-vs-always"))
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{Always: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x?trace=1", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	trigger := readManifestTrigger(t, root)
+	require.NotEmpty(t, trigger, "bundle must exist (eager manual path)")
+	assert.NotEqual(t, "always", trigger,
+		"manifest trigger must NOT be always when manual flag was also set")
+	assert.Contains(t, []string{"query", "header"}, trigger,
+		"manifest trigger must be the manual source (query/header)")
+}
+
+// TestTrace_Always_NoPromotedLogLine pins REVIEWER HIGH-F (Phase 2.C
+// follow-up). The trace.bundle.promoted Info line was added in Phase 2.B
+// (REVIEWER MEDIUM-2) so operators tailing the host log could see WHICH
+// requests created bundles and WHY. That contract holds for rare auto-
+// triggers (on_error, on_quality_flag) but inverts under always=true:
+// every request creates a bundle, every line carries trigger=always, and
+// the operator-grep target loses its discriminating power. At 100 req/s
+// it would emit 6,000 Info lines/min, all noise.
+//
+// Post-fix: the Info line is gated by `autoTrigger != TriggerAlways`. The
+// bundle still lands on disk (verified via findManifest), the manifest
+// still records trigger=always (the on-disk operator-grep target stays
+// intact), only the host-log line is suppressed for the always path.
+//
+// This is the negative pin — without it a future refactor that drops the
+// gate would silently re-introduce the noise stream.
+func TestTrace_Always_NoPromotedLogLine(t *testing.T) {
+	root := t.TempDir()
+
+	// Capture every Info+ entry the request-scoped logger emits so we can
+	// assert NO trace.bundle.promoted line fires on the always path.
+	core, recorded := observer.New(zapcore.InfoLevel)
+	logger := zap.New(core)
+
+	r := gin.New()
+	r.Use(requestIDStub("req-always-no-promoted-line"))
+	r.Use(func(c *gin.Context) {
+		ctx := logctx.Inject(c.Request.Context(), logger)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	})
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			// ONLY always — no other triggers, so the always branch is the
+			// one that fires. If on_error or quality_flag also fired, the
+			// promoted line would correctly emit (REVIEWER's gate is
+			// trigger-specific) and the negative assertion below would
+			// pass for the wrong reason.
+			Triggers: artifact.TriggerConfig{Always: true},
+		},
+	))
+	r.GET("/x", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/x", nil)
+	r.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	// Sanity: bundle MUST still exist on disk with trigger=always. The
+	// gate suppresses only the host-log line, not the on-disk artifact.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath,
+		"always-trigger bundle must still land on disk; the suppression is host-log-only")
+	assert.Equal(t, "always", readManifestTrigger(t, root),
+		"manifest trigger must remain 'always' — operators still grep the manifest, only the host-log signal is suppressed")
+
+	// The actual REVIEWER HIGH-F pin: NO trace.bundle.promoted Info line
+	// on the always path. Symmetrical with TestTrace_OnError_PromoteFailed_
+	// NoPromotedLogLine (which pins the negative case for promote failures).
+	assert.Empty(t, recorded.FilterMessage("trace.bundle.promoted").All(),
+		"trace.bundle.promoted must NOT fire for trigger=always — at production rates it would flood the host log with redundant signal (every line would carry trigger=always)")
+}
+
+// TestTrace_Always_HandlerPanic_StillBundles pins REVIEWER MEDIUM-B.4
+// (Phase 2.C follow-up). Phase 2.A introduced the defer+recover() that
+// wraps the post-c.Next() Promote/Close block; Phase 2.A pinned this for
+// on_error (TestTrace_OnError_HandlerPanic_StillBundles) and Phase 2.B
+// pinned it for on_quality_flag (TestTrace_OnQualityFlag_HandlerPanic_
+// StillBundles). Phase 2.C did NOT add the analogous pin for always —
+// without one, a future refactor that restructures the precedence switch
+// could silently break the panic-only-always path with no test catching it.
+//
+// The defer+recover is structurally trigger-agnostic, so the test is
+// covered IMPLICITLY today by the on_error/on_quality_flag tests, but
+// covering it EXPLICITLY documents intent and tightens the seam.
+//
+// Setup mirrors the on_quality_flag panic test EXCEPT:
+//   - Only Always=true is configured (OnError off, QualityFlagThreshold
+//     unset). This guarantees the always branch is the one that wins
+//     precedence — the on_error fallback won't accidentally mask a
+//     regression in the always path.
+//   - The handler panics WITHOUT recording any flags (because flags would
+//     route through on_quality_flag at the precedence switch).
+//
+// Verifies:
+//   - The bundle directory exists on disk despite the panic (the panic
+//     must NOT skip Promote — Phase 2.A's defer guarantees this).
+//   - The manifest's trigger is "always" (NOT "on_error", because OnError
+//     is off in this config — the panic forces respOutcome=error but with
+//     no on_error trigger configured, the precedence ladder drops to
+//     always as the catch-all).
+//   - The manifest's outcome is "error" (panic forces it via the defer's
+//     `panicked || status>=500` check).
+//   - gin.Recovery — registered OUTSIDE trace, mirroring the Phase 2.A
+//     and 2.B panic tests — still translates the re-raised panic into 500.
+func TestTrace_Always_HandlerPanic_StillBundles(t *testing.T) {
+	root := t.TempDir()
+
+	r := gin.New()
+	r.Use(requestIDStub("req-panic-always"))
+	// Recovery is registered FIRST (outside trace), so a panic from the
+	// handler propagates back through trace's c.Next() to here. The defer
+	// inside trace captures the panic, runs Promote, then re-raises for
+	// Recovery to translate into a 500. Same ordering as the on_error /
+	// on_quality_flag panic tests.
+	r.Use(gin.Recovery())
+	r.Use(middleware.TraceMiddleware(
+		narrate.Config{Enabled: true, SampleRate: 1.0},
+		artifact.Config{
+			Enabled:  true,
+			RootPath: root,
+			Triggers: artifact.TriggerConfig{
+				// ONLY always — see test doc above for why we deliberately
+				// leave OnError + QualityFlagThreshold off.
+				Always: true,
+			},
+		},
+	))
+	r.GET("/boom", func(c *gin.Context) {
+		// Synthetic panic — same shape as the on_error / on_quality_flag
+		// panic tests. NO RecordQualityFlagCount call: that would route
+		// to on_quality_flag at the precedence switch and we'd be testing
+		// that path instead of always.
+		panic("synthetic handler panic for trace MEDIUM-B.4 (always)")
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	r.ServeHTTP(w, req)
+
+	// gin.Recovery translates the re-raised panic into a 500.
+	require.Equal(t, http.StatusInternalServerError, w.Code,
+		"outer Recovery middleware must still see the re-raised panic")
+
+	// Bundle directory must exist on disk despite the panic — this is
+	// the entire point of Phase 2.A's defer wrap.
+	mfPath := findManifest(root)
+	require.NotEmpty(t, mfPath,
+		"always-trigger bundle must exist on disk even when the handler panics")
+
+	// Manifest must reflect the always auto-trigger and the error
+	// outcome forced by the panic.
+	body, err := os.ReadFile(mfPath)
+	require.NoError(t, err)
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(body, &mf))
+	assert.Equal(t, "always", mf.Trigger,
+		"panicking handler with only Always=true must promote with trigger=always (OnError is off; precedence ladder drops to always as catch-all)")
+	assert.Equal(t, "error", mf.Outcome,
+		"panicked request must record outcome=error in the manifest")
+}

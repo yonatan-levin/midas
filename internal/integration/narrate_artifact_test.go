@@ -744,3 +744,186 @@ func TestNarrate_OnQualityFlagAutoBundle(t *testing.T) {
 	_, err = os.Stat(filepath.Join(bundleDir, "10-clean-output.json"))
 	assert.NoError(t, err, "10-clean-output.json must exist in promoted bundle")
 }
+
+// TestNarrate_AlwaysAutoBundle pins Phase 2.C end-to-end: with
+// logging.artifact_store.triggers.always=true and a normal (200) request,
+// the bundle MUST land on disk WITHOUT a manual ?trace=1 flag, the
+// manifest's trigger MUST be "always", and 99-narrate.jsonl MUST contain
+// the full per-request narrate stream. This is the "operator flipped the
+// always-knob for a debugging session" path — the bundle is captured even
+// though the request succeeded uneventfully.
+//
+// Differs from TestNarrate_OnErrorAutoBundle in two ways:
+//   - The request hits the real fair-value handler (AAPL, 200) instead
+//     of a synthetic 5xx route. Always must fire on the dominant healthy
+//     path, not just on errors.
+//   - We assert trigger="always" (not "on_error") and that the manifest's
+//     outcome is "ok" (not "error") — proving the trigger fires for clean
+//     requests and the precedence ladder doesn't accidentally upgrade
+//     "always" to a more diagnostic trigger when nothing else fired.
+func TestNarrate_AlwaysAutoBundle(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	projectRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
+
+	srcMultiples := filepath.Join(projectRoot, "config", "industry_multiples.json")
+	require.FileExists(t, srcMultiples)
+	require.NoError(t, os.MkdirAll("./config", 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll("./config") })
+	multiplesBytes, err := os.ReadFile(srcMultiples)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile("./config/industry_multiples.json", multiplesBytes, 0o644))
+
+	observerCore, observedLogs := observer.New(zapcore.InfoLevel)
+	obsLogger := zap.New(observerCore)
+
+	artifactRoot := t.TempDir()
+
+	cfg := createTestConfig("redis://127.0.0.1:0")
+	cfg.Logging.TraceCalculations = true
+	cfg.Logging.Narrate.Enabled = true
+	cfg.Logging.Narrate.SampleRate = 1.0
+	cfg.Logging.ArtifactStore.Enabled = true
+	cfg.Logging.ArtifactStore.RootPath = artifactRoot
+	cfg.Logging.ArtifactStore.QueueSize = 256
+	// Phase 2.C — always-on knob ENABLED. No manual flag will be sent and
+	// no other auto-trigger is configured. Deliberately keep on_error and
+	// quality_flag_threshold off so the precedence ladder cannot upgrade the
+	// trigger to a higher-precedence value — this pins that always FIRES on
+	// the dominant 200-OK path when it is the only configured trigger.
+	cfg.Logging.ArtifactStore.Triggers.Always = true
+	cfg.Market.YFinance.Enabled = false
+	cfg.Macro.FREDEnabled = false
+	cfg.Macro.ManualRiskFreeRate = 0.04
+	cfg.Macro.ManualMarketRiskPremium = 0.05
+	cfg.DataCleaner.RulesPath = filepath.Join(projectRoot, "config", "datacleaner", "rules.json")
+	cfg.DataCleaner.IndustryRulesPath = filepath.Join(projectRoot, "config", "datacleaner", "industry")
+
+	var (
+		database       *sqlx.DB
+		authService    *auth.Service
+		valuationSvc   *valuation.Service
+		rateLimiter    *ratelimit.RateLimiter
+		healthHandler  *handlers.HealthHandler
+		metricsService *metrics.Service
+	)
+
+	app := fxtest.New(t,
+		fx.Provide(func() *config.Config { return cfg }),
+		fx.Decorate(func() *zap.Logger { return obsLogger }),
+		di.CoreModule,
+		di.ServiceModule,
+		di.HandlerModule,
+		fx.Provide(handlers.NewFairValueHandler),
+		fx.Populate(
+			&database,
+			&authService,
+			&valuationSvc,
+			&rateLimiter,
+			&healthHandler,
+			&metricsService,
+		),
+	)
+	app.RequireStart()
+	t.Cleanup(app.RequireStop)
+
+	SetupDatabase(t, database)
+	SeedTestData(t, database)
+
+	srv := api.NewServer(cfg, obsLogger, valuationSvc, authService, rateLimiter, healthHandler, metricsService)
+	router := srv.Engine()
+
+	ctx := context.Background()
+	apiKey, err := authService.CreateKey(ctx, "narrate-always-user", []coreEntities.Permission{
+		coreEntities.PermissionReadFairValue,
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	// NB: NO ?trace=1, NO X-Midas-Trace — pin the always auto-trigger.
+	req, err := http.NewRequest(http.MethodGet, "/api/v1/fair-value/AAPL", nil)
+	require.NoError(t, err)
+	req.Header.Set("X-API-Key", apiKey.Key)
+
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+
+	requestID := w.Header().Get("X-Request-ID")
+	require.NotEmpty(t, requestID, "X-Request-ID must be present")
+
+	// --- Assert (1): a bundle was created on disk under the always trigger.
+	bundleDir := findBundleDir(t, artifactRoot, "AAPL", requestID)
+	require.NotEmpty(t, bundleDir,
+		"expected a bundle directory for request %s under %s after always auto-trigger",
+		requestID, artifactRoot)
+
+	// --- Assert (2): manifest.trigger == "always" — no other trigger was
+	// configured so the catch-all wins the precedence ladder.
+	mfBody, err := os.ReadFile(filepath.Join(bundleDir, "00-manifest.json"))
+	require.NoError(t, err)
+	var m artifact.Manifest
+	require.NoError(t, json.Unmarshal(mfBody, &m))
+	assert.Equal(t, "always", m.Trigger,
+		"auto-triggered bundle must carry trigger=always in its manifest when no higher-precedence trigger fires")
+	assert.Equal(t, requestID, m.RequestID)
+	// Outcome MUST NOT be "error" — pin that always firing on a 200 request
+	// doesn't accidentally upgrade the bundle's outcome via the precedence
+	// path. We tolerate "partial" because the full valuation pipeline can
+	// evict snapshots from the deferred buffer under realistic load (same
+	// observable behaviour the Phase 2.B integration test sees and
+	// deliberately doesn't pin); the pre-Phase-2.C `dropped/writeErrors/
+	// oversize > 0 -> partial` rule lives in Bundle.Close() and is
+	// orthogonal to which trigger opened the bundle.
+	assert.NotEqual(t, "error", m.Outcome,
+		"always-triggered bundle on a 200 request must NOT record outcome=error")
+
+	// --- Assert (3): the bundle's narrate stream (99-narrate.jsonl) contains
+	// the full per-request story. Pins that buffered (pre-trigger) narrate
+	// lines like request.received survive the deferred->promoted transition
+	// even on the always path, identical to the on_error path.
+	narrateStream := filepath.Join(bundleDir, "99-narrate.jsonl")
+	streamBody, err := os.ReadFile(narrateStream)
+	require.NoError(t, err, "99-narrate.jsonl must exist in promoted deferred bundle")
+
+	streamLines := strings.Split(strings.TrimSpace(string(streamBody)), "\n")
+	require.GreaterOrEqual(t, len(streamLines), 2,
+		"narrate stream must have at least request.received + response.sent; got %d lines", len(streamLines))
+
+	var sawRequestReceived, sawResponseSent bool
+	for i, line := range streamLines {
+		var entry map[string]interface{}
+		require.NoError(t, json.Unmarshal([]byte(line), &entry),
+			"line %d not valid JSON: %s", i, line)
+		assert.Equal(t, "narrate", entry["event"], "line %d missing event=narrate", i)
+		assert.Equal(t, requestID, entry["request_id"], "line %d wrong request_id", i)
+		switch entry["phase"] {
+		case "request.received":
+			sawRequestReceived = true
+		case "response.sent":
+			sawResponseSent = true
+		}
+	}
+	assert.True(t, sawRequestReceived,
+		"buffered request.received line must survive the deferred->promoted transition on the always path")
+	assert.True(t, sawResponseSent,
+		"post-promote response.sent line must land in the same stream file on the always path")
+
+	// --- Assert (4): host log stream still received the narrate lines for
+	// correlation (BundleSink is a tee, not a replacement). Identical to the
+	// on_error path's contract.
+	narrateEntries := filterByEvent(observedLogs.All(), "narrate")
+	require.NotEmpty(t, narrateEntries, "host log stream must still receive narrate lines")
+	hostHasResponseSent := false
+	for _, e := range narrateEntries {
+		if fieldString(e, "phase") == "response.sent" && fieldString(e, "request_id") == requestID {
+			hostHasResponseSent = true
+			break
+		}
+	}
+	assert.True(t, hostHasResponseSent,
+		"host log stream must contain response.sent for the same request_id")
+
+	// --- Assert (5): 10-clean-output.json (the cleaned data) is also on disk.
+	// Same survives-promote contract as the on_error / on_quality_flag paths.
+	_, err = os.Stat(filepath.Join(bundleDir, "10-clean-output.json"))
+	assert.NoError(t, err, "10-clean-output.json must exist in promoted always bundle")
+}
