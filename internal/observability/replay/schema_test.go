@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
@@ -50,9 +51,7 @@ func TestCurrentSchemaVersions_NonZeroVersions(t *testing.T) {
 // the current versions reports zero drift.
 func TestCompareSchemaVersions_NoDrift(t *testing.T) {
 	manifestVers := map[string]int{}
-	for k, v := range CurrentSchemaVersions {
-		manifestVers[k] = v
-	}
+	maps.Copy(manifestVers, CurrentSchemaVersions)
 	rpt := CompareSchemaVersions(manifestVers)
 	if rpt.HasDrift() {
 		t.Fatalf("expected no drift; got %d entries: %+v", len(rpt.Entries), rpt.Entries)
@@ -63,9 +62,7 @@ func TestCompareSchemaVersions_NoDrift(t *testing.T) {
 // case (bundle has older version, current code has newer).
 func TestCompareSchemaVersions_VersionMismatch(t *testing.T) {
 	manifestVers := map[string]int{}
-	for k, v := range CurrentSchemaVersions {
-		manifestVers[k] = v
-	}
+	maps.Copy(manifestVers, CurrentSchemaVersions)
 	// Roll FinancialData back by one to simulate a v6 bundle replayed
 	// against v7 code.
 	manifestVers["FinancialData"] = CurrentSchemaVersions["FinancialData"] - 1
@@ -98,9 +95,7 @@ func TestCompareSchemaVersions_MissingFromCurrent(t *testing.T) {
 	manifestVers := map[string]int{
 		"UnknownEntity": 5,
 	}
-	for k, v := range CurrentSchemaVersions {
-		manifestVers[k] = v
-	}
+	maps.Copy(manifestVers, CurrentSchemaVersions)
 
 	rpt := CompareSchemaVersions(manifestVers)
 	if !rpt.HasDrift() {
@@ -128,9 +123,7 @@ func TestCompareSchemaVersions_MissingFromCurrent(t *testing.T) {
 // direction.
 func TestCompareSchemaVersions_MissingFromBundle(t *testing.T) {
 	manifestVers := map[string]int{}
-	for k, v := range CurrentSchemaVersions {
-		manifestVers[k] = v
-	}
+	maps.Copy(manifestVers, CurrentSchemaVersions)
 	// Drop one entity to simulate a producer not yet present at capture
 	// time.
 	delete(manifestVers, "MacroData")
@@ -189,9 +182,7 @@ func TestCompareManifestSchemas_RealManifestStruct(t *testing.T) {
 	mf := &artifact.Manifest{
 		SchemaVersions: map[string]int{},
 	}
-	for k, v := range CurrentSchemaVersions {
-		mf.SchemaVersions[k] = v
-	}
+	maps.Copy(mf.SchemaVersions, CurrentSchemaVersions)
 	rpt := CompareManifestSchemas(mf)
 	if rpt.HasDrift() {
 		t.Fatalf("expected no drift for current-aligned manifest; got %+v", rpt.Entries)

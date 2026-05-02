@@ -87,14 +87,18 @@ func CompareFloat(a, b, relTol, absTol float64) bool {
 // reflects CompareFloat. Returns the FloatDiff regardless of whether the
 // pair is in tolerance — the renderer is responsible for filtering or
 // annotating based on WithinTolerance.
-func FloatDiffOf(path string, old, new, relTol, absTol float64) FloatDiff {
-	d := FloatDiff{Path: path, Old: old, New: new}
-	d.AbsDrift = math.Abs(old - new)
-	maxMag := math.Max(math.Abs(old), math.Abs(new))
+//
+// Parameter names (bundleVal / currentVal) match the JSON Old/New
+// convention used elsewhere in the renderer; we avoid the literal `new`
+// because it shadows Go's builtin.
+func FloatDiffOf(path string, bundleVal, currentVal, relTol, absTol float64) FloatDiff {
+	d := FloatDiff{Path: path, Old: bundleVal, New: currentVal}
+	d.AbsDrift = math.Abs(bundleVal - currentVal)
+	maxMag := math.Max(math.Abs(bundleVal), math.Abs(currentVal))
 	if maxMag > 0 {
 		d.RelDrift = d.AbsDrift / maxMag
 	}
-	d.WithinTolerance = CompareFloat(old, new, relTol, absTol)
+	d.WithinTolerance = CompareFloat(bundleVal, currentVal, relTol, absTol)
 	return d
 }
 

@@ -48,7 +48,13 @@ func ParseDurationExtended(s string) (time.Duration, error) {
 	// forms (e.g. `1d2h`) because that would conflict with Go's time-unit
 	// grammar and force us to rewrite the parser. Single-suffix is enough
 	// for --filter-since.
-	if strings.HasSuffix(s, "d") && !endsWithStdUnit(s) {
+	//
+	// Note: Go's std time-unit suffixes (ns/us/µs/ms/s/m/h) never end in
+	// "d", so a HasSuffix(s, "d") check is unambiguous against the
+	// current Go grammar. If a future Go release adds a unit ending in
+	// "d", the test suite (which exercises every standard unit) will
+	// catch it before this branch silently misroutes input.
+	if strings.HasSuffix(s, "d") {
 		numStr := strings.TrimSuffix(s, "d")
 		// time.ParseDuration accepts decimal floats, so reuse its number
 		// parser by treating the days value as hours and multiplying.
@@ -76,19 +82,4 @@ func ParseDurationExtended(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("replay: invalid duration %q: %w", s, err)
 	}
 	return d, nil
-}
-
-// endsWithStdUnit returns true when s ends with one of Go's standard
-// time-unit suffixes. Used by ParseDurationExtended to disambiguate `5d`
-// (our days suffix) from any Go-std form that happens to end in `d` —
-// today there are none, so this is defensive against future Go additions.
-//
-// We do NOT include `d` here on purpose; that's the suffix we're adding.
-func endsWithStdUnit(s string) bool {
-	for _, suffix := range []string{"ns", "us", "µs", "ms", "s", "m", "h"} {
-		if strings.HasSuffix(s, suffix) {
-			return true
-		}
-	}
-	return false
 }

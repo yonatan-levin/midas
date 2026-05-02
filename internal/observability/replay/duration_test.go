@@ -65,7 +65,8 @@ func TestParseDurationExtended_TableDriven(t *testing.T) {
 func TestParseDurationExtended_DoesNotAcceptCompoundDays(t *testing.T) {
 	cases := []string{"1d2h", "1d30m", "0.5d12h"}
 	for _, c := range cases {
-		c := c
+		// Go 1.22+ scopes range vars per iteration so the previous
+		// `c := c` shadow is unnecessary.
 		t.Run(c, func(t *testing.T) {
 			_, err := ParseDurationExtended(c)
 			if err == nil {
