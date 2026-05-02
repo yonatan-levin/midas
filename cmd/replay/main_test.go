@@ -265,6 +265,32 @@ func TestRun_OutFile(t *testing.T) {
 	}
 }
 
+// TestRun_QuietJSON_ResultsIsEmptyArray pins R1 follow-up #8: --quiet
+// --format=json must emit "results": [] not "results": null. Downstream
+// tooling (jq idioms, type-stable consumers) expect a stable array
+// shape. Without explicit []Result{} initialization the Go encoder emits
+// null for a nil slice.
+func TestRun_QuietJSON_ResultsIsEmptyArray(t *testing.T) {
+	bundle := filepath.Join("..", "..", "internal", "observability", "replay", "testdata", "happy")
+	abs, err := filepath.Abs(bundle)
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--quiet", "--format=json", abs}, &stdout, &stderr)
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if strings.Contains(out, `"results": null`) {
+		t.Errorf(`--quiet --format=json must emit "results": [] not "results": null; got:%s`, out)
+	}
+	if !strings.Contains(out, `"results": []`) {
+		t.Errorf(`expected "results": [] in quiet JSON output; got:%s`, out)
+	}
+}
+
 // TestRun_QuietMode confirms --quiet hides per-bundle rows but keeps the
 // summary line.
 func TestRun_QuietMode(t *testing.T) {

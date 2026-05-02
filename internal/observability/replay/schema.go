@@ -44,27 +44,33 @@ var CurrentSchemaVersions = map[string]int{
 // schema_versions map and CurrentSchemaVersions. Used by the text/JSON
 // renderers to format the drift table; also surfaced individually so
 // callers can decide policy per entity.
+//
+// JSON keys are snake_case to match the rest of the §7 contract — emitted
+// as part of Result.SchemaDriftEntries[]. Pre-R1-follow-up these fields
+// were untagged and serialized as PascalCase, locking in a broken JSON
+// contract; the tags below are mandatory and the snake_case test in
+// output_test.go pins it.
 type SchemaDriftEntry struct {
 	// Entity is the domain entity name (e.g. "FinancialData"). Stable
 	// across producer versions.
-	Entity string
+	Entity string `json:"entity"`
 	// BundleVersion is the value the manifest stamped at capture time. 0
 	// means the manifest did not stamp this entity at all (treated as
 	// drift unless OnlyMismatch is true).
-	BundleVersion int
+	BundleVersion int `json:"bundle_version"`
 	// CurrentVersion is the value the running binary would stamp today.
 	// 0 means the running binary doesn't know this entity at all (the
 	// bundle stamps something replay's CurrentSchemaVersions map omits) —
 	// also drift, in the opposite direction.
-	CurrentVersion int
+	CurrentVersion int `json:"current_version"`
 	// MissingFromCurrent is true when the bundle stamps an entity that
 	// CurrentSchemaVersions doesn't track. Indicates a producer was added
 	// since this replay binary was built.
-	MissingFromCurrent bool
+	MissingFromCurrent bool `json:"missing_from_current"`
 	// MissingFromBundle is true when the running binary stamps an entity
 	// the bundle's manifest does not. Indicates the producer existed at
 	// build time but didn't yet at bundle-capture time.
-	MissingFromBundle bool
+	MissingFromBundle bool `json:"missing_from_bundle"`
 }
 
 // SchemaDriftReport is the full drift comparison between a bundle's

@@ -28,22 +28,22 @@ type FloatDiff struct {
 	// "sanity_check.implied_pe"). R2 fills this in by tracing the field
 	// path; R1's CompareFloat doesn't synthesize a Path and the caller
 	// supplies one.
-	Path string
+	Path string `json:"path"`
 	// Old is the bundle's recorded value (from 17-response.json). Renamed
 	// "old" rather than "bundle" so the JSON shape (§7) reads naturally.
-	Old float64
+	Old float64 `json:"old"`
 	// New is the value the current code produced.
-	New float64
+	New float64 `json:"new"`
 	// RelDrift is |new-old|/max(|old|,|new|) when both are non-zero, else 0.
 	// Reported even when the diff is within tolerance so the
 	// "drifted-within-tolerance" annotation in --verbose mode (R3) has
 	// data to work with.
-	RelDrift float64
+	RelDrift float64 `json:"rel_drift"`
 	// AbsDrift is |new-old|. Always reported.
-	AbsDrift float64
+	AbsDrift float64 `json:"abs_drift"`
 	// WithinTolerance is true when the pair satisfies CompareFloat at the
 	// configured tolerances. Useful to the renderer for color-coding.
-	WithinTolerance bool
+	WithinTolerance bool `json:"within_tolerance"`
 }
 
 // CompareFloat returns true when two float64 values are equal within the
@@ -125,9 +125,9 @@ type ResultDiff struct {
 // StringDiff is the textual analog of FloatDiff for string-, bool-, or
 // integer-valued fields where tolerance is irrelevant.
 type StringDiff struct {
-	Path string
-	Old  string
-	New  string
+	Path string `json:"path"`
+	Old  string `json:"old"`
+	New  string `json:"new"`
 }
 
 // HasMismatch returns true when the diff contains any out-of-tolerance

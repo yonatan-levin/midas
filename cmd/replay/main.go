@@ -16,9 +16,34 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/replay"
 )
+
+// resolveGitSHA reads the binary's VCS revision from runtime/debug.ReadBuildInfo.
+// Populated for builds produced by `go build` from a clean VCS tree
+// (Go ≥ 1.18 stamps it automatically). Returns an empty string when
+// running under `go test` or `go run` (no VCS stamping in those modes) —
+// JSON output preserves the empty string so consumers can distinguish
+// "no git info" from "git info matches".
+//
+// Replaces the previous user-facing --git-sha flag (R1 follow-up #11).
+// Operator override is deferred to R2 when it actually has an effect
+// (drift detection); registering it as a no-op flag now would be a
+// contract leak.
+func resolveGitSHA() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return ""
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" {
+			return s.Value
+		}
+	}
+	return ""
+}
 
 // exitFn is overridable in tests so main_test.go can drive Run() and
 // inspect exit codes without actually exiting the test process.
@@ -55,7 +80,6 @@ type flags struct {
 	allowGitDrift    bool
 	quiet            bool
 	verbose          bool
-	gitSHA           string
 }
 
 // parseFlags parses argv (without the program name). Returns the parsed
@@ -75,7 +99,11 @@ func parseFlags(argv []string) (*flags, string, error) {
 	fs.BoolVar(&f.allowGitDrift, "allow-git-drift", false, "Warn instead of refusing on git_sha mismatch (R2)")
 	fs.BoolVar(&f.quiet, "quiet", false, "Suppress per-bundle rows; only print the aggregate summary")
 	fs.BoolVar(&f.verbose, "verbose", false, "Verbose per-field diff output (text mode)")
-	fs.StringVar(&f.gitSHA, "git-sha", "", "Override the current build's git sha (R2; passthrough now)")
+	// --git-sha was previously registered but had no R1-side effect; it
+	// would have been a contract leak (REVIEWER #11). It will return as
+	// an operator override in R2 once git-drift detection actually
+	// consumes it. R1 populates git_sha_current from
+	// runtime/debug.ReadBuildInfo automatically (see resolveGitSHA).
 
 	if err := fs.Parse(argv); err != nil {
 		return nil, "", err
@@ -129,7 +157,7 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 	// Pass/Fail.
 	report := &replay.Report{
 		ReplayVersion: replay.ReplayVersion,
-		GitSHACurrent: f.gitSHA,
+		GitSHACurrent: resolveGitSHA(),
 		Verbose:       f.verbose,
 	}
 
@@ -150,9 +178,13 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 	if f.quiet {
 		// Quiet mode: skip per-bundle rows; show only the aggregate.
 		// We still emit it via the renderer to keep the format
-		// consistent — just clear Results temporarily.
+		// consistent — clear Results to an empty (non-nil) slice so the
+		// JSON encoder emits "results": [] rather than "results": null.
+		// The latter is a regression: downstream tooling (jq idioms,
+		// type-stable consumers) expects a stable array shape. Pinned by
+		// TestRun_QuietJSON_ResultsIsEmptyArray. R1 follow-up #8.
 		quietReport := *report
-		quietReport.Results = nil
+		quietReport.Results = []replay.Result{}
 		if err := renderReport(&quietReport, f.format, out); err != nil {
 			fmt.Fprintf(stderr, "replay: render: %v\n", err)
 			return 2

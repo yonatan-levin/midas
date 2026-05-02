@@ -98,9 +98,15 @@ type Summary struct {
 // Report bundles per-bundle Results plus a Summary into a single
 // renderable shape. The JSON renderer emits exactly this struct (with
 // replay_version + git_sha_current up top per spec §7).
+//
+// git_sha_current is intentionally NOT omitempty: spec §7 sample at
+// L515-554 shows the field always populated. The cmd/replay binary
+// resolves it from runtime/debug.ReadBuildInfo at startup so the JSON
+// contract field is always present (an empty string indicates an
+// unstamped/test-binary build, which is information itself).
 type Report struct {
 	ReplayVersion  string   `json:"replay_version"`
-	GitSHACurrent  string   `json:"git_sha_current,omitempty"`
+	GitSHACurrent  string   `json:"git_sha_current"`
 	Summary        Summary  `json:"summary"`
 	Results        []Result `json:"results"`
 	Verbose        bool     `json:"-"` // renderer flag, not serialized
@@ -152,9 +158,17 @@ func (r *Report) ExitCode() int {
 }
 
 // RenderJSON emits the Report as a single, indented JSON object on w.
-// Always emits a stable shape — null/empty slices serialize as `null`
-// (default Go behavior) which downstream tooling already handles. The
-// JSON output is the stable contract; tests pin it via golden files.
+// JSON shape is the stable contract (spec §6 D6); tests pin it via
+// golden assertions in output_test.go.
+//
+// Field-omission rules:
+//   - Fields tagged with `,omitempty` are dropped when zero/empty (e.g.
+//     Result.Diffs is omitted entirely when no diffs exist).
+//   - Fields without `,omitempty` always serialize, even when nil/zero.
+//     For Report.Results specifically: callers that want an empty array
+//     in --quiet mode MUST pass []Result{} (not nil), otherwise Go's
+//     encoder emits `null`. cmd/replay/main.go does this in the --quiet
+//     branch.
 func (r *Report) RenderJSON(w io.Writer) error {
 	if r == nil {
 		return fmt.Errorf("replay: nil report")

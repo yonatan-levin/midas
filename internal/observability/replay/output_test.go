@@ -3,6 +3,7 @@ package replay
 import (
 	"bytes"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -462,6 +463,100 @@ func TestReport_RenderText_ErroredWithEmptyError(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "ERROR:") {
 		t.Errorf("empty Error string should not produce ERROR: line; got:\n%s", buf.String())
+	}
+}
+
+// TestReport_RenderJSON_AllKeysSnakeCase pins the JSON contract from
+// spec §6 D6 (R1 follow-up #3): every JSON object key emitted by the
+// renderer must be snake_case. The schema_drift_entries[] array
+// previously emitted PascalCase keys (Entity, BundleVersion, ...) because
+// the SchemaDriftEntry struct lacked json: tags. This test traverses
+// every nested object and rejects any key with a capital letter.
+//
+// The regex pattern matches a JSON key like "FooBar":, distinguishing
+// keys from string values that contain capitals.
+func TestReport_RenderJSON_AllKeysSnakeCase(t *testing.T) {
+	r := &Report{
+		ReplayVersion: ReplayVersion,
+		GitSHACurrent: "deadbeef",
+		Results: []Result{
+			{
+				Bundle:        "/x",
+				Status:        StatusErrored,
+				Ticker:        "AAPL",
+				FieldsTotal:   10,
+				FieldsChanged: 2,
+				SchemaDrift:   true,
+				GitDrift:      true,
+				DurationMs:    100,
+				Diffs: []FloatDiff{
+					{Path: "wacc", Old: 0.092, New: 0.094, RelDrift: 0.0217, AbsDrift: 0.002, WithinTolerance: false},
+				},
+				StringDiffs: []StringDiff{
+					{Path: "industry.sic", Old: "TECH", New: "TECH_SAAS"},
+				},
+				DriftedWithinTolerance: []FloatDiff{
+					{Path: "growth_rate", Old: 0.05, New: 0.05000001},
+				},
+				SchemaDriftEntries: []SchemaDriftEntry{
+					{Entity: "FinancialData", BundleVersion: 7, CurrentVersion: 8},
+					{Entity: "NewEntity", CurrentVersion: 1, MissingFromBundle: true},
+					{Entity: "DroppedEntity", BundleVersion: 3, MissingFromCurrent: true},
+				},
+				Error: "test error",
+			},
+		},
+		Summary: Summary{Total: 1, Errored: 1, DurationMs: 100},
+	}
+
+	var buf bytes.Buffer
+	if err := r.RenderJSON(&buf); err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+
+	// Match any JSON key (a quoted identifier followed by a colon) that
+	// starts with an uppercase letter or contains an uppercase letter.
+	// snake_case keys (e.g. "fields_total":) won't match. Stable contract:
+	// no PascalCase keys anywhere in the output.
+	violators := regexp.MustCompile(`"[A-Z][A-Za-z0-9_]*":`).FindAllString(buf.String(), -1)
+	if len(violators) > 0 {
+		t.Fatalf("RenderJSON emitted PascalCase keys (R1 follow-up #3): %v\nFull output:\n%s",
+			violators, buf.String())
+	}
+
+	// Sanity: the snake_case versions should be present.
+	out := buf.String()
+	for _, expected := range []string{`"entity":`, `"bundle_version":`, `"current_version":`, `"missing_from_current":`, `"missing_from_bundle":`} {
+		if !strings.Contains(out, expected) {
+			t.Errorf("expected SchemaDriftEntry key %s in output; got:\n%s", expected, out)
+		}
+	}
+}
+
+// TestReport_RenderJSON_QuietProducesEmptyArray pins R1 follow-up #8:
+// --quiet output's results field must serialize as `[]`, not `null`.
+// The orchestration code clones the report and clears Results; without
+// initialization to []Result{}, Go's JSON encoder emits `null` because
+// the slice is nil. Downstream tooling generally handles `[]` better
+// than `null` (jq idioms, type-stable consumers).
+func TestReport_RenderJSON_QuietProducesEmptyArray(t *testing.T) {
+	// Mimic the cmd/replay --quiet flow: clone and zero the Results slice
+	// to []Result{} (the post-fix shape).
+	r := &Report{
+		ReplayVersion: ReplayVersion,
+		Results:       []Result{},
+		Summary:       Summary{Total: 1, Passed: 1},
+	}
+	var buf bytes.Buffer
+	if err := r.RenderJSON(&buf); err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, `"results": null`) {
+		t.Errorf("--quiet --format=json must emit results: [] not results: null; got:\n%s", out)
+	}
+	if !strings.Contains(out, `"results": []`) {
+		t.Errorf("expected results: [] in quiet JSON output; got:\n%s", out)
 	}
 }
 
