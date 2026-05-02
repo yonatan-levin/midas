@@ -5,7 +5,7 @@
 | **ID** | BUG-013 |
 | **Title** | `(*Bundle).SetTicker` on a deferred bundle silently fails because `os.Rename` runs against an on-disk directory that doesn't exist yet — bundle promotes at the original `_no-ticker/req_<id>/` path instead of the intended `<TICKER>/req_<id>/` path |
 | **Severity** | MEDIUM (operator-visible, manifest-grep workaround exists) |
-| **Status** | Open (filed 2026-05-01) |
+| **Status** | Resolved 2026-05-02 (merge `621f805`) |
 | **Component** | `internal/observability/artifact/bundle.go::SetTicker` + handler call site `internal/api/v1/handlers/fair_value.go:258` |
 | **Reported** | 2026-05-01 (Phase 2.C QA pass; surfaced when `Always=true` made every request hit the path) |
 | **Affects** | All three auto-trigger paths: `on_error` (Phase 2.A), `on_quality_flag` (Phase 2.B), `always` (Phase 2.C). Manual `?trace=1` / `X-Midas-Trace` triggers are NOT affected (they use the eager `OpenBundle` path which sets the ticker directory at construction time). |
@@ -139,3 +139,30 @@ Con: bigger refactor; adds a new field; changes the Promote contract. More movin
 - Phase 2.A and Phase 2.B both have this bug latently (manual-flow tests passed; auto-trigger tests didn't inspect on-disk paths)
 - Related code: `internal/observability/artifact/bundle.go::SetTicker` (lines ~424-490 in the Phase 2.C branch), `internal/api/v1/handlers/fair_value.go:258` (call site)
 - Spec: `docs/refactoring/observability-narrative-and-artifacts-spec.md` §7 (manifest layout assumes per-ticker partitioning)
+
+---
+
+## Resolution (2026-05-02)
+
+**Merge:** `621f805` on master (`merge: fix/bug013-deferred-bundle-set-ticker — BUG-013 + latent b.root race fix (2 commits)`).
+
+**Approach:** Option A from the Recommended Fix section above — `SetTicker` branches on `b.deferred.Load()`. In deferred mode, skip `os.Rename` (the on-disk dir doesn't exist yet) and update `b.root` in memory directly; `Promote()` later `MkdirAll`s at the correct per-ticker path. Eager-mode behavior unchanged (`os.Rename` still runs against the existing directory; pre-existing `TestSetTicker_RenameFailureCountedAsWriteError` regression pin still passes).
+
+**Commits:**
+- `f86d067` — operator-UX fix (Option A). 4 new unit tests + 1 eager regression pin + 3 integration test extensions (one per auto-trigger).
+- `021e362` — REVIEWER follow-up addressing two latent concurrency surfaces uncovered while reviewing `f86d067`:
+  - **HIGH-A**: `Promote` read `b.root` without holding `b.mu`. Pre-existing race surface latent since Phase 2.A; `f86d067` made it writable by adding an under-lock write in deferred-mode `SetTicker`. Fix: snapshot `b.root` under `b.mu` in `Promote` (mirrors `runWorker` pattern).
+  - **MEDIUM-A**: TOCTOU window in `SetTicker` between `b.deferred.Load()` and `b.mu.Lock()`. A concurrent `Promote` could flip `deferred` between the check and the lock. Fix: re-check-after-lock under `pendingMu→b.mu` ordering (chosen against REVIEWER's suggested reverse direction to honor `bufferStream`'s documented prohibition on `b.mu→pendingMu` nesting). 3 new race-detector tests (`TestDeferredBundle_SetTickerPromoteRace_NoDataRace`, `TestSetTicker_DeferredBundle_AfterPromoteFallsThroughToEager`, `TestSetTicker_DeferredBundle_CloseDuringTOCTOURace`).
+
+**QA evidence:**
+- Independent lock-order audit: 10 `b.mu.Lock` sites + 5 `pendingMu.Lock` sites enumerated; ZERO `b.mu→pendingMu` nestings anywhere in `bundle.go`; exactly two NEW `pendingMu→b.mu` nestings introduced (the HIGH-A `Promote` snapshot + the MEDIUM-A `SetTicker` re-check).
+- 150 race-detector iterations clean (`-race -count=3` across the new race tests).
+- Live disk inspection: bundle landed at `artifacts/<date>/AAPL/req_<id>/` with manifest `outcome="ok"` and no `notes` field — the spurious `write_failures=1` from the pre-fix failed rename is gone. The visible disappearance of the bug.
+- Coverage: 90.3% (above 90% gate; 0.5pp dip from baseline because the MEDIUM-A re-check tests fire non-deterministically across runs by design).
+- All Phase 1 + 2.A + 2.B + 2.C regressions pass.
+
+**Acceptance criteria from spec — all met:**
+- ✅ Operator running `LOGGING_ARTIFACT_STORE_TRIGGERS_ALWAYS=true` and querying `/api/v1/fair-value/AAPL` finds the bundle at `artifacts/<date>/AAPL/req_<id>/` (NOT under `_no-ticker/`).
+- ✅ Manifest `outcome="ok"` for bundles with no real write failures.
+- ✅ Manual `?trace=1` flow unchanged (regression pin holds).
+- ✅ All existing tests pass (Option A is backward-compatible for the eager path).
