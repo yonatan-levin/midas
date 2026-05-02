@@ -574,6 +574,53 @@ func TestSetTicker_RenameFailureCountedAsWriteError(t *testing.T) {
 	assert.Greater(t, b.WriteErrors(), int64(0), "rename failure must be counted as a writeError")
 }
 
+// TestSetTicker_EagerBundle_StillRenamesOnDisk pins the BUG-013 fix's
+// "eager-mode unchanged" invariant: the deferred-mode short-circuit
+// (skip os.Rename, just update b.root) must NOT regress the eager path.
+// An eager bundle has a real on-disk directory at construction time, so
+// SetTicker MUST still rename the directory on disk — otherwise a
+// `?trace=1` request for /api/v1/fair-value/TSM would land at _no-ticker/
+// (the eager-mode bug fixed earlier in 2026-04-26 by TestSetTicker_RenamesDirectory).
+//
+// Companion regression pin to TestSetTicker_DeferredBundle_* in
+// bundle_deferred_test.go.
+func TestSetTicker_EagerBundle_StillRenamesOnDisk(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	b, err := artifact.OpenBundle(cfg, "rid-eager-rename", "", artifact.TriggerHeader)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	originalRoot := b.Root()
+	// Sanity: the on-disk dir for the original (no-ticker) path exists.
+	st, err := os.Stat(originalRoot)
+	require.NoError(t, err, "eager bundle must create on-disk dir at construction")
+	assert.True(t, st.IsDir())
+
+	b.SetTicker("AAPL")
+
+	// New on-disk path under AAPL.
+	newRoot := b.Root()
+	parts := splitPath(t, newRoot, root)
+	require.Equal(t, "AAPL", parts[1],
+		"eager-mode SetTicker must still move the bundle to <date>/AAPL/")
+
+	// New dir exists on disk; old _no-ticker req dir is gone (the rename
+	// MOVED the directory, not just updated b.root in memory).
+	st, err = os.Stat(newRoot)
+	require.NoError(t, err)
+	assert.True(t, st.IsDir())
+	_, err = os.Stat(originalRoot)
+	assert.True(t, os.IsNotExist(err),
+		"eager rename must remove the old _no-ticker req dir; pre-fix this assertion would still pass, but a regression to deferred-style in-memory-only update would leave the old dir intact")
+
+	// writeErrors stays zero — the rename succeeded against a real directory.
+	assert.Equal(t, int64(0), b.WriteErrors())
+
+	require.NoError(t, b.Close())
+}
+
 // TestSetTicker_SanitizesPathSeparators — a malicious ticker with path
 // separators must be neutralised before becoming a directory name.
 func TestSetTicker_SanitizesPathSeparators(t *testing.T) {
