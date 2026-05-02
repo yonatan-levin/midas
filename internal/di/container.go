@@ -153,6 +153,12 @@ var ServiceModule = fx.Options(
 	),
 
 	fx.Provide(NewValuationService),
+	// Phase R0 (D10) — register the production wall-clock binding for
+	// valuation.Clock. NewValuationService uses the default wallClock{}
+	// populated in NewService; this provider is here so replay's
+	// fx.Decorate over it resolves cleanly when the replay binary lands in
+	// Phase R2. Production behavior is byte-identical to pre-R0.
+	fx.Provide(valuation.NewWallClock),
 	fx.Provide(NewRateLimiterService),
 
 	// Bind *valuation.Service to handlers.ValuationCalculator interface

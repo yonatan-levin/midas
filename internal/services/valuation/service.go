@@ -46,6 +46,15 @@ type Service struct {
 	config             *config.Config
 	logger             *zap.Logger
 	calcEmitter        *calclog.Emitter // emits the 12 DCF stage traces (Phase M)
+
+	// clock is the wall-clock seam introduced by Phase R0 of the
+	// observability replay-tooling spec (D10). Production binds it to
+	// wallClock{} (which delegates to time.Now); replay binds it to a
+	// manifest-bound clock so cross-year regression replays do not silently
+	// shift the FY-period key or the CalculatedAt stamp. NewService defaults
+	// this to wallClock{} so every existing test call site is unaffected;
+	// SetClock allows replay to override post-construction.
+	clock Clock
 }
 
 // log returns the appropriate logger for the current execution context.
@@ -145,7 +154,29 @@ func NewService(
 		config:             cfg,
 		logger:             logger,
 		calcEmitter:        calcEmitter,
+		// Default to the production wall-clock binding. Replay overrides this
+		// via SetClock after construction (D10). Existing test call sites
+		// don't need to thread anything new because the default is identical
+		// to a direct time.Now() read.
+		clock: NewWallClock(),
 	}
+}
+
+// SetClock injects a Clock implementation used for the four wall-clock reads
+// in CalculateValuation (request-start, FY-period fallback, two CalculatedAt
+// stamps). Production never calls this — the default wallClock{} populated by
+// NewService matches pre-R0 behavior bit-for-bit. Replay uses this to bind
+// the clock to manifest.started_at so cross-year regression replays remain
+// deterministic. Mirrors the SetMacroGateway / SetYFinanceGateway pattern.
+//
+// Passing a nil Clock is a no-op — the existing default is preserved so a
+// caller that always sets but occasionally passes nil cannot accidentally
+// brick the service.
+func (s *Service) SetClock(clk Clock) {
+	if clk == nil {
+		return
+	}
+	s.clock = clk
 }
 
 // SetYFinanceGateway injects the Yahoo Finance gateway for analyst estimates.
@@ -158,7 +189,12 @@ func (s *Service) SetYFinanceGateway(gw ports.YFinanceGateway) {
 // opts may be nil; when provided, overrides (e.g., beta, risk-free rate)
 // replace the corresponding values fetched from data sources.
 func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *ValuationOptions) (*entities.ValuationResult, error) {
-	start := time.Now()
+	// Wall-clock read routed through the Clock seam (D10). Production binds
+	// to time.Now() byte-identically; replay binds to manifest.started_at.
+	// Note: the duration metrics below use time.Since(start) which is
+	// wall-clock relative — replay disables the metrics service so the
+	// (large, manifest-time-anchored) "duration" is harmless.
+	start := s.clock.Now()
 	s.log(ctx).Info("Starting valuation calculation", zap.String("ticker", ticker))
 
 	// Skip cache for requests with overrides — they represent ad-hoc user queries
@@ -242,7 +278,11 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 			// Fallback: wrap single FinancialData into HistoricalFinancialData
 			periodKey := fetchResult.FinancialData.FilingPeriod
 			if periodKey == "" || (len(periodKey) < 2 || periodKey[len(periodKey)-2:] != "FY") {
-				periodKey = fmt.Sprintf("%dFY", time.Now().Year())
+				// Math-affecting read: a 2026 bundle replayed in 2027 must
+				// pick the same FY-period key it picked at capture time
+				// (D10). Routing through s.clock.Now() makes that pinning
+				// possible. Production semantics unchanged.
+				periodKey = fmt.Sprintf("%dFY", s.clock.Now().Year())
 				fetchResult.FinancialData.FilingPeriod = periodKey
 			}
 			historicalData = &entities.HistoricalFinancialData{
@@ -1053,8 +1093,11 @@ func (s *Service) performValuation(
 	}
 
 	result := &entities.ValuationResult{
-		Ticker:                historicalData.Ticker,
-		CalculatedAt:          time.Now(),
+		Ticker: historicalData.Ticker,
+		// CalculatedAt is observable in the response payload but does not
+		// affect math. Routing through Clock keeps replay byte-deterministic
+		// across calendar dates.
+		CalculatedAt:          s.clock.Now(),
 		TangibleValuePerShare: tangibleValuePerShare,
 		DCFValuePerShare:      dcfValuePerShare,
 		WACC:                  waccResult.WACC,
@@ -1250,8 +1293,9 @@ func (s *Service) performAlternativeValuation(
 
 	// Convert ModelResult to ValuationResult
 	result := &entities.ValuationResult{
-		Ticker:                historicalData.Ticker,
-		CalculatedAt:          time.Now(),
+		Ticker: historicalData.Ticker,
+		// See note in DCF path above — Clock seam keeps replay deterministic.
+		CalculatedAt:          s.clock.Now(),
 		TangibleValuePerShare: tangibleValuePerShare,
 		DCFValuePerShare:      modelResult.IntrinsicValuePerShare,
 		WACC:                  waccResult.WACC,
