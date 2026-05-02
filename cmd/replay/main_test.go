@@ -122,6 +122,10 @@ func TestRun_HappyBundle(t *testing.T) {
 
 // TestRun_SchemaDriftRefused replays the schema-drift bundle without
 // --allow-schema-drift; spec §9 R1: exits 2 with the drift table.
+// TestRun_SchemaDriftRefused replays the schema-drift bundle without
+// --allow-schema-drift; spec §5 D5: the drift table goes to STDERR (so
+// it is not interleaved with report output piped to --out or
+// processed by jq), and the binary exits 2.
 func TestRun_SchemaDriftRefused(t *testing.T) {
 	bundle := filepath.Join("..", "..", "internal", "observability", "replay", "testdata", "schema-drift")
 	abs, err := filepath.Abs(bundle)
@@ -134,12 +138,42 @@ func TestRun_SchemaDriftRefused(t *testing.T) {
 	if code != 2 {
 		t.Errorf("exit code = %d, want 2; stdout=%s\nstderr=%s", code, stdout.String(), stderr.String())
 	}
-	// The drift table is printed in the report (stdout, not stderr).
-	if !strings.Contains(stdout.String(), "schema:FinancialData") {
-		t.Errorf("expected drift detail in output; got stdout=%s", stdout.String())
+	// Per spec §5 D5: schema-drift table is on stderr, separate from the
+	// report (which lives on stdout / --out). R1 follow-up #4.
+	if !strings.Contains(stderr.String(), "schema:FinancialData") {
+		t.Errorf("expected drift detail on STDERR (spec §5 D5); got stderr=%s\nstdout=%s", stderr.String(), stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "schema drift detected") {
-		t.Errorf("expected schema-drift error message; got stdout=%s", stdout.String())
+	if !strings.Contains(stderr.String(), "schema drift detected") {
+		t.Errorf("expected schema-drift error message on STDERR; got stderr=%s\nstdout=%s", stderr.String(), stdout.String())
+	}
+	// Bundle's per-row result still appears in the report on stdout
+	// (status=ERRORED). Only the focused diagnostic is on stderr.
+	if !strings.Contains(stdout.String(), "ERRORED") {
+		t.Errorf("expected per-row ERRORED status on stdout; got stdout=%s", stdout.String())
+	}
+}
+
+// TestRun_SchemaDriftRefused_StderrOutDecoupled pins the spec invariant
+// from R1 follow-up #4: even when --out routes the report to a file
+// (so stdout is empty), the schema-drift diagnostic still goes to
+// stderr. Operators piping --out=foo.json | jq must see the failure
+// without reading the file.
+func TestRun_SchemaDriftRefused_StderrOutDecoupled(t *testing.T) {
+	bundle := filepath.Join("..", "..", "internal", "observability", "replay", "testdata", "schema-drift")
+	abs, err := filepath.Abs(bundle)
+	if err != nil {
+		t.Fatalf("abs: %v", err)
+	}
+	outFile := filepath.Join(t.TempDir(), "report.json")
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--format=json", "--out=" + outFile, abs}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2; stderr=%s", code, stderr.String())
+	}
+	// The diagnostic is on stderr regardless of --out.
+	if !strings.Contains(stderr.String(), "schema:FinancialData") {
+		t.Errorf("schema-drift diagnostic must reach stderr even when --out routes the report elsewhere; stderr=%s", stderr.String())
 	}
 }
 

@@ -22,11 +22,12 @@ import (
 //     --workers=1 reproducibility (NF3 / spec §7).
 //   - rootDir contains no bundles → returns an empty slice (NOT an error).
 //     The CLI treats "0/0 passed" as exit 0 (spec §9 R1 acceptance).
-//   - Symlinks are NOT followed when descending: hermetic walks must not
-//     loop on cyclic symlinks (§5 D9). A symlink directly pointing at a
-//     bundle directory IS recognized at the top level (so users can
-//     `ln -s ./real artifacts-symlink && replay artifacts-symlink`), but
-//     symlinks inside the tree are skipped.
+//   - Symlinks are followed once (spec §5 D9): a directory symlink is
+//     descended into the first time it is seen, but cycle protection
+//     prevents infinite loops on self-loops or back-references. Cycle
+//     detection uses os.SameFile against a set of already-visited
+//     FileInfos so it is portable across Linux/macOS/Windows without
+//     reaching into syscall-specific Inode fields.
 //
 // The signature is intentionally narrow — no filter or limit args. Filters
 // (--filter-ticker / --filter-since) live at the orchestration layer in
@@ -51,46 +52,129 @@ func WalkBundles(rootDir string) ([]string, error) {
 		return []string{abs}, nil
 	}
 
+	bundles, err := walkOnce(abs, info, []os.FileInfo{info})
+	if err != nil {
+		return nil, fmt.Errorf("replay: walk %s: %w", rootDir, err)
+	}
+
+	// Deterministic ordering for reproducibility. Empty slice when no
+	// bundles found is a legitimate result, NOT an error.
+	sort.Strings(bundles)
+	return bundles, nil
+}
+
+// walkOnce recursively walks the directory tree rooted at dir, following
+// symlinked subdirectories at most once each. visited tracks every
+// directory FileInfo that the walker has already entered; when a symlink
+// resolves to a directory whose FileInfo matches any visited entry (per
+// os.SameFile), it is skipped to break cycles.
+//
+// We hand-roll the recursion instead of using filepath.WalkDir because
+// WalkDir does not follow symlinks (and its DirEntry interface deliberately
+// hides Lstat-vs-Stat resolution). os.SameFile gives us portable
+// inode-equivalence semantics (sys-Inode on POSIX, NT-handle ID on Windows)
+// without forcing per-OS code paths into this package.
+func walkOnce(dir string, dirInfo os.FileInfo, visited []os.FileInfo) ([]string, error) {
 	var bundles []string
-	walkErr := filepath.WalkDir(abs, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			// A read error mid-walk should not abort the whole batch — log
-			// the path and continue. The user-facing diagnostic comes from
-			// the orchestration layer (which surfaces "errored" Result).
-			// For R1 we surface fs errors but only at the orchestration
-			// edge; here we just skip the bad subtree.
-			if d != nil && d.IsDir() {
-				return filepath.SkipDir
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		// Skip unreadable subtrees rather than aborting the whole batch.
+		// The orchestration layer surfaces per-bundle errors; a transient
+		// permission issue under the root should not erase the whole run.
+		return nil, nil
+	}
+
+	for _, e := range entries {
+		path := filepath.Join(dir, e.Name())
+
+		// e.Type() reflects the LSTAT result — we need that to detect
+		// symlinks. For symlinks we then Stat the target to learn whether
+		// it resolves to a directory and to get a FileInfo for cycle
+		// detection.
+		isSymlink := e.Type()&fs.ModeSymlink != 0
+
+		if isSymlink {
+			target, statErr := os.Stat(path)
+			if statErr != nil {
+				// Broken symlink — skip silently. Surfacing it would noise
+				// the batch summary; consumers care about bundles, not
+				// dangling links.
+				continue
 			}
-			return nil
-		}
-		// Skip symlinks inside the tree to prevent cycles. Use Type()
-		// instead of os.Lstat() to keep allocations bounded.
-		if d.Type()&os.ModeSymlink != 0 {
-			if d.IsDir() {
-				return filepath.SkipDir
+			if !target.IsDir() {
+				continue
 			}
-			return nil
+			// Cycle protection: if we've already entered a directory with
+			// this identity (by os.SameFile), skip it. Spec §5 D9
+			// "follow once, no cycles".
+			cycle := false
+			for _, v := range visited {
+				if os.SameFile(v, target) {
+					cycle = true
+					break
+				}
+			}
+			if cycle {
+				continue
+			}
+			// Follow the symlink: descend into the target with an
+			// expanded visited set. We do NOT register the target as a
+			// candidate bundle root (that's the responsibility of the
+			// recursive call below if target/00-manifest.json exists).
+			if isBundle(path) {
+				bundles = append(bundles, path)
+				continue
+			}
+			sub, subErr := walkOnce(path, target, append(visited, target))
+			if subErr != nil {
+				return nil, subErr
+			}
+			bundles = append(bundles, sub...)
+			continue
 		}
-		if !d.IsDir() {
-			return nil
+
+		if !e.IsDir() {
+			continue
+		}
+
+		// Plain directory: stat it for cycle tracking, then recurse.
+		// (Hard-link cycles between directories are rare on POSIX and
+		// impossible on most filesystems, but tracking them costs only an
+		// already-paid Stat.)
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			continue
 		}
 		if isBundle(path) {
 			bundles = append(bundles, path)
 			// Don't descend into a bundle — bundles are leaf directories
 			// in the artifact tree by construction. This avoids treating
 			// a bundle's testdata-style nested directories as bundles.
-			return filepath.SkipDir
+			continue
 		}
-		return nil
-	})
-	if walkErr != nil {
-		return nil, fmt.Errorf("replay: walk %s: %w", rootDir, walkErr)
+		// Cycle check on hard-linked dirs (defensive; rare in practice).
+		cycle := false
+		for _, v := range visited {
+			if os.SameFile(v, info) {
+				cycle = true
+				break
+			}
+		}
+		if cycle {
+			continue
+		}
+		sub, subErr := walkOnce(path, info, append(visited, info))
+		if subErr != nil {
+			return nil, subErr
+		}
+		bundles = append(bundles, sub...)
 	}
 
-	// Deterministic ordering for reproducibility. Empty slice when no
-	// bundles found is a legitimate result, NOT an error.
-	sort.Strings(bundles)
+	_ = dirInfo // dirInfo is the FileInfo for `dir`; reserved for future
+	// extensions (e.g. emitting structured walk diagnostics). Kept in
+	// the signature so callers can pass the already-stat'd root without
+	// re-statting.
 	return bundles, nil
 }
 

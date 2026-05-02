@@ -163,3 +163,67 @@ func TestWalkBundles_SymlinkDoesNotCycle(t *testing.T) {
 		t.Fatalf("expected 1 bundle; got %d (%v)", len(got), got)
 	}
 }
+
+// TestWalkBundles_FollowsSymlinkOnce pins R1 follow-up #6 + spec §5 D9
+// "Symlinks are followed once (no cycles)." If a user symlinks
+// ~/bundles → /storage/bundles and runs `replay ~/bundles/<sub>`, the
+// walker MUST descend through the symlink and find bundles inside it.
+// The previous behavior (skip all symlinks) silently missed them.
+//
+// Skipped on Windows where symlink creation requires elevated privileges
+// and is flaky in CI.
+func TestWalkBundles_FollowsSymlinkOnce(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires admin on Windows; covered on Linux/macOS")
+	}
+	root := t.TempDir()
+	// Set up dir-a/ with a symlink "link-to-b" pointing at dir-b/, which
+	// contains a real bundle. The walker must follow the link and find
+	// the bundle.
+	dirA := filepath.Join(root, "dir-a")
+	dirB := filepath.Join(root, "dir-b")
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	makeBundle(t, dirB)
+	if err := os.Symlink(dirB, filepath.Join(dirA, "link-to-b")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	got, err := WalkBundles(dirA)
+	if err != nil {
+		t.Fatalf("WalkBundles: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 bundle (via symlink); got %d (%v)", len(got), got)
+	}
+}
+
+// TestWalkBundles_SelfSymlinkDoesNotCycle protects against the
+// pathological case where a directory contains a symlink to itself.
+// Spec §5 D9's "follow once, no cycles" requires termination.
+//
+// Skipped on Windows for the same admin-privilege reason.
+func TestWalkBundles_SelfSymlinkDoesNotCycle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires admin on Windows; covered on Linux/macOS")
+	}
+	root := t.TempDir()
+	dirA := filepath.Join(root, "dir-a")
+	if err := os.MkdirAll(dirA, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// A self-loop symlink — following it would re-walk dir-a infinitely.
+	if err := os.Symlink(dirA, filepath.Join(dirA, "loop")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	makeBundle(t, filepath.Join(dirA, "real-bundle"))
+
+	got, err := WalkBundles(dirA)
+	if err != nil {
+		t.Fatalf("WalkBundles: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 bundle (loop must not revisit); got %d (%v)", len(got), got)
+	}
+}

@@ -196,7 +196,45 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// Spec §5 D5: when schema drift is detected and --allow-schema-drift
+	// was NOT passed, the mismatched table goes to stderr (separate from
+	// the report on stdout / --out). Operators piping --out=foo.json to
+	// jq must still see WHY replay refused without reading the file.
+	// R1 follow-up #4.
+	if !f.allowSchemaDrift {
+		writeSchemaDriftDiagnostic(stderr, report.Results)
+	}
+
 	return report.ExitCode()
+}
+
+// writeSchemaDriftDiagnostic emits a focused, stderr-bound diagnostic for
+// every bundle that was refused due to schema drift. Mirrors the per-row
+// drift entries the text renderer would have emitted on stdout, but
+// scoped to only the refused bundles so operators see the actionable
+// detail even when --format=json is in use (where stdout is machine-
+// parseable and not human-friendly) or when --out routes the report to a
+// file.
+//
+// The emitted lines mirror writeResultRow's drift-detail format so a
+// human eyeballing both streams sees consistent text.
+func writeSchemaDriftDiagnostic(w io.Writer, results []replay.Result) {
+	for _, r := range results {
+		if r.Status != replay.StatusErrored || !r.SchemaDrift {
+			continue
+		}
+		fmt.Fprintf(w, "replay: %s: %s\n", r.Bundle, r.Error)
+		for _, e := range r.SchemaDriftEntries {
+			fmt.Fprintf(w, "  - schema:%s  bundle=%d current=%d", e.Entity, e.BundleVersion, e.CurrentVersion)
+			if e.MissingFromCurrent {
+				fmt.Fprint(w, " (unknown to current code)")
+			}
+			if e.MissingFromBundle {
+				fmt.Fprint(w, " (not stamped in bundle)")
+			}
+			fmt.Fprintln(w)
+		}
+	}
 }
 
 // evaluateBundle runs the R1 evaluation for a single bundle: read manifest
