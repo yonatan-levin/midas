@@ -3,7 +3,6 @@ package replay
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"testing"
 )
@@ -139,19 +138,12 @@ func TestWalkBundles_NotADirectory(t *testing.T) {
 
 // TestWalkBundles_SymlinkDoesNotCycle creates a symlink loop and verifies
 // the walker terminates without revisiting the same bundle. Skipped on
-// Windows where symlink creation requires elevated privileges and the test
-// would be flaky in CI.
+// hosts without symlink-creation privileges (Windows non-admin etc.).
 func TestWalkBundles_SymlinkDoesNotCycle(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation requires admin on Windows; covered on Linux/macOS")
-	}
 	root := t.TempDir()
 	makeBundle(t, filepath.Join(root, "AAPL", "req_01"))
 	// Symlink that points back to root — would be a cycle if followed.
-	loop := filepath.Join(root, "loop")
-	if err := os.Symlink(root, loop); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
+	trySymlink(t, root, filepath.Join(root, "loop"))
 
 	got, err := WalkBundles(root)
 	if err != nil {
@@ -164,18 +156,29 @@ func TestWalkBundles_SymlinkDoesNotCycle(t *testing.T) {
 	}
 }
 
+// trySymlink wraps os.Symlink with t.Skip on EPERM/ENOTSUP. Windows
+// non-admin users cannot create symlinks (the OS returns
+// ERROR_PRIVILEGE_NOT_HELD); macOS sandboxes and some containerized CI
+// environments may also reject the call. Skipping at the call site means
+// the symlink-coverage tests run on Linux dev boxes and CI hosts that
+// have the capability, while Windows non-admin users see a Skip rather
+// than a hard fail.
+func trySymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink creation not permitted on this host (%v); covered on Linux/macOS with sufficient privileges", err)
+	}
+}
+
 // TestWalkBundles_FollowsSymlinkOnce pins R1 follow-up #6 + spec §5 D9
 // "Symlinks are followed once (no cycles)." If a user symlinks
 // ~/bundles → /storage/bundles and runs `replay ~/bundles/<sub>`, the
 // walker MUST descend through the symlink and find bundles inside it.
 // The previous behavior (skip all symlinks) silently missed them.
 //
-// Skipped on Windows where symlink creation requires elevated privileges
-// and is flaky in CI.
+// Skipped on hosts where symlink creation is rejected (Windows non-admin,
+// some sandboxed environments).
 func TestWalkBundles_FollowsSymlinkOnce(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation requires admin on Windows; covered on Linux/macOS")
-	}
 	root := t.TempDir()
 	// Set up dir-a/ with a symlink "link-to-b" pointing at dir-b/, which
 	// contains a real bundle. The walker must follow the link and find
@@ -186,9 +189,7 @@ func TestWalkBundles_FollowsSymlinkOnce(t *testing.T) {
 		t.Fatalf("setup: %v", err)
 	}
 	makeBundle(t, dirB)
-	if err := os.Symlink(dirB, filepath.Join(dirA, "link-to-b")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
+	trySymlink(t, dirB, filepath.Join(dirA, "link-to-b"))
 
 	got, err := WalkBundles(dirA)
 	if err != nil {
@@ -202,21 +203,14 @@ func TestWalkBundles_FollowsSymlinkOnce(t *testing.T) {
 // TestWalkBundles_SelfSymlinkDoesNotCycle protects against the
 // pathological case where a directory contains a symlink to itself.
 // Spec §5 D9's "follow once, no cycles" requires termination.
-//
-// Skipped on Windows for the same admin-privilege reason.
 func TestWalkBundles_SelfSymlinkDoesNotCycle(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink creation requires admin on Windows; covered on Linux/macOS")
-	}
 	root := t.TempDir()
 	dirA := filepath.Join(root, "dir-a")
 	if err := os.MkdirAll(dirA, 0o755); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
 	// A self-loop symlink — following it would re-walk dir-a infinitely.
-	if err := os.Symlink(dirA, filepath.Join(dirA, "loop")); err != nil {
-		t.Fatalf("symlink: %v", err)
-	}
+	trySymlink(t, dirA, filepath.Join(dirA, "loop"))
 	makeBundle(t, filepath.Join(dirA, "real-bundle"))
 
 	got, err := WalkBundles(dirA)
@@ -225,5 +219,71 @@ func TestWalkBundles_SelfSymlinkDoesNotCycle(t *testing.T) {
 	}
 	if len(got) != 1 {
 		t.Fatalf("expected 1 bundle (loop must not revisit); got %d (%v)", len(got), got)
+	}
+}
+
+// TestWalkBundles_BrokenSymlinkSkipped covers the broken-symlink branch
+// of walkOnce: a symlink whose target doesn't exist is silently skipped
+// rather than aborting the batch. Surfacing it would noise the summary
+// for a class of "user removed a target" issues that aren't actionable
+// at the bundle layer.
+func TestWalkBundles_BrokenSymlinkSkipped(t *testing.T) {
+	root := t.TempDir()
+	makeBundle(t, filepath.Join(root, "real-bundle"))
+	// Symlink to a non-existent target.
+	trySymlink(t, filepath.Join(root, "does-not-exist"), filepath.Join(root, "broken"))
+
+	got, err := WalkBundles(root)
+	if err != nil {
+		t.Fatalf("WalkBundles: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 bundle (broken link skipped); got %d (%v)", len(got), got)
+	}
+}
+
+// TestWalkBundles_SymlinkToFileIgnored covers the non-directory-target
+// branch of walkOnce: a symlink to a regular file is not a candidate
+// bundle root and must not be followed.
+func TestWalkBundles_SymlinkToFileIgnored(t *testing.T) {
+	root := t.TempDir()
+	makeBundle(t, filepath.Join(root, "real-bundle"))
+	// Stray file at root + a symlink pointing to it.
+	if err := os.WriteFile(filepath.Join(root, "stray.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	trySymlink(t, filepath.Join(root, "stray.txt"), filepath.Join(root, "link-to-file"))
+
+	got, err := WalkBundles(root)
+	if err != nil {
+		t.Fatalf("WalkBundles: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 bundle (file-target symlink ignored); got %d (%v)", len(got), got)
+	}
+}
+
+// TestWalkBundles_SymlinkDirectlyToBundle covers the
+// "symlink IS a bundle" terse-syntax branch. A user can symlink
+// ~/AAPL-bundle → /storage/...../AAPL/req_X and run
+// `replay ~/AAPL-bundle`; walkOnce recognises the symlink target as a
+// bundle and reports the LINK path (not the resolved target) as the
+// bundle root.
+func TestWalkBundles_SymlinkDirectlyToBundle(t *testing.T) {
+	root := t.TempDir()
+	bundle := filepath.Join(root, "real-bundle")
+	makeBundle(t, bundle)
+	linkPath := filepath.Join(root, "link-to-bundle")
+	trySymlink(t, bundle, linkPath)
+
+	got, err := WalkBundles(root)
+	if err != nil {
+		t.Fatalf("WalkBundles: %v", err)
+	}
+	// Both the real bundle AND the linked bundle should be discovered.
+	// Cycle-protection prevents the latter from re-descending into the
+	// former. The order is sorted ascending.
+	if len(got) != 2 {
+		t.Fatalf("expected 2 bundles (real + symlink); got %d (%v)", len(got), got)
 	}
 }

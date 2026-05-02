@@ -138,14 +138,11 @@ func walkOnce(dir string, dirInfo os.FileInfo, visited []os.FileInfo) ([]string,
 			continue
 		}
 
-		// Plain directory: stat it for cycle tracking, then recurse.
-		// (Hard-link cycles between directories are rare on POSIX and
-		// impossible on most filesystems, but tracking them costs only an
-		// already-paid Stat.)
-		info, statErr := os.Stat(path)
-		if statErr != nil {
-			continue
-		}
+		// Plain directory: bundle-or-recurse. We don't cycle-check plain
+		// directories because POSIX disallows hard-linked directories
+		// (only privileged macOS users can create them) and Windows has
+		// no equivalent — the symlink-side cycle protection is sufficient
+		// for the threat model of "user symlinks ~/bundles to itself".
 		if isBundle(path) {
 			bundles = append(bundles, path)
 			// Don't descend into a bundle — bundles are leaf directories
@@ -153,15 +150,11 @@ func walkOnce(dir string, dirInfo os.FileInfo, visited []os.FileInfo) ([]string,
 			// a bundle's testdata-style nested directories as bundles.
 			continue
 		}
-		// Cycle check on hard-linked dirs (defensive; rare in practice).
-		cycle := false
-		for _, v := range visited {
-			if os.SameFile(v, info) {
-				cycle = true
-				break
-			}
-		}
-		if cycle {
+		// Stat for the visited set so a deeper symlink cycling back to
+		// this dir is caught. Cheap (already paid by ReadDir's stat
+		// cache on most filesystems).
+		info, statErr := os.Stat(path)
+		if statErr != nil {
 			continue
 		}
 		sub, subErr := walkOnce(path, info, append(visited, info))
