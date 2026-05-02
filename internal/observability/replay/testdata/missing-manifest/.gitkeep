@@ -1,0 +1,4 @@
+# This directory is intentionally empty: tests for the "missing manifest" /
+# "missing payload" paths use it as the bundle root and assert
+# ReadManifest fails with os.ErrNotExist. Do NOT add a 00-manifest.json
+# here — that would break the tests.

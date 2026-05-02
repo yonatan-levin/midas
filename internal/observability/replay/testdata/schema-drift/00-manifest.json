@@ -1,0 +1,21 @@
+{
+  "bundle_version": "1.0",
+  "request_id": "01HW8ZQXKRDRIFTTEST",
+  "ticker": "MSFT",
+  "trigger": "header",
+  "started_at": "2026-01-01T00:00:00Z",
+  "outcome": "ok",
+  "phases_recorded": [],
+  "redactions_applied": [],
+  "schema_versions": {
+    "FinancialData": 999,
+    "ValuationResult": 2,
+    "FairValueResponse": 1,
+    "SECCompanyFacts": 3,
+    "MarketData": 1,
+    "MacroData": 1,
+    "GrowthEstimate": 1
+  },
+  "git_sha": "cafef00d",
+  "build_version": "v0.0.0-stale"
+}
