@@ -1406,12 +1406,28 @@ func (s *Service) isFinancialDataIncomplete(data *entities.HistoricalFinancialDa
 		latest.CashAndCashEquivalents == 0
 }
 
-// calculateDataFreshnessScore calculates a score from 0-100 based on data age
+// calculateDataFreshnessScore calculates a score from 0-100 based on data age.
+//
+// All wall-clock reads route through s.clock so the score is deterministic
+// under replay (Phase R0/D7): replay binds Clock to manifest.started_at, so
+// every age delta reflects the original capture's age rather than
+// recomputing against the wall clock at replay time. Production binds Clock
+// to wallClock{} (time.Now), so observable behavior is unchanged.
+//
+// We compute the market age inline rather than calling market.GetDataAge()
+// because that entity helper unconditionally reads time.Now() — a third
+// latent leak in the same payload-visible field that the dispatch's
+// two-reads framing did not flag explicitly. Cross-year replay would
+// otherwise still see the score floating with the wall clock, so we route
+// market age through s.clock here for symmetry. The entity helper is left
+// alone (it has other call sites and changing its signature is out of scope
+// for this dispatch).
 func (s *Service) calculateDataFreshnessScore(financial *entities.FinancialData, market *entities.MarketData, macro *entities.MacroData) int {
 	score := 100
+	now := s.clock.Now()
 
 	// Reduce score based on financial data age
-	financialAge := time.Since(financial.AsOf)
+	financialAge := now.Sub(financial.AsOf)
 	if financialAge > 90*24*time.Hour { // More than 90 days
 		score -= 30
 	} else if financialAge > 30*24*time.Hour { // More than 30 days
@@ -1419,7 +1435,7 @@ func (s *Service) calculateDataFreshnessScore(financial *entities.FinancialData,
 	}
 
 	// Reduce score based on market data age
-	marketAge := market.GetDataAge()
+	marketAge := now.Sub(market.AsOf)
 	if marketAge > 7*24*time.Hour { // More than 7 days
 		score -= 20
 	} else if marketAge > 24*time.Hour { // More than 1 day
@@ -1427,7 +1443,7 @@ func (s *Service) calculateDataFreshnessScore(financial *entities.FinancialData,
 	}
 
 	// Reduce score based on macro data age
-	macroAge := time.Since(macro.AsOf)
+	macroAge := now.Sub(macro.AsOf)
 	if macroAge > 30*24*time.Hour { // More than 30 days
 		score -= 20
 	} else if macroAge > 7*24*time.Hour { // More than 7 days

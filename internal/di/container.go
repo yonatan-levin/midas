@@ -153,11 +153,12 @@ var ServiceModule = fx.Options(
 	),
 
 	fx.Provide(NewValuationService),
-	// Phase R0 (D10) — register the production wall-clock binding for
-	// valuation.Clock. NewValuationService uses the default wallClock{}
-	// populated in NewService; this provider is here so replay's
-	// fx.Decorate over it resolves cleanly when the replay binary lands in
-	// Phase R2. Production behavior is byte-identical to pre-R0.
+	// Phase R0/R1 (D10) — register the production wall-clock binding for
+	// valuation.Clock. NewValuationService consumes this Clock and calls
+	// svc.SetClock(clock) so a Phase R2 fx.Decorate over Clock (binding to
+	// manifest.started_at for replay) actually flows into the constructed
+	// *Service. Production behavior is byte-identical to pre-R0 because
+	// NewWallClock returns a delegate over time.Now.
 	fx.Provide(valuation.NewWallClock),
 	fx.Provide(NewRateLimiterService),
 
@@ -639,6 +640,7 @@ func NewValuationService(
 	cfg *config.Config,
 	logger *zap.Logger,
 	calcEmitter *calclog.Emitter,
+	clock valuation.Clock,
 ) *valuation.Service {
 	svc := valuation.NewService(
 		financialRepo,
@@ -652,6 +654,14 @@ func NewValuationService(
 		logger,
 		calcEmitter,
 	)
+
+	// Phase R0/R1 (D10) — consummate the Clock provider so fx.Decorate
+	// over valuation.Clock actually flows into *Service. Without this
+	// SetClock call, NewService's default wallClock{} would be retained
+	// and any Decorate layer (e.g. replay binding to manifest.started_at)
+	// would silently no-op. Production passes valuation.NewWallClock —
+	// byte-identical to the previous default.
+	svc.SetClock(clock)
 
 	// Wire YFinanceGateway for analyst consensus estimates.
 	// The market gateway wraps a YFinanceClient that implements YFinanceGateway.
