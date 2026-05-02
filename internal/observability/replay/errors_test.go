@@ -80,14 +80,50 @@ func TestBundleMissingPayloadError_AsExtractsFields(t *testing.T) {
 	}
 }
 
-// TestBundleMissingPayloadError_UnwrapReturnsSentinel locks the unwrap
-// behavior — Unwrap() must yield the sentinel, not nil and not Cause. This
-// is what makes errors.Is work uniformly across both bare and rich
-// returns.
-func TestBundleMissingPayloadError_UnwrapReturnsSentinel(t *testing.T) {
-	err := NewBundleMissingPayloadError("/x", "y", fs.ErrNotExist)
-	unwrapped := errors.Unwrap(err)
-	if unwrapped != ErrBundleMissingPayload {
-		t.Fatalf("Unwrap() = %v, want ErrBundleMissingPayload", unwrapped)
+// TestBundleMissingPayloadError_UnwrapReturnsCause locks the corrected
+// unwrap contract: Unwrap() yields the underlying os/io error (Cause) so
+// errors.Is(err, fs.ErrNotExist) succeeds. The sentinel-match path is now
+// served by Is(), not Unwrap, per the Go errors invariant that an error's
+// chain must terminate at the underlying root cause.
+//
+// Before fix (R1 follow-up #2): Unwrap returned the package sentinel,
+// breaking errors.Is(err, fs.ErrNotExist) even when Cause = fs.ErrNotExist.
+// After fix: Unwrap → Cause; Is(target) handles the sentinel match.
+func TestBundleMissingPayloadError_UnwrapReturnsCause(t *testing.T) {
+	t.Run("with cause", func(t *testing.T) {
+		err := NewBundleMissingPayloadError("/x", "y", fs.ErrNotExist)
+		unwrapped := errors.Unwrap(err)
+		if unwrapped != fs.ErrNotExist {
+			t.Fatalf("Unwrap() = %v, want fs.ErrNotExist", unwrapped)
+		}
+	})
+	t.Run("without cause", func(t *testing.T) {
+		err := NewBundleMissingPayloadError("/x", "y", nil)
+		unwrapped := errors.Unwrap(err)
+		if unwrapped != nil {
+			t.Fatalf("Unwrap() = %v, want nil for no-cause case", unwrapped)
+		}
+	})
+}
+
+// TestBundleMissingPayloadError_IsMatchesCause is the new contract: a
+// rich BundleMissingPayloadError wrapping fs.ErrNotExist must satisfy
+// BOTH errors.Is(err, ErrBundleMissingPayload) (via the Is method) AND
+// errors.Is(err, fs.ErrNotExist) (via Unwrap → Cause).
+//
+// This is the canonical idiom for a sentinel-class error that also wraps
+// a stdlib error: Is(target) handles the package-internal sentinel
+// matching; Unwrap exposes the underlying root cause for stdlib matching.
+// The previous implementation broke the second leg by returning the
+// sentinel from Unwrap, so callers that wanted to special-case
+// "file-not-found" errors uniformly across the codebase couldn't.
+func TestBundleMissingPayloadError_IsMatchesCause(t *testing.T) {
+	err := NewBundleMissingPayloadError("/bundles/x", "05-fetch-sec.raw.json", fs.ErrNotExist)
+
+	if !errors.Is(err, ErrBundleMissingPayload) {
+		t.Errorf("errors.Is(err, ErrBundleMissingPayload) should be true (sentinel match via Is method)")
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("errors.Is(err, fs.ErrNotExist) should be true (cause match via Unwrap chain) — the fix routes Unwrap through Cause so stdlib sentinels are reachable")
 	}
 }

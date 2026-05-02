@@ -66,16 +66,30 @@ func (e *BundleMissingPayloadError) Error() string {
 	return fmt.Sprintf("replay: bundle %q missing payload %q", e.BundlePath, e.RelativePath)
 }
 
-// Unwrap returns the package-level sentinel so errors.Is matches
-// ErrBundleMissingPayload regardless of whether the caller wrapped the
-// rich type or the bare sentinel. Also unwraps Cause when the caller
-// asks for it via errors.As.
+// Is reports whether target matches the package-level sentinel. This
+// keeps errors.Is(err, ErrBundleMissingPayload) working regardless of
+// whether the caller returned the bare sentinel or the rich struct.
+//
+// Implementing Is alongside Unwrap is the canonical Go idiom for a
+// "sentinel-class error that also wraps a stdlib error": Is handles the
+// package-internal sentinel match; Unwrap exposes Cause so stdlib
+// sentinels (fs.ErrNotExist, io.ErrUnexpectedEOF, ...) remain reachable
+// through the standard error chain.
+func (e *BundleMissingPayloadError) Is(target error) bool {
+	return target == ErrBundleMissingPayload
+}
+
+// Unwrap returns the underlying os/io error (Cause) so errors.Is matches
+// stdlib sentinels like fs.ErrNotExist. Returns nil when no Cause was
+// supplied, terminating the chain cleanly. The package-internal sentinel
+// match is served by Is, not Unwrap.
+//
+// Before R1 follow-up #2 this returned ErrBundleMissingPayload — that
+// shadowed Cause and broke errors.Is(err, fs.ErrNotExist) even when the
+// caller wrapped a real fs.ErrNotExist. The fix splits the two
+// responsibilities cleanly.
 func (e *BundleMissingPayloadError) Unwrap() error {
-	// Returning the sentinel here lets errors.Is(err, ErrBundleMissingPayload)
-	// succeed for both `return ErrBundleMissingPayload` and
-	// `return &BundleMissingPayloadError{...}`. Callers that need the
-	// underlying os error can use errors.As to reach Cause directly.
-	return ErrBundleMissingPayload
+	return e.Cause
 }
 
 // NewBundleMissingPayloadError is a small constructor so call sites stay
