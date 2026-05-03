@@ -1,0 +1,22 @@
+{
+  "bundle_version": "1.0",
+  "request_id": "01HW8ZQXKRHAPPYTEST",
+  "ticker": "AAPL",
+  "trigger": "header",
+  "started_at": "2026-04-25T12:34:56Z",
+  "finished_at": "2026-04-25T12:35:00Z",
+  "outcome": "ok",
+  "phases_recorded": [],
+  "redactions_applied": [],
+  "schema_versions": {
+    "FinancialData": 7,
+    "GrowthEstimate": 1,
+    "ValuationResult": 2,
+    "FairValueResponse": 1,
+    "SECCompanyFacts": 3,
+    "MarketData": 1,
+    "MacroData": 1
+  },
+  "git_sha": "deadbeef",
+  "build_version": "v0.9.0-rc1"
+}
