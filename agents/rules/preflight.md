@@ -22,6 +22,10 @@ Use `sequential-thinking` MCP tool to:
 ### Step 2: Load Relevant Documentation
 
 Based on the task, read these files using the Read tool:
+- Root `CLAUDE.md` - project identity, tech stack, conventions, important files, build commands
+- Root `AGENTS.md` - loading contract and cross-file relationships
+- Root `docs/THESIS.md` - product direction, current phase, roadmap, scope boundaries
+- Root `docs/API_DOCUMENTATION.md` - API reference, valuation engine internals, config, deployment
 - Root `ARCHITECTURE.md` - overall system architecture
 - Root `CONTRACTS.md` - API contracts and DTOs
 - Root `TESTING.md` - testing requirements

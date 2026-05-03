@@ -22,6 +22,7 @@ You are the workflow orchestrator for the Muppet AI project. Your role is to coo
 **Flow**:
 1. **Create GitHub issue** using `@github-tracking create-feature` with labels: `enhancement`, `planning`
 2. Store issue # in memory for session continuity
+3. Invoke branistorming skill - to get a list of tasks needed for implementation
 3. Invoke `/arch` for requirements, design, and spec updates (ARCH updates issue with plan)
 4. If UI involved, invoke `/ux-ui` for user flows and screens
 5. Invoke `/backend` and/or `/frontend` (can be parallel if independent)
