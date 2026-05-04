@@ -1041,12 +1041,12 @@ func TestFairValueResponse_Industry_RealClassifier(t *testing.T) {
 // nil ValuationResult — the handler relies on this so `omitempty` drops the
 // field entirely when the engine produced no classification signal.
 func TestBuildIndustryFromResult_NilResult(t *testing.T) {
-	assert.Nil(t, buildIndustryFromResult(nil))
+	assert.Nil(t, BuildIndustryFromResult(nil))
 }
 
 // TestBuildIndustryFromResult_AllFieldsEmpty verifies the helper returns nil
 // when a ValuationResult has no classification data populated at all.
 // Prevents an empty `{match: false}` object from leaking into responses.
 func TestBuildIndustryFromResult_AllFieldsEmpty(t *testing.T) {
-	assert.Nil(t, buildIndustryFromResult(&entities.ValuationResult{}))
+	assert.Nil(t, BuildIndustryFromResult(&entities.ValuationResult{}))
 }

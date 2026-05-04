@@ -101,11 +101,18 @@ func matchSICToGICS(sicLabel, gicsCode string) bool {
 	return allowed[gicsCode]
 }
 
-// buildIndustryFromResult constructs the Industry response object from the
+// BuildIndustryFromResult constructs the Industry response object from the
 // classification fields plumbed onto ValuationResult. Returns nil when the
 // engine produced no classification signal at all, so the response's
 // omitempty-tagged Industry field disappears entirely.
-func buildIndustryFromResult(result *entities.ValuationResult) *Industry {
+//
+// Exported in Phase R2 D1.1 (observability replay tooling) so the replay
+// orchestration layer in internal/observability/replay/replay.go can rebuild
+// a response-equivalent shape from *entities.ValuationResult and diff it
+// against the bundle's recorded 17-response.json. The rename is logic-free —
+// callers of the lowercase symbol moved to the capitalized name with no
+// behavioral change.
+func BuildIndustryFromResult(result *entities.ValuationResult) *Industry {
 	if result == nil {
 		return nil
 	}
@@ -382,7 +389,7 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		CalculationVersion:    result.CalculationVersion,
 		Warnings:              result.Warnings,
 		SanityCheck:           result.SanityCheck,
-		Industry:              buildIndustryFromResult(result),
+		Industry:              BuildIndustryFromResult(result),
 		// Phase B12 (IFRS-FPI): always-present transparency fields. Currency
 		// falls back to "USD" if an upstream code path forgot to stamp it
 		// (defense in depth — the valuation service guarantees "USD" today).
@@ -522,7 +529,7 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 			CalculationVersion:    result.CalculationVersion,
 			Warnings:              result.Warnings,
 			SanityCheck:           result.SanityCheck,
-			Industry:              buildIndustryFromResult(result),
+			Industry:              BuildIndustryFromResult(result),
 			// Phase B12 (IFRS-FPI): mirror single-ticker handler for parity.
 			Currency:        currencyOrUSD(result.ReportingCurrency),
 			ADRRatioApplied: result.ADRRatioApplied,
