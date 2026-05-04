@@ -198,3 +198,113 @@ func TestAsNoOpMetricsService_WrongType_ReturnsNil(t *testing.T) {
 		t.Fatalf("nil arg: want nil; got %v", got)
 	}
 }
+
+// TestNotFoundCompositeStubs_TrivialMethodsAreNoOps sweeps the
+// no-op accessors / setters across all NotFound repos so the trivial
+// pass-through methods are exercised. This bumps file-level coverage
+// above the 90% gate without writing per-method targeted tests for
+// stubs that have no behavior to assert beyond "doesn't panic".
+func TestNotFoundCompositeStubs_TrivialMethodsAreNoOps(t *testing.T) {
+	ctx := context.Background()
+
+	// Financial data: GetByPeriod, StoreHistorical, GetLastUpdated.
+	frepo := NewNotFoundFinancialDataRepo()
+	if _, err := frepo.GetByPeriod(ctx, "AAPL", "2023FY"); err == nil {
+		t.Fatalf("GetByPeriod: want error; got nil")
+	}
+	if err := frepo.StoreHistorical(ctx, &entities.HistoricalFinancialData{Ticker: "AAPL"}); err != nil {
+		t.Fatalf("StoreHistorical: %v", err)
+	}
+	if _, err := frepo.GetLastUpdated(ctx, "AAPL"); err == nil {
+		t.Fatalf("GetLastUpdated: want error; got nil")
+	}
+	if err := frepo.Store(ctx, &entities.FinancialData{Ticker: "AAPL"}); err != nil {
+		t.Fatalf("Store: %v", err)
+	}
+
+	// Market data: Store, IsStale, GetLastUpdated.
+	mrepo := NewNotFoundMarketDataRepo()
+	if err := mrepo.Store(ctx, &entities.MarketData{Ticker: "AAPL"}); err != nil {
+		t.Fatalf("Market.Store: %v", err)
+	}
+	stale, err := mrepo.IsStale(ctx, "AAPL", time.Hour)
+	if err != nil || !stale {
+		t.Fatalf("Market.IsStale: want (true, nil); got (%v, %v)", stale, err)
+	}
+	if _, err := mrepo.GetLastUpdated(ctx, "AAPL"); err == nil {
+		t.Fatalf("Market.GetLastUpdated: want error; got nil")
+	}
+
+	// Macro data: Store, IsStale.
+	macrorepo := NewNotFoundMacroDataRepo()
+	if err := macrorepo.Store(ctx, &entities.MacroData{}); err != nil {
+		t.Fatalf("Macro.Store: %v", err)
+	}
+	stale2, err := macrorepo.IsStale(ctx, time.Hour)
+	if err != nil || !stale2 {
+		t.Fatalf("Macro.IsStale: want (true, nil); got (%v, %v)", stale2, err)
+	}
+
+	// Ticker mapping: GetTicker, GetAllMappings, LoadFromSEC.
+	trepo := NewNotFoundTickerMappingRepo()
+	if _, err := trepo.GetTicker(ctx, "320193"); err == nil {
+		t.Fatalf("GetTicker: want error; got nil")
+	}
+	all, err := trepo.GetAllMappings(ctx)
+	if err != nil || len(all) != 0 {
+		t.Fatalf("GetAllMappings: want ({}, nil); got (%v, %v)", all, err)
+	}
+	if err := trepo.LoadFromSEC(ctx); err != nil {
+		t.Fatalf("LoadFromSEC: %v", err)
+	}
+
+	// SetNX: cache stub is a no-op-ok path.
+	crepo := NewNotFoundCacheRepo()
+	ok, err := crepo.SetNX(ctx, "k", 1, time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("SetNX: want (true, nil); got (%v, %v)", ok, err)
+	}
+
+	// NoOpMetricsService: every getter returns 0 / no error.
+	svc := NewNoOpMetricsService()
+	if svc.GetActiveConnections() != 0 {
+		t.Fatalf("GetActiveConnections: want 0")
+	}
+	if svc.GetAverageResponseTime() != 0 {
+		t.Fatalf("GetAverageResponseTime: want 0")
+	}
+	if svc.GetTotalValuations() != 0 {
+		t.Fatalf("GetTotalValuations: want 0")
+	}
+	if svc.GetSuccessfulValuations() != 0 {
+		t.Fatalf("GetSuccessfulValuations: want 0")
+	}
+	if svc.GetFailedValuations() != 0 {
+		t.Fatalf("GetFailedValuations: want 0")
+	}
+	if svc.GetAverageWACC() != 0 {
+		t.Fatalf("GetAverageWACC: want 0")
+	}
+	if svc.GetAverageGrowthRate() != 0 {
+		t.Fatalf("GetAverageGrowthRate: want 0")
+	}
+	if svc.GetUniqueTickersServed() != 0 {
+		t.Fatalf("GetUniqueTickersServed: want 0")
+	}
+}
+
+// TestBundleYFinanceGateway_CallsCount bumps coverage on the test-only
+// accessor.
+func TestBundleYFinanceGateway_CallsCount_AdvancesOnEachCall(t *testing.T) {
+	tmpDir := t.TempDir()
+	seedBundleFile(t, tmpDir, marketRawFile, makeMarketRaw(t, "AAPL"))
+	gw := NewBundleYFinanceGateway(tmpDir, ModeRaw)
+
+	if gw.CallsCount() != 0 {
+		t.Fatalf("initial CallsCount: want 0")
+	}
+	_, _ = gw.GetQuote(context.Background(), "AAPL")
+	if gw.CallsCount() != 1 {
+		t.Fatalf("after 1 GetQuote: want 1, got %d", gw.CallsCount())
+	}
+}
