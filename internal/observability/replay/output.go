@@ -83,6 +83,24 @@ type Result struct {
 	// Error carries the error message for an Errored Result. Stable
 	// shape; the underlying error type is not promised.
 	Error string `json:"error,omitempty"`
+
+	// errSentinel is the underlying typed error so callers can
+	// errors.Is(result.Err(), replay.ErrBundleMissingPayload). Not
+	// serialized to JSON — the Error string is the stable contract.
+	// Exposed via Result.Err() so tests can match sentinels without
+	// string parsing.
+	errSentinel error `json:"-"`
+}
+
+// Err returns the typed sentinel error attached to an Errored Result, or
+// nil when no sentinel was recorded. Use errors.Is on the return to
+// match a specific class (e.g. ErrBundleMissingPayload) without parsing
+// the .Error string.
+func (r *Result) Err() error {
+	if r == nil {
+		return nil
+	}
+	return r.errSentinel
 }
 
 // Summary is the aggregate row at the bottom of every replay invocation.
