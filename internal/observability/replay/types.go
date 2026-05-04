@@ -29,21 +29,6 @@ const (
 	ModeParsed
 )
 
-// String returns a stable lowercase name suitable for log fields and CLI
-// flag values ("raw" / "parsed"). Stable contract — values flow through
-// `--from=raw|parsed` and into the manifest's notes when replay annotates
-// the chosen mode.
-func (m Mode) String() string {
-	switch m {
-	case ModeRaw:
-		return "raw"
-	case ModeParsed:
-		return "parsed"
-	default:
-		return "unknown"
-	}
-}
-
 // Options carries replay configuration that flows from the CLI into the fx
 // Module and the Replay() orchestrator. Fields are read by both module.go
 // (for fx wiring) and replay.go (for policy decisions like schema-drift
