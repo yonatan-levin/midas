@@ -76,7 +76,10 @@ func Module(bundleDir string, opts Options) fx.Option {
 		// will not transitively pull in DB/Redis providers.
 		// --------------------------------------------------------------
 		fx.Provide(func(logger *zap.Logger) ports.SECGateway {
-			return NewBundleSECGateway(bundleDir, opts.Mode, logger)
+			// opts.Ticker (manifest ticker) is threaded so the SEC gateway's
+			// GetTickerCIKMapping returns {ticker: cik} for any bundle —
+			// not just the prior hardcoded mega-cap list. VERIFIER MEDIUM-1.
+			return NewBundleSECGateway(bundleDir, opts.Mode, opts.Ticker, logger)
 		}),
 		fx.Provide(func() ports.MarketDataGateway {
 			return NewBundleMarketGateway(bundleDir, opts.Mode)

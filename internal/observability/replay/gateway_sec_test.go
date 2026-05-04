@@ -169,7 +169,7 @@ func TestBundleSECGateway_GetCompanyFacts_RawMode_ParsesProductionBytes(t *testi
 	tmpDir := t.TempDir()
 	seedBundleFile(t, tmpDir, secRawFile, makeMinimalSECRaw(t))
 
-	gw := NewBundleSECGateway(tmpDir, ModeRaw, zap.NewNop())
+	gw := NewBundleSECGateway(tmpDir, ModeRaw, "AAPL", zap.NewNop())
 	got, err := gw.GetCompanyFacts(context.Background(), "320193")
 	if err != nil {
 		t.Fatalf("GetCompanyFacts: %v", err)
@@ -195,7 +195,7 @@ func TestBundleSECGateway_GetCompanyFacts_ParsedMode_DirectUnmarshal(t *testing.
 	tmpDir := t.TempDir()
 	seedBundleFile(t, tmpDir, secParsedFile, makeMinimalSECParsed(t))
 
-	gw := NewBundleSECGateway(tmpDir, ModeParsed, zap.NewNop())
+	gw := NewBundleSECGateway(tmpDir, ModeParsed, "AAPL", zap.NewNop())
 	got, err := gw.GetCompanyFacts(context.Background(), "320193")
 	if err != nil {
 		t.Fatalf("GetCompanyFacts: %v", err)
@@ -210,7 +210,7 @@ func TestBundleSECGateway_GetCompanyFacts_ParsedMode_DirectUnmarshal(t *testing.
 
 func TestBundleSECGateway_GetCompanyFacts_MissingFile_ReturnsErrBundleMissingPayload(t *testing.T) {
 	tmpDir := t.TempDir() // no fixture seeded
-	gw := NewBundleSECGateway(tmpDir, ModeRaw, zap.NewNop())
+	gw := NewBundleSECGateway(tmpDir, ModeRaw, "AAPL", zap.NewNop())
 	_, err := gw.GetCompanyFacts(context.Background(), "320193")
 	if err == nil {
 		t.Fatalf("expected error; got nil")
@@ -229,16 +229,61 @@ func TestBundleSECGateway_GetCompanyFacts_MissingFile_ReturnsErrBundleMissingPay
 
 func TestBundleSECGateway_GetTickerCIKMapping_NotInBundle_ReturnsErrBundleMissingPayload(t *testing.T) {
 	tmpDir := t.TempDir()
-	gw := NewBundleSECGateway(tmpDir, ModeRaw, zap.NewNop())
+	gw := NewBundleSECGateway(tmpDir, ModeRaw, "AAPL", zap.NewNop())
 	_, err := gw.GetTickerCIKMapping(context.Background())
 	if !errors.Is(err, ErrBundleMissingPayload) {
 		t.Fatalf("expected ErrBundleMissingPayload; got %v", err)
 	}
 }
 
+// TestBundleSECGateway_GetTickerCIKMapping_ArbitraryTicker pins the fix
+// for VERIFIER finding MEDIUM-1: the mapping must work for ANY bundle
+// ticker, not just a hardcoded 8-element list. The previous
+// implementation returned a fixed map keyed by AAPL/MSFT/GOOG/GOOGL/AMZN/
+// NVDA/TSLA/META so any other ticker (e.g. BABA, AMD, JPM) would silently
+// fall through coordinator.go:342 and fail the engine with a
+// "ticker not found" error during replay.
+//
+// Fix: the constructor now takes the manifest ticker; the mapping
+// returned is exactly {ticker: cik}, working for arbitrary bundles.
+func TestBundleSECGateway_GetTickerCIKMapping_ArbitraryTicker(t *testing.T) {
+	cases := []struct {
+		ticker string
+	}{
+		{"BABA"},
+		{"AMD"},
+		{"JPM"},
+		{"TSM"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.ticker, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			seedBundleFile(t, tmpDir, secRawFile, makeMinimalSECRaw(t))
+
+			gw := NewBundleSECGateway(tmpDir, ModeRaw, tc.ticker, zap.NewNop())
+			mapping, err := gw.GetTickerCIKMapping(context.Background())
+			if err != nil {
+				t.Fatalf("GetTickerCIKMapping: %v", err)
+			}
+			cik, ok := mapping[tc.ticker]
+			if !ok {
+				t.Fatalf("expected %s in mapping; got %v", tc.ticker, mapping)
+			}
+			// SEC fixture stamps CIK 320193 (AAPL); the bundle is
+			// single-ticker so we mirror that captured CIK back regardless
+			// of what the manifest ticker is. The load-bearing assertion
+			// is "the manifest ticker is the key", not the value.
+			if cik != "320193" {
+				t.Fatalf("CIK for %s: want 320193, got %q", tc.ticker, cik)
+			}
+		})
+	}
+}
+
 func TestBundleSECGateway_GetCompanyConcepts_NotInBundle_ReturnsErrBundleMissingPayload(t *testing.T) {
 	tmpDir := t.TempDir()
-	gw := NewBundleSECGateway(tmpDir, ModeRaw, zap.NewNop())
+	gw := NewBundleSECGateway(tmpDir, ModeRaw, "AAPL", zap.NewNop())
 	_, err := gw.GetCompanyConcepts(context.Background(), "320193", "Revenues")
 	if !errors.Is(err, ErrBundleMissingPayload) {
 		t.Fatalf("expected ErrBundleMissingPayload; got %v", err)
@@ -246,7 +291,7 @@ func TestBundleSECGateway_GetCompanyConcepts_NotInBundle_ReturnsErrBundleMissing
 }
 
 func TestBundleSECGateway_HealthCheck_AlwaysOK(t *testing.T) {
-	gw := NewBundleSECGateway(t.TempDir(), ModeRaw, zap.NewNop())
+	gw := NewBundleSECGateway(t.TempDir(), ModeRaw, "AAPL", zap.NewNop())
 	if err := gw.HealthCheck(context.Background()); err != nil {
 		t.Fatalf("HealthCheck: %v", err)
 	}
@@ -256,7 +301,7 @@ func TestBundleSECGateway_GetFinancialDataForTicker_RawMode_ProducesHistorical(t
 	tmpDir := t.TempDir()
 	seedBundleFile(t, tmpDir, secRawFile, makeMinimalSECRaw(t))
 
-	gw := NewBundleSECGateway(tmpDir, ModeRaw, zap.NewNop())
+	gw := NewBundleSECGateway(tmpDir, ModeRaw, "AAPL", zap.NewNop())
 	got, err := gw.GetFinancialDataForTicker(context.Background(), "AAPL", "320193")
 	if err != nil {
 		t.Fatalf("GetFinancialDataForTicker: %v", err)
@@ -280,7 +325,7 @@ func TestBundleSECGateway_ConcurrentGetCompanyFacts_RaceFree(t *testing.T) {
 	tmpDir := t.TempDir()
 	seedBundleFile(t, tmpDir, secRawFile, makeMinimalSECRaw(t))
 
-	gw := NewBundleSECGateway(tmpDir, ModeRaw, zap.NewNop())
+	gw := NewBundleSECGateway(tmpDir, ModeRaw, "AAPL", zap.NewNop())
 
 	const N = 50
 	var wg sync.WaitGroup
@@ -303,7 +348,7 @@ func TestBundleSECGateway_GetCompanyFacts_RawMode_MalformedJSON_ReturnsError(t *
 	tmpDir := t.TempDir()
 	seedBundleFile(t, tmpDir, secRawFile, []byte("{not-json"))
 
-	gw := NewBundleSECGateway(tmpDir, ModeRaw, zap.NewNop())
+	gw := NewBundleSECGateway(tmpDir, ModeRaw, "AAPL", zap.NewNop())
 	_, err := gw.GetCompanyFacts(context.Background(), "320193")
 	if err == nil {
 		t.Fatalf("expected error; got nil")

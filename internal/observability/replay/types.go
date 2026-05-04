@@ -80,4 +80,15 @@ type Options struct {
 	// values fall through to a wall-clock binding — replay still runs,
 	// but cross-year determinism is no longer guaranteed.
 	ManifestStartedAt string
+
+	// Ticker is the bundle manifest's ticker value, threaded into the
+	// BundleSECGateway constructor so GetTickerCIKMapping returns
+	// {ticker: cik} for the actual bundle ticker. Without this the
+	// gateway's mapping is empty / synthetic and the engine fails at
+	// coordinator.go:342 for any bundle whose request did not carry an
+	// inline CIK. VERIFIER finding MEDIUM-1.
+	//
+	// Replay() populates this field from the manifest before constructing
+	// the fx Module; direct callers of Module() may set it explicitly.
+	Ticker string
 }

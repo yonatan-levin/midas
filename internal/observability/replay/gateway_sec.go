@@ -63,6 +63,14 @@ type BundleSECGateway struct {
 	mode      Mode
 	parser    *sec.Parser
 
+	// ticker is the manifest ticker for this bundle. Threaded in at
+	// construction so GetTickerCIKMapping returns {ticker: cik} for the
+	// actual bundle ticker — supports any bundle, not just the prior
+	// hardcoded 8-element list of mega-caps. VERIFIER finding MEDIUM-1.
+	// Empty is permitted; in that case GetTickerCIKMapping returns an
+	// empty map (engine path then surfaces a "ticker not found" error).
+	ticker string
+
 	// callsCount is the per-method invocation counter, incremented atomically
 	// by every exported method. Test-only observability — replay's
 	// concurrency-safety regression tests assert on these values; production
@@ -74,15 +82,23 @@ type BundleSECGateway struct {
 // bundle directory. The directory must already contain
 // `05-fetch-sec.<raw|parsed>.json` for the gateway to satisfy GetCompanyFacts;
 // missing files are reported via ErrBundleMissingPayload at call time, not
-// at construction. logger is forwarded to the production sec.Parser via
-// sec.NewParser; pass zap.NewNop() in tests to silence parser-side logs.
-func NewBundleSECGateway(bundleDir string, mode Mode, logger *zap.Logger) *BundleSECGateway {
+// at construction.
+//
+// ticker is the manifest's ticker for this bundle; it is reflected back in
+// GetTickerCIKMapping so the engine's coordinator (coordinator.go:342)
+// resolves the bundle's ticker → captured CIK regardless of what equity
+// the bundle was captured against.
+//
+// logger is forwarded to the production sec.Parser via sec.NewParser; pass
+// zap.NewNop() in tests to silence parser-side logs.
+func NewBundleSECGateway(bundleDir string, mode Mode, ticker string, logger *zap.Logger) *BundleSECGateway {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &BundleSECGateway{
 		bundleDir: bundleDir,
 		mode:      mode,
+		ticker:    ticker,
 		parser:    sec.NewParser(logger),
 	}
 }
@@ -163,30 +179,24 @@ func (g *BundleSECGateway) GetCompanyConcepts(ctx context.Context, cik string, t
 	return nil, NewBundleMissingPayloadError(g.bundleDir, fmt.Sprintf("05-fetch-sec-concepts-%s.raw.json", tag), nil)
 }
 
-// GetTickerCIKMapping returns a synthetic single-entry mapping derived
-// from the bundle's captured SEC raw payload. Bundles do not snapshot
-// the SEC ticker→CIK index directly (it's a separate global endpoint),
-// but the valuation engine's coordinator path consults this method to
-// resolve the bundle's ticker to its CIK before calling
-// GetFinancialDataForTicker. Without a working mapping, replay would
-// fail on every bundle whose request did not carry an inline CIK.
+// GetTickerCIKMapping returns the bundle's single-entry {ticker: cik}
+// mapping derived from the captured SEC raw payload. Bundles do not
+// snapshot the SEC global ticker→CIK index, but the engine's coordinator
+// path (coordinator.go:342) consults this method to resolve the bundle's
+// ticker to its CIK before calling GetFinancialDataForTicker.
 //
 // Resolution strategy:
-//  1. Read the bundle's SEC raw payload (or parsed payload).
-//  2. Extract CIK + entityName from the unmarshalled SECCompanyFacts.
-//  3. Return a map with the entityName-derived ticker AND a "wildcard"
-//     mapping. The coordinator looks up by ticker, so we return a map
-//     that maps EVERY common ticker shape to the captured CIK — the
-//     bundle is single-ticker, and this mapping serves whatever ticker
-//     the valuation request used.
+//  1. Read the bundle's SEC raw (or parsed) payload to extract the
+//     captured CIK.
+//  2. Return {g.ticker: cik}. The bundle is single-ticker by design;
+//     the manifest ticker is wired through the constructor (VERIFIER
+//     finding MEDIUM-1) so any bundle works — not just the previously
+//     hardcoded 8-element AAPL/MSFT/GOOG/GOOGL/AMZN/NVDA/TSLA/META set.
 //
-// Implementation note: we return a map keyed by the manifest's ticker
-// (passed through environment, so we use the entity's name as a proxy)
-// as well as a fallback bare-CIK entry. Since the coordinator does
-// `tickerMapping[ticker]`, we need a map entry whose key matches the
-// requested ticker. The cleanest signal is: use the SEC raw payload's
-// CIK for ANY ticker — since the bundle is single-ticker the ambiguity
-// is moot.
+// When g.ticker is empty (constructor was passed ""), the mapping uses
+// a synthetic "*" key — the coordinator's lookup `tickerMapping[ticker]`
+// won't hit it, surfacing a clean "ticker not found" error rather than
+// silently mis-resolving.
 func (g *BundleSECGateway) GetTickerCIKMapping(ctx context.Context) (map[string]string, error) {
 	atomic.AddUint64(&g.callsCount, 1)
 
@@ -201,6 +211,7 @@ func (g *BundleSECGateway) GetTickerCIKMapping(ctx context.Context) (map[string]
 		}
 	}
 
+	var cik string
 	var facts ports.SECCompanyFacts
 	if err := json.Unmarshal(body, &facts); err != nil {
 		// Try the parsed-mode shape (entities.CompanyFactsResponse) instead.
@@ -208,42 +219,19 @@ func (g *BundleSECGateway) GetTickerCIKMapping(ctx context.Context) (map[string]
 		if err2 := json.Unmarshal(body, &parsed); err2 != nil {
 			return nil, fmt.Errorf("replay: BundleSECGateway GetTickerCIKMapping: parse payload: %w", err)
 		}
-		// Build a wildcard mapping from the parsed CIK. The synthetic
-		// "*" key won't be hit by `mapping[ticker]`; we need the actual
-		// ticker. Coordinator extracts ticker from the request; we have
-		// no canonical ticker here, so fall through to a synthetic
-		// "WILDCARD" key that matches nothing — the engine will then
-		// surface the same error as before.
-		return map[string]string{"*": parsed.CIK}, nil
+		cik = parsed.CIK
+	} else {
+		cik = facts.CIK.String()
 	}
-	cik := facts.CIK.String()
-	// Synthesize a ticker key. We don't know the bundle's official ticker
-	// here, but the coordinator's lookup is `tickerMapping[ticker]` where
-	// `ticker` is whatever was passed to CalculateValuation. We return
-	// a map populated with several common forms of the entity's ticker
-	// alongside a "*" wildcard. The simplest robust approach: return a
-	// map that maps the ENTITY NAME (which often contains the ticker as
-	// substring) and rely on the test-facing API contract.
-	//
-	// Pragmatic: the bundle was OPENED with a known ticker (it's in
-	// the manifest). The replay fx Module construction passes that
-	// ticker via the manifest path; it's not directly available to this
-	// method. Solution: return an "all-tickers-map-to-this-CIK" view by
-	// using a special synthetic key "_replay_default" which the coordinator
-	// won't hit, plus rely on the test setting CIK in the request. For
-	// the production round-trip integration test we accept that this
-	// surfaces the ticker→CIK gap. The SEC bundle's CIK is still
-	// queryable via GetCompanyFacts, which is the engine's primary entry.
-	return map[string]string{
-		"AAPL":  cik,
-		"MSFT":  cik,
-		"GOOG":  cik,
-		"GOOGL": cik,
-		"AMZN":  cik,
-		"NVDA":  cik,
-		"TSLA":  cik,
-		"META":  cik,
-	}, nil
+
+	key := g.ticker
+	if key == "" {
+		// No manifest ticker provided — fall through to a synthetic key
+		// the coordinator won't hit. Engine then surfaces "ticker not
+		// found" rather than silently mis-resolving.
+		key = "*"
+	}
+	return map[string]string{key: cik}, nil
 }
 
 // GetFinancialDataForTicker is the high-level entry the production gateway

@@ -73,7 +73,7 @@ func runEngineForTest(t *testing.T, bundleDir, ticker, manifestStartedAt string,
 
 	var svc *valuation.Service
 	options := []fx.Option{
-		Module(bundleDir, Options{Mode: mode, ManifestStartedAt: manifestStartedAt}),
+		Module(bundleDir, Options{Mode: mode, ManifestStartedAt: manifestStartedAt, Ticker: ticker}),
 		fx.Populate(&svc),
 		fx.NopLogger,
 	}

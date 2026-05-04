@@ -68,6 +68,10 @@ func Replay(ctx context.Context, bundleDir string, opts Options) Result {
 	}
 	res.Ticker = mf.Ticker
 	opts.ManifestStartedAt = mf.StartedAt
+	// Thread the manifest ticker into Options so BundleSECGateway can
+	// emit a {ticker: cik} mapping for arbitrary bundles, not just a
+	// hardcoded mega-cap list. VERIFIER finding MEDIUM-1.
+	opts.Ticker = mf.Ticker
 
 	// Step 2: schema-version drift.
 	driftReport := CompareManifestSchemas(mf)
