@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 
@@ -157,6 +158,14 @@ func TestModule_PostConstructHook_WiresYFinanceGateway(t *testing.T) {
 // provider — proving production's NewDatabase (which opens a sqlite
 // handle) is NOT pulled in by replay.Module. fx surfaces this as a
 // "missing dependency" error when an Invoke requests the type.
+//
+// VERIFIER MEDIUM-2: previous version used a local placeholder
+// `type sqlxDB struct{}` — that asserted "fx errors when an unprovided
+// type is requested," true for ANY type. The strengthened version
+// imports github.com/jmoiron/sqlx and asserts directly against the
+// real *sqlx.DB so a regression that quietly added sqlx wiring would
+// surface as the test now passing the Invoke (no Err) — i.e., the
+// hermeticity-of-replay claim would visibly break.
 func TestModule_DoesNotConstructDB(t *testing.T) {
 	defer func() {
 		// Recover from fx-injected panics — fxtest.New / .RequireStart
@@ -165,14 +174,12 @@ func TestModule_DoesNotConstructDB(t *testing.T) {
 		_ = recover()
 	}()
 
-	type sqlxDB struct{} // local placeholder; we don't import sqlx here
-
 	app := fx.New(
 		Module(t.TempDir(), Options{Mode: ModeRaw, ManifestStartedAt: "2025-01-15T12:00:00Z"}),
-		fx.Invoke(func(*sqlxDB) {}),
+		fx.Invoke(func(*sqlx.DB) {}),
 		fx.NopLogger,
 	)
 	if err := app.Err(); err == nil {
-		t.Fatalf("expected fx Err for missing *sqlxDB; got nil")
+		t.Fatalf("expected fx Err for missing *sqlx.DB; got nil — replay module silently provides a DB handle, breaking hermeticity")
 	}
 }
