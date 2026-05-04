@@ -241,3 +241,81 @@ func TestCurrencyOrUSD_DefaultsToUSD(t *testing.T) {
 		t.Fatalf("TWD: want TWD, got %q", got)
 	}
 }
+
+// TestReplay_GitDrift covers the git-SHA drift branch in Replay() that
+// fires when both bundle and current SHAs are non-empty and disagree
+// (VERIFIER finding LOW-1). The branch is otherwise untested by
+// Replay()-level tests because the test process has no VCS stamping
+// (runtime/debug.ReadBuildInfo returns empty under `go test`), so the
+// drift condition never triggers organically.
+//
+// Mechanism: swap the package-level gitSHAResolver to a fake that
+// returns a known SHA, then drive Replay() with a manifest stamping
+// a different SHA. Restore on test exit.
+func TestReplay_GitDrift(t *testing.T) {
+	originalResolver := gitSHAResolver
+	t.Cleanup(func() { gitSHAResolver = originalResolver })
+
+	const bundleSHA = "deadbeef"
+	const currentSHA = "cafebabe"
+	gitSHAResolver = func() string { return currentSHA }
+
+	writeManifestWithSHA := func(t *testing.T, dir string) {
+		t.Helper()
+		mf := artifact.Manifest{
+			BundleVersion:  "1.0",
+			RequestID:      "req_drift",
+			Ticker:         "AAPL",
+			Trigger:        "header",
+			StartedAt:      "2026-01-15T12:00:00Z",
+			Outcome:        "ok",
+			GitSHA:         bundleSHA,
+			SchemaVersions: map[string]int{},
+		}
+		for k, v := range CurrentSchemaVersions {
+			mf.SchemaVersions[k] = v
+		}
+		body, err := json.MarshalIndent(&mf, "", "  ")
+		if err != nil {
+			t.Fatalf("marshal manifest: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "00-manifest.json"), body, 0o644); err != nil {
+			t.Fatalf("write manifest: %v", err)
+		}
+	}
+
+	t.Run("RefusedByDefault", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		writeManifestWithSHA(t, tmpDir)
+
+		res := Replay(context.Background(), tmpDir, Options{Mode: ModeRaw})
+		if res.Status != StatusErrored {
+			t.Fatalf("Status: want errored, got %s", res.Status)
+		}
+		if !res.GitDrift {
+			t.Fatalf("GitDrift: want true; got false")
+		}
+		if res.Error == "" {
+			t.Fatalf("Error: want non-empty drift diagnostic; got empty")
+		}
+	})
+
+	t.Run("AllowedWithFlag_ProceedsWithDriftAnnotation", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		writeManifestWithSHA(t, tmpDir)
+
+		res := Replay(context.Background(), tmpDir, Options{Mode: ModeRaw, AllowGitDrift: true})
+		if !res.GitDrift {
+			t.Fatalf("GitDrift: want true under --allow-git-drift; got false")
+		}
+		// AllowGitDrift lets the run proceed; we won't reach Pass because no
+		// SEC payload is seeded — but the Status MUST NOT be the drift-refusal
+		// path, and the Error message must NOT be the drift refusal string.
+		if res.Status == StatusErrored && res.Error != "" {
+			driftRefusal := "git_sha drift: bundle=" + bundleSHA + " current=" + currentSHA
+			if len(res.Error) >= len(driftRefusal) && res.Error[:len(driftRefusal)] == driftRefusal {
+				t.Fatalf("Replay still refused on drift despite AllowGitDrift=true; error=%q", res.Error)
+			}
+		}
+	})
+}

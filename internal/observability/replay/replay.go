@@ -87,7 +87,7 @@ func Replay(ctx context.Context, bundleDir string, opts Options) Result {
 	// Step 3: git-SHA drift. F6 invariant: empty bundle git_sha is
 	// "unknown" (not drift); only fire when both have non-empty values
 	// that disagree.
-	currentSHA := resolveGitSHA()
+	currentSHA := gitSHAResolver()
 	if mf.GitSHA != "" && currentSHA != "" && mf.GitSHA != currentSHA {
 		res.GitDrift = true
 		if !opts.AllowGitDrift {
@@ -228,9 +228,17 @@ func currencyOrUSD(s string) string {
 	return s
 }
 
-// resolveGitSHA returns the binary's VCS revision via runtime/debug.
-// Mirrors cmd/replay/main.go's helper of the same name. Empty when
-// running under `go test` / `go run` (no VCS stamping).
+// gitSHAResolver returns the binary's VCS revision; package-level var so
+// tests can inject a deterministic resolver (VERIFIER finding LOW-1).
+// Default: resolveGitSHA, which reads runtime/debug.ReadBuildInfo and
+// returns the vcs.revision setting. Empty when running under
+// `go test` / `go run` (no VCS stamping). Mirrors cmd/replay/main.go's
+// helper of the same name.
+var gitSHAResolver = resolveGitSHA
+
+// resolveGitSHA is the production git-SHA resolver. Kept exported only
+// at the package-internal level (lowercase) so the package-var seam
+// above can default to it without exposing a new API.
 func resolveGitSHA() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
