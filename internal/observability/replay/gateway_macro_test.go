@@ -119,11 +119,14 @@ func TestBundleMacroGateway_GetTreasuryRates_RawMode_PartialPresence_ToleratedPe
 	}
 }
 
-func TestBundleMacroGateway_GetMarketRiskPremium_NotInBundle_ReturnsErrBundleMissingPayload(t *testing.T) {
+func TestBundleMacroGateway_GetMarketRiskPremium_ReturnsProductionDefault(t *testing.T) {
 	gw := NewBundleMacroGateway(t.TempDir(), ModeRaw)
-	_, err := gw.GetMarketRiskPremium(context.Background())
-	if !errors.Is(err, ErrBundleMissingPayload) {
-		t.Fatalf("expected ErrBundleMissingPayload; got %v", err)
+	mrp, err := gw.GetMarketRiskPremium(context.Background())
+	if err != nil {
+		t.Fatalf("GetMarketRiskPremium: %v", err)
+	}
+	if mrp != defaultMarketRiskPremium {
+		t.Fatalf("MRP: want %v, got %v", defaultMarketRiskPremium, mrp)
 	}
 }
 

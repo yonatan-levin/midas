@@ -130,15 +130,20 @@ func Module(bundleDir string, opts Options) fx.Option {
 		fx.Provide(datafetcher.NewDataFetcher),
 
 		// --------------------------------------------------------------
-		// Clock provider: production wallClock. Replay overrides it via
-		// fx.Decorate below to bind to manifest.started_at, so cross-year
-		// replays remain deterministic. Stage F's
-		// TestReplay_CrossYearProducesByteIdenticalOutput layers ANOTHER
-		// fx.Decorate(Clock) on top of this — fx applies Decorate in
-		// declaration order, so the test-supplied fixture clock wins.
+		// Clock provider: bound directly to manifest.started_at via a
+		// constructor closure. We DO NOT use fx.Decorate here because
+		// fx 1.24.0 disallows multiple decorators on the same type
+		// within one composition — and Stage F's
+		// TestReplay_CrossYearProducesByteIdenticalOutput needs to layer
+		// a SECOND fx.Decorate(Clock) on top of replay.Module to inject
+		// a fixture clock for cross-year regression. Decorating once at
+		// the module level would block that layering.
+		//
+		// By exposing Clock as a plain fx.Provide, the test (or any
+		// future caller) can attach exactly one fx.Decorate(Clock) on
+		// top to override the manifest binding.
 		// --------------------------------------------------------------
-		fx.Provide(valuation.NewWallClock),
-		fx.Decorate(func(_ valuation.Clock) valuation.Clock {
+		fx.Provide(func() valuation.Clock {
 			return newManifestClock(opts.ManifestStartedAt)
 		}),
 

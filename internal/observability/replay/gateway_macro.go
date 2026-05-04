@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
-	"time"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/infra/gateways/macro"
@@ -89,9 +88,15 @@ func (g *BundleMacroGateway) GetTreasuryRates(ctx context.Context) (*entities.Tr
 		// Walk each FRED series file and dispatch through the production
 		// parser. Per-series misses are tolerated; missing ALL files is
 		// an error.
-		rates := &entities.TreasuryRates{
-			AsOf: time.Now().UTC(),
-		}
+		//
+		// AsOf is intentionally zero — bundles do not capture the
+		// production gateway's wall-clock stamp, and using time.Now()
+		// here would inject wall-clock drift into every replay
+		// (TestReplay_CrossYearProducesByteIdenticalOutput would fail
+		// across calendar years). The zero-value time.Time satisfies
+		// downstream consumers that only read the rate fields; AsOf is
+		// not consulted for math by the engine.
+		rates := &entities.TreasuryRates{}
 		var present int
 		for seriesID, fieldName := range macroSeriesMap {
 			fname := fmt.Sprintf("07-fetch-macro-%s.raw.json", seriesID)
@@ -133,24 +138,31 @@ func (g *BundleMacroGateway) GetTreasuryRates(ctx context.Context) (*entities.Tr
 	}
 }
 
-// GetMarketRiskPremium returns ErrBundleMissingPayload — bundles do not
-// capture an MRP file because production reads it from configuration
-// (config.Macro.ManualMarketRiskPremium), not from FRED. The valuation
-// service path SHOULD reach this method through macro.Gateway.GetMarketRiskPremium
-// which always succeeds via the config default; replay returns
-// ErrBundleMissingPayload to surface the contract gap loudly so a future
-// FRED-MRP wiring forces the bundle producer to capture it.
+// defaultMarketRiskPremium mirrors the production
+// config.MacroConfig.ManualMarketRiskPremium default at
+// internal/config/config.go (viper.SetDefault "macro.manual_market_risk_premium")
+// — kept in lockstep so replay's MRP matches production for any bundle
+// captured against the default config. If the production default
+// changes, this constant must change in the same commit; the round-trip
+// integration test will surface the drift.
+const defaultMarketRiskPremium = 0.06 // 6%
+
+// GetMarketRiskPremium returns a fixed value matching the production
+// gateway's default behavior. Production at gateway.go:140-157 returns
+// (cfg.ManualMarketRiskPremium, nil) — never consulting FRED today —
+// so we do the same: a constant. Bundles do not snapshot the MRP because
+// production never fetches it; routing through ErrBundleMissingPayload
+// would falsely fail every replay because the engine path
+// (datafetcher/coordinator.go:383-386) treats an MRP error as fatal,
+// terminating fetchMacroData.
 //
-// Practical note: if an existing engine path treats MRP fetch failure as
-// fatal during replay, the round-trip integration test (Stage F) will
-// surface that and we revisit. Today's production code returns
-// (cfg.ManualMarketRiskPremium, nil) — never errors — so the engine path
-// has no error-handling for this method to exercise; replay returning the
-// sentinel is functionally equivalent to "engine consumes the wrong
-// number" which the response diff will detect.
+// If a future production change starts fetching MRP from FRED, the
+// bundle producer must snapshot it AND replay must read that snapshot;
+// the round-trip integration test will catch any drift between the
+// captured value and the constant returned here.
 func (g *BundleMacroGateway) GetMarketRiskPremium(ctx context.Context) (float64, error) {
 	atomic.AddUint64(&g.callsCount, 1)
-	return 0, NewBundleMissingPayloadError(g.bundleDir, "07-fetch-macro-mrp.json", nil)
+	return defaultMarketRiskPremium, nil
 }
 
 // GetFXRate honors the identity short-circuit per ports.MacroDataGateway
