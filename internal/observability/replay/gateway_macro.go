@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/infra/gateways/macro"
 )
@@ -62,14 +63,25 @@ type BundleMacroGateway struct {
 	bundleDir string
 	mode      Mode
 
+	// cfg is the wired *config.Config — used to source
+	// Macro.ManualMarketRiskPremium so replay tracks production-config
+	// behavior bit-for-bit (VERIFIER finding HIGH-1). nil is permitted
+	// to keep the constructor non-breaking for throwaway tests; the
+	// nil path falls back to defaultMarketRiskPremium, which mirrors
+	// the production default at internal/config/config.go:490.
+	cfg *config.Config
+
 	callsCount uint64
 }
 
-// NewBundleMacroGateway constructs a replay-mode macro gateway.
-func NewBundleMacroGateway(bundleDir string, mode Mode) *BundleMacroGateway {
+// NewBundleMacroGateway constructs a replay-mode macro gateway. cfg may be
+// nil; when nil, GetMarketRiskPremium falls back to defaultMarketRiskPremium
+// (which is pinned to the production-config default).
+func NewBundleMacroGateway(bundleDir string, mode Mode, cfg *config.Config) *BundleMacroGateway {
 	return &BundleMacroGateway{
 		bundleDir: bundleDir,
 		mode:      mode,
+		cfg:       cfg,
 	}
 }
 
@@ -138,30 +150,40 @@ func (g *BundleMacroGateway) GetTreasuryRates(ctx context.Context) (*entities.Tr
 	}
 }
 
-// defaultMarketRiskPremium mirrors the production
-// config.MacroConfig.ManualMarketRiskPremium default at
-// internal/config/config.go (viper.SetDefault "macro.manual_market_risk_premium")
-// — kept in lockstep so replay's MRP matches production for any bundle
-// captured against the default config. If the production default
-// changes, this constant must change in the same commit; the round-trip
-// integration test will surface the drift.
-const defaultMarketRiskPremium = 0.06 // 6%
+// defaultMarketRiskPremium mirrors the production-config default at
+// internal/config/config.go:490 (viper.SetDefault
+// "macro.manual_market_risk_premium", 0.05). Used only as a fallback
+// when the gateway is constructed without a *config.Config (test paths).
+// Production replays receive the live cfg.Macro.ManualMarketRiskPremium
+// via the constructor and never consult this constant — so the value
+// here only matters for nil-config tests. If the production default
+// changes, update this constant AND config.go in the same commit.
+const defaultMarketRiskPremium = 0.05 // 5% — mirrors config.go:490
 
-// GetMarketRiskPremium returns a fixed value matching the production
-// gateway's default behavior. Production at gateway.go:140-157 returns
-// (cfg.ManualMarketRiskPremium, nil) — never consulting FRED today —
-// so we do the same: a constant. Bundles do not snapshot the MRP because
-// production never fetches it; routing through ErrBundleMissingPayload
-// would falsely fail every replay because the engine path
-// (datafetcher/coordinator.go:383-386) treats an MRP error as fatal,
-// terminating fetchMacroData.
+// GetMarketRiskPremium returns the configured MRP, mirroring production at
+// internal/infra/gateways/macro/gateway.go:140-157 which returns
+// (cfg.ManualMarketRiskPremium, nil) — never consulting FRED today.
+//
+// Replay reads cfg.Macro.ManualMarketRiskPremium so the round-trip is
+// bit-identical to production for any bundle captured against the wired
+// config (VERIFIER finding HIGH-1). When the gateway was constructed
+// with a nil *config.Config (e.g. throwaway tests), we fall back to the
+// production-default constant defaultMarketRiskPremium so the prior
+// "no-config" contract still produces a sensible value.
+//
+// Bundles do not snapshot the MRP because production never fetches it;
+// routing through ErrBundleMissingPayload would falsely fail every
+// replay because the engine path
+// (datafetcher/coordinator.go:383-386) treats an MRP error as fatal.
 //
 // If a future production change starts fetching MRP from FRED, the
 // bundle producer must snapshot it AND replay must read that snapshot;
-// the round-trip integration test will catch any drift between the
-// captured value and the constant returned here.
+// the round-trip integration test will surface drift.
 func (g *BundleMacroGateway) GetMarketRiskPremium(ctx context.Context) (float64, error) {
 	atomic.AddUint64(&g.callsCount, 1)
+	if g.cfg != nil {
+		return g.cfg.Macro.ManualMarketRiskPremium, nil
+	}
 	return defaultMarketRiskPremium, nil
 }
 

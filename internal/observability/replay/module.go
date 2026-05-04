@@ -81,8 +81,11 @@ func Module(bundleDir string, opts Options) fx.Option {
 		fx.Provide(func() ports.MarketDataGateway {
 			return NewBundleMarketGateway(bundleDir, opts.Mode)
 		}),
-		fx.Provide(func() ports.MacroDataGateway {
-			return NewBundleMacroGateway(bundleDir, opts.Mode)
+		fx.Provide(func(cfg *config.Config) ports.MacroDataGateway {
+			// Threaded *config.Config so GetMarketRiskPremium reads
+			// cfg.Macro.ManualMarketRiskPremium (matches production
+			// gateway.go:140-157). VERIFIER finding HIGH-1.
+			return NewBundleMacroGateway(bundleDir, opts.Mode, cfg)
 		}),
 		// YFinance is wired post-construct via the fx.Invoke at the bottom;
 		// expose it here so the post-construct hook can resolve it.
@@ -191,6 +194,14 @@ func replayConfig() *config.Config {
 		Valuation: config.ValuationConfig{
 			DCFMaxGrowthRate: 0.40,
 			DCFMinGrowthRate: -0.10,
+		},
+		// Mirror viper default at config.go:490
+		// (viper.SetDefault "macro.manual_market_risk_premium", 0.05).
+		// Threaded into BundleMacroGateway so replay's MRP matches
+		// production for bundles captured against the default config.
+		// VERIFIER finding HIGH-1.
+		Macro: config.MacroConfig{
+			ManualMarketRiskPremium: 0.05,
 		},
 		DataCleaner: config.DataCleanerConfig{
 			// Mirror viper defaults at config.go:510-529. The rules /

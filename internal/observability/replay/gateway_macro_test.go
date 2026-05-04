@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 )
@@ -44,7 +45,7 @@ func TestBundleMacroGateway_GetTreasuryRates_RawMode_ParsesProductionBytes(t *te
 	seedBundleFile(t, tmpDir, "07-fetch-macro-DGS5.raw.json", makeFREDObsRaw(t, "3.75"))
 	seedBundleFile(t, tmpDir, "07-fetch-macro-DGS2.raw.json", makeFREDObsRaw(t, "3.50"))
 
-	gw := NewBundleMacroGateway(tmpDir, ModeRaw)
+	gw := NewBundleMacroGateway(tmpDir, ModeRaw, nil)
 	got, err := gw.GetTreasuryRates(context.Background())
 	if err != nil {
 		t.Fatalf("GetTreasuryRates: %v", err)
@@ -74,7 +75,7 @@ func TestBundleMacroGateway_GetTreasuryRates_ParsedMode_DirectUnmarshal(t *testi
 	}
 	seedBundleFile(t, tmpDir, macroParsedFile, body)
 
-	gw := NewBundleMacroGateway(tmpDir, ModeParsed)
+	gw := NewBundleMacroGateway(tmpDir, ModeParsed, nil)
 	got, err := gw.GetTreasuryRates(context.Background())
 	if err != nil {
 		t.Fatalf("GetTreasuryRates: %v", err)
@@ -86,7 +87,7 @@ func TestBundleMacroGateway_GetTreasuryRates_ParsedMode_DirectUnmarshal(t *testi
 
 func TestBundleMacroGateway_GetTreasuryRates_RawMode_AllSeriesMissing_ReturnsErrBundleMissingPayload(t *testing.T) {
 	tmpDir := t.TempDir() // no files
-	gw := NewBundleMacroGateway(tmpDir, ModeRaw)
+	gw := NewBundleMacroGateway(tmpDir, ModeRaw, nil)
 	_, err := gw.GetTreasuryRates(context.Background())
 	if !errors.Is(err, ErrBundleMissingPayload) {
 		t.Fatalf("expected ErrBundleMissingPayload; got %v", err)
@@ -94,7 +95,7 @@ func TestBundleMacroGateway_GetTreasuryRates_RawMode_AllSeriesMissing_ReturnsErr
 }
 
 func TestBundleMacroGateway_GetTreasuryRates_ParsedMode_MissingFile_ReturnsErrBundleMissingPayload(t *testing.T) {
-	gw := NewBundleMacroGateway(t.TempDir(), ModeParsed)
+	gw := NewBundleMacroGateway(t.TempDir(), ModeParsed, nil)
 	_, err := gw.GetTreasuryRates(context.Background())
 	if !errors.Is(err, ErrBundleMissingPayload) {
 		t.Fatalf("expected ErrBundleMissingPayload; got %v", err)
@@ -106,7 +107,7 @@ func TestBundleMacroGateway_GetTreasuryRates_RawMode_PartialPresence_ToleratedPe
 	// Only one series present; rest must be tolerated.
 	seedBundleFile(t, tmpDir, "07-fetch-macro-DGS10.raw.json", makeFREDObsRaw(t, "4.25"))
 
-	gw := NewBundleMacroGateway(tmpDir, ModeRaw)
+	gw := NewBundleMacroGateway(tmpDir, ModeRaw, nil)
 	got, err := gw.GetTreasuryRates(context.Background())
 	if err != nil {
 		t.Fatalf("GetTreasuryRates: %v", err)
@@ -119,19 +120,62 @@ func TestBundleMacroGateway_GetTreasuryRates_RawMode_PartialPresence_ToleratedPe
 	}
 }
 
-func TestBundleMacroGateway_GetMarketRiskPremium_ReturnsProductionDefault(t *testing.T) {
-	gw := NewBundleMacroGateway(t.TempDir(), ModeRaw)
+// TestBundleMacroGateway_GetMarketRiskPremium_ReadsFromConfig pins the
+// fix for VERIFIER finding HIGH-1: the gateway must read MRP from the
+// supplied *config.Config so replay tracks whatever production value
+// is wired (currently 0.05, see internal/config/config.go:490). Pinning
+// against a constant inside the gateway risked silent drift if the
+// production default ever changed; the constant in this package was
+// 0.06 while production was 0.05, which would have produced a 1pp WACC
+// drift for any captured bundle.
+func TestBundleMacroGateway_GetMarketRiskPremium_ReadsFromConfig(t *testing.T) {
+	cases := []struct {
+		name string
+		mrp  float64
+	}{
+		{"production default 0.05", 0.05},
+		{"override 0.06", 0.06},
+		{"override 0.075", 0.075},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{Macro: config.MacroConfig{ManualMarketRiskPremium: tc.mrp}}
+			gw := NewBundleMacroGateway(t.TempDir(), ModeRaw, cfg)
+			got, err := gw.GetMarketRiskPremium(context.Background())
+			if err != nil {
+				t.Fatalf("GetMarketRiskPremium: %v", err)
+			}
+			if got != tc.mrp {
+				t.Fatalf("MRP: want %v, got %v", tc.mrp, got)
+			}
+		})
+	}
+}
+
+// TestBundleMacroGateway_GetMarketRiskPremium_NilConfig_FallsBackToProductionDefault
+// guards the no-config path: when callers construct the gateway without
+// a config (e.g. in pre-existing tests), the gateway returns the
+// production default constant so the prior contract still holds. This
+// keeps the constructor signature change non-breaking for the common
+// "throwaway test gateway" usage.
+func TestBundleMacroGateway_GetMarketRiskPremium_NilConfig_FallsBackToProductionDefault(t *testing.T) {
+	gw := NewBundleMacroGateway(t.TempDir(), ModeRaw, nil)
 	mrp, err := gw.GetMarketRiskPremium(context.Background())
 	if err != nil {
 		t.Fatalf("GetMarketRiskPremium: %v", err)
 	}
+	// Production default at internal/config/config.go:490 is 0.05.
 	if mrp != defaultMarketRiskPremium {
-		t.Fatalf("MRP: want %v, got %v", defaultMarketRiskPremium, mrp)
+		t.Fatalf("MRP nil-config fallback: want %v, got %v", defaultMarketRiskPremium, mrp)
+	}
+	if defaultMarketRiskPremium != 0.05 {
+		t.Fatalf("defaultMarketRiskPremium constant must mirror production default 0.05; got %v", defaultMarketRiskPremium)
 	}
 }
 
 func TestBundleMacroGateway_GetFXRate_FromCcyEqualsToCcy_ReturnsOne(t *testing.T) {
-	gw := NewBundleMacroGateway(t.TempDir(), ModeRaw)
+	gw := NewBundleMacroGateway(t.TempDir(), ModeRaw, nil)
 	rate, err := gw.GetFXRate(context.Background(), "USD", "USD")
 	if err != nil {
 		t.Fatalf("GetFXRate identity: %v", err)
@@ -142,7 +186,7 @@ func TestBundleMacroGateway_GetFXRate_FromCcyEqualsToCcy_ReturnsOne(t *testing.T
 }
 
 func TestBundleMacroGateway_GetFXRate_NonIdentity_ReturnsErrBundleMissingPayload(t *testing.T) {
-	gw := NewBundleMacroGateway(t.TempDir(), ModeRaw)
+	gw := NewBundleMacroGateway(t.TempDir(), ModeRaw, nil)
 	_, err := gw.GetFXRate(context.Background(), "TWD", "USD")
 	if !errors.Is(err, ErrBundleMissingPayload) {
 		t.Fatalf("expected ErrBundleMissingPayload; got %v", err)
@@ -150,7 +194,7 @@ func TestBundleMacroGateway_GetFXRate_NonIdentity_ReturnsErrBundleMissingPayload
 }
 
 func TestBundleMacroGateway_HealthCheck_AlwaysOK(t *testing.T) {
-	gw := NewBundleMacroGateway(t.TempDir(), ModeRaw)
+	gw := NewBundleMacroGateway(t.TempDir(), ModeRaw, nil)
 	if err := gw.HealthCheck(context.Background()); err != nil {
 		t.Fatalf("HealthCheck: %v", err)
 	}
@@ -162,7 +206,7 @@ func TestBundleMacroGateway_ConcurrentGetTreasuryRates_RaceFree(t *testing.T) {
 		seedBundleFile(t, tmpDir, fmt.Sprintf("07-fetch-macro-%s.raw.json", seriesID), makeFREDObsRaw(t, "4.0"))
 	}
 
-	gw := NewBundleMacroGateway(tmpDir, ModeRaw)
+	gw := NewBundleMacroGateway(tmpDir, ModeRaw, nil)
 
 	const N = 50
 	var wg sync.WaitGroup
