@@ -70,4 +70,14 @@ type Options struct {
 	// fires when both bundle and current have non-empty git_sha values that
 	// disagree.
 	AllowGitDrift bool
+
+	// ManifestStartedAt is the bundle manifest's started_at value,
+	// RFC3339Nano-formatted. The replay fx Module binds the
+	// *valuation.Service Clock seam to this instant so the engine's
+	// wall-clock reads (FY-period fallback in service.go:285,
+	// CalculatedAt stamps) reproduce the capture-time outputs even when
+	// the replay calendar year differs (D10 invariant). Empty/malformed
+	// values fall through to a wall-clock binding — replay still runs,
+	// but cross-year determinism is no longer guaranteed.
+	ManifestStartedAt string
 }
