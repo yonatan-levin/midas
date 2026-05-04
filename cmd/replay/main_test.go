@@ -391,3 +391,66 @@ func cpManifest(t *testing.T, name, dst string) {
 		t.Fatalf("write: %v", err)
 	}
 }
+
+// TestParseFlags_FromRaw_Default pins the R2 flag default. Plan §3 Stage E.
+func TestParseFlags_FromRaw_Default(t *testing.T) {
+	f, _, err := parseFlags([]string{"/x"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if f.from != "raw" {
+		t.Fatalf("default --from = %q, want raw", f.from)
+	}
+}
+
+// TestParseFlags_FromParsed_Explicit verifies --from=parsed is accepted.
+func TestParseFlags_FromParsed_Explicit(t *testing.T) {
+	f, _, err := parseFlags([]string{"--from=parsed", "/x"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if f.from != "parsed" {
+		t.Fatalf("--from=parsed: got %q, want parsed", f.from)
+	}
+}
+
+// TestParseFlags_FromInvalid_Errors rejects an unsupported value.
+func TestParseFlags_FromInvalid_Errors(t *testing.T) {
+	_, _, err := parseFlags([]string{"--from=cleaned", "/x"})
+	if err == nil {
+		t.Fatal("parseFlags should reject --from=cleaned")
+	}
+	if !strings.Contains(err.Error(), "raw or parsed") {
+		t.Fatalf("error message should mention valid values; got: %v", err)
+	}
+}
+
+// TestParseFlags_R3FlagsAreNotRegistered confirms the deferred R3 flags
+// are NOT registered — registering them as no-ops would be a CLI contract
+// leak per the prior R1 follow-up #11 rule. Each unknown flag must
+// produce "flag provided but not defined".
+func TestParseFlags_R3FlagsAreNotRegistered(t *testing.T) {
+	r3Flags := []string{
+		"--workers=4",
+		"--filter-ticker=AAPL",
+		"--filter-since=24h",
+		"--diff-stages",
+		"--float-rel-tol=1e-6",
+		"--float-abs-tol=1e-9",
+	}
+	for _, flagArg := range r3Flags {
+		t.Run(flagArg, func(t *testing.T) {
+			_, _, err := parseFlags([]string{flagArg, "/x"})
+			if err == nil {
+				t.Fatalf("parseFlags must reject %s as unknown; got nil error", flagArg)
+			}
+			// Don't pin on the exact message; flag.Parse uses
+			// "flag provided but not defined" but our caller wraps that
+			// in flag.ErrHelp handling. Substring check is enough.
+			if !strings.Contains(err.Error(), "flag provided but not defined") &&
+				!strings.Contains(err.Error(), "not defined") {
+				t.Fatalf("expected unknown-flag error for %s; got: %v", flagArg, err)
+			}
+		})
+	}
+}
