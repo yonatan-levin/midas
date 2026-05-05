@@ -50,9 +50,18 @@ PATTERNS=(
 # we register collectors — every entry there uses promauto.With(registry),
 # never the global. The two service.go / service_test.go entries below
 # are inline comments documenting why DefaultRegisterer is avoided.
+#
+# internal/observability/replay/module.go is allowlisted for an audit
+# doc-comment only (Stage I.0): the comment block at line 309 references
+# `prometheus.DefaultRegisterer` to explain why metrics.NewService allocates
+# a fresh per-service registry instead. The replay module wires
+# *metrics.Service via metrics.NewService — verified by the same Stage I.0
+# audit — so allowlisting only documents the avoidance, never an actual
+# global registration.
 ALLOWLIST=(
     'internal/services/metrics/service.go'
     'internal/services/metrics/service_test.go'
+    'internal/observability/replay/module.go'
 )
 
 # Verify rg (ripgrep) is available

@@ -45,9 +45,18 @@ $Patterns = @(
 $PatternOr = ($Patterns -join '|')
 
 # Allowlist: literal paths (relative to repo root) where matches are acceptable.
+#
+# internal/observability/replay/module.go is allowlisted for an audit
+# doc-comment only (Stage I.0): the comment block near line 309 references
+# `prometheus.DefaultRegisterer` to explain why metrics.NewService allocates
+# a fresh per-service registry instead. The replay module wires
+# *metrics.Service via metrics.NewService — verified by the same Stage I.0
+# audit — so allowlisting only documents the avoidance, never an actual
+# global registration.
 $Allowlist = @(
     'internal/services/metrics/service.go',
-    'internal/services/metrics/service_test.go'
+    'internal/services/metrics/service_test.go',
+    'internal/observability/replay/module.go'
 )
 
 Write-Host "lint-prometheus-registers: scanning for stray DefaultRegisterer registrations..."
