@@ -1,15 +1,12 @@
 package macro
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +19,10 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
+
+// Note: bytes / encoding/json / strconv were removed from this file in
+// Phase R2 Stage A.6 when the per-series FRED parser moved to parser.go.
+// They remain available via parser.go's imports for the actual parsing.
 
 // fxCacheTTL bounds how long a cached FX rate (FRED-fetched or static-fallback)
 // is reused before a refresh is attempted. Six hours matches the FRED H.10
@@ -265,48 +266,35 @@ func (g *Gateway) getFREDSeries(ctx context.Context, seriesID string) (float64, 
 		return 0, fmt.Errorf("FRED API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	// Tier-3 artifact bundle: TeeReader the response body so reads dual-stream
-	// into both the JSON decoder AND a per-request raw-bytes buffer.
-	body := resp.Body
-	var rawBuf *bytes.Buffer
-	if b := artifact.From(ctx); b != nil {
-		rawBuf = &bytes.Buffer{}
-		body = io.NopCloser(io.TeeReader(resp.Body, rawBuf))
-	}
-
-	var fredResponse FREDResponse
-	if err := json.NewDecoder(body).Decode(&fredResponse); err != nil {
-		return 0, fmt.Errorf("failed to decode FRED response: %w", err)
-	}
-
-	// Push the captured raw bytes into the bundle. Body redaction strips any
-	// secret-looking JSON keys; we ALSO record "query.api_key" in the manifest
-	// redaction set since the FRED key travels in the URL (not visible to
-	// RedactJSONBytes which only sees the response body).
-	if rawBuf != nil {
-		raw, redacted := artifact.RedactJSONBytes(rawBuf.Bytes())
-		if b := artifact.From(ctx); b != nil {
-			redacted = append(redacted, "query.api_key")
-			fname := fmt.Sprintf("07-fetch-macro-%s.raw.json", seriesID)
-			b.SnapshotRaw(ctx, "fetch.macro", fname, raw, redacted)
-		}
-	}
-
-	if len(fredResponse.Observations) == 0 {
-		return 0, fmt.Errorf("no observations found for series %s", seriesID)
-	}
-
-	observation := fredResponse.Observations[0]
-	if observation.Value == "." {
-		return 0, fmt.Errorf("no valid data for series %s", seriesID)
-	}
-
-	value, err := strconv.ParseFloat(observation.Value, 64)
+	// Drain the response body into a buffer so we can both feed the parser
+	// AND snapshot the raw bytes into the artifact bundle (when one is on
+	// ctx). Pre-Phase-R2-A.6 this used io.TeeReader + json.NewDecoder; the
+	// equivalent is to ReadAll once and pass the bytes to ParseFREDSeries.
+	// The buffer is bounded by FRED's response size (one observation,
+	// well under 1 KiB) so the all-in-memory shape is fine.
+	rawBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse value for series %s: %w", seriesID, err)
+		return 0, fmt.Errorf("failed to read FRED response body: %w", err)
 	}
 
-	return value, nil
+	// Tier-3 artifact bundle: snapshot the captured raw bytes. Body
+	// redaction strips any secret-looking JSON keys; we ALSO record
+	// "query.api_key" in the manifest redaction set since the FRED key
+	// travels in the URL (not visible to RedactJSONBytes which only sees
+	// the response body). Snapshot lands BEFORE the parse so a malformed
+	// body still leaves an on-disk trace for postmortem analysis.
+	if b := artifact.From(ctx); b != nil {
+		raw, redacted := artifact.RedactJSONBytes(rawBytes)
+		redacted = append(redacted, "query.api_key")
+		fname := fmt.Sprintf("07-fetch-macro-%s.raw.json", seriesID)
+		b.SnapshotRaw(ctx, "fetch.macro", fname, raw, redacted)
+	}
+
+	// Phase R2 Stage A.6: per-series parsing extracted into a pure free
+	// function (parser.go::ParseFREDSeries). Replay's BundleMacroGateway
+	// (Stage A.3) imports the same function for raw-mode dispatch so
+	// `--from=raw` exercises the production parser per spec D3.
+	return ParseFREDSeries(seriesID, rawBytes)
 }
 
 // getTreasuryRatesFromConfig returns treasury rates using config defaults.

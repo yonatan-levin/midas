@@ -12,10 +12,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/replay"
@@ -60,11 +62,14 @@ const usageMessage = `Usage: replay [flags] <path>
   <path>  A bundle directory (containing 00-manifest.json) OR a parent
           directory containing one or more bundles (recursively walked).
 
-Phase R1 flags (subset of spec §7 — full set lands in R2/R3):
+Flags (R1 + R2 — full set lands in R3):
   --format string         Output format: text or json (default "text")
   --out string            Output path (default "-" for stdout)
   --allow-schema-drift    Treat schema-version mismatch as a warning instead of an error
+  --allow-git-drift       Treat git_sha mismatch as a warning instead of an error
   --quiet                 Suppress per-bundle rows; only print the aggregate summary
+  --verbose               Verbose per-field diff output (text mode)
+  --from string           Gateway substitution mode: raw or parsed (default "raw")
 
 Exit codes:
   0   All bundles validated and (in R2+) replayed within tolerance
@@ -80,6 +85,14 @@ type flags struct {
 	allowGitDrift    bool
 	quiet            bool
 	verbose          bool
+
+	// from selects the gateway substitution mode for replay's bundle
+	// gateways: "raw" (decode the captured HTTP-response bytes through
+	// the production parser) or "parsed" (json.Unmarshal the
+	// post-parse snapshot directly). Defaults to "raw" so a bare
+	// `replay <bundle>` invocation runs the symmetric production-parser
+	// path that exercises spec D3's invariant.
+	from string
 }
 
 // parseFlags parses argv (without the program name). Returns the parsed
@@ -99,6 +112,7 @@ func parseFlags(argv []string) (*flags, string, error) {
 	fs.BoolVar(&f.allowGitDrift, "allow-git-drift", false, "Warn instead of refusing on git_sha mismatch (R2)")
 	fs.BoolVar(&f.quiet, "quiet", false, "Suppress per-bundle rows; only print the aggregate summary")
 	fs.BoolVar(&f.verbose, "verbose", false, "Verbose per-field diff output (text mode)")
+	fs.StringVar(&f.from, "from", "raw", "Gateway substitution mode (raw|parsed)")
 	// --git-sha was previously registered but had no R1-side effect; it
 	// would have been a contract leak (REVIEWER #11). It will return as
 	// an operator override in R2 once git-drift detection actually
@@ -116,6 +130,10 @@ func parseFlags(argv []string) (*flags, string, error) {
 
 	if f.format != "text" && f.format != "json" {
 		return nil, "", fmt.Errorf("--format must be text or json; got %q", f.format)
+	}
+
+	if f.from != "raw" && f.from != "parsed" {
+		return nil, "", fmt.Errorf("--from must be raw or parsed; got %q", f.from)
 	}
 
 	args := fs.Args()
@@ -237,9 +255,58 @@ func writeSchemaDriftDiagnostic(w io.Writer, results []replay.Result) {
 	}
 }
 
-// evaluateBundle runs the R1 evaluation for a single bundle: read manifest
-// + validate schema. R2 will replace this with the engine-running path.
+// evaluateBundle delegates to replay.Replay which runs the engine through
+// the bundle gateways and diffs the result against 17-response.json.
+//
+// Skeleton-only fallback (preserves R1 behavior): bundles whose only
+// content is 00-manifest.json (i.e. fixtures captured before R2 shipped
+// or bundles produced by a server config that disabled artifact capture
+// after manifest emission) are surfaced as StatusSkeletonOK rather than
+// StatusErrored on engine failure. Detection is a presence-check on the
+// canonical SEC raw/parsed file — the only required input the engine
+// needs to produce a valuation. Without it, the engine has nothing to
+// run, and "errored" misclassifies what is actually a manifest-only
+// drift-detection bundle.
+//
+// Mode mapping: --from=raw → replay.ModeRaw (default); --from=parsed →
+// replay.ModeParsed.
 func evaluateBundle(bundleDir string, f *flags) replay.Result {
+	if isSkeletonOnly(bundleDir) {
+		return evaluateSkeletonBundle(bundleDir, f)
+	}
+	mode := replay.ModeRaw
+	if f.from == "parsed" {
+		mode = replay.ModeParsed
+	}
+	return replay.Replay(context.Background(), bundleDir, replay.Options{
+		Mode:             mode,
+		AllowSchemaDrift: f.allowSchemaDrift,
+		AllowGitDrift:    f.allowGitDrift,
+	})
+}
+
+// isSkeletonOnly reports whether the bundle directory contains only
+// 00-manifest.json (no SEC, market, macro, or response payloads). When
+// true, evaluateBundle uses the R1 SkeletonOK path; when false the full
+// engine replay runs.
+//
+// Heuristic: check for the SEC raw/parsed file presence as a proxy for
+// "the bundle has data to replay". The SEC fetch is the engine's
+// foundational input — without it, every other gateway is downstream
+// of an empty financial-data branch and the engine cannot proceed.
+func isSkeletonOnly(bundleDir string) bool {
+	for _, name := range []string{"05-fetch-sec.raw.json", "05-fetch-sec.parsed.json"} {
+		if _, err := os.Stat(filepath.Join(bundleDir, name)); err == nil {
+			return false
+		}
+	}
+	return true
+}
+
+// evaluateSkeletonBundle preserves R1's manifest-only walk: read
+// manifest, validate schema, return StatusSkeletonOK or StatusErrored
+// for drift-without-flag.
+func evaluateSkeletonBundle(bundleDir string, f *flags) replay.Result {
 	res := replay.Result{
 		Bundle: bundleDir,
 		Status: replay.StatusSkeletonOK,
@@ -261,10 +328,7 @@ func evaluateBundle(bundleDir string, f *flags) replay.Result {
 			res.Error = "schema drift detected (use --allow-schema-drift to proceed)"
 			return res
 		}
-		// Drift allowed: keep status as SkeletonOK; renderer will show
-		// schema_drift=true on the row.
 	}
-
 	return res
 }
 
