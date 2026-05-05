@@ -475,15 +475,6 @@ func TestParseFlags_R3FlagsAreRegistered(t *testing.T) {
 			},
 		},
 		{
-			name: "--diff-stages",
-			argv: []string{"--diff-stages", "/x"},
-			assert: func(t *testing.T, f *flags) {
-				if !f.diffStages {
-					t.Fatal("diffStages = false, want true")
-				}
-			},
-		},
-		{
 			name: "--float-rel-tol=1e-6",
 			argv: []string{"--float-rel-tol=1e-6", "/x"},
 			assert: func(t *testing.T, f *flags) {
@@ -510,6 +501,24 @@ func TestParseFlags_R3FlagsAreRegistered(t *testing.T) {
 			}
 			c.assert(t, f)
 		})
+	}
+}
+
+// TestParseFlags_DiffStagesNotRegistered pins the contract that
+// --diff-stages is intentionally absent until Stage K (per-stage diff)
+// ships in R3b. Registering the flag without the engine consuming it
+// would be a CLI contract leak — passing the flag would silently do
+// nothing — same hazard the R2 follow-up #11 caught for --git-sha.
+//
+// When Stage K lands, this test should be replaced with a positive
+// "registered + behavior" pin in TestParseFlags_R3FlagsAreRegistered.
+func TestParseFlags_DiffStagesNotRegistered(t *testing.T) {
+	_, _, err := parseFlags([]string{"--diff-stages", "/x"})
+	if err == nil {
+		t.Fatal("--diff-stages must NOT be registered until Stage K ships; parseFlags accepted it")
+	}
+	if !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("expected 'flag provided but not defined' error; got: %v", err)
 	}
 }
 

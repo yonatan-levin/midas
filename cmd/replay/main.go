@@ -79,7 +79,6 @@ Flags:
   --workers int           Parallel replay workers (default runtime.NumCPU(); env REPLAY_WORKERS)
   --filter-ticker string  Replay only bundles whose manifest ticker == this string (exact-case)
   --filter-since string   Replay only bundles whose manifest started_at is within this duration of now (e.g. 7d, 24h)
-  --diff-stages           Diff intermediate-stage JSON files in addition to the response (R3)
   --float-rel-tol float   Relative tolerance for float diffs (default 1e-9)
   --float-abs-tol float   Absolute tolerance for float diffs (default 1e-12)
 
@@ -126,11 +125,11 @@ type flags struct {
 	filterSinceRaw string
 	filterSince    time.Duration
 
-	// diffStages, when true, diffs intermediate-stage JSON files
-	// (10-clean-output.json, 12-growth-curve.json, 13-wacc.json,
-	// 15-valuation.json) against the replay engine's reproductions.
-	// R3 Stage K wires the per-stage diff machinery; this flag toggles it.
-	diffStages bool
+	// --diff-stages was previously registered but had no R3 (Stages I+J+L)
+	// side-effect; the per-stage diff machinery (Stage K) is deferred to
+	// R3b. Registering the flag now would be a contract leak — passing
+	// --diff-stages would silently do nothing. Same fix shape as the
+	// R2-era --git-sha drop. Re-add when Stage K ships.
 
 	// floatRelTol / floatAbsTol override the default tolerances used by
 	// the diff layer. Defaults map to replay.DefaultFloatRelTol /
@@ -169,7 +168,6 @@ func parseFlags(argv []string) (*flags, string, error) {
 	fs.IntVar(&f.workers, "workers", defaultWorkers, "Parallel replay workers (default runtime.NumCPU(); env REPLAY_WORKERS)")
 	fs.StringVar(&f.filterTicker, "filter-ticker", "", "Replay only bundles whose manifest ticker == this string (exact-case)")
 	fs.StringVar(&f.filterSinceRaw, "filter-since", "", "Replay only bundles whose manifest started_at is within this duration of now (e.g. 7d, 24h)")
-	fs.BoolVar(&f.diffStages, "diff-stages", false, "Diff intermediate-stage JSON files in addition to the response")
 	fs.Float64Var(&f.floatRelTol, "float-rel-tol", replay.DefaultFloatRelTol, "Relative tolerance for float diffs")
 	fs.Float64Var(&f.floatAbsTol, "float-abs-tol", replay.DefaultFloatAbsTol, "Absolute tolerance for float diffs")
 
@@ -531,7 +529,6 @@ func evaluateBundle(bundleDir string, f *flags) replay.Result {
 		AllowGitDrift:    f.allowGitDrift,
 		FloatRelTol:      f.floatRelTol,
 		FloatAbsTol:      f.floatAbsTol,
-		DiffStages:       f.diffStages,
 	})
 }
 

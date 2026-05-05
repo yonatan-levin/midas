@@ -87,9 +87,9 @@ type Options struct {
 	// = 1e-12). Same semantics as FloatRelTol.
 	FloatAbsTol float64
 
-	// DiffStages enables per-stage diff (10-clean-output.json,
-	// 12-growth-curve.json, 13-wacc.json, 15-valuation.json) against the
-	// engine's reproductions. R3 Stage K wires the diff machinery; this
-	// option toggles it. False (default) preserves R0+R1+R2 behavior.
-	DiffStages bool
+	// Per-stage diff (10-clean-output.json, 12-growth-curve.json,
+	// 13-wacc.json, 15-valuation.json) is deferred to Stage K (R3b). The
+	// previous DiffStages bool was dropped — registering it without an
+	// engine consumer was a CLI contract leak (VERIFIER MAJOR-1). Re-add
+	// when Stage K wires the per-stage diff machinery.
 }
