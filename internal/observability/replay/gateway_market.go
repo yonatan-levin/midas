@@ -184,9 +184,15 @@ func (g *BundleMarketGateway) readQuote(mode Mode) (*ports.YFinanceQuote, error)
 // assessDataQuality consults the quote's averageDailyVolume3M and
 // regularMarketVolume — both already on the captured quote — but the
 // helper itself is unexported. Replicating it here would couple replay to
-// the helper's heuristics; for R2 we accept "good" as the constant since
-// the engine consumes DataQuality only as a freshness annotation, not for
-// math. R3 may revisit if a diff surfaces.
+// the helper's heuristics.
+//
+// RPL-2f (R3 Stage O.4): the field carries the literal sentinel
+// "replay-stub" so a future engine path that branches on DataQuality
+// surfaces the replay-context origin rather than masquerading as
+// production-quality data. Verified at change-time that no engine
+// path keys off "good"; if a future caller adds such a branch, this
+// sentinel will surface in tests as a mismatched-string assertion
+// rather than a silent miscategorization.
 func quoteToMarketData(ticker string, quote *ports.YFinanceQuote) *entities.MarketData {
 	asOf := time.Unix(quote.RegularMarketTime, 0).UTC()
 	return &entities.MarketData{
@@ -198,7 +204,7 @@ func quoteToMarketData(ticker string, quote *ports.YFinanceQuote) *entities.Mark
 		AverageVolume:     quote.AverageDailyVolume3M,
 		AsOf:              asOf,
 		Source:            "yfinance",
-		DataQuality:       "good",
+		DataQuality:       "replay-stub",
 	}
 }
 

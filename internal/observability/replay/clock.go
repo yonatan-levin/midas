@@ -3,6 +3,8 @@ package replay
 import (
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
 )
 
@@ -20,22 +22,37 @@ type manifestClock struct {
 	at time.Time
 }
 
-// newManifestClock parses the manifest's started_at (RFC3339Nano) and
-// returns a Clock pinned to that instant. If the input fails to parse,
-// fall back to time.Now() — replay still succeeds (the cross-year test
-// would catch silent drift) and we emit no error because Clock has no
-// error channel. Production stamps started_at via time.Now().UTC() in
-// NewManifestBuilder, so a parse failure indicates a corrupted bundle
-// rather than a replay-side bug.
+// clockLogger is the package-level zap logger used to emit a WARN line
+// when newManifestClock falls back to wall-clock semantics on a malformed
+// or empty manifest started_at. Defaults to zap.NewNop so tests that
+// don't care about the warning can ignore it. Tests can swap in a real
+// logger (or zaptest.NewLogger(t)) to assert the warning fires.
 //
-// Empty input is also tolerated for the same reason — a future bundle
-// producer that forgets to stamp started_at would otherwise crash replay.
+// RPL-2n (R3 Stage O.12): the prior silent fallback masked corrupted
+// manifests; the operator only knew something was off if a downstream
+// diff fired. With the WARN line, the corruption is surfaced at the
+// source.
+var clockLogger = zap.NewNop()
+
+// newManifestClock parses the manifest's started_at (RFC3339Nano) and
+// returns a Clock pinned to that instant. If the input fails to parse
+// or is empty, fall back to time.Now() — replay still succeeds (the
+// cross-year test would catch silent drift) and we emit a WARN line
+// via clockLogger so the corruption is no longer silent. Production
+// stamps started_at via time.Now().UTC() in NewManifestBuilder, so a
+// parse failure indicates a corrupted bundle rather than a replay-side
+// bug; the operator sees the WARN and can re-capture the bundle.
 func newManifestClock(startedAt string) valuation.Clock {
 	if startedAt == "" {
+		clockLogger.Warn("replay: manifest started_at is empty; clock falling back to wall-clock (cross-year regression invariant cannot hold)")
 		return valuation.NewWallClock()
 	}
 	t, err := time.Parse(time.RFC3339Nano, startedAt)
 	if err != nil {
+		clockLogger.Warn("replay: manifest started_at malformed; clock falling back to wall-clock",
+			zap.String("started_at", startedAt),
+			zap.Error(err),
+		)
 		return valuation.NewWallClock()
 	}
 	return &manifestClock{at: t}

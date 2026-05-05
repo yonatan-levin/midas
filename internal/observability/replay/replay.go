@@ -245,6 +245,15 @@ func currencyOrUSD(s string) string {
 // returns the vcs.revision setting. Empty when running under
 // `go test` / `go run` (no VCS stamping). Mirrors cmd/replay/main.go's
 // helper of the same name.
+//
+// Thread-safety note (RPL-2e, R3 Stage O.3): this is a package-level
+// var by design. Tests overriding it MUST NOT call t.Parallel() — a
+// concurrent test could read while another writes. The current test
+// usage is sequential and verified safe; documenting this constraint
+// is preferred over the higher-cost refactor (passing a resolver
+// closure through Options) per the project's "pragmatic, not dogmatic"
+// stance on globals. If a future test needs t.Parallel(), promote
+// the seam to Options.GitSHAResolver instead.
 var gitSHAResolver = resolveGitSHA
 
 // resolveGitSHA is the production git-SHA resolver. Kept exported only

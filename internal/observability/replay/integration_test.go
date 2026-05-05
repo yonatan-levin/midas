@@ -289,10 +289,13 @@ func TestReplay_CrossYearProducesByteIdenticalOutput(t *testing.T) {
 	}
 }
 
-// scrubTimestamps zeroes the wall-clock-derived fields on a
-// *ValuationResult so cross-year comparison can focus on math. This is
-// the test-only helper for the D10 regression pin — production code
-// never zeros these.
+// scrubTimestamps zeroes the wall-clock-echo fields on a
+// *ValuationResult so cross-year comparison can focus on math. The
+// scrubbed fields are the WALL-CLOCK echoes — not derived math from
+// the wall clock — so zeroing them does not affect any number that
+// comparison cares about. This is the test-only helper for the D10
+// regression pin; production code never zeros these.
+// RPL-2l (R3 Stage O.10): reworded for clarity.
 func scrubTimestamps(r *entities.ValuationResult) {
 	if r == nil {
 		return

@@ -71,9 +71,11 @@ func (g *BundleYFinanceGateway) GetBatchQuotes(ctx context.Context, tickers []st
 	for _, t := range tickers {
 		// Stamp Symbol so callers that round-trip the map see the right
 		// ticker; production sets the field server-side before returning.
-		copy := *quote
-		copy.Symbol = t
-		out[t] = &copy
+		// RPL-2m (R3 Stage O.11): variable renamed from `copy` to `dup`
+		// so it no longer shadows the built-in `copy` function.
+		dup := *quote
+		dup.Symbol = t
+		out[t] = &dup
 	}
 	return out, nil
 }
