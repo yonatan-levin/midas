@@ -105,12 +105,28 @@ func (r *Result) Err() error {
 
 // Summary is the aggregate row at the bottom of every replay invocation.
 // Renderers append it to the per-bundle stream.
+//
+// Timing fields (R3 Stage L.3 — v2 plan Addition #4):
+//   - DurationMs: cumulative per-bundle replay duration (sum of Result.DurationMs).
+//     Pre-existing field; preserves R2 contract.
+//   - WalkDurationMs: wall-clock time WalkBundles took to enumerate the bundle
+//     tree. Single batch-level measurement (one WalkBundles call covers the run).
+//   - ReplayDurationMs: wall-clock time the dispatcher spent running per-bundle
+//     replays. Under --workers > 1 this is the wall clock of the bounded pool
+//     (start of dispatch to last worker complete), NOT cumulative CPU time.
+//
+// The walk/replay split makes Surface #2's scale ceiling observable rather
+// than debated: a future operator reporting "replay is slow on 10k bundles"
+// has data to pinpoint walk vs replay as the bottleneck without spelunking
+// source.
 type Summary struct {
-	Total      int   `json:"total"`
-	Passed     int   `json:"passed"`
-	Failed     int   `json:"failed"`
-	Errored    int   `json:"errored"`
-	DurationMs int64 `json:"duration_ms"`
+	Total            int   `json:"total"`
+	Passed           int   `json:"passed"`
+	Failed           int   `json:"failed"`
+	Errored          int   `json:"errored"`
+	DurationMs       int64 `json:"duration_ms"`
+	WalkDurationMs   int64 `json:"walk_duration_ms"`
+	ReplayDurationMs int64 `json:"replay_duration_ms"`
 }
 
 // Report bundles per-bundle Results plus a Summary into a single

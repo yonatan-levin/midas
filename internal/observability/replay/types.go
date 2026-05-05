@@ -76,4 +76,20 @@ type Options struct {
 	// Replay() populates this field from the manifest before constructing
 	// the fx Module; direct callers of Module() may set it explicitly.
 	Ticker string
+
+	// FloatRelTol overrides the default relative tolerance used by the
+	// float-diff layer (DefaultFloatRelTol = 1e-9). Zero means "use the
+	// default"; explicit non-zero values flow through to compareFairValueResponses.
+	// R3 Stage L.2.
+	FloatRelTol float64
+
+	// FloatAbsTol overrides the default absolute tolerance (DefaultFloatAbsTol
+	// = 1e-12). Same semantics as FloatRelTol.
+	FloatAbsTol float64
+
+	// DiffStages enables per-stage diff (10-clean-output.json,
+	// 12-growth-curve.json, 13-wacc.json, 15-valuation.json) against the
+	// engine's reproductions. R3 Stage K wires the diff machinery; this
+	// option toggles it. False (default) preserves R0+R1+R2 behavior.
+	DiffStages bool
 }

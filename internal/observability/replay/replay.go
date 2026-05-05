@@ -128,7 +128,18 @@ func Replay(ctx context.Context, bundleDir string, opts Options) Result {
 		res.Error = fmt.Errorf("unmarshal recorded response: %w", err).Error()
 		return res
 	}
-	diff := compareFairValueResponses(&bundleResp, currentResp, DefaultFloatRelTol, DefaultFloatAbsTol)
+	// Resolve tolerances: zero is sentinel for "use default" so a caller
+	// that doesn't set Options.FloatRelTol gets the historical contract.
+	// R3 Stage L.2.
+	relTol := opts.FloatRelTol
+	if relTol == 0 {
+		relTol = DefaultFloatRelTol
+	}
+	absTol := opts.FloatAbsTol
+	if absTol == 0 {
+		absTol = DefaultFloatAbsTol
+	}
+	diff := compareFairValueResponses(&bundleResp, currentResp, relTol, absTol)
 	diff.SortDiffs()
 
 	res.FieldsTotal = diff.FieldsTotal
