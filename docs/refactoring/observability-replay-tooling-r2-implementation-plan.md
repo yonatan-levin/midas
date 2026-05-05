@@ -1,11 +1,45 @@
 # Observability Replay Tooling — Phase R2 Implementation Plan
 
+**Status:** R2 SHIPPED on master (merge `e4d2fb2`, 2026-05-05). All Stages (Pre-Flight + D1.1 + A.1 + A.2 + A.3 + A.4 + A.6 + B + C + D + E + F + G) executed per plan across 3 BACKEND dispatches; A.5 (Finzive) skipped per plan §4 (Finzive not wired in production). Validated through 4 review gates (VERIFIER × 2, REVIEWER, QA). 15 advisory follow-ups deferred to R3, tracked at `docs/reviewer/RPL2-r2-followups.md`. This plan is now historical — kept for traceability.
+
 ---
 
 ## Revision History
 
 - **v2 (2026-05-04 — revision pass)**: Tightened Surface #3 (macro raw-mode parser extraction is now a pre-approved Stage A task, not a >30-LoC fallback). Tightened Surface #4 (cross-year regression test now uses Clock-injected fixture clocks at 2026 vs 2027 — replaces the weak "two consecutive replays" assertion). Other 3 Critical Surfaces accepted as-is from v1.
 - **v1 (initial)**: Stage breakdown, spike protocol, gateway contracts, test plan, coverage gates.
+
+---
+
+## Implementation Outcome (post-shipment record)
+
+| Stage | Result | Commit(s) |
+|-------|--------|-----------|
+| Pre-Flight `fx.Decorate` spike | PASSED at fx v1.24.0; §10 Contingent (GatewayModule split) NOT triggered | `2c4b60c` (BACKEND-1) |
+| D1.1 `BuildIndustryFromResult` export | DONE (rename-only) | `1bd7947` (BACKEND-1) |
+| A.6 `macro.ParseFREDSeries` extraction | DONE (~75 LoC pure function + 150 LoC tests at 100% file coverage) | `985603e` (BACKEND-1) |
+| A.1 `BundleSECGateway` | DONE | `c98c061` (BACKEND-2) |
+| A.2/A.3/A.4 Market/Macro/YFinance gateways | DONE (grouped) | `54c1f76` (BACKEND-2) |
+| A.5 Finzive | SKIPPED (not wired in production) | n/a |
+| B side-effect stubs | DONE | `c90b3af` (BACKEND-2) |
+| C `replay.Module` fx composition | DONE — **deviation: hand-picked `fx.Provide` instead of `fx.Decorate` over CoreModule** for F11 hermeticity (transitive `*sqlx.DB`/`*redis.Client` pulls). Documented in 60-line package comment. | `8aef33a` (BACKEND-2) |
+| D `Replay()` orchestrator + comparator | DONE | `9302411` (BACKEND-2) |
+| E `--from` CLI flag + R3 deferral guard | DONE | `dcd4dd7` (BACKEND-2) |
+| F round-trip + cross-year integration tests | DONE — both pass `-count=10 -race` | `8434989` (BACKEND-2) |
+| G `go-cmp` direct import + CompareResponse | DONE — `go.mod` adds only this one direct-promotion | `a09cd53` (BACKEND-2) |
+| Coverage sweep on stubs | DONE (replay 84.5%, cmd/replay 81.4%) | `edc4680` (BACKEND-2) |
+| VERIFIER cycle 1 — HIGH-1 fix | Threaded `*config.Config` into `BundleMacroGateway` for MRP (was hardcoded 0.06; now reads `cfg.Macro.ManualMarketRiskPremium` with 0.05 fallback matching production default) | `4945a01` (BACKEND-3) |
+| VERIFIER cycle 1 — MEDIUM-1 fix | Threaded `manifest.Ticker` into `BundleSECGateway` (replaces hardcoded 8-ticker map; now supports any captured ticker including FPI/ADR set) | `a8d58e7` (BACKEND-3) |
+| VERIFIER cycle 1 — MEDIUM-2 fix | `TestModule_DoesNotConstructDB` now asserts against real `*sqlx.DB` (previously used local placeholder type) | `a1ba463` (BACKEND-3) |
+| VERIFIER cycle 1 — LOW-1 fix | Cover git-drift branch in `Replay()` via injectable `gitSHAResolver` package-var seam | `8d1e8f4` (BACKEND-3) |
+| VERIFIER cycle 1 — LOW-2 fix | Removed dead `Mode.String()` method (`camelToSnake` retained — has real caller at `diff.go:373`) | `6d485c3` (BACKEND-3) |
+
+**5 BACKEND deviations beyond the original plan**, all defensible per the gate reviews:
+1. Stage C hand-picked module (vs `fx.Decorate(CoreModule)` in spec D2) — for F11 hermeticity
+2. Cross-year test `scrubTimestamps` of 3 timestamp fields before `reflect.DeepEqual` — those fields ARE the clock's value
+3. `BundleMacroGateway.GetMarketRiskPremium` returns config value, not `ErrBundleMissingPayload` — coordinator treats MRP error as fatal
+4. `BundleSECGateway.GetTickerCIKMapping` extracts CIK from raw payload + threaded ticker — engine consumes mapping for every replay
+5. Coverage 84.5% / 81.4% (below 90% / 80% spec target) — gaps in defensive `if err != nil` branches accepted by VERIFIER
 
 ---
 
