@@ -1,5 +1,9 @@
 # Observability Replay Tooling — Phase R3 Implementation Plan
 
+**Status:** R3a SHIPPED on master (merge `011d78c`, 2026-05-06). 9 of 14 plan stages executed across 11 commits and 4 BACKEND continuation cycles; 5 stages deferred to R3b (tracked at `docs/reviewer/RPL3-r3a-followups.md`). Validated through 4 review-gate cycles (VERIFIER × 3, REVIEWER, QA × 1). This plan is now historical — kept for traceability.
+
+---
+
 **Status:** PLAN v2 — awaiting human approval before BACKEND dispatch.
 
 **Builds on:**
@@ -38,22 +42,39 @@ The spec §1 estimate of ~600 LoC excludes the cleanup sweep; with the RPL fold-
 
 ---
 
-## Implementation Outcome (placeholder for BACKEND post-shipment)
+## Implementation Outcome (R3a SHIPPED 2026-05-06; merge `011d78c`)
 
 | Stage | Result | Commit(s) |
 |-------|--------|-----------|
-| Pre-Flight parallel-fx.App spike (v2 Addition #3) | TBD | TBD |
-| Stage I.0 (Prometheus registry audit + lint script — v2 Addition #1) | TBD | TBD |
-| Stage I (parallel walker + `--workers`) | TBD | TBD |
-| Stage J (filter flags) | TBD | TBD |
-| Stage K (`--diff-stages`) | TBD | TBD |
-| Stage L (`--verbose` + tolerance flags + walk/replay timing — v2 Addition #4) | TBD | TBD |
-| Stage M (JSON golden tests + RPL-2a/RPL-2b) | TBD | TBD |
-| Stage N (perf benches NF2/NF3) | TBD | TBD |
-| Stage O (RPL-2 cleanup sweep) | TBD | TBD |
-| Stage O.13 (`cmd/server` ↔ `replay` import-boundary guard — v2 Addition #2) | TBD | TBD |
+| Pre-Flight parallel-fx.App spike (v2 Addition #3) | DONE — PASSES under `-race -count=10` | `e793d77` |
+| Stage I.0 (Prometheus registry audit + lint script — v2 Addition #1) | DONE — `scripts/lint-prometheus-registers.{sh,ps1}` ship; allowlist updated cycle-3 | `a06fcad`, `27c2f58` (cycle-3 allowlist fix) |
+| Stage I.1 + I.5 (walk thread-safety doc + dirInfo drop) | DONE — sequential walk + per-bundle parallel replay (Decision I.1.b) | `bff0e49` |
+| Stage I.2 (`--workers` + bounded worker pool + recover wrapper) | DONE — hand-coded bounded semaphore (NOT errgroup); F11 hermeticity preserved | `2136444`, `eb60818` (integration tests) |
+| Stage J (`--filter-ticker` + `--filter-since`) | DONE — consumes `ParseDurationExtended`; case-sensitive ticker match | `2136444`, `eb60818` |
+| Stage K (`--diff-stages`) | **DEFERRED to R3b** — flag intentionally not registered (cycle-3 contract-leak fix); engine-side `stage_diff.go` not shipped | RPL-3a (deferred) |
+| Stage L.1 (verbose stage-diff render) | **DEFERRED to R3b** — blocked on Stage K | RPL-3b (deferred) |
+| Stage L.2 (`--float-rel-tol` + `--float-abs-tol`) | DONE — NaN/±Inf rejection (cycle-4 fix); zero-sentinel-default | `2136444`, `7a6aeaa` (cycle-4 ±Inf fix) |
+| Stage L.3 (walk/replay timing — v2 Addition #4) | DONE — `Summary.WalkDurationMs` + `Summary.ReplayDurationMs` snake_case JSON fields | `2136444`, `eb60818` |
+| Stage M.1 (JSON golden tests) | **DEFERRED to R3b** — no orphan fixtures shipped | RPL-3c (deferred) |
+| Stage M.2 (honest round-trip rename — RPL-2a) | DONE — `TestRoundTrip_ReplaySelfConsistency_ZeroDiffs` with documented self-referential limitation | `6506cc6` |
+| Stage M.3 (parsed-mode round-trip — RPL-2b) | **DEFERRED to R3b** — attempted then reverted because `seedFullBundle` is raw-mode-only | RPL-3d (deferred) |
+| Stage N (perf benches NF2/NF3) | **DEFERRED to R3b** — synthetic 100-bundle corpus not generated | RPL-3e (deferred) |
+| Stage O (RPL-2 cleanup sweep — 9 of 12 items) | DONE — RPL-2c/e/f/g/j/k/l/m/n addressed; cycle-4 `ParseDurationExtended` prefix fix | `5d5d5dc`, `959997f` (cycle-4) |
+| Stage O.6 (`init()` reflection guard) | **DEFERRED to R3b** — RPL-2h carry-forward | RPL-3f (deferred) |
+| Stage O.13 (`cmd/server` import-boundary guard — v2 Addition #2) | DONE — `cmd/server/import_boundary_test.go` uses `os/exec` + `go list -deps` | `5d5d5dc` |
 
-BACKEND fills in commit SHAs and any deviations from this plan during the post-shipment record pass.
+**5 deferred stages total** (K, L.1, M.1, M.3, N, O.6) — see `docs/reviewer/RPL3-r3a-followups.md` for the consolidated R3b backlog including 8 LOW NITs from REVIEWER + the missing `evaluateBundleWithRecover` panic-coverage test.
+
+**Architectural deviations from v2 plan** (all documented at the code site):
+- Decision I.1.b chose sequential walk + per-bundle parallel replay (NOT parallel walking) — RPL-1b's `visited` slice mutex concern dissolves into a doc-comment per the chosen architecture.
+- Stage I.2 RPL-2g half-fix turned out doc-only — Stage I.0 audit confirmed `metrics.NewService` already allocates a fresh per-instance `*prometheus.Registry` (not the global `DefaultRegisterer`), so the no-op stub the plan prescribed was redundant. Per-instance isolation now CI-enforced by the `lint-prometheus-registers` script.
+- Worker pool is hand-coded bounded semaphore rather than `errgroup.SetLimit` — avoids `golang.org/x/sync` direct-promotion (NF1 invariant); pattern documented in dispatch comments at `cmd/replay/main.go`.
+
+**4 BACKEND continuation cycles** — exceeded the self-imposed 3-cycle cap with explicit HUMAN authorization for cycle-4 (the QA-MINOR fix dispatch). Each cycle hit per-dispatch quota walls; the cap-break was justified because the cycle-4 scope was tight (~30 LoC, 2 atomic commits) and produced clean fixes without further regressions.
+
+**Coverage at shipment**: replay 84.4% (down from 84.6% R2 baseline due to denominator dilution; gap concentrated in deferred Stage K/M.1 surfaces); cmd/replay 87.2% (up from 76.1% R2 baseline); valuation 89.1% no regression.
+
+**Invariants preserved**: `pkg/finance/*` byte-for-byte unchanged, `go.mod`/`go.sum` unchanged (no new external Go modules), zero non-comment `time.Now()` in `internal/services/valuation/service.go`, F11 hermeticity holds under parallelism (verified by Pre-Flight spike + integration tests under `-race -count=10`).
 
 ---
 
