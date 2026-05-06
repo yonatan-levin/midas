@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -71,6 +72,52 @@ func TestParseDurationExtended_DoesNotAcceptCompoundDays(t *testing.T) {
 			_, err := ParseDurationExtended(c)
 			if err == nil {
 				t.Fatalf("ParseDurationExtended(%q) should reject compound days form", c)
+			}
+		})
+	}
+}
+
+// TestParseDurationExtended_DaysSuffixErrorMessageIsClear pins the
+// contract that when an input ends in `d` but the prefix is non-numeric
+// (e.g. `invalid`, `wd`, `xd`), the error message references the ORIGINAL
+// input, not a mangled mid-form.
+//
+// Background (QA cycle 1, R3 minor #2): the days-suffix branch trimmed `d`
+// from any trailing-`d` input and appended `h` for time.ParseDuration.
+// For "invalid" → trimmed to "invali" → "invalih", which Go would reject
+// with `time: invalid duration "invalih"`. Operators reading the error
+// would scratch their head over "invalih" — a string they never typed.
+//
+// Contract: error message MUST contain the original input verbatim and
+// MUST NOT contain the trimmed-then-rehydrated mid-form. This catches
+// the regression class even if the underlying impl strategy changes.
+func TestParseDurationExtended_DaysSuffixErrorMessageIsClear(t *testing.T) {
+	cases := []struct {
+		input string
+		// mangled is the substring that MUST NOT appear in the error
+		// message — this is the trimmed-then-rehydrated form the old
+		// implementation surfaced.
+		mangled string
+	}{
+		{"invalid", "invalih"},
+		{"abcd", "abch"},
+		{"wd", "wh"},
+		{"xd", "xh"},
+		{"nd", "nh"},
+		{"bad", ""}, // doesn't end in `d`; no mangling, but still must error against original
+	}
+	for _, c := range cases {
+		t.Run(c.input, func(t *testing.T) {
+			_, err := ParseDurationExtended(c.input)
+			if err == nil {
+				t.Fatalf("ParseDurationExtended(%q) succeeded; want error", c.input)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, c.input) {
+				t.Fatalf("error message must contain original input %q; got: %v", c.input, err)
+			}
+			if c.mangled != "" && strings.Contains(msg, c.mangled) {
+				t.Fatalf("error message must NOT contain mangled mid-form %q; got: %v", c.mangled, err)
 			}
 		})
 	}
