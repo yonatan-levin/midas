@@ -1,6 +1,7 @@
 package replay
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -12,7 +13,6 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
-	authsvc "github.com/midas/dcf-valuation-api/internal/services/auth"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
 	aiSvc "github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
@@ -239,9 +239,14 @@ func replayConfig() *config.Config {
 
 // resolveDataCleanerConfigPath finds the repo's config/datacleaner/<name>
 // file regardless of where the binary is invoked from. The strategy:
-// walk up from the package's source file until config/datacleaner exists.
-// Falls back to the relative path when the walk fails — replay tests
-// then surface a clear loader error rather than silently mis-loading.
+// walk up from the package's source file until the first ancestor
+// containing go.mod (which marks the repo root). Falls back to the
+// relative path when the walk fails — replay tests then surface a
+// clear loader error rather than silently mis-loading.
+//
+// RPL-2j (R3 Stage O.8): the prior fixed-depth walk (4 parents) was
+// brittle if module.go ever moved. Anchoring on go.mod is robust
+// against directory-depth drift.
 func resolveDataCleanerConfigPath(name string) string {
 	// Production callers run from repo root, so the relative path works.
 	// Tests run from internal/observability/replay/ and need the absolute
@@ -250,13 +255,21 @@ func resolveDataCleanerConfigPath(name string) string {
 	if !ok {
 		return "./config/datacleaner/" + name
 	}
-	// thisFile is .../internal/observability/replay/module.go.
-	// Walk up: replay/ -> observability/ -> internal/ -> repo/.
-	repoRoot := thisFile
-	for i := 0; i < 4; i++ {
-		repoRoot = filepath.Dir(repoRoot)
+	// Walk up from this file until we find a directory containing go.mod.
+	// Cap the search at 16 ancestors to avoid an unbounded walk on a
+	// pathological filesystem.
+	dir := filepath.Dir(thisFile)
+	for i := 0; i < 16; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return filepath.Join(dir, "config", "datacleaner", name)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // reached filesystem root
+		}
+		dir = parent
 	}
-	return filepath.Join(repoRoot, "config", "datacleaner", name)
+	return "./config/datacleaner/" + name
 }
 
 // replayLogger returns a zap.NewNop logger so replay never emits log lines
@@ -288,6 +301,17 @@ func replayLogger() *zap.Logger {
 // satisfies the interface but NOT the concrete *metrics.Service type;
 // using the production constructor here is the simplest path that
 // preserves source-compatibility with the production engine.
+//
+// RPL-2g (R3 Stage O.5): under --workers > 1 the replay binary runs N
+// concurrent Replay() invocations, each of which constructs its own
+// *metrics.Service via this provider. Stage I.0's audit confirmed that
+// metrics.NewService allocates a FRESH per-service *prometheus.Registry
+// (NOT prometheus.DefaultRegisterer) — see internal/services/metrics/
+// service.go:107-109. Each parallel worker therefore gets its own
+// registry; there is no shared state and no race on collector
+// registration. The defense-in-depth lint at scripts/lint-prometheus-
+// registers.{sh,ps1} (Stage I.0) prevents future regressions that
+// would reintroduce DefaultRegisterer use.
 func replayMetricsService(logger *zap.Logger) *metrics.Service {
 	return metrics.NewService(logger)
 }
@@ -340,9 +364,9 @@ func replayValuationService(
 		calcEmitter,
 	)
 	svc.SetClock(clock)
-	if macroGateway != nil {
-		svc.SetMacroGateway(macroGateway)
-	}
+	// RPL-2k (R3 Stage O.9): macroGateway comes through fx.Provide which
+	// never produces nil. The defensive check was dead code.
+	svc.SetMacroGateway(macroGateway)
 	// YFinanceGateway is wired in the fx.Invoke hook after this constructor
 	// returns; doing it here would require an extra parameter the production
 	// constructor doesn't have, so we keep the post-construct hook for
@@ -351,11 +375,9 @@ func replayValuationService(
 	return svc
 }
 
-// _ = authsvc / handlers — silence unused-import linters; both packages
-// are referenced in the fx.Provide lines above. The import block keeps
-// these visible so a future addition that needs them does not have to
-// re-import.
-var (
-	_ = authsvc.NewService
-	_ = time.Now
-)
+// _ = time.Now — placeholder so the time import (used by replayClock and
+// its callers in this package) is never accidentally pruned by goimports
+// when the rest of the file's references vary. RPL-2c (R3 Stage O.1)
+// removed the sibling authsvc.NewService sentinel — the auth package was
+// never wired from this module.
+var _ = time.Now

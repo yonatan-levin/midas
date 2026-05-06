@@ -128,7 +128,18 @@ func Replay(ctx context.Context, bundleDir string, opts Options) Result {
 		res.Error = fmt.Errorf("unmarshal recorded response: %w", err).Error()
 		return res
 	}
-	diff := compareFairValueResponses(&bundleResp, currentResp, DefaultFloatRelTol, DefaultFloatAbsTol)
+	// Resolve tolerances: zero is sentinel for "use default" so a caller
+	// that doesn't set Options.FloatRelTol gets the historical contract.
+	// R3 Stage L.2.
+	relTol := opts.FloatRelTol
+	if relTol == 0 {
+		relTol = DefaultFloatRelTol
+	}
+	absTol := opts.FloatAbsTol
+	if absTol == 0 {
+		absTol = DefaultFloatAbsTol
+	}
+	diff := compareFairValueResponses(&bundleResp, currentResp, relTol, absTol)
 	diff.SortDiffs()
 
 	res.FieldsTotal = diff.FieldsTotal
@@ -234,6 +245,15 @@ func currencyOrUSD(s string) string {
 // returns the vcs.revision setting. Empty when running under
 // `go test` / `go run` (no VCS stamping). Mirrors cmd/replay/main.go's
 // helper of the same name.
+//
+// Thread-safety note (RPL-2e, R3 Stage O.3): this is a package-level
+// var by design. Tests overriding it MUST NOT call t.Parallel() — a
+// concurrent test could read while another writes. The current test
+// usage is sequential and verified safe; documenting this constraint
+// is preferred over the higher-cost refactor (passing a resolver
+// closure through Options) per the project's "pragmatic, not dogmatic"
+// stance on globals. If a future test needs t.Parallel(), promote
+// the seam to Options.GitSHAResolver instead.
 var gitSHAResolver = resolveGitSHA
 
 // resolveGitSHA is the production git-SHA resolver. Kept exported only

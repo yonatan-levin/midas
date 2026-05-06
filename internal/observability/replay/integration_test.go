@@ -107,7 +107,7 @@ func writeResponseFile(t *testing.T, bundleDir string, resp *handlers.FairValueR
 	}
 }
 
-// TestRoundTrip_ProduceBundleThenReplay_ZeroDiffs is the headline R2
+// TestRoundTrip_ReplaySelfConsistency_ZeroDiffs is the headline R2
 // integration test (plan §3 Stage F task F.1).
 //
 // Strategy: seed a complete bundle, run the engine once to capture the
@@ -116,13 +116,23 @@ func writeResponseFile(t *testing.T, bundleDir string, resp *handlers.FairValueR
 // Both runs are deterministic (clock pinned to manifest.started_at, no
 // network I/O), so the diff is expected to be zero.
 //
+// Limitation (RPL-2a, R3 Stage M.2 doc): both halves of the round-trip
+// use the same buildFairValueResponse helper. A bug in that helper
+// would pass this test silently because both sides invoke the same
+// buggy projection. Functional "replay reproduces production exactly"
+// coverage comes from the cross-year regression test
+// (TestReplay_CrossYearProducesByteIdenticalOutput) and the JSON
+// golden tests planned for Stage M.1. The honest name for THIS test is
+// "ReplaySelfConsistency" — it asserts replay is deterministic against
+// itself.
+//
 // This test exercises:
 //   - Stage A bundle gateways (SEC raw → parser, Market raw, Macro raw)
 //   - Stage B NotFound repos (cache miss → engine consults gateways)
 //   - Stage C fx Module composition (no DB/Redis side effects)
 //   - Stage D Replay() orchestrator (manifest read, schema check, engine,
 //     response render, response diff)
-func TestRoundTrip_ProduceBundleThenReplay_ZeroDiffs(t *testing.T) {
+func TestRoundTrip_ReplaySelfConsistency_ZeroDiffs(t *testing.T) {
 	const ticker = "AAPL"
 	const startedAt = "2026-01-15T12:00:00Z"
 
@@ -148,6 +158,24 @@ func TestRoundTrip_ProduceBundleThenReplay_ZeroDiffs(t *testing.T) {
 		t.Fatalf("FieldsChanged: want 0, got %d; floats=%v strings=%v", res.FieldsChanged, res.Diffs, res.StringDiffs)
 	}
 }
+
+// RPL-2b (R3 Stage M.3) — DEFERRED:
+//
+// A parsed-mode counterpart to TestRoundTrip_ReplaySelfConsistency_
+// ZeroDiffs would require a separate seedFullBundle that emits the
+// 05-fetch-sec.parsed.json / 06-fetch-market.parsed.json /
+// 07-fetch-macro-*.parsed.json projections of the production parser
+// output. seedFullBundle today produces only the raw-mode payloads;
+// extending it for parsed mode is a non-trivial fixture-builder
+// addition (the parsed shapes mirror the post-parse domain types,
+// which evolve with engine schema). Plan §3 Stage M.3 estimated
+// ~30 LoC but the actual cost includes a parallel ~150 LoC seed
+// builder. Pushing this to a follow-up keeps R3 landable.
+//
+// The unit-level gateway dispatch tests (gateway_*_test.go's
+// ModeParsed branches) and the CLI-level flag parse test
+// (TestParseFlags_FromParsed_Explicit) provide partial coverage;
+// the missing piece is end-to-end parsed-mode replay determinism.
 
 // TestRoundTrip_MutatedResponse_FlagsDiff verifies that mutating the
 // canonical response after capture causes Replay to surface a diff.
@@ -289,10 +317,13 @@ func TestReplay_CrossYearProducesByteIdenticalOutput(t *testing.T) {
 	}
 }
 
-// scrubTimestamps zeroes the wall-clock-derived fields on a
-// *ValuationResult so cross-year comparison can focus on math. This is
-// the test-only helper for the D10 regression pin — production code
-// never zeros these.
+// scrubTimestamps zeroes the wall-clock-echo fields on a
+// *ValuationResult so cross-year comparison can focus on math. The
+// scrubbed fields are the WALL-CLOCK echoes — not derived math from
+// the wall clock — so zeroing them does not affect any number that
+// comparison cares about. This is the test-only helper for the D10
+// regression pin; production code never zeros these.
+// RPL-2l (R3 Stage O.10): reworded for clarity.
 func scrubTimestamps(r *entities.ValuationResult) {
 	if r == nil {
 		return

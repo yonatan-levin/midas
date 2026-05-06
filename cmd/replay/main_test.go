@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestParseFlags_HappyPath drives the canonical flag set and confirms
@@ -425,32 +427,210 @@ func TestParseFlags_FromInvalid_Errors(t *testing.T) {
 	}
 }
 
-// TestParseFlags_R3FlagsAreNotRegistered confirms the deferred R3 flags
-// are NOT registered — registering them as no-ops would be a CLI contract
-// leak per the prior R1 follow-up #11 rule. Each unknown flag must
-// produce "flag provided but not defined".
-func TestParseFlags_R3FlagsAreNotRegistered(t *testing.T) {
-	r3Flags := []string{
-		"--workers=4",
-		"--filter-ticker=AAPL",
-		"--filter-since=24h",
-		"--diff-stages",
-		"--float-rel-tol=1e-6",
-		"--float-abs-tol=1e-9",
+// TestParseFlags_R3FlagsAreRegistered (R3 polarity flip): the previously-
+// deferred R3 flag set IS now registered with real behavior. Each entry
+// must parse without error and produce its expected effect on the flags
+// struct. This test inverts the prior R2-era TestParseFlags_R3FlagsAreNotRegistered
+// per the plan §7 Done-When checklist.
+func TestParseFlags_R3FlagsAreRegistered(t *testing.T) {
+	cases := []struct {
+		name   string
+		argv   []string
+		assert func(t *testing.T, f *flags)
+	}{
+		{
+			name: "--workers=4",
+			argv: []string{"--workers=4", "/x"},
+			assert: func(t *testing.T, f *flags) {
+				if f.workers != 4 {
+					t.Fatalf("workers = %d, want 4", f.workers)
+				}
+			},
+		},
+		{
+			name: "--filter-ticker=AAPL",
+			argv: []string{"--filter-ticker=AAPL", "/x"},
+			assert: func(t *testing.T, f *flags) {
+				if f.filterTicker != "AAPL" {
+					t.Fatalf("filterTicker = %q, want AAPL", f.filterTicker)
+				}
+			},
+		},
+		{
+			name: "--filter-since=24h",
+			argv: []string{"--filter-since=24h", "/x"},
+			assert: func(t *testing.T, f *flags) {
+				if f.filterSince != 24*time.Hour {
+					t.Fatalf("filterSince = %v, want 24h", f.filterSince)
+				}
+			},
+		},
+		{
+			name: "--filter-since=7d (extended duration)",
+			argv: []string{"--filter-since=7d", "/x"},
+			assert: func(t *testing.T, f *flags) {
+				if f.filterSince != 7*24*time.Hour {
+					t.Fatalf("filterSince = %v, want 168h", f.filterSince)
+				}
+			},
+		},
+		{
+			name: "--float-rel-tol=1e-6",
+			argv: []string{"--float-rel-tol=1e-6", "/x"},
+			assert: func(t *testing.T, f *flags) {
+				if f.floatRelTol != 1e-6 {
+					t.Fatalf("floatRelTol = %v, want 1e-6", f.floatRelTol)
+				}
+			},
+		},
+		{
+			name: "--float-abs-tol=1e-9",
+			argv: []string{"--float-abs-tol=1e-9", "/x"},
+			assert: func(t *testing.T, f *flags) {
+				if f.floatAbsTol != 1e-9 {
+					t.Fatalf("floatAbsTol = %v, want 1e-9", f.floatAbsTol)
+				}
+			},
+		},
 	}
-	for _, flagArg := range r3Flags {
-		t.Run(flagArg, func(t *testing.T) {
-			_, _, err := parseFlags([]string{flagArg, "/x"})
-			if err == nil {
-				t.Fatalf("parseFlags must reject %s as unknown; got nil error", flagArg)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f, _, err := parseFlags(c.argv)
+			if err != nil {
+				t.Fatalf("parseFlags: %v", err)
 			}
-			// Don't pin on the exact message; flag.Parse uses
-			// "flag provided but not defined" but our caller wraps that
-			// in flag.ErrHelp handling. Substring check is enough.
-			if !strings.Contains(err.Error(), "flag provided but not defined") &&
-				!strings.Contains(err.Error(), "not defined") {
-				t.Fatalf("expected unknown-flag error for %s; got: %v", flagArg, err)
+			c.assert(t, f)
+		})
+	}
+}
+
+// TestParseFlags_DiffStagesNotRegistered pins the contract that
+// --diff-stages is intentionally absent until Stage K (per-stage diff)
+// ships in R3b. Registering the flag without the engine consuming it
+// would be a CLI contract leak — passing the flag would silently do
+// nothing — same hazard the R2 follow-up #11 caught for --git-sha.
+//
+// When Stage K lands, this test should be replaced with a positive
+// "registered + behavior" pin in TestParseFlags_R3FlagsAreRegistered.
+func TestParseFlags_DiffStagesNotRegistered(t *testing.T) {
+	_, _, err := parseFlags([]string{"--diff-stages", "/x"})
+	if err == nil {
+		t.Fatal("--diff-stages must NOT be registered until Stage K ships; parseFlags accepted it")
+	}
+	if !strings.Contains(err.Error(), "flag provided but not defined") {
+		t.Fatalf("expected 'flag provided but not defined' error; got: %v", err)
+	}
+}
+
+// TestParseFlags_Workers_DefaultIsRuntimeNumCPU asserts the --workers
+// default falls back to runtime.NumCPU when REPLAY_WORKERS is unset.
+func TestParseFlags_Workers_DefaultIsRuntimeNumCPU(t *testing.T) {
+	t.Setenv("REPLAY_WORKERS", "")
+	f, _, err := parseFlags([]string{"/x"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if f.workers != runtime.NumCPU() {
+		t.Fatalf("workers default = %d, want runtime.NumCPU() = %d", f.workers, runtime.NumCPU())
+	}
+}
+
+// TestParseFlags_Workers_ZeroOrNegativeRejected validates the lower bound.
+func TestParseFlags_Workers_ZeroOrNegativeRejected(t *testing.T) {
+	cases := []string{"--workers=0", "--workers=-1"}
+	for _, c := range cases {
+		t.Run(c, func(t *testing.T) {
+			_, _, err := parseFlags([]string{c, "/x"})
+			if err == nil {
+				t.Fatalf("expected error for %s; got nil", c)
+			}
+			if !strings.Contains(err.Error(), "--workers must be >= 1") {
+				t.Fatalf("expected --workers >= 1 error; got %v", err)
 			}
 		})
+	}
+}
+
+// TestParseFlags_FloatTol_NegativeRejected validates tolerance lower bound.
+func TestParseFlags_FloatTol_NegativeRejected(t *testing.T) {
+	if _, _, err := parseFlags([]string{"--float-rel-tol=-1", "/x"}); err == nil {
+		t.Fatal("expected error for --float-rel-tol=-1")
+	}
+	if _, _, err := parseFlags([]string{"--float-abs-tol=-0.5", "/x"}); err == nil {
+		t.Fatal("expected error for --float-abs-tol=-0.5")
+	}
+}
+
+// TestParseFlags_FloatTol_InfRejected pins the contract that ±Inf is
+// rejected for both --float-rel-tol and --float-abs-tol.
+//
+// Why: an operator typo like `--float-rel-tol=+Inf` (or `-Inf`, which Go's
+// strconv parses as a valid float64) is finite-positive on the surface but
+// makes EVERY float comparison tolerate ANY drift — turning replay PASS
+// into a useless rubber stamp regardless of real differences. NaN and
+// negatives were already rejected; Inf was a gap closed by QA cycle 1.
+//
+// The flag value MUST be a finite, non-negative float64 to be accepted.
+func TestParseFlags_FloatTol_InfRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+	}{
+		{"rel_pos_inf", []string{"--float-rel-tol=+Inf", "/x"}},
+		{"rel_neg_inf", []string{"--float-rel-tol=-Inf", "/x"}},
+		{"abs_pos_inf", []string{"--float-abs-tol=+Inf", "/x"}},
+		{"abs_neg_inf", []string{"--float-abs-tol=-Inf", "/x"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, _, err := parseFlags(c.argv)
+			if err == nil {
+				t.Fatalf("parseFlags(%v) accepted ±Inf; want error", c.argv)
+			}
+			// The error message should call out which flag and that the
+			// value must be finite — operators reading stderr should
+			// understand the contract from the message alone.
+			msg := err.Error()
+			if !strings.Contains(msg, "--float-rel-tol") && !strings.Contains(msg, "--float-abs-tol") {
+				t.Fatalf("error message must reference the offending flag; got: %v", err)
+			}
+			if !strings.Contains(msg, "finite") {
+				t.Fatalf("error message must explain finite-only contract; got: %v", err)
+			}
+		})
+	}
+}
+
+// TestParseFlags_FilterSince_InvalidUnitErrors confirms ParseDurationExtended
+// errors propagate through parseFlags.
+func TestParseFlags_FilterSince_InvalidUnitErrors(t *testing.T) {
+	if _, _, err := parseFlags([]string{"--filter-since=1w", "/x"}); err == nil {
+		t.Fatal("expected error for --filter-since=1w")
+	}
+}
+
+// TestEnvVar_REPLAY_WORKERS_FlagWins confirms an explicit --workers flag
+// beats REPLAY_WORKERS env var (spec §8 precedence).
+func TestEnvVar_REPLAY_WORKERS_FlagWins(t *testing.T) {
+	t.Setenv("REPLAY_WORKERS", "8")
+	f, _, err := parseFlags([]string{"--workers=2", "/x"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if f.workers != 2 {
+		t.Fatalf("workers = %d, want 2 (flag wins over env)", f.workers)
+	}
+}
+
+// TestEnvVar_REPLAY_WORKERS_AppliesAsDefault confirms the env var fills
+// in the default when --workers is not passed.
+func TestEnvVar_REPLAY_WORKERS_AppliesAsDefault(t *testing.T) {
+	t.Setenv("REPLAY_WORKERS", "8")
+	f, _, err := parseFlags([]string{"/x"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
+	}
+	if f.workers != 8 {
+		t.Fatalf("workers = %d, want 8 (env-var default)", f.workers)
 	}
 }

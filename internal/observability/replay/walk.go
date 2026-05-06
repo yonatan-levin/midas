@@ -52,7 +52,16 @@ func WalkBundles(rootDir string) ([]string, error) {
 		return []string{abs}, nil
 	}
 
-	bundles, err := walkOnce(abs, info, []os.FileInfo{info})
+	// Thread-safety note (RPL-1b): WalkBundles itself is single-threaded
+	// by construction. R3 layers parallelism at the replay-orchestration
+	// layer (cmd/replay/main.go uses a worker pool that calls Replay()
+	// per-bundle in parallel) — NOT at the walk layer. The walk is I/O-
+	// bound and small (<1 s for 100 bundles); parallelizing the walk
+	// itself would force `visited` to be guarded by a sync.Mutex and
+	// gain no measurable throughput. If a future profile shows the walk
+	// is the bottleneck, switch to a per-goroutine snapshot OR a mutex-
+	// guarded visitSet — both are mechanically straightforward.
+	bundles, err := walkOnce(abs, []os.FileInfo{info})
 	if err != nil {
 		return nil, fmt.Errorf("replay: walk %s: %w", rootDir, err)
 	}
@@ -74,7 +83,11 @@ func WalkBundles(rootDir string) ([]string, error) {
 // hides Lstat-vs-Stat resolution). os.SameFile gives us portable
 // inode-equivalence semantics (sys-Inode on POSIX, NT-handle ID on Windows)
 // without forcing per-OS code paths into this package.
-func walkOnce(dir string, dirInfo os.FileInfo, visited []os.FileInfo) ([]string, error) {
+//
+// RPL-1a (R3): the prior `dirInfo` parameter (reserved for future stat-cache
+// extensions) was dropped per plan v2 Decision I.4 — YAGNI; R3's parallel
+// dispatcher lives at the orchestration layer, not in this walker.
+func walkOnce(dir string, visited []os.FileInfo) ([]string, error) {
 	var bundles []string
 
 	entries, err := os.ReadDir(dir)
@@ -126,7 +139,7 @@ func walkOnce(dir string, dirInfo os.FileInfo, visited []os.FileInfo) ([]string,
 				bundles = append(bundles, path)
 				continue
 			}
-			sub, subErr := walkOnce(path, target, append(visited, target))
+			sub, subErr := walkOnce(path, append(visited, target))
 			if subErr != nil {
 				return nil, subErr
 			}
@@ -157,17 +170,13 @@ func walkOnce(dir string, dirInfo os.FileInfo, visited []os.FileInfo) ([]string,
 		if statErr != nil {
 			continue
 		}
-		sub, subErr := walkOnce(path, info, append(visited, info))
+		sub, subErr := walkOnce(path, append(visited, info))
 		if subErr != nil {
 			return nil, subErr
 		}
 		bundles = append(bundles, sub...)
 	}
 
-	_ = dirInfo // dirInfo is the FileInfo for `dir`; reserved for future
-	// extensions (e.g. emitting structured walk diagnostics). Kept in
-	// the signature so callers can pass the already-stat'd root without
-	// re-statting.
 	return bundles, nil
 }
 

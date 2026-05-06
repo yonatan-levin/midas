@@ -16,9 +16,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
+	"sort"
+	"strconv"
+	"sync"
+	"time"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/replay"
 )
@@ -62,7 +68,7 @@ const usageMessage = `Usage: replay [flags] <path>
   <path>  A bundle directory (containing 00-manifest.json) OR a parent
           directory containing one or more bundles (recursively walked).
 
-Flags (R1 + R2 — full set lands in R3):
+Flags:
   --format string         Output format: text or json (default "text")
   --out string            Output path (default "-" for stdout)
   --allow-schema-drift    Treat schema-version mismatch as a warning instead of an error
@@ -70,10 +76,15 @@ Flags (R1 + R2 — full set lands in R3):
   --quiet                 Suppress per-bundle rows; only print the aggregate summary
   --verbose               Verbose per-field diff output (text mode)
   --from string           Gateway substitution mode: raw or parsed (default "raw")
+  --workers int           Parallel replay workers (default runtime.NumCPU(); env REPLAY_WORKERS)
+  --filter-ticker string  Replay only bundles whose manifest ticker == this string (exact-case)
+  --filter-since string   Replay only bundles whose manifest started_at is within this duration of now (e.g. 7d, 24h)
+  --float-rel-tol float   Relative tolerance for float diffs (default 1e-9)
+  --float-abs-tol float   Absolute tolerance for float diffs (default 1e-12)
 
 Exit codes:
-  0   All bundles validated and (in R2+) replayed within tolerance
-  1   Reserved for R2: at least one bundle's diff exceeded tolerance
+  0   All bundles validated and replayed within tolerance
+  1   At least one bundle's diff exceeded tolerance
   2   Infrastructure failure (missing files, malformed manifest, schema drift without --allow-schema-drift)
 `
 
@@ -93,6 +104,39 @@ type flags struct {
 	// `replay <bundle>` invocation runs the symmetric production-parser
 	// path that exercises spec D3's invariant.
 	from string
+
+	// workers is the parallel-dispatch fan-out for the per-bundle
+	// replay loop. Default is runtime.NumCPU(); REPLAY_WORKERS env var
+	// overrides the default but is itself overridden by an explicit
+	// --workers flag. Validation: must be >= 1.
+	workers int
+
+	// filterTicker, when non-empty, restricts the replay to bundles
+	// whose manifest.ticker exactly equals this string. Case-sensitive
+	// (tickers are conventionally uppercase in the system; mismatches
+	// are intentionally a no-op rather than a fuzzy-matched surprise).
+	filterTicker string
+
+	// filterSinceRaw is the user-supplied --filter-since string. It is
+	// parsed via replay.ParseDurationExtended (which accepts the Go
+	// stdlib syntax plus the "d" days unit) into filterSince after
+	// flag.Parse returns. A bundle is included iff manifest.started_at
+	// is within filterSince of time.Now() — boundary inclusive.
+	filterSinceRaw string
+	filterSince    time.Duration
+
+	// --diff-stages was previously registered but had no R3 (Stages I+J+L)
+	// side-effect; the per-stage diff machinery (Stage K) is deferred to
+	// R3b. Registering the flag now would be a contract leak — passing
+	// --diff-stages would silently do nothing. Same fix shape as the
+	// R2-era --git-sha drop. Re-add when Stage K ships.
+
+	// floatRelTol / floatAbsTol override the default tolerances used by
+	// the diff layer. Defaults map to replay.DefaultFloatRelTol /
+	// replay.DefaultFloatAbsTol. Negative or NaN values are rejected at
+	// parse time.
+	floatRelTol float64
+	floatAbsTol float64
 }
 
 // parseFlags parses argv (without the program name). Returns the parsed
@@ -113,6 +157,20 @@ func parseFlags(argv []string) (*flags, string, error) {
 	fs.BoolVar(&f.quiet, "quiet", false, "Suppress per-bundle rows; only print the aggregate summary")
 	fs.BoolVar(&f.verbose, "verbose", false, "Verbose per-field diff output (text mode)")
 	fs.StringVar(&f.from, "from", "raw", "Gateway substitution mode (raw|parsed)")
+
+	// R3 flags. --workers default resolution: REPLAY_WORKERS env var if
+	// set and parseable; otherwise runtime.NumCPU(). The CLI flag, when
+	// passed explicitly, beats both. We register the flag with the env-
+	// derived default so `flag.Parse` still treats an explicit
+	// --workers=N as an override (flag's IntVar has no notion of
+	// "explicitly set"; the default-precedence chain matches spec §8).
+	defaultWorkers := defaultWorkerCount()
+	fs.IntVar(&f.workers, "workers", defaultWorkers, "Parallel replay workers (default runtime.NumCPU(); env REPLAY_WORKERS)")
+	fs.StringVar(&f.filterTicker, "filter-ticker", "", "Replay only bundles whose manifest ticker == this string (exact-case)")
+	fs.StringVar(&f.filterSinceRaw, "filter-since", "", "Replay only bundles whose manifest started_at is within this duration of now (e.g. 7d, 24h)")
+	fs.Float64Var(&f.floatRelTol, "float-rel-tol", replay.DefaultFloatRelTol, "Relative tolerance for float diffs")
+	fs.Float64Var(&f.floatAbsTol, "float-abs-tol", replay.DefaultFloatAbsTol, "Absolute tolerance for float diffs")
+
 	// --git-sha was previously registered but had no R1-side effect; it
 	// would have been a contract leak (REVIEWER #11). It will return as
 	// an operator override in R2 once git-drift detection actually
@@ -136,6 +194,39 @@ func parseFlags(argv []string) (*flags, string, error) {
 		return nil, "", fmt.Errorf("--from must be raw or parsed; got %q", f.from)
 	}
 
+	if f.workers < 1 {
+		return nil, "", fmt.Errorf("--workers must be >= 1; got %d", f.workers)
+	}
+
+	// Validate float tolerances. The flag value must be a finite,
+	// non-negative float64. Three failure modes to reject:
+	//   - negative (e.g. `--float-rel-tol=-0.01`): silently flips
+	//     comparisons; nonsensical.
+	//   - NaN (e.g. `--float-rel-tol=NaN`): every comparison fails the
+	//     ordering check; equally nonsensical.
+	//   - ±Inf (e.g. `--float-rel-tol=+Inf`): every comparison falls
+	//     within tolerance, turning replay PASS into a rubber stamp
+	//     regardless of real drift. This is the operator-typo class bug
+	//     QA cycle 1 caught before it could mask a real regression.
+	// Use math.IsInf(_, 0) to catch BOTH +Inf and -Inf in a single check.
+	if math.IsNaN(f.floatRelTol) || math.IsInf(f.floatRelTol, 0) || f.floatRelTol < 0 {
+		return nil, "", fmt.Errorf("--float-rel-tol must be a finite, non-negative number; got %v", f.floatRelTol)
+	}
+	if math.IsNaN(f.floatAbsTol) || math.IsInf(f.floatAbsTol, 0) || f.floatAbsTol < 0 {
+		return nil, "", fmt.Errorf("--float-abs-tol must be a finite, non-negative number; got %v", f.floatAbsTol)
+	}
+
+	// Parse --filter-since via replay.ParseDurationExtended (handles the
+	// "d" days unit on top of Go's stdlib syntax). Empty string disables
+	// the filter (filterSince stays at the zero value).
+	if f.filterSinceRaw != "" {
+		d, err := replay.ParseDurationExtended(f.filterSinceRaw)
+		if err != nil {
+			return nil, "", fmt.Errorf("--filter-since: %w", err)
+		}
+		f.filterSince = d
+	}
+
 	args := fs.Args()
 	if len(args) == 0 {
 		return nil, "", fmt.Errorf("missing positional <path> argument")
@@ -144,6 +235,24 @@ func parseFlags(argv []string) (*flags, string, error) {
 		return nil, "", fmt.Errorf("expected exactly one <path> argument; got %d", len(args))
 	}
 	return f, args[0], nil
+}
+
+// defaultWorkerCount resolves the --workers default. Precedence per
+// spec §8: explicit --workers flag (caller's responsibility) beats
+// REPLAY_WORKERS env var beats runtime.NumCPU(). This helper handles
+// only the env-vs-NumCPU half; the flag-vs-this half is driven by the
+// flag library treating an explicit argument as an override.
+//
+// Malformed / non-positive REPLAY_WORKERS values fall back to NumCPU
+// silently — env-var typos shouldn't produce a hard error at flag-set
+// construction time.
+func defaultWorkerCount() int {
+	if raw, ok := os.LookupEnv("REPLAY_WORKERS"); ok {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 1 {
+			return n
+		}
+	}
+	return runtime.NumCPU()
 }
 
 // Run executes the parsed CLI against the supplied I/O. Extracted so
@@ -164,26 +273,44 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
+	walkStart := time.Now()
 	bundles, err := replay.WalkBundles(path)
 	if err != nil {
 		fmt.Fprintf(stderr, "replay: %v\n", err)
 		return 2
 	}
+	walkDuration := time.Since(walkStart)
 
-	// Build the report by walking each bundle and producing a Result.
-	// Phase R1: the only outcome is SkeletonOK or Errored. R2 adds
-	// Pass/Fail.
+	// Apply --filter-ticker / --filter-since AFTER the walk and BEFORE
+	// the dispatch. Filtering is policy that doesn't belong in WalkBundles
+	// (which is intentionally narrow); doing it here also lets us avoid
+	// constructing fx apps for filtered-out bundles.
+	bundles = applyFilters(bundles, f, stderr)
+
+	// Build the report. Per spec §7 the JSON contract is stable; we
+	// populate it with the per-bundle Results from a parallel dispatcher
+	// when --workers > 1, or sequentially otherwise.
 	report := &replay.Report{
 		ReplayVersion: replay.ReplayVersion,
 		GitSHACurrent: resolveGitSHA(),
 		Verbose:       f.verbose,
 	}
 
-	for _, b := range bundles {
-		res := evaluateBundle(b, f)
-		report.Results = append(report.Results, res)
-	}
+	replayStart := time.Now()
+	report.Results = dispatchReplay(bundles, f)
+	replayDuration := time.Since(replayStart)
+
+	// Sort by bundle path so output ordering is deterministic regardless
+	// of worker-completion order. RenderText/RenderJSON also sort, but
+	// pinning the order here keeps ComputeSummary's per-result iteration
+	// stable too.
+	sort.Slice(report.Results, func(i, j int) bool {
+		return report.Results[i].Bundle < report.Results[j].Bundle
+	})
+
 	report.Summary = replay.ComputeSummary(report.Results)
+	report.Summary.WalkDurationMs = walkDuration.Milliseconds()
+	report.Summary.ReplayDurationMs = replayDuration.Milliseconds()
 
 	// Render to the configured destination.
 	out, closeFn, err := openOutput(f.out, stdout)
@@ -255,6 +382,132 @@ func writeSchemaDriftDiagnostic(w io.Writer, results []replay.Result) {
 	}
 }
 
+// dispatchReplay runs evaluateBundle for every bundle either sequentially
+// (--workers == 1) or in a bounded goroutine pool (--workers > 1).
+//
+// Determinism: result ordering is NOT preserved by the parallel path; the
+// caller sorts by Bundle after collection. RenderText / RenderJSON also
+// sort, so stdout is byte-identical between --workers=1 and --workers=N
+// for the same bundle set.
+//
+// Hermeticity (F11): each goroutine constructs its own replay.Module fx
+// app via Replay() — no shared mutable state across workers. Bundle
+// gateway structs are immutable post-construction (R2 invariant).
+//
+// Panic recovery: each worker has a defer-recover that converts a panic
+// into a StatusErrored Result with a "panic in replay worker" diagnostic.
+// This catches an Auth/Watchlist stub panic (allowed per F11; sits OUTSIDE
+// the F11 goroutine path) without crashing the whole batch.
+func dispatchReplay(bundles []string, f *flags) []replay.Result {
+	if len(bundles) == 0 {
+		return nil
+	}
+
+	// Sequential fast path: --workers=1 preserves R0+R1+R2 behavior
+	// bit-for-bit. Removes any pool-construction overhead for trivial
+	// runs and keeps the deterministic-stdout property (which the
+	// post-collect sort would also enforce, but the explicit branch is
+	// simpler to reason about).
+	if f.workers <= 1 {
+		out := make([]replay.Result, 0, len(bundles))
+		for _, b := range bundles {
+			out = append(out, evaluateBundleWithRecover(b, f))
+		}
+		return out
+	}
+
+	// Bounded goroutine pool. Capacity = f.workers; a buffered channel of
+	// the same capacity acts as the semaphore. Each worker reads one job,
+	// runs evaluateBundle, writes its Result into a per-index slot. We
+	// avoid an unbounded results channel because the input size is known
+	// (len(bundles)) — direct slot-write is simpler than a fan-in
+	// goroutine.
+	results := make([]replay.Result, len(bundles))
+	sem := make(chan struct{}, f.workers)
+	var wg sync.WaitGroup
+
+	for i, b := range bundles {
+		i, b := i, b
+		wg.Add(1)
+		sem <- struct{}{} // acquire slot
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }() // release slot
+			results[i] = evaluateBundleWithRecover(b, f)
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+// evaluateBundleWithRecover wraps evaluateBundle with a defer-recover so
+// a panic in any layer of the engine path (Auth/Watchlist stubs, an
+// engine refactor that accidentally touches a panic-stub repo, etc.)
+// becomes a StatusErrored Result instead of crashing the binary mid-batch.
+//
+// F11 invariant unchanged: bundle gateways still return
+// replay.ErrBundleMissingPayload (NOT panic) on missing files because
+// they sit on coordinator goroutines. This recover is a defense-in-depth
+// for layers OUTSIDE the F11 boundary.
+func evaluateBundleWithRecover(bundleDir string, f *flags) (res replay.Result) {
+	defer func() {
+		if r := recover(); r != nil {
+			res = replay.Result{
+				Bundle: bundleDir,
+				Status: replay.StatusErrored,
+				Error:  fmt.Sprintf("panic in replay worker: %v", r),
+			}
+		}
+	}()
+	return evaluateBundle(bundleDir, f)
+}
+
+// applyFilters filters the bundle list by --filter-ticker and
+// --filter-since. Both filters peek the manifest (cheap; <1 KiB read);
+// failed manifest reads are propagated through to evaluateBundle which
+// surfaces them as a StatusErrored Result — we don't want a malformed
+// manifest to silently disappear from the report just because a filter
+// couldn't read it.
+func applyFilters(bundles []string, f *flags, stderr io.Writer) []string {
+	if f.filterTicker == "" && f.filterSince == 0 {
+		return bundles
+	}
+	out := make([]string, 0, len(bundles))
+	now := time.Now()
+	for _, b := range bundles {
+		mf, err := replay.ReadManifest(b)
+		if err != nil {
+			// Couldn't read manifest — keep the bundle so evaluateBundle
+			// surfaces the failure as StatusErrored. Matches the principle
+			// "filters narrow the inclusion set; they don't suppress
+			// errors".
+			out = append(out, b)
+			continue
+		}
+		if f.filterTicker != "" && mf.Ticker != f.filterTicker {
+			continue
+		}
+		if f.filterSince > 0 && mf.StartedAt != "" {
+			// Boundary inclusive: a bundle exactly at now-filterSince is
+			// included (Sub <= filterSince). A malformed StartedAt is
+			// surfaced as a stderr WARN and the bundle passes through —
+			// we don't want a manifest-corruption case to silently
+			// vanish from the report.
+			started, err := time.Parse(time.RFC3339Nano, mf.StartedAt)
+			if err != nil {
+				started, err = time.Parse(time.RFC3339, mf.StartedAt)
+			}
+			if err != nil {
+				fmt.Fprintf(stderr, "replay: %s: malformed manifest started_at %q: %v (bundle kept)\n", b, mf.StartedAt, err)
+			} else if now.Sub(started) > f.filterSince {
+				continue
+			}
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
 // evaluateBundle delegates to replay.Replay which runs the engine through
 // the bundle gateways and diffs the result against 17-response.json.
 //
@@ -282,6 +535,8 @@ func evaluateBundle(bundleDir string, f *flags) replay.Result {
 		Mode:             mode,
 		AllowSchemaDrift: f.allowSchemaDrift,
 		AllowGitDrift:    f.allowGitDrift,
+		FloatRelTol:      f.floatRelTol,
+		FloatAbsTol:      f.floatAbsTol,
 	})
 }
 

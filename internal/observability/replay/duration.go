@@ -2,6 +2,7 @@ package replay
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -56,10 +57,28 @@ func ParseDurationExtended(s string) (time.Duration, error) {
 	// catch it before this branch silently misroutes input.
 	if strings.HasSuffix(s, "d") {
 		numStr := strings.TrimSuffix(s, "d")
+		// Pre-validate that the prefix is a numeric literal BEFORE
+		// delegating to time.ParseDuration. Without this guard, an input
+		// like "invalid" (which ends in `d`) gets trimmed to "invali" and
+		// rehydrated as "invalih", surfacing a confusing
+		// `time: invalid duration "invalih"` — a string the operator
+		// never typed. Falling through to the standard time.ParseDuration
+		// branch produces a clean error against the original input
+		// instead. (QA cycle 1, R3 minor #2.)
+		if _, err := strconv.ParseFloat(numStr, 64); err != nil {
+			// Non-numeric prefix → not actually a days form. Let the
+			// standard parser handle it; it will error against `s`
+			// verbatim.
+			d, err := time.ParseDuration(s)
+			if err != nil {
+				return 0, fmt.Errorf("replay: invalid duration %q: %w", s, err)
+			}
+			return d, nil
+		}
 		// time.ParseDuration accepts decimal floats, so reuse its number
 		// parser by treating the days value as hours and multiplying.
 		// Going through ParseDuration also gives consistent error
-		// messages (e.g. for "abcd").
+		// messages.
 		hoursDur, err := time.ParseDuration(numStr + "h")
 		if err != nil {
 			return 0, fmt.Errorf("replay: invalid duration %q: %w", s, err)
