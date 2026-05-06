@@ -561,6 +561,46 @@ func TestParseFlags_FloatTol_NegativeRejected(t *testing.T) {
 	}
 }
 
+// TestParseFlags_FloatTol_InfRejected pins the contract that ±Inf is
+// rejected for both --float-rel-tol and --float-abs-tol.
+//
+// Why: an operator typo like `--float-rel-tol=+Inf` (or `-Inf`, which Go's
+// strconv parses as a valid float64) is finite-positive on the surface but
+// makes EVERY float comparison tolerate ANY drift — turning replay PASS
+// into a useless rubber stamp regardless of real differences. NaN and
+// negatives were already rejected; Inf was a gap closed by QA cycle 1.
+//
+// The flag value MUST be a finite, non-negative float64 to be accepted.
+func TestParseFlags_FloatTol_InfRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		argv []string
+	}{
+		{"rel_pos_inf", []string{"--float-rel-tol=+Inf", "/x"}},
+		{"rel_neg_inf", []string{"--float-rel-tol=-Inf", "/x"}},
+		{"abs_pos_inf", []string{"--float-abs-tol=+Inf", "/x"}},
+		{"abs_neg_inf", []string{"--float-abs-tol=-Inf", "/x"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, _, err := parseFlags(c.argv)
+			if err == nil {
+				t.Fatalf("parseFlags(%v) accepted ±Inf; want error", c.argv)
+			}
+			// The error message should call out which flag and that the
+			// value must be finite — operators reading stderr should
+			// understand the contract from the message alone.
+			msg := err.Error()
+			if !strings.Contains(msg, "--float-rel-tol") && !strings.Contains(msg, "--float-abs-tol") {
+				t.Fatalf("error message must reference the offending flag; got: %v", err)
+			}
+			if !strings.Contains(msg, "finite") {
+				t.Fatalf("error message must explain finite-only contract; got: %v", err)
+			}
+		})
+	}
+}
+
 // TestParseFlags_FilterSince_InvalidUnitErrors confirms ParseDurationExtended
 // errors propagate through parseFlags.
 func TestParseFlags_FilterSince_InvalidUnitErrors(t *testing.T) {

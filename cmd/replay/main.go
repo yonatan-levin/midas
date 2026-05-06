@@ -198,14 +198,22 @@ func parseFlags(argv []string) (*flags, string, error) {
 		return nil, "", fmt.Errorf("--workers must be >= 1; got %d", f.workers)
 	}
 
-	// Validate float tolerances. Negative or NaN are nonsensical; reject
-	// them so a typo like `--float-rel-tol=-0.01` doesn't silently turn
-	// every comparison into a tolerated drift.
-	if math.IsNaN(f.floatRelTol) || f.floatRelTol < 0 {
-		return nil, "", fmt.Errorf("--float-rel-tol must be >= 0 and non-NaN; got %v", f.floatRelTol)
+	// Validate float tolerances. The flag value must be a finite,
+	// non-negative float64. Three failure modes to reject:
+	//   - negative (e.g. `--float-rel-tol=-0.01`): silently flips
+	//     comparisons; nonsensical.
+	//   - NaN (e.g. `--float-rel-tol=NaN`): every comparison fails the
+	//     ordering check; equally nonsensical.
+	//   - ±Inf (e.g. `--float-rel-tol=+Inf`): every comparison falls
+	//     within tolerance, turning replay PASS into a rubber stamp
+	//     regardless of real drift. This is the operator-typo class bug
+	//     QA cycle 1 caught before it could mask a real regression.
+	// Use math.IsInf(_, 0) to catch BOTH +Inf and -Inf in a single check.
+	if math.IsNaN(f.floatRelTol) || math.IsInf(f.floatRelTol, 0) || f.floatRelTol < 0 {
+		return nil, "", fmt.Errorf("--float-rel-tol must be a finite, non-negative number; got %v", f.floatRelTol)
 	}
-	if math.IsNaN(f.floatAbsTol) || f.floatAbsTol < 0 {
-		return nil, "", fmt.Errorf("--float-abs-tol must be >= 0 and non-NaN; got %v", f.floatAbsTol)
+	if math.IsNaN(f.floatAbsTol) || math.IsInf(f.floatAbsTol, 0) || f.floatAbsTol < 0 {
+		return nil, "", fmt.Errorf("--float-abs-tol must be a finite, non-negative number; got %v", f.floatAbsTol)
 	}
 
 	// Parse --filter-since via replay.ParseDurationExtended (handles the
