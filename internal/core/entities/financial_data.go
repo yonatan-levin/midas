@@ -102,6 +102,14 @@ type FinancialData struct {
 	CurrentAssets      float64 `json:"current_assets"`
 	CurrentLiabilities float64 `json:"current_liabilities"`
 
+	// TotalLiabilities is the as-reported balance-sheet line "total liabilities"
+	// (us-gaap:Liabilities / ifrs-full:Liabilities). Populated by the SEC parser
+	// when the umbrella XBRL tag is present; left at zero otherwise. Distinct
+	// from CurrentLiabilities (the short-term subset). Consumed by the Graham-
+	// floor diagnostic in internal/services/valuation/graham.go; not used by
+	// the DCF or alt-model engines.
+	TotalLiabilities float64 `json:"total_liabilities,omitempty"`
+
 	// Cash position (for equity bridge: EV - Debt + Cash = Equity Value)
 	CashAndCashEquivalents float64 `json:"cash_and_cash_equivalents"`
 

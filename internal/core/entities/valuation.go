@@ -13,6 +13,19 @@ type ValuationResult struct {
 	TangibleValuePerShare float64 `json:"tangible_value_per_share"` // Net tangible assets / shares
 	DCFValuePerShare      float64 `json:"dcf_value_per_share"`      // Intrinsic value from DCF model
 
+	// Graham-school asset-floor diagnostics (see internal/services/valuation/graham.go
+	// and docs/refactoring/graham-floor-metrics-spec.md). All four use *float64 +
+	// omitempty: nil = TotalLiabilities unresolved (a warning is appended to
+	// Warnings instead). Non-nil = resolved; the value may be negative
+	// (NCAVPerShare on distressed companies) or 0 (GrahamFloorPerShare clamped
+	// when NCAV is negative). Plain float64 + omitempty would silently drop
+	// legitimate &0.0 values, collapsing the "unresolved" and "deep distress"
+	// states into the same wire shape.
+	CurrentAssetsPerShare *float64 `json:"current_assets_per_share,omitempty"`
+	NCAVPerShare          *float64 `json:"ncav_per_share,omitempty"`
+	GrahamFloorPerShare   *float64 `json:"graham_floor_per_share,omitempty"`
+	GrahamDiscountPct     *float64 `json:"graham_discount_pct,omitempty"`
+
 	// WACC components
 	WACC           float64 `json:"wacc"`             // Weighted Average Cost of Capital
 	CostOfEquity   float64 `json:"cost_of_equity"`   // CAPM-derived cost of equity

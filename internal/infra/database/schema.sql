@@ -64,6 +64,12 @@ CREATE TABLE IF NOT EXISTS financial_data (
     current_assets DECIMAL(15,2),
     current_liabilities DECIMAL(15,2),
 
+    -- Umbrella total-liabilities line (us-gaap:Liabilities / ifrs-full:Liabilities).
+    -- Distinct from current_liabilities (the short-term subset). Feeds the
+    -- Graham-floor diagnostic in internal/services/valuation/graham.go;
+    -- nullable so warm rows from before the migration stay valid.
+    total_liabilities DECIMAL(15,2),
+
     -- Cash position (for equity bridge)
     cash_and_cash_equivalents DECIMAL(15,2),
 
@@ -198,6 +204,15 @@ CREATE TABLE IF NOT EXISTS valuation_results (
     dcf_value_per_share DECIMAL(10,4),
     enterprise_value DECIMAL(15,2),
     equity_value DECIMAL(15,2),
+
+    -- Graham-school asset-floor diagnostics. Nullable: omitted from a
+    -- response when total_liabilities can't be resolved (see graham.go).
+    -- ncav_per_share may be negative (deep distress); graham_floor_per_share
+    -- clamps at 0; graham_discount_pct is NULL when the floor is 0.
+    current_assets_per_share DECIMAL(12,4),
+    ncav_per_share DECIMAL(12,4),
+    graham_floor_per_share DECIMAL(12,4),
+    graham_discount_pct DECIMAL(8,6),
     
     -- Data sources and quality
     financial_data_period VARCHAR(10), -- Which period was used

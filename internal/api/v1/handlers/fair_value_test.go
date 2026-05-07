@@ -1050,3 +1050,92 @@ func TestBuildIndustryFromResult_NilResult(t *testing.T) {
 func TestBuildIndustryFromResult_AllFieldsEmpty(t *testing.T) {
 	assert.Nil(t, BuildIndustryFromResult(&entities.ValuationResult{}))
 }
+
+// TestFairValueResponse_GrahamDiscountPct_OmitEmpty pins the JSON-marshal
+// behaviour of the *float64 + omitempty pair on graham_discount_pct. The
+// pointer is the only thing distinguishing "floor==0, ratio undefined"
+// (key absent) from "price exactly equals floor" (key present, value 0).
+// Plain float64 + omitempty would silently drop the &0.0 case.
+func TestFairValueResponse_GrahamDiscountPct_OmitEmpty(t *testing.T) {
+	zero := 0.0
+	positive := 23.30
+
+	tests := []struct {
+		name         string
+		discount     *float64
+		wantKey      bool   // graham_discount_pct present in JSON?
+		wantContains string // expected substring in marshalled JSON
+	}{
+		{name: "nil pointer omits the key", discount: nil, wantKey: false},
+		{name: "&0.0 keeps the key with value 0", discount: &zero, wantKey: true, wantContains: `"graham_discount_pct":0`},
+		{name: "&23.30 keeps the key with the positive value", discount: &positive, wantKey: true, wantContains: `"graham_discount_pct":23.3`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := FairValueResponse{
+				Ticker:            "X",
+				GrahamDiscountPct: tt.discount,
+			}
+			b, err := json.Marshal(r)
+			require.NoError(t, err)
+			j := string(b)
+
+			if tt.wantKey {
+				assert.Contains(t, j, "graham_discount_pct", "key should be present")
+				if tt.wantContains != "" {
+					assert.Contains(t, j, tt.wantContains)
+				}
+			} else {
+				assert.NotContains(t, j, "graham_discount_pct", "key should be omitted")
+			}
+		})
+	}
+}
+
+// TestFairValueResponse_GrahamFloorFields_OmitEmpty verifies that all four
+// pointer fields drop from the JSON when nil (the unresolved-fallback shape
+// per spec F-5), matching the "all four omit when total_liabilities can't be
+// resolved" contract.
+func TestFairValueResponse_GrahamFloorFields_OmitEmpty(t *testing.T) {
+	r := FairValueResponse{Ticker: "X"} // all graham fields default-nil
+	b, err := json.Marshal(r)
+	require.NoError(t, err)
+	j := string(b)
+
+	for _, key := range []string{
+		"current_assets_per_share",
+		"ncav_per_share",
+		"graham_floor_per_share",
+		"graham_discount_pct",
+	} {
+		assert.NotContains(t, j, key, "expected %s to be omitted on nil default", key)
+	}
+}
+
+// TestFairValueResponse_GrahamFloorFields_DeepDistress pins the contract that
+// distinguishes the deep-distress shape (resolved + negative NCAV → floor
+// clamped to 0) from the unresolved-fallback shape (all four absent). With
+// pointer + omitempty, &0.0 stays in JSON; nil drops. A regression to plain
+// float64 + omitempty would silently collapse these two semantically
+// different states into the same wire output.
+func TestFairValueResponse_GrahamFloorFields_DeepDistress(t *testing.T) {
+	caps := 2.85
+	ncav := -0.765
+	floor := 0.0
+	r := FairValueResponse{
+		Ticker:                "MXL",
+		CurrentAssetsPerShare: &caps,
+		NCAVPerShare:          &ncav,
+		GrahamFloorPerShare:   &floor,
+		GrahamDiscountPct:     nil, // floor==0 → discount nil
+	}
+	b, err := json.Marshal(r)
+	require.NoError(t, err)
+	j := string(b)
+
+	assert.Contains(t, j, `"current_assets_per_share":2.85`)
+	assert.Contains(t, j, `"ncav_per_share":-0.765`)
+	assert.Contains(t, j, `"graham_floor_per_share":0`, "&0.0 must stay in JSON, not be dropped by omitempty")
+	assert.NotContains(t, j, "graham_discount_pct", "discount must be absent when floor==0")
+}

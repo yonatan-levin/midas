@@ -610,6 +610,19 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		financialData.CurrentLiabilities = val
 	}
 
+	// Total liabilities umbrella tag — feeds the Graham-floor diagnostic
+	// (internal/services/valuation/graham.go). Distinct from
+	// CurrentLiabilities (short-term subset). The us-gaap:Liabilities tag is
+	// already in the requested-tags list at the top of this file; this block
+	// just plumbs the parsed value onto FinancialData. ifrs-full:Liabilities
+	// covers TSM, ASML, SAP, BABA and other 20-F filers without a separate
+	// derivation step.
+	if val, exists := p.findValue(data, []string{
+		"Liabilities",
+	}); exists {
+		financialData.TotalLiabilities = val
+	}
+
 	if val, exists := p.findValue(data, []string{
 		"CashAndCashEquivalentsAtCarryingValue",
 		"CashCashEquivalentsAndShortTermInvestments",
@@ -1010,6 +1023,11 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"ifrs-full:Cash",
 		"ifrs-full:CurrentAssets",
 		"ifrs-full:CurrentLiabilities",
+		// Umbrella total-liabilities tag for IFRS filers — feeds the
+		// Graham-floor diagnostic. Most 20-F filers publish this directly;
+		// findValue is namespace-aware so the same code path that picks up
+		// us-gaap:Liabilities will pick this up for IFRS reporters.
+		"ifrs-full:Liabilities",
 		"ifrs-full:Goodwill",
 		"ifrs-full:IntangibleAssetsOtherThanGoodwill",
 		"ifrs-full:Inventories",

@@ -255,6 +255,52 @@ components:
         dcf_value_per_share:
           type: number
           format: float
+        current_assets_per_share:
+          type: number
+          format: float
+          nullable: true
+          example: 55.13
+          description: |
+            Current assets divided by diluted shares. Pure asset-side floor
+            with no liability subtraction. Returned as null (omitted from
+            JSON) when total_liabilities cannot be resolved (a warning is
+            added to `warnings`).
+        ncav_per_share:
+          type: number
+          format: float
+          nullable: true
+          example: 4.55
+          description: |
+            Net Current Asset Value per share — Graham's classic deep-value
+            metric: (current_assets - total_liabilities) / diluted_shares.
+            May be negative when liabilities exceed current assets (the raw
+            value is returned, no clamping). Returned as null (omitted)
+            when total_liabilities cannot be resolved.
+        graham_floor_per_share:
+          type: number
+          format: float
+          nullable: true
+          example: 3.03
+          description: |
+            "Buy below" trigger per Graham — max(ncav_per_share * 2/3, 0).
+            **The value 0 stays in the JSON** when present — clamped from a
+            negative NCAV — and represents "no asset floor exists, the
+            company has more obligations than liquid assets". Returned as
+            null (omitted) only when total_liabilities cannot be resolved
+            (distinct signal: data unavailable vs. data says zero).
+        graham_discount_pct:
+          type: number
+          format: float
+          nullable: true
+          example: 23.30
+          description: |
+            Ratio (current_price - graham_floor_per_share) / graham_floor_per_share.
+            Positive = price above the floor (normal market pricing or
+            overvalued vs. floor); negative = price below the floor (Graham
+            net-net territory). Returned as null (omitted from JSON) when
+            graham_floor_per_share is 0 (divide-by-zero would otherwise
+            produce a meaningless infinity signal) or when current_price
+            is unavailable.
         as_of:
           type: string
           format: date-time

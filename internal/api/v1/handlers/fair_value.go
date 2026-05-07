@@ -132,22 +132,35 @@ func BuildIndustryFromResult(result *entities.ValuationResult) *Industry {
 // FairValueResponse represents the response structure for fair value requests
 // @Description Fair value calculation response with intrinsic valuation metrics
 type FairValueResponse struct {
-	Ticker                string                `json:"ticker" example:"AAPL"`                                  // Stock ticker symbol
-	WACC                  float64               `json:"wacc" example:"0.092"`                                   // Weighted Average Cost of Capital
-	GrowthRate            float64               `json:"growth_rate" example:"0.045"`                            // Summary growth rate (CAGR of projected rates)
-	GrowthRates           []float64             `json:"growth_rates,omitempty"`                                 // Per-year projected growth rates
-	GrowthSource          string                `json:"growth_source,omitempty" example:"analyst_blend"`        // Growth estimation source
-	GrowthConfidence      string                `json:"growth_confidence,omitempty" example:"high"`             // Growth estimation confidence
-	TangibleValuePerShare float64               `json:"tangible_value_per_share" example:"24.73"`               // Net tangible book value per share
-	DCFValuePerShare      float64               `json:"dcf_value_per_share" example:"156.42"`                   // Discounted cash flow fair value per share
-	AsOf                  string                `json:"as_of" example:"2025-08-13T22:15:34.402652598Z"`         // Timestamp of calculation
-	DataQualityScore      float64               `json:"data_quality_score,omitempty" example:"85.5"`            // Data quality score (0-100)
-	DataQualityGrade      string                `json:"data_quality_grade,omitempty" example:"B"`               // Data quality grade (A-F)
-	CalculationMethod     string                `json:"calculation_method,omitempty" example:"multi_stage_dcf"` // Model used: multi_stage_dcf, ddm, ffo, revenue_multiple
-	CalculationVersion    string                `json:"calculation_version,omitempty" example:"4.0"`            // Engine version that produced this result
-	Warnings              []string              `json:"warnings,omitempty"`                                     // Data quality or assumption warnings
-	SanityCheck           *entities.SanityCheck `json:"sanity_check,omitempty"`                                 // Multiples cross-check against sector medians
-	Industry              *Industry             `json:"industry,omitempty"`                                     // Dual industry classification (SIC + heuristic) for drift detection
+	Ticker                string    `json:"ticker" example:"AAPL"`                           // Stock ticker symbol
+	WACC                  float64   `json:"wacc" example:"0.092"`                            // Weighted Average Cost of Capital
+	GrowthRate            float64   `json:"growth_rate" example:"0.045"`                     // Summary growth rate (CAGR of projected rates)
+	GrowthRates           []float64 `json:"growth_rates,omitempty"`                          // Per-year projected growth rates
+	GrowthSource          string    `json:"growth_source,omitempty" example:"analyst_blend"` // Growth estimation source
+	GrowthConfidence      string    `json:"growth_confidence,omitempty" example:"high"`      // Growth estimation confidence
+	TangibleValuePerShare float64   `json:"tangible_value_per_share" example:"24.73"`        // Net tangible book value per share
+	DCFValuePerShare      float64   `json:"dcf_value_per_share" example:"156.42"`            // Discounted cash flow fair value per share
+
+	// Graham-school asset-floor diagnostics — see
+	// docs/refactoring/graham-floor-metrics-spec.md. All four use *float64 +
+	// omitempty: nil = TotalLiabilities unresolved (a warning is appended to
+	// `warnings`). Non-nil = resolved; values may be negative (NCAV on
+	// distressed companies) or 0 (floor clamped when NCAV is negative). Pointer
+	// types preserve the deep-distress signal (resolved + negative + clamped)
+	// distinct from the unresolved-fallback signal (all four absent + warning).
+	CurrentAssetsPerShare *float64 `json:"current_assets_per_share,omitempty" example:"55.13"`
+	NCAVPerShare          *float64 `json:"ncav_per_share,omitempty" example:"4.55"`
+	GrahamFloorPerShare   *float64 `json:"graham_floor_per_share,omitempty" example:"3.03"`
+	GrahamDiscountPct     *float64 `json:"graham_discount_pct,omitempty" example:"23.30"`
+
+	AsOf               string                `json:"as_of" example:"2025-08-13T22:15:34.402652598Z"`         // Timestamp of calculation
+	DataQualityScore   float64               `json:"data_quality_score,omitempty" example:"85.5"`            // Data quality score (0-100)
+	DataQualityGrade   string                `json:"data_quality_grade,omitempty" example:"B"`               // Data quality grade (A-F)
+	CalculationMethod  string                `json:"calculation_method,omitempty" example:"multi_stage_dcf"` // Model used: multi_stage_dcf, ddm, ffo, revenue_multiple
+	CalculationVersion string                `json:"calculation_version,omitempty" example:"4.1"`            // Engine version that produced this result
+	Warnings           []string              `json:"warnings,omitempty"`                                     // Data quality or assumption warnings
+	SanityCheck        *entities.SanityCheck `json:"sanity_check,omitempty"`                                 // Multiples cross-check against sector medians
+	Industry           *Industry             `json:"industry,omitempty"`                                     // Dual industry classification (SIC + heuristic) for drift detection
 
 	// Currency is the ISO-4217 code that dcf_value_per_share and
 	// tangible_value_per_share are denominated in. Always "USD" — the
@@ -382,6 +395,10 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		GrowthConfidence:      result.GrowthConfidence,
 		TangibleValuePerShare: result.TangibleValuePerShare,
 		DCFValuePerShare:      result.DCFValuePerShare,
+		CurrentAssetsPerShare: result.CurrentAssetsPerShare,
+		NCAVPerShare:          result.NCAVPerShare,
+		GrahamFloorPerShare:   result.GrahamFloorPerShare,
+		GrahamDiscountPct:     result.GrahamDiscountPct,
 		AsOf:                  result.CalculatedAt.Format("2006-01-02T15:04:05Z"),
 		DataQualityScore:      result.DataQualityScore,
 		DataQualityGrade:      string(result.DataQualityGrade),
@@ -522,6 +539,10 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 			GrowthConfidence:      result.GrowthConfidence,
 			TangibleValuePerShare: result.TangibleValuePerShare,
 			DCFValuePerShare:      result.DCFValuePerShare,
+			CurrentAssetsPerShare: result.CurrentAssetsPerShare,
+			NCAVPerShare:          result.NCAVPerShare,
+			GrahamFloorPerShare:   result.GrahamFloorPerShare,
+			GrahamDiscountPct:     result.GrahamDiscountPct,
 			AsOf:                  result.CalculatedAt.Format("2006-01-02T15:04:05Z"),
 			DataQualityScore:      result.DataQualityScore,
 			DataQualityGrade:      string(result.DataQualityGrade),

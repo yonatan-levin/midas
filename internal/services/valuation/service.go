@@ -1092,6 +1092,9 @@ func (s *Service) performValuation(
 		}
 	}
 
+	gf := calculateGrahamFloorMetrics(ctx, s.logger, historicalData.Ticker,
+		latestFinancialData, sharesOutstanding, marketData.SharePrice)
+
 	result := &entities.ValuationResult{
 		Ticker: historicalData.Ticker,
 		// CalculatedAt is observable in the response payload but does not
@@ -1100,6 +1103,10 @@ func (s *Service) performValuation(
 		CalculatedAt:          s.clock.Now(),
 		TangibleValuePerShare: tangibleValuePerShare,
 		DCFValuePerShare:      dcfValuePerShare,
+		CurrentAssetsPerShare: gf.CurrentAssetsPerShare,
+		NCAVPerShare:          gf.NCAVPerShare,
+		GrahamFloorPerShare:   gf.GrahamFloorPerShare,
+		GrahamDiscountPct:     gf.GrahamDiscountPct,
 		WACC:                  waccResult.WACC,
 		GrowthRate:            growthEstimate.SummaryGrowthRate(),
 		GrowthRates:           growthEstimate.ProjectedGrowthRates,
@@ -1114,7 +1121,7 @@ func (s *Service) performValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     "multi_stage_dcf",
-		CalculationVersion:    "4.0",
+		CalculationVersion:    "4.1",
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -1133,6 +1140,10 @@ func (s *Service) performValuation(
 
 	if dcfFallbackWarning != "" {
 		result.Warnings = append(result.Warnings, dcfFallbackWarning)
+	}
+
+	if len(gf.Warnings) > 0 {
+		result.Warnings = append(result.Warnings, gf.Warnings...)
 	}
 
 	// Phase 4: Run multiples sanity cross-check to flag extreme divergences.
@@ -1291,6 +1302,9 @@ func (s *Service) performAlternativeValuation(
 	// Calculate data freshness score
 	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
 
+	gf := calculateGrahamFloorMetrics(ctx, s.logger, historicalData.Ticker,
+		latestFinancialData, sharesOutstanding, marketData.SharePrice)
+
 	// Convert ModelResult to ValuationResult
 	result := &entities.ValuationResult{
 		Ticker: historicalData.Ticker,
@@ -1298,6 +1312,10 @@ func (s *Service) performAlternativeValuation(
 		CalculatedAt:          s.clock.Now(),
 		TangibleValuePerShare: tangibleValuePerShare,
 		DCFValuePerShare:      modelResult.IntrinsicValuePerShare,
+		CurrentAssetsPerShare: gf.CurrentAssetsPerShare,
+		NCAVPerShare:          gf.NCAVPerShare,
+		GrahamFloorPerShare:   gf.GrahamFloorPerShare,
+		GrahamDiscountPct:     gf.GrahamDiscountPct,
 		WACC:                  waccResult.WACC,
 		GrowthRate:            growthEstimate.SummaryGrowthRate(),
 		GrowthRates:           growthEstimate.ProjectedGrowthRates,
@@ -1312,8 +1330,12 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     modelResult.ModelType,
-		CalculationVersion:    "4.0",
+		CalculationVersion:    "4.1",
 		Warnings:              modelResult.Warnings,
+	}
+
+	if len(gf.Warnings) > 0 {
+		result.Warnings = append(result.Warnings, gf.Warnings...)
 	}
 
 	return result, nil

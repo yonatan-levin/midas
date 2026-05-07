@@ -330,11 +330,15 @@ curl -H "X-API-Key: <key>" \
   "growth_confidence": "high",
   "tangible_value_per_share": 24.73,
   "dcf_value_per_share": 156.42,
+  "current_assets_per_share": 8.45,
+  "ncav_per_share": 2.10,
+  "graham_floor_per_share": 1.40,
+  "graham_discount_pct": 192.27,
   "as_of": "2025-08-13T22:15:34Z",
   "data_quality_score": 85.5,
   "data_quality_grade": "B",
   "calculation_method": "multi_stage_dcf",
-  "calculation_version": "4.0",
+  "calculation_version": "4.1",
   "warnings": [],
   "sanity_check": {
     "implied_pe": 18.5,
@@ -367,6 +371,10 @@ curl -H "X-API-Key: <key>" \
 | `growth_confidence` | Confidence level: `high`, `medium`, `low` |
 | `tangible_value_per_share` | Net tangible book value per share (floor value) |
 | `dcf_value_per_share` | DCF-derived intrinsic value per share |
+| `current_assets_per_share` | Current assets ÷ diluted shares — pure asset-side floor with no liability subtraction. Omitted when `total_liabilities` cannot be resolved |
+| `ncav_per_share` | Graham's Net Current Asset Value per share: `(current_assets − total_liabilities) / diluted_shares`. **May be negative** for distressed companies (raw value, no clamping). Omitted when `total_liabilities` cannot be resolved |
+| `graham_floor_per_share` | Graham's "buy below" trigger: `max(ncav_per_share × 2/3, 0)`. Clamps to 0 when NCAV is negative — that case represents "no asset floor exists, the company has more obligations than liquid assets" |
+| `graham_discount_pct` | `(current_price − graham_floor_per_share) / graham_floor_per_share`. Positive = price above floor; negative = price below floor (Graham net-net territory). **Returned as `null` and omitted from JSON when `graham_floor_per_share` is 0** |
 | `data_quality_score` | 0-100 score reflecting data freshness and completeness |
 | `data_quality_grade` | Letter grade: A (90+), B (80+), C (70+), D (60+), F (<60) |
 | `calculation_method` | Model used: `multi_stage_dcf`, `ddm`, `ffo`, `revenue_multiple` |
