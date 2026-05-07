@@ -297,3 +297,7 @@ coverage.out
 *.coverage
 *cover*
 .hypothesis
+
+# Negations: docs are documentation, never ignored even if names match patterns
+# above (e.g. RM-2's "coverage-gaps" filename incidentally matches *cover*).
+!docs/**
