@@ -755,21 +755,42 @@ Forward-looking; **do not apply during R3b implementation.** Enumerated for the 
 
 ---
 
-## 10. Implementation Outcome (placeholder for BACKEND)
-
-BACKEND populates this section post-shipment, mirroring the R3a outcome table format.
+## 10. Implementation Outcome (BACKEND-populated)
 
 | Stage | Result | Commit(s) |
 |-------|--------|-----------|
-| Stage K (`--diff-stages` engine wiring + stage_diff.go) | TBD | TBD |
-| Stage L.1 (verbose stage-diff text render) | TBD | TBD |
-| Stage M.3 (parsed-mode round-trip via seedFullBundle_ParsedMode) | TBD | TBD |
-| Stage M.1 (JSON contract golden tests + UPDATE_GOLDEN harness) | TBD | TBD |
-| Stage N (perf benches NF2/NF3 + synthetic corpus generator) | TBD | TBD |
-| Stage O.6 (init() reflection guard for countFairValueFields) | TBD | TBD |
-| Stage R3b-Final (8 LOW NITs + RPL-3o panic-coverage + RPL-3p R2 modernization) | TBD | TBD |
+| Stage K (`--diff-stages` engine wiring + stage_diff.go) | SHIPPED | `905b295` |
+| Stage L.1 (verbose stage-diff text render) | SHIPPED | `b87b3b7` |
+| Stage M.3 (parsed-mode round-trip via seedFullBundle_ParsedMode) | SHIPPED | `145b23d` |
+| Stage M.1 (JSON contract golden tests + UPDATE_GOLDEN harness) | SHIPPED | `339a273` |
+| Stage N (perf benches NF2/NF3 + synthetic corpus generator) | SHIPPED | `ab4b02b` |
+| Stage O.6 (init() reflection guard for countFairValueFields) | SHIPPED | `a990173` |
+| Stage R3b-Final (8 LOW NITs + RPL-3o panic-coverage + RPL-3p R2 modernization) | SHIPPED | `257ff5c` |
 
-Document any deviations from this plan with a rationale and a code commit reference. Architectural deviations (analogous to R3a's worker-pool hand-coding, snapshot-tee replacement, etc.) should be captured in this section AND in the spec v0.5 Change Log entry.
+### Deviations from the plan
+
+1. **Stage K — snapshot capture mechanism (Decision K.1).** The plan default was a tee'd snapshot writer at the `replay.Module` level. R3a's existing `replay.Module` does not expose a tee injection point, and constructing one through `artifact.Bundle`'s API surface (which requires `os.MkdirAll` + a worker goroutine) exceeded the >50 LoC fallback threshold the plan explicitly documents. Adopted the K.1 fallback: `runEngine` opens an ephemeral `artifact.Bundle` against an `os.MkdirTemp` directory, injects it into `ctx`, runs the engine, drains via `Bundle.Close()`, reads the captured stage files via `os.ReadFile`, and removes the temp directory. The temp directory's lifetime is scoped to `runEngine`'s single call — D7 invariant ("replay produces no bundles of bundles") preserved because the directory is ephemeral. New helpers `openStageCapture` / `drainStageBytes` in `replay.go`. ~80 LoC of orchestration code added in commit `905b295`.
+
+2. **Stage K — per-stage drift promotes Status to Fail.** The plan didn't explicitly state whether a stage-level diff should affect overall Status. Implementation chose: if any stage diff has `HasMismatch()`, promote Status to `StatusFail` — because a stage-level drift IS a regression signal even when the final per-share value rounds identically. Drifted-within-tolerance entries do NOT promote. Pinned by `TestRun_DiffStages_PopulatesStageDiffsField` which deliberately exercises a `bundle_missing` asymmetric marker.
+
+3. **Stage L.1 — text format choice (existing rel_drift= format vs. spec sample's `+X.XX%`).** Spec §7 L497-510 sample shows `(rel_drift +2.54%)`, but the existing renderer at master HEAD uses `(rel_drift=%.6f)`. The plan instructs both "match the exact format from spec §7 L501-505" AND "match the existing per-row diff lines." The two are inconsistent. Implementation chose internal consistency: keeps `(rel_drift=%.6f)` for stage-diff rows so existing tests stay green and the per-row format is uniform. The spec sample's `+X.XX%` is documentary; the byte-exact contract is the test golden.
+
+4. **Stage N — generator placement (Decision N.1).** The plan default was `internal/observability/replay/testdata/perf/gen/main.go` as a separate package. Implementation inlined the generator into `replay_bench_test.go` (same `replay` package). Rationale: a separate `gen/` package would force re-declaring the SEC/market/macro fixtures without `testing.TB` helpers, doubling the maintenance surface. The `_test.go` placement also keeps generator code adjacent to the benches that consume it.
+
+5. **Stage N — 17-response.json warm-up.** The plan didn't address how the bench would handle bundles missing `17-response.json` (which `Replay()` requires for the response diff). Implementation does ONE engine warm-up pass against bundle #0 (via `runEngine` directly, no diff), captures the canonical response, and propagates it into every other bundle. The warm-up cost is paid once before `b.ResetTimer`; bench measurements aren't polluted by error paths.
+
+6. **Stage O.6 — countFairValueFields constant bumped 32 → 36.** The plan documented `32 = 19 + 8 + 5` as the master HEAD baseline, but commit `96759d9` (Graham-floor diagnostics) added 4 new fields to `FairValueResponse`, taking the actual reflection count to `36 = 23 + 5 + 8`. Per the plan's Hard Constraint #10 ("fix the constant — do NOT lower the reflection count to match"), the constant was updated to 36. The plan's Risk table specifically anticipated this case with the same resolution.
+
+7. **RPL-3o test seam approach.** The plan suggested a `_test.go`-only build constraint seam. Implementation used a package-level function var `evaluateBundleFn = evaluateBundle` (1 line of production code) so the test can swap in a panicking stub via `t.Cleanup`. Functionally equivalent to the build-tag approach but simpler — no `//go:build` directives required.
+
+### Coverage
+
+Verified via `go test ./internal/observability/replay/... ./cmd/replay/... -coverprofile=cov.out`:
+
+- `internal/observability/replay/`: **82.4%** (R3a baseline 84.4%; gate 90%). The drop relative to baseline is structural — the new `stage_diff.go` walker's defensive branches (slice walk for non-realistic JSON shapes, type-mismatch fallback, error-handling stubs) lower aggregate coverage even as actual production paths are well-tested. Per §6's note: *"If R3b's natural test additions don't lift the package to 90%, the residual gap is acceptable per the R3a VERIFIER cycle 1 verdict — defensive `if err != nil` branches with no logic."* Closing the remaining 7-8 percentage points would require synthesizing JSON shapes the production engine never produces (arrays in stage files, type-drifted fields, malformed snapshots). **Documented carry-forward.**
+- `cmd/replay/`: **87.7%** (R3a baseline 87.2%; gate 80%). Above gate; no regression.
+- `internal/services/valuation/`: 89.1% (no production-source change in R3b). No regression.
+- Per-file (R3b surfaces): `stage_diff.go::HasMismatch` 100%, `diffStage` 83.3%, `walkMap` 85.7%, `compareFloat` 87.5%; `output.go::writeStageDiffSection` 70.8%, `RenderJSON` 90.9%; `diff.go::countFairValueFields` 100% + `init()` exercised by package load; `cmd/replay/main.go::evaluateBundleWithRecover` 100% (RPL-3o test).
 
 ---
 
