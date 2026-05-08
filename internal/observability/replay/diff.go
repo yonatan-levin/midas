@@ -11,7 +11,42 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
+
+// init is the Stage O.6 (R3b) reflection guard for
+// countFairValueFields. It uses reflect.NumField to count the actual
+// struct fields of FairValueResponse + Industry + SanityCheck at
+// package load and panics if they disagree with the constant returned
+// by countFairValueFields below.
+//
+// Why panic at init: a field-count drift means goFieldToJSON's
+// snake_case mapping is incomplete — a new field would render via
+// camelToSnake's best-effort PascalCase→snake_case heuristic, which
+// is wrong for most real fields. Failing fast at package load forces
+// the maintainer to update countFairValueFields AND goFieldToJSON in
+// the same commit as the new struct field.
+//
+// Panic scope: replay-binary-only. cmd/server does NOT import this
+// package — enforced by cmd/server/import_boundary_test.go shipped
+// under R3a Stage O.13. A panic here cannot crash production server
+// startup. If a future refactor breaks the import boundary, the O.13
+// test fails first; the O.6 panic is reachable only after that
+// breakage.
+func init() {
+	responseFields := reflect.TypeOf(handlers.FairValueResponse{}).NumField()
+	industryFields := reflect.TypeOf(handlers.Industry{}).NumField()
+	sanityFields := reflect.TypeOf(entities.SanityCheck{}).NumField()
+	actual := responseFields + industryFields + sanityFields
+	expected := countFairValueFields()
+	if actual != expected {
+		panic(fmt.Sprintf(
+			"replay/diff.go: countFairValueFields drift — reflect counted %d fields (response=%d + industry=%d + sanity=%d), constant returns %d. "+
+				"Update countFairValueFields and goFieldToJSON to match the new struct shape.",
+			actual, responseFields, industryFields, sanityFields, expected,
+		))
+	}
+}
 
 // Default float tolerances per spec §5 D4. Two knobs because the relative
 // and absolute cases are orthogonal:
@@ -452,14 +487,25 @@ func nilOrType(p interface{}) string {
 
 // countFairValueFields returns the number of fields the Stage G
 // CompareResponse walker considers, used to populate
-// ResultDiff.FieldsTotal. Hand-counted matching the goFieldToJSON map
-// (top-level fields + nested structs, excluding internal-only fields
-// not exposed in JSON). Stable contract — bumping this requires a
-// matching FairValueResponse field addition; CI failure here is the
-// signal.
+// ResultDiff.FieldsTotal. Pinned to the reflection-counted struct
+// fields of FairValueResponse + Industry + SanityCheck — the init()
+// guard above asserts the constant and reflection agree at package
+// load time.
+//
+// Master HEAD baseline at R3b: 23 (FairValueResponse, including the
+// 4 Graham-school fields added in commit 96759d9) + 5 (Industry) +
+// 8 (SanityCheck) = 36.
+//
+// When a future commit extends FairValueResponse, Industry, or
+// SanityCheck:
+//  1. The init() guard panics on the next package load with the
+//     expected vs actual counts.
+//  2. Update this constant to match the new reflection count.
+//  3. Add an entry to goFieldToJSON for the new field's snake_case
+//     name (otherwise camelToSnake's best-effort conversion runs).
 func countFairValueFields() int {
-	// FairValueResponse: 19 top-level public fields.
-	// SanityCheck: 8 fields.
+	// FairValueResponse: 23 top-level public fields (post-Graham).
 	// Industry: 5 fields.
-	return 19 + 8 + 5
+	// SanityCheck: 8 fields.
+	return 23 + 5 + 8
 }

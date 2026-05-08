@@ -2,8 +2,36 @@ package replay
 
 import (
 	"math"
+	"reflect"
 	"testing"
+
+	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
+
+// TestCountFairValueFields_MatchesReflection asserts the constant
+// returned by countFairValueFields equals the actual reflection-based
+// count of FairValueResponse + Industry + SanityCheck struct fields.
+//
+// This is the unit-level partner of the package-load init() guard
+// (diff.go). The init() guard panics on drift; this test re-states
+// the contract so a future contributor reading diff_test.go sees it
+// without needing to dig into init(). If init() panicked at package
+// load, this test would never run — so the test passing implies
+// init() did not panic.
+//
+// Stage O.6 (R3b plan §3 Stage O.6).
+func TestCountFairValueFields_MatchesReflection(t *testing.T) {
+	responseFields := reflect.TypeOf(handlers.FairValueResponse{}).NumField()
+	industryFields := reflect.TypeOf(handlers.Industry{}).NumField()
+	sanityFields := reflect.TypeOf(entities.SanityCheck{}).NumField()
+	actual := responseFields + industryFields + sanityFields
+
+	if got := countFairValueFields(); got != actual {
+		t.Errorf("countFairValueFields() = %d; reflection counts %d (response=%d + industry=%d + sanity=%d). Update the constant to match.",
+			got, actual, responseFields, industryFields, sanityFields)
+	}
+}
 
 // TestCompareFloat_TableDriven covers the canonical pass/fail cases at the
 // default tolerances. Each row's comment explains why it matters in the
