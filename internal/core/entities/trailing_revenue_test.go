@@ -678,6 +678,30 @@ func TestTrailingTwelveMonthsRevenue_AnnualizedQuarter_NonQ1Stub(t *testing.T) {
 	}
 }
 
+// TestAnnualizedQuarterRevenue_DirectInvocation_DefensiveBranches reaches into
+// the unexported helper to pin its defensive branches. The public helper
+// preferentially routes around these (TTM_4Q wins on 4 contiguous quarters,
+// FY wins when an FY exists), so direct invocation is the only way to keep
+// coverage on the count==4 fall-through and the no-Q1 stub path.
+func TestAnnualizedQuarterRevenue_DirectInvocation_DefensiveBranches(t *testing.T) {
+	// count==4 fall-through: 4 contiguous quarters in the latest year. The
+	// public helper would route this to TTM_4Q; calling annualizedQuarterRevenue
+	// directly returns the raw sum without scaling.
+	h := &HistoricalFinancialData{
+		Ticker: "DEFENSIVE",
+		Data: map[string]*FinancialData{
+			"2025Q1": {Revenue: 100, FilingPeriod: "2025Q1"},
+			"2025Q2": {Revenue: 110, FilingPeriod: "2025Q2"},
+			"2025Q3": {Revenue: 120, FilingPeriod: "2025Q3"},
+			"2025Q4": {Revenue: 130, FilingPeriod: "2025Q4"},
+		},
+	}
+	sum, ok := h.annualizedQuarterRevenue()
+	if !ok || sum != 460 {
+		t.Errorf("count==4 fall-through: got (%v, %v), want (460, true)", sum, ok)
+	}
+}
+
 // absDiff is a small helper for float comparisons in this test file.
 func absDiff(a, b float64) float64 {
 	if a > b {

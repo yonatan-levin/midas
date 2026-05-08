@@ -73,9 +73,15 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 		return nil, fmt.Errorf("revenue_multiple: no financial data available")
 	}
 
-	revenue := latest.Revenue
+	// RM-1: never read latest.Revenue directly — that's single-quarter for
+	// 10-Q filings and produces ~4x understatement against an annual
+	// EV/Revenue multiple. The TTM helper enforces a documented fallback
+	// chain (TTM_4Q -> TTM_PRIOR_BRIDGE -> ANNUAL_FY -> ANNUALIZED_QUARTER ->
+	// INSUFFICIENT_HISTORY) and surfaces the path via `source` so replay
+	// tooling and dashboards can audit lossy fallbacks.
+	revenue, source, ttmWarning := input.HistoricalData.TrailingTwelveMonthsRevenue()
 	if revenue <= 0 {
-		return nil, fmt.Errorf("revenue_multiple: company has no revenue (%.2f); cannot apply revenue multiple", revenue)
+		return nil, fmt.Errorf("revenue_multiple: insufficient revenue history (%s)", source)
 	}
 
 	// Select the appropriate EV/Revenue multiple for this industry
@@ -101,6 +107,16 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 	warnings := []string{
 		"Revenue multiple valuation is a rough approximation — does not account for profitability or cash flows",
 		fmt.Sprintf("Applied %.1fx EV/Revenue multiple for %s sector", multiple, input.Industry),
+	}
+
+	// Surface the TTM source so consumers can distinguish a clean TTM_4Q
+	// from a lossy ANNUALIZED_QUARTER. We always emit the source line
+	// (even on the clean path) so downstream dashboards can pivot on it
+	// without parsing free-form warning text. The helper returns a
+	// non-empty `ttmWarning` ONLY for the lossy paths.
+	warnings = append(warnings, fmt.Sprintf("revenue_base: source=%s revenue=$%.0f", source, revenue))
+	if ttmWarning != "" {
+		warnings = append(warnings, ttmWarning)
 	}
 
 	// Additional warning for negative OI companies
