@@ -78,28 +78,52 @@ var sicToGICS = map[string]map[string]bool{
 	"TELECOM": {"50": true},             // Communication Services
 	"TRANS":   {"20": true},             // Industrials (transportation)
 	"CONS":    {"30": true, "25": true}, // Consumer Staples primary, Discretionary secondary
+
+	// REIT subsector codes emitted by the RESTATE Pass-2 sub-industry
+	// classifier (VAL-3 P1+P4). All map to GICS "60" (Real Estate). Listed
+	// explicitly so matchSICToGICS can resolve the full code without falling
+	// through to the parent-prefix strip — RETAIL_REIT, DATA_CENTER, etc.
+	// would otherwise normalize to "RETAIL" / "DATA" and silently drift to
+	// match=false.
+	"RESIDENTIAL":     {"60": true},
+	"OFFICE":          {"60": true},
+	"INDUSTRIAL":      {"60": true},
+	"RETAIL_REIT":     {"60": true},
+	"HEALTHCARE_REIT": {"60": true},
+	"DATA_CENTER":     {"60": true},
+	"CELLTOWER":       {"60": true},
+	"SPECIALTY":       {"60": true},
 }
 
 // matchSICToGICS returns true when the SIC-derived label and the heuristic
 // GICS code agree per the sicToGICS table. Empty inputs are never a match.
-// Sub-industry refinements (TECH_SAAS, HEALTH_BIOTECH, FIN_IB, MFG_SEMI,
-// FIN_BANK, FIN_INSURANCE, …) produced by classifier Pass 2 are normalized
-// to their parent prefix before lookup, so "TECH_SAAS" vs "45" matches just
-// like "TECH" vs "45" would.
+//
+// Lookup order:
+//  1. Full-code exact match (catches REIT subsector codes like RETAIL_REIT
+//     and DATA_CENTER that legitimately contain underscores yet map to a
+//     different GICS sector than their first-token prefix would suggest).
+//  2. Strip-at-first-underscore parent prefix, then look up again. Lets the
+//     classifier's Pass-2 sub-industry codes (TECH_SAAS, HEALTH_BIOTECH,
+//     FIN_IB, MFG_SEMI, FIN_BANK, …) inherit their parent's GICS mapping
+//     without an explicit entry per sub-industry.
 func matchSICToGICS(sicLabel, gicsCode string) bool {
 	if sicLabel == "" || gicsCode == "" {
 		return false
 	}
-	// Sub-industries (TECH_SAAS, HEALTH_BIOTECH, …) are equivalent to their
-	// parent for match purposes. Take the parent prefix before lookup.
+	// 1. Exact full-code match wins so REIT subsector codes resolve correctly:
+	//    RETAIL_REIT → 60 must NOT collapse to RETAIL → {25, 30}.
+	if allowed, ok := sicToGICS[sicLabel]; ok {
+		return allowed[gicsCode]
+	}
+	// 2. Fall back to parent prefix for codes whose subsector isn't listed
+	//    explicitly in sicToGICS (TECH_SAAS, HEALTH_BIOTECH, FIN_BANK, …).
 	if i := strings.IndexByte(sicLabel, '_'); i >= 0 {
 		sicLabel = sicLabel[:i]
+		if allowed, ok := sicToGICS[sicLabel]; ok {
+			return allowed[gicsCode]
+		}
 	}
-	allowed, ok := sicToGICS[sicLabel]
-	if !ok {
-		return false
-	}
-	return allowed[gicsCode]
+	return false
 }
 
 // BuildIndustryFromResult constructs the Industry response object from the

@@ -104,9 +104,16 @@ func (r *ModelRouter) SelectModel(ctx context.Context, ticker, industry string, 
 		}
 	}
 
-	// Rule 2: REITs use FFO model
-	// Match both "REIT" and the config's "RESTATE" (Real Estate) code
-	if upperIndustry == "REIT" || upperIndustry == "RESTATE" {
+	// Rule 2: REITs use FFO model.
+	// Matches both "REIT" / "RESTATE" (parent code) and the bare REIT
+	// subsector codes that the classifier emits via the RESTATE Pass-2
+	// sub-industry refinement (VAL-3 P1+P4): RESIDENTIAL, OFFICE,
+	// INDUSTRIAL, RETAIL_REIT, HEALTHCARE_REIT, DATA_CENTER, CELLTOWER,
+	// SPECIALTY. Listing them explicitly here (rather than reverse-mapping
+	// to RESTATE) keeps the routing key the same shape the FFO model uses
+	// for its multiple/cap-rate lookup, so model_selection traces remain
+	// self-describing.
+	if isREITIndustry(upperIndustry) {
 		if model := r.findModel("ffo"); model != nil {
 			logctx.Or(ctx, r.logger).Info("Selected FFO model for REIT",
 				zap.String("industry", industry))
@@ -170,4 +177,29 @@ func (r *ModelRouter) findModel(modelType string) ValuationModel {
 		}
 	}
 	return nil
+}
+
+// reitIndustrySet holds the bare REIT subsector codes emitted by the RESTATE
+// Pass-2 sub-industry classifier in addition to the parent-level "REIT" /
+// "RESTATE" labels. Kept in the models package so isREITIndustry stays a
+// pure-string check — no dep on the classifier or config packages.
+var reitIndustrySet = map[string]struct{}{
+	"REIT":            {},
+	"RESTATE":         {},
+	"RESIDENTIAL":     {},
+	"OFFICE":          {},
+	"INDUSTRIAL":      {},
+	"RETAIL_REIT":     {},
+	"HEALTHCARE_REIT": {},
+	"DATA_CENTER":     {},
+	"CELLTOWER":       {},
+	"SPECIALTY":       {},
+}
+
+// isREITIndustry reports whether the upper-cased industry code denotes a REIT
+// — either the parent label or one of the subsector codes the classifier
+// emits via Pass-2 sub-industry refinement.
+func isREITIndustry(upperIndustry string) bool {
+	_, ok := reitIndustrySet[upperIndustry]
+	return ok
 }

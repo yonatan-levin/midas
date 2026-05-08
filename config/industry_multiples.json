@@ -1,14 +1,16 @@
 {
-  "version": "1.1.1",
-  "description": "Industry-specific valuation multiples for alternative models (DDM, FFO, Revenue Multiple) and exit-multiple terminal value cross-check. Values represent sector median multiples derived from market data. v1.1.1 (RM-2 P1) adds MFG_SEMI/FIN_BANK/FIN_INSURANCE buckets so semiconductors, banks, and insurers no longer fall back silently to the broader sector default.",
+  "version": "1.2.0",
+  "description": "Industry-specific valuation multiples for alternative models (DDM, FFO, Revenue Multiple) and exit-multiple terminal value cross-check. Values represent sector median multiples derived from market data. v1.2.0 (VAL-3 P1+P4) recalibrates REIT subsector P/FFO multiples and cap rates to 2025-26 ranges and adds CELLTOWER + SPECIALTY buckets. REIT subsector keys remain bare (RESIDENTIAL, DATA_CENTER, ...) to align with the FFO model's longest-prefix-match lookup.",
   "reit_pffo_multiples": {
     "default": 15.0,
-    "RESIDENTIAL": 18.0,
-    "INDUSTRIAL": 22.0,
-    "OFFICE": 12.0,
-    "RETAIL_REIT": 13.0,
-    "HEALTHCARE_REIT": 14.0,
-    "DATA_CENTER": 25.0
+    "RESIDENTIAL": 20.0,
+    "INDUSTRIAL": 22.5,
+    "OFFICE": 14.0,
+    "RETAIL_REIT": 10.0,
+    "HEALTHCARE_REIT": 17.5,
+    "DATA_CENTER": 31.0,
+    "CELLTOWER": 25.0,
+    "SPECIALTY": 17.5
   },
   "ev_revenue_multiples": {
     "default": 2.0,
@@ -69,11 +71,12 @@
   "reit_cap_rates": {
     "default": 0.06,
     "RESIDENTIAL": 0.05,
-    "INDUSTRIAL": 0.055,
-    "OFFICE": 0.07,
-    "RETAIL_REIT": 0.065,
+    "INDUSTRIAL": 0.045,
+    "OFFICE": 0.075,
+    "RETAIL_REIT": 0.085,
     "HEALTHCARE_REIT": 0.06,
-    "DATA_CENTER": 0.045
+    "DATA_CENTER": 0.04,
+    "CELLTOWER": 0.045
   },
   "sector_median_pfcf": {
     "default": 22.0,
