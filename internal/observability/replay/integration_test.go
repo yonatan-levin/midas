@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -45,9 +46,9 @@ func seedFullBundle(t *testing.T, ticker, manifestStartedAt string) string {
 		Outcome:        "ok",
 		SchemaVersions: map[string]int{},
 	}
-	for k, v := range CurrentSchemaVersions {
-		mf.SchemaVersions[k] = v
-	}
+	// RPL-3p (R3b cleanup): maps.Copy collapses the manual map-walk
+	// into a single stdlib call (Go 1.21+).
+	maps.Copy(mf.SchemaVersions, CurrentSchemaVersions)
 	body, err := json.MarshalIndent(&mf, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal manifest: %v", err)
@@ -113,9 +114,8 @@ func seedFullBundle_ParsedMode(t *testing.T, ticker, manifestStartedAt string) s
 		Outcome:        "ok",
 		SchemaVersions: map[string]int{},
 	}
-	for k, v := range CurrentSchemaVersions {
-		mf.SchemaVersions[k] = v
-	}
+	// RPL-3p (R3b cleanup): maps.Copy stdlib helper.
+	maps.Copy(mf.SchemaVersions, CurrentSchemaVersions)
 	body, err := json.MarshalIndent(&mf, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal manifest: %v", err)
@@ -447,8 +447,9 @@ func TestRoundTrip_MissingRawSEC_ReturnsErroredViaCoordinatorGoroutine(t *testin
 		t.Fatalf("remove SEC raw: %v", err)
 	}
 
-	// Wrap Replay in a recover to assert no panic.
-	var recovered interface{}
+	// Wrap Replay in a recover to assert no panic. RPL-3p (R3b cleanup):
+	// `any` instead of legacy `interface{}`.
+	var recovered any
 	var res Result
 	func() {
 		defer func() { recovered = recover() }()

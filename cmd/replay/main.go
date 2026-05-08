@@ -80,8 +80,8 @@ Flags:
   --filter-ticker string  Replay only bundles whose manifest ticker == this string (exact-case)
   --filter-since string   Replay only bundles whose manifest started_at is within this duration of now (e.g. 7d, 24h)
   --diff-stages           Diff intermediate-stage JSON files (10-clean-output, 12-growth-curve, 13-wacc, 15-valuation) in addition to the response-level diff
-  --float-rel-tol float   Relative tolerance for float diffs (default 1e-9)
-  --float-abs-tol float   Absolute tolerance for float diffs (default 1e-12)
+  --float-rel-tol float   Relative tolerance for float diffs (default 1e-9; 0 means use default, NOT exact-match)
+  --float-abs-tol float   Absolute tolerance for float diffs (default 1e-12; 0 means use default, NOT exact-match)
 
 Exit codes:
   0   All bundles validated and replayed within tolerance
@@ -431,7 +431,9 @@ func dispatchReplay(bundles []string, f *flags) []replay.Result {
 	var wg sync.WaitGroup
 
 	for i, b := range bundles {
-		i, b := i, b
+		// Go 1.23.0 (per go.mod): per-iteration loop semantics are in
+		// effect, so a closure capturing i/b sees fresh values without
+		// the historical `i, b := i, b` shadow. RPL-3g (R3b cleanup).
 		wg.Add(1)
 		sem <- struct{}{} // acquire slot
 		go func() {
@@ -463,8 +465,22 @@ func evaluateBundleWithRecover(bundleDir string, f *flags) (res replay.Result) {
 			}
 		}
 	}()
-	return evaluateBundle(bundleDir, f)
+	return evaluateBundleFn(bundleDir, f)
 }
+
+// evaluateBundleFn is the package-level indirection so tests can
+// install a panic stub and exercise evaluateBundleWithRecover's
+// `defer recover()` path. Production wires it to evaluateBundle.
+//
+// Test-only seam (RPL-3o): main_test.go's
+// TestEvaluateBundleWithRecover_PanicConvertedToErroredResult swaps
+// this var with a panicking stub, calls evaluateBundleWithRecover,
+// and asserts the recover converted the panic to a StatusErrored
+// Result without crashing the binary. The seam is 1 line of
+// production code (the var declaration) — the alternative would be
+// an unreachable test-only branch inside evaluateBundle, which is
+// dirtier.
+var evaluateBundleFn = evaluateBundle
 
 // applyFilters filters the bundle list by --filter-ticker and
 // --filter-since. Both filters peek the manifest (cheap; <1 KiB read);

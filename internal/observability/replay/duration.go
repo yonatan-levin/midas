@@ -55,8 +55,9 @@ func ParseDurationExtended(s string) (time.Duration, error) {
 	// current Go grammar. If a future Go release adds a unit ending in
 	// "d", the test suite (which exercises every standard unit) will
 	// catch it before this branch silently misroutes input.
-	if strings.HasSuffix(s, "d") {
-		numStr := strings.TrimSuffix(s, "d")
+	// RPL-3j (R3b cleanup): strings.CutSuffix collapses HasSuffix +
+	// TrimSuffix into one call (Go 1.21+).
+	if numStr, ok := strings.CutSuffix(s, "d"); ok {
 		// Pre-validate that the prefix is a numeric literal BEFORE
 		// delegating to time.ParseDuration. Without this guard, an input
 		// like "invalid" (which ends in `d`) gets trimmed to "invali" and

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/midas/dcf-valuation-api/internal/observability/replay"
 )
 
 // TestParseFlags_HappyPath drives the canonical flag set and confirms
@@ -641,5 +643,44 @@ func TestEnvVar_REPLAY_WORKERS_AppliesAsDefault(t *testing.T) {
 	}
 	if f.workers != 8 {
 		t.Fatalf("workers = %d, want 8 (env-var default)", f.workers)
+	}
+}
+
+// TestEvaluateBundleWithRecover_PanicConvertedToErroredResult exercises
+// the defer-recover at the worker-goroutine boundary in
+// evaluateBundleWithRecover. Production: a panic in any layer outside
+// the F11 datafetcher goroutine path (e.g. an Auth/Watchlist stub
+// panic, an engine refactor that touches a panic-stub repo) escapes
+// up to evaluateBundleWithRecover where the deferred recover converts
+// it to a StatusErrored Result so the parent batch keeps running.
+//
+// Strategy: the production evaluateBundle is reached via the
+// evaluateBundleFn package-level indirection (RPL-3o test seam, ~5
+// LoC of production code). Test swaps in a stub that panics with a
+// known sentinel; assert the result's Status==StatusErrored and the
+// Error string contains the panic value.
+//
+// RPL-3o (R3b cleanup); spec §12 testing requirement.
+func TestEvaluateBundleWithRecover_PanicConvertedToErroredResult(t *testing.T) {
+	const panicMsg = "rpl-3o-test-panic"
+
+	original := evaluateBundleFn
+	t.Cleanup(func() { evaluateBundleFn = original })
+	evaluateBundleFn = func(bundleDir string, f *flags) replay.Result {
+		panic(panicMsg)
+	}
+
+	res := evaluateBundleWithRecover("/x/test-bundle", &flags{})
+	if res.Status != replay.StatusErrored {
+		t.Fatalf("Status: want errored, got %s", res.Status)
+	}
+	if res.Bundle != "/x/test-bundle" {
+		t.Errorf("Bundle: want /x/test-bundle, got %q", res.Bundle)
+	}
+	if !strings.Contains(res.Error, "panic in replay worker") {
+		t.Errorf("Error must mention 'panic in replay worker'; got %q", res.Error)
+	}
+	if !strings.Contains(res.Error, panicMsg) {
+		t.Errorf("Error must surface the panic value %q; got %q", panicMsg, res.Error)
 	}
 }

@@ -58,7 +58,7 @@ func TestSpike_ParallelFxAppLifecycle(t *testing.T) {
 	const startStopTimeout = 30 * time.Second
 
 	type result struct {
-		registry interface{} // captures *prometheus.Registry pointer; interface{} dodges import-cycle
+		registry any // captures *prometheus.Registry pointer; any dodges import-cycle
 		err      error
 	}
 
@@ -66,8 +66,9 @@ func TestSpike_ParallelFxAppLifecycle(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(numWorkers)
 
-	for i := 0; i < numWorkers; i++ {
-		i := i
+	// Go 1.22+ integer range form; per-iteration capture by Go 1.23+
+	// loop semantics drops the shadow line. RPL-3i (R3b cleanup).
+	for i := range numWorkers {
 		go func() {
 			defer wg.Done()
 			defer func() {
@@ -141,7 +142,8 @@ func TestSpike_ParallelFxAppLifecycle(t *testing.T) {
 	// Assert per-app metrics-registry pointers are pairwise distinct. A
 	// shared pointer would mean Module() leaked process-global state into
 	// per-app construction — the central concern RPL-2g half-fix targets.
-	for i := 0; i < numWorkers; i++ {
+	// RPL-3i (R3b cleanup): integer range form.
+	for i := range numWorkers {
 		for j := i + 1; j < numWorkers; j++ {
 			if results[i].registry == results[j].registry {
 				t.Errorf("metrics registry pollution: worker %d and worker %d share the same *prometheus.Registry pointer (%p)", i, j, results[i].registry)
@@ -167,11 +169,11 @@ func TestSpike_ParallelFxAppLifecycle(t *testing.T) {
 // panicErr converts a recovered panic value into an error for storage in
 // the result slice without forcing a goroutine-local t.Fatalf (which would
 // fail to surface from a child goroutine in the standard testing harness).
-type panicError struct{ v interface{} }
+type panicError struct{ v any }
 
 func (p panicError) Error() string { return "panic in worker goroutine" }
 
-func panicErr(v interface{}) error { return panicError{v: v} }
+func panicErr(v any) error { return panicError{v: v} }
 
 // errMissing returns a typed error for "an fx.Populate target was not
 // resolved" — symptomatic of a Module() composition regression.

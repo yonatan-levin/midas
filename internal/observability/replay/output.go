@@ -113,9 +113,12 @@ func (r *Result) Err() error {
 // Summary is the aggregate row at the bottom of every replay invocation.
 // Renderers append it to the per-bundle stream.
 //
-// Timing fields (R3 Stage L.3 — v2 plan Addition #4):
-//   - DurationMs: cumulative per-bundle replay duration (sum of Result.DurationMs).
-//     Pre-existing field; preserves R2 contract.
+// Timing fields (R3 Stage L.3 — v2 plan Addition #4; clarified RPL-3m R3b):
+//   - DurationMs: cumulative per-bundle replay duration (sum of
+//     Result.DurationMs). Pre-existing field; preserves R2 contract.
+//     Under --workers > 1, this exceeds ReplayDurationMs because workers
+//     run concurrently — operators wanting the user-facing wait time
+//     should read ReplayDurationMs instead.
 //   - WalkDurationMs: wall-clock time WalkBundles took to enumerate the bundle
 //     tree. Single batch-level measurement (one WalkBundles call covers the run).
 //   - ReplayDurationMs: wall-clock time the dispatcher spent running per-bundle
