@@ -1,0 +1,51 @@
+{
+  "replay_version": "0.1",
+  "git_sha_current": "test-build",
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "errored": 0,
+    "duration_ms": 104,
+    "walk_duration_ms": 0,
+    "replay_duration_ms": 0
+  },
+  "results": [
+    {
+      "bundle": "/fixtures/AMD/req_stage_diffs",
+      "status": "fail",
+      "ticker": "AMD",
+      "fields_total": 36,
+      "fields_changed": 0,
+      "schema_drift": false,
+      "git_drift": false,
+      "duration_ms": 104,
+      "stage_diffs": {
+        "13-wacc.json": {
+          "floats": [
+            {
+              "path": "stages.13-wacc.json.cost_of_equity",
+              "old": 0.118,
+              "new": 0.121,
+              "rel_drift": 0.0254,
+              "abs_drift": 0.003,
+              "within_tolerance": false
+            }
+          ]
+        },
+        "15-valuation.json": {
+          "drifted_within_tolerance": [
+            {
+              "path": "stages.15-valuation.json.dcf_value_per_share",
+              "old": 156.42,
+              "new": 156.4200000001,
+              "rel_drift": 6.4e-13,
+              "abs_drift": 1e-10,
+              "within_tolerance": true
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

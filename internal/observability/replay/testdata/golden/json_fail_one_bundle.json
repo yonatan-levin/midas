@@ -1,0 +1,35 @@
+{
+  "replay_version": "0.1",
+  "git_sha_current": "test-build",
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 1,
+    "errored": 0,
+    "duration_ms": 92,
+    "walk_duration_ms": 0,
+    "replay_duration_ms": 0
+  },
+  "results": [
+    {
+      "bundle": "/fixtures/AMD/req_fail",
+      "status": "fail",
+      "ticker": "AMD",
+      "fields_total": 36,
+      "fields_changed": 1,
+      "schema_drift": false,
+      "git_drift": false,
+      "duration_ms": 92,
+      "diffs": [
+        {
+          "path": "dcf_value_per_share",
+          "old": 156.42,
+          "new": 156.81,
+          "rel_drift": 0.0025,
+          "abs_drift": 0.39,
+          "within_tolerance": false
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "replay_version": "0.1",
+  "git_sha_current": "test-build",
+  "summary": {
+    "total": 1,
+    "passed": 0,
+    "failed": 0,
+    "errored": 1,
+    "duration_ms": 14,
+    "walk_duration_ms": 0,
+    "replay_duration_ms": 0
+  },
+  "results": [
+    {
+      "bundle": "/fixtures/TSM/req_errored",
+      "status": "errored",
+      "ticker": "TSM",
+      "fields_total": 0,
+      "fields_changed": 0,
+      "schema_drift": false,
+      "git_drift": false,
+      "duration_ms": 14,
+      "error": "replay: bundle missing payload: 05-fetch-sec.raw.json"
+    }
+  ]
+}
