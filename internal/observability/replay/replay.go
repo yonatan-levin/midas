@@ -97,7 +97,12 @@ func Replay(ctx context.Context, bundleDir string, opts Options) Result {
 	}
 
 	// Step 4-5: build the fx app, resolve the service, run the engine.
-	current, runErr := runEngine(ctx, bundleDir, opts, mf.Ticker)
+	// When opts.DiffStages is set, stagesDir is a per-call temp directory
+	// that the engine's `b.Snapshot(...)` calls write into; runEngine
+	// removes it before returning bytes through stagesBytes. Empty
+	// otherwise. Spec D7 invariant ("replay produces no bundles of
+	// bundles") is preserved because stagesDir is ephemeral.
+	current, stagesBytes, runErr := runEngine(ctx, bundleDir, opts, mf.Ticker)
 	if runErr != nil {
 		res.Error = runErr.Error()
 		// Pass-through: errors.Is(...,replay.ErrBundleMissingPayload) on
@@ -148,7 +153,26 @@ func Replay(ctx context.Context, bundleDir string, opts Options) Result {
 	res.StringDiffs = diff.Strings
 	res.DriftedWithinTolerance = diff.FloatsWithinTolerance
 
-	if diff.HasMismatch() {
+	// Stage K: per-stage JSON diff. When opts.DiffStages is true, walk the
+	// canonical stage inventory and diff each pair (bundle-recorded vs
+	// engine-produced). A stage diff at any inventory entry that
+	// HasMismatch() promotes the overall result to StatusFail even if
+	// the response-level diff was clean — because a stage-level drift IS
+	// a regression signal even when the final per-share value happens to
+	// round identically. Drifted-within-tolerance entries do NOT promote.
+	stageMismatch := false
+	if opts.DiffStages {
+		res.StageDiffs = make(map[string]StageDiff, len(StageDiffInventory))
+		for _, stageFile := range StageDiffInventory {
+			sd := diffStage(bundleDir, stageFile, stagesBytes[stageFile], relTol, absTol)
+			res.StageDiffs[stageFile] = sd
+			if sd.HasMismatch() {
+				stageMismatch = true
+			}
+		}
+	}
+
+	if diff.HasMismatch() || stageMismatch {
 		res.Status = StatusFail
 	} else {
 		res.Status = StatusPass
@@ -157,10 +181,27 @@ func Replay(ctx context.Context, bundleDir string, opts Options) Result {
 }
 
 // runEngine constructs the fx app, resolves *valuation.Service, and
-// invokes CalculateValuation. Returns the engine output and any error.
-// The fx app is started + stopped within this function — its lifetime
-// does not extend past Replay's return.
-func runEngine(ctx context.Context, bundleDir string, opts Options, ticker string) (*entities.ValuationResult, error) {
+// invokes CalculateValuation. Returns the engine output, a per-stage-
+// filename map of captured snapshot bytes (populated only when
+// opts.DiffStages is true; nil otherwise), and any error. The fx app
+// is started + stopped within this function — its lifetime does not
+// extend past Replay's return.
+//
+// Stage K snapshot capture (D7 invariant — "replay produces no bundles
+// of bundles"):
+//
+// When opts.DiffStages is true, runEngine creates an ephemeral temp
+// directory, opens an artifact.Bundle pointed at it, injects the
+// bundle into ctx so the engine's `b := artifact.From(ctx)` lookup
+// returns it, and reads back the captured stage files from the temp
+// directory before removing it. The temp directory's lifetime is
+// scoped to this function — it never persists past the return.
+//
+// Hermeticity preserved: the temp directory lives under os.TempDir()
+// (NOT under the production artifact root); the bundle's worker
+// goroutine flushes synchronously via Close() before we read the
+// files; RemoveAll cleans up unconditionally via defer.
+func runEngine(ctx context.Context, bundleDir string, opts Options, ticker string) (*entities.ValuationResult, map[string][]byte, error) {
 	var svc *valuation.Service
 	app := fx.New(
 		Module(bundleDir, opts),
@@ -168,12 +209,12 @@ func runEngine(ctx context.Context, bundleDir string, opts Options, ticker strin
 		fx.NopLogger,
 	)
 	if err := app.Err(); err != nil {
-		return nil, fmt.Errorf("replay: fx app build: %w", err)
+		return nil, nil, fmt.Errorf("replay: fx app build: %w", err)
 	}
 	startCtx, startCancel := context.WithTimeout(ctx, 30*time.Second)
 	defer startCancel()
 	if err := app.Start(startCtx); err != nil {
-		return nil, fmt.Errorf("replay: fx app start: %w", err)
+		return nil, nil, fmt.Errorf("replay: fx app start: %w", err)
 	}
 	defer func() {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -182,14 +223,26 @@ func runEngine(ctx context.Context, bundleDir string, opts Options, ticker strin
 	}()
 
 	if svc == nil {
-		return nil, fmt.Errorf("replay: *valuation.Service was not populated")
+		return nil, nil, fmt.Errorf("replay: *valuation.Service was not populated")
 	}
 
-	result, err := svc.CalculateValuation(ctx, ticker, nil)
-	if err != nil {
-		return nil, fmt.Errorf("replay: CalculateValuation %s: %w", ticker, err)
+	// Optional snapshot capture for Stage K. When enabled, an ephemeral
+	// bundle is injected into ctx; the engine's per-stage `b.Snapshot`
+	// calls land in stagesDir which we read + remove before return.
+	stageBytes, cleanup, ctxOut, snapErr := openStageCapture(ctx, opts, ticker)
+	if snapErr != nil {
+		return nil, nil, snapErr
 	}
-	return result, nil
+	defer cleanup()
+
+	result, err := svc.CalculateValuation(ctxOut, ticker, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("replay: CalculateValuation %s: %w", ticker, err)
+	}
+
+	// Drain captured stage snapshots (no-op when DiffStages is false).
+	captured := drainStageBytes(stageBytes, opts)
+	return result, captured, nil
 }
 
 // buildFairValueResponse mirrors the production handler at
@@ -277,3 +330,111 @@ func resolveGitSHA() string {
 // future code (e.g. R3's per-stage diff against intermediate snapshots)
 // likely will, and the import-block stability matters for review hygiene.
 var _ = artifact.ManifestVersion
+
+// stageCaptureContext is the per-call state for Stage K's snapshot
+// capture. Holds the ephemeral *artifact.Bundle, its temp directory,
+// and the context that downstream engine code reads via
+// `artifact.From(ctx)`. Returned from openStageCapture as a struct so
+// Replay's caller can defer cleanup() without juggling individual
+// pointers.
+type stageCaptureState struct {
+	bundle  *artifact.Bundle
+	rootDir string
+}
+
+// openStageCapture opens an ephemeral artifact bundle when
+// opts.DiffStages is true so the engine's `b.Snapshot(...)` calls
+// land somewhere readable. When opts.DiffStages is false (the common
+// case), this is a no-op that returns ctx unchanged.
+//
+// Returned values:
+//   - state: holds the bundle pointer + root dir; nil when DiffStages
+//     is false.
+//   - cleanup: idempotent function the caller defers. Closes the
+//     bundle (waits for the worker to drain) and removes the temp dir.
+//   - ctxOut: the (possibly bundle-injected) context to pass downstream.
+//   - err: only non-nil when bundle construction itself fails (rare;
+//     mostly an OS error case).
+func openStageCapture(ctx context.Context, opts Options, ticker string) (*stageCaptureState, func(), context.Context, error) {
+	if !opts.DiffStages {
+		return nil, func() {}, ctx, nil
+	}
+
+	rootDir, err := os.MkdirTemp("", "replay-stages-*")
+	if err != nil {
+		return nil, func() {}, ctx, fmt.Errorf("replay: open stage capture: %w", err)
+	}
+
+	cfg := artifact.Config{
+		Enabled:  true,
+		RootPath: rootDir,
+	}
+	requestID := fmt.Sprintf("replay-%s-%d", ticker, time.Now().UnixNano())
+	// TriggerHeader is the manual-diagnostic trigger; the closest match
+	// for replay's "produce snapshots for offline diff". Manifest stamp
+	// is academic since the temp-dir bundle is removed before return —
+	// no operator ever inspects it.
+	b, err := artifact.OpenBundle(cfg, requestID, ticker, artifact.TriggerHeader)
+	if err != nil {
+		_ = os.RemoveAll(rootDir)
+		return nil, func() {}, ctx, fmt.Errorf("replay: open stage bundle: %w", err)
+	}
+	if b == nil {
+		// OpenBundle returns nil when cfg.Enabled is false — defensive
+		// fallback in case the API contract changes.
+		_ = os.RemoveAll(rootDir)
+		return nil, func() {}, ctx, fmt.Errorf("replay: stage bundle was nil")
+	}
+
+	state := &stageCaptureState{bundle: b, rootDir: rootDir}
+	cleanup := func() {
+		// Close drains the worker goroutine and synchronously flushes
+		// pending snapshots to disk. ALL reads in drainStageBytes
+		// happen AFTER cleanup is deferred but BEFORE the deferred
+		// fires, so we cannot call cleanup eagerly here. Caller is
+		// responsible for ordering: drain first, then defer fires.
+		_ = b.Close()
+		_ = os.RemoveAll(rootDir)
+	}
+	ctxOut := artifact.Inject(ctx, b)
+	return state, cleanup, ctxOut, nil
+}
+
+// drainStageBytes reads the captured stage files back from the
+// ephemeral bundle's root directory. Returns nil when state is nil
+// (DiffStages was false). Errors on individual files are non-fatal —
+// they manifest downstream as `current_missing` asymmetric markers
+// because diffStage observes the empty bytes.
+//
+// IMPORTANT: this MUST be called after b.Close() drains the worker, so
+// the saved files are guaranteed to be on disk. The caller's deferred
+// cleanup() also calls Close() — that's a no-op redundancy because
+// Bundle.Close is idempotent. We close eagerly here so the read sees
+// the post-flush files; the deferred close handles the directory
+// removal afterward.
+func drainStageBytes(state *stageCaptureState, opts Options) map[string][]byte {
+	if state == nil || !opts.DiffStages {
+		return nil
+	}
+	// Eager close so the worker has drained before we read. Idempotent
+	// per Bundle.Close's contract.
+	_ = state.bundle.Close()
+
+	out := make(map[string][]byte, len(StageDiffInventory))
+	// Bundle.Root() returns the per-request directory inside rootDir;
+	// stage files land directly under that root.
+	bundleRoot := state.bundle.Root()
+	for _, stageFile := range StageDiffInventory {
+		body, err := os.ReadFile(filepath.Join(bundleRoot, stageFile))
+		if err != nil {
+			// Missing file is the common case (engine's calculation
+			// path skipped this stage — e.g. non-DCF model paths
+			// don't write 15-valuation.json). Leave the entry absent
+			// from `out` so diffStage's `currentAbsent` branch fires
+			// and emits the asymmetric marker.
+			continue
+		}
+		out[stageFile] = body
+	}
+	return out
+}

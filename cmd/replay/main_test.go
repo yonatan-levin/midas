@@ -504,21 +504,30 @@ func TestParseFlags_R3FlagsAreRegistered(t *testing.T) {
 	}
 }
 
-// TestParseFlags_DiffStagesNotRegistered pins the contract that
-// --diff-stages is intentionally absent until Stage K (per-stage diff)
-// ships in R3b. Registering the flag without the engine consuming it
-// would be a CLI contract leak — passing the flag would silently do
-// nothing — same hazard the R2 follow-up #11 caught for --git-sha.
-//
-// When Stage K lands, this test should be replaced with a positive
-// "registered + behavior" pin in TestParseFlags_R3FlagsAreRegistered.
-func TestParseFlags_DiffStagesNotRegistered(t *testing.T) {
-	_, _, err := parseFlags([]string{"--diff-stages", "/x"})
-	if err == nil {
-		t.Fatal("--diff-stages must NOT be registered until Stage K ships; parseFlags accepted it")
+// TestParseFlags_DiffStages_DefaultFalse pins the default value of the
+// --diff-stages flag. Default off means the watchlist-regression
+// workflow doesn't pay the snapshot-capture cost unless the operator
+// explicitly opts in. R3b Stage K.
+func TestParseFlags_DiffStages_DefaultFalse(t *testing.T) {
+	f, _, err := parseFlags([]string{"/x"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
 	}
-	if !strings.Contains(err.Error(), "flag provided but not defined") {
-		t.Fatalf("expected 'flag provided but not defined' error; got: %v", err)
+	if f.diffStages {
+		t.Fatalf("--diff-stages default = true, want false")
+	}
+}
+
+// TestParseFlags_DiffStages_ExplicitTrue verifies the bool flag flips
+// when explicitly passed. Plain `--diff-stages` (no value) is the spec
+// shape per §7's L515-554 sample.
+func TestParseFlags_DiffStages_ExplicitTrue(t *testing.T) {
+	f, _, err := parseFlags([]string{"--diff-stages", "/x"})
+	if err != nil {
+		t.Fatalf("parseFlags --diff-stages: %v", err)
+	}
+	if !f.diffStages {
+		t.Fatalf("--diff-stages = false after explicit pass; want true")
 	}
 }
 

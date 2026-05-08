@@ -159,23 +159,85 @@ func TestRoundTrip_ReplaySelfConsistency_ZeroDiffs(t *testing.T) {
 	}
 }
 
-// RPL-2b (R3 Stage M.3) — DEFERRED:
-//
-// A parsed-mode counterpart to TestRoundTrip_ReplaySelfConsistency_
-// ZeroDiffs would require a separate seedFullBundle that emits the
-// 05-fetch-sec.parsed.json / 06-fetch-market.parsed.json /
-// 07-fetch-macro-*.parsed.json projections of the production parser
-// output. seedFullBundle today produces only the raw-mode payloads;
-// extending it for parsed mode is a non-trivial fixture-builder
-// addition (the parsed shapes mirror the post-parse domain types,
-// which evolve with engine schema). Plan §3 Stage M.3 estimated
-// ~30 LoC but the actual cost includes a parallel ~150 LoC seed
-// builder. Pushing this to a follow-up keeps R3 landable.
-//
-// The unit-level gateway dispatch tests (gateway_*_test.go's
-// ModeParsed branches) and the CLI-level flag parse test
-// (TestParseFlags_FromParsed_Explicit) provide partial coverage;
-// the missing piece is end-to-end parsed-mode replay determinism.
+// TestRun_DiffStages_PopulatesStageDiffsField verifies Stage K's
+// engine wiring populates Result.StageDiffs when Options.DiffStages is
+// true. Setup mirrors the round-trip happy path; the assertion is that
+// at least one stage entry is present after the run, since the engine
+// writes `13-wacc.json` unconditionally on the DCF path. R3b Stage K.
+func TestRun_DiffStages_PopulatesStageDiffsField(t *testing.T) {
+	const ticker = "AAPL"
+	const startedAt = "2026-01-15T12:00:00Z"
+
+	bundleDir := seedFullBundle(t, ticker, startedAt)
+
+	// Capture canonical response so the response-level diff is clean.
+	_, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeRaw, nil)
+	writeResponseFile(t, bundleDir, firstResp)
+
+	// Replay with DiffStages enabled.
+	res := Replay(context.Background(), bundleDir, Options{Mode: ModeRaw, DiffStages: true})
+	if res.Status == StatusErrored {
+		t.Fatalf("Replay returned Errored: %s", res.Error)
+	}
+	if res.StageDiffs == nil {
+		t.Fatalf("StageDiffs nil with DiffStages=true; want non-nil map")
+	}
+	// 13-wacc.json is the load-bearing entry — always written by the DCF
+	// path (the only model path the AAPL fixture exercises).
+	if _, ok := res.StageDiffs["13-wacc.json"]; !ok {
+		t.Fatalf("StageDiffs missing 13-wacc.json key; got keys %v", stageDiffKeys(res.StageDiffs))
+	}
+	// 13-wacc.json should ALSO be in the bundle (because the test
+	// fixture's first engine run wrote it via the same Snapshot path).
+	// However, our seedFullBundle does NOT write stage files — only
+	// raw fetches. So the 13-wacc.json bundle side IS missing, and the
+	// diff path emits a `bundle_missing` asymmetric marker. Pin that.
+	bw, ok := res.StageDiffs["13-wacc.json"]
+	if !ok {
+		t.Fatal("13-wacc.json absent from StageDiffs")
+	}
+	foundMissingMarker := false
+	for _, sd := range bw.Strings {
+		if sd.Path == "stages.13-wacc.json.bundle_missing" {
+			foundMissingMarker = true
+			break
+		}
+	}
+	if !foundMissingMarker {
+		// The fixture writes raw fetches but not stage snapshots; the
+		// engine produces 13-wacc.json on the DCF path. Asymmetric
+		// marker is the expected outcome.
+		t.Fatalf("expected `bundle_missing` marker for 13-wacc.json (fixture has no stage files); got %+v", bw)
+	}
+}
+
+// TestRun_DiffStages_DisabledByDefault_ZeroStageDiffs verifies that
+// without the flag, Result.StageDiffs is nil. Catches a regression
+// where DiffStages defaulted to true and would silently slow every
+// replay.
+func TestRun_DiffStages_DisabledByDefault_ZeroStageDiffs(t *testing.T) {
+	const ticker = "AAPL"
+	const startedAt = "2026-01-15T12:00:00Z"
+
+	bundleDir := seedFullBundle(t, ticker, startedAt)
+	_, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeRaw, nil)
+	writeResponseFile(t, bundleDir, firstResp)
+
+	res := Replay(context.Background(), bundleDir, Options{Mode: ModeRaw}) // DiffStages omitted = false
+	if res.StageDiffs != nil {
+		t.Fatalf("StageDiffs = %+v; want nil with DiffStages omitted", res.StageDiffs)
+	}
+}
+
+// stageDiffKeys returns sorted keys of a StageDiff map for diagnostic
+// printing in test failures.
+func stageDiffKeys(m map[string]StageDiff) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
 
 // TestRoundTrip_MutatedResponse_FlagsDiff verifies that mutating the
 // canonical response after capture causes Replay to surface a diff.

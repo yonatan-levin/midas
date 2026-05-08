@@ -79,6 +79,7 @@ Flags:
   --workers int           Parallel replay workers (default runtime.NumCPU(); env REPLAY_WORKERS)
   --filter-ticker string  Replay only bundles whose manifest ticker == this string (exact-case)
   --filter-since string   Replay only bundles whose manifest started_at is within this duration of now (e.g. 7d, 24h)
+  --diff-stages           Diff intermediate-stage JSON files (10-clean-output, 12-growth-curve, 13-wacc, 15-valuation) in addition to the response-level diff
   --float-rel-tol float   Relative tolerance for float diffs (default 1e-9)
   --float-abs-tol float   Absolute tolerance for float diffs (default 1e-12)
 
@@ -125,11 +126,13 @@ type flags struct {
 	filterSinceRaw string
 	filterSince    time.Duration
 
-	// --diff-stages was previously registered but had no R3 (Stages I+J+L)
-	// side-effect; the per-stage diff machinery (Stage K) is deferred to
-	// R3b. Registering the flag now would be a contract leak — passing
-	// --diff-stages would silently do nothing. Same fix shape as the
-	// R2-era --git-sha drop. Re-add when Stage K ships.
+	// diffStages enables per-stage JSON diff (Stage K). When true, the
+	// orchestrator captures the engine's intermediate snapshots
+	// (10-clean-output.json, 12-growth-curve.json, 13-wacc.json,
+	// 15-valuation.json) into an ephemeral bundle and diffs them against
+	// the bundle's recorded versions. Off by default to keep the
+	// watchlist-regression workflow as fast as the response-only diff.
+	diffStages bool
 
 	// floatRelTol / floatAbsTol override the default tolerances used by
 	// the diff layer. Defaults map to replay.DefaultFloatRelTol /
@@ -168,6 +171,7 @@ func parseFlags(argv []string) (*flags, string, error) {
 	fs.IntVar(&f.workers, "workers", defaultWorkers, "Parallel replay workers (default runtime.NumCPU(); env REPLAY_WORKERS)")
 	fs.StringVar(&f.filterTicker, "filter-ticker", "", "Replay only bundles whose manifest ticker == this string (exact-case)")
 	fs.StringVar(&f.filterSinceRaw, "filter-since", "", "Replay only bundles whose manifest started_at is within this duration of now (e.g. 7d, 24h)")
+	fs.BoolVar(&f.diffStages, "diff-stages", false, "Diff intermediate-stage JSON files in addition to the response-level diff (Stage K, Phase 2.D R3b)")
 	fs.Float64Var(&f.floatRelTol, "float-rel-tol", replay.DefaultFloatRelTol, "Relative tolerance for float diffs")
 	fs.Float64Var(&f.floatAbsTol, "float-abs-tol", replay.DefaultFloatAbsTol, "Absolute tolerance for float diffs")
 
@@ -537,6 +541,7 @@ func evaluateBundle(bundleDir string, f *flags) replay.Result {
 		AllowGitDrift:    f.allowGitDrift,
 		FloatRelTol:      f.floatRelTol,
 		FloatAbsTol:      f.floatAbsTol,
+		DiffStages:       f.diffStages,
 	})
 }
 

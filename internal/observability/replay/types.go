@@ -87,9 +87,22 @@ type Options struct {
 	// = 1e-12). Same semantics as FloatRelTol.
 	FloatAbsTol float64
 
-	// Per-stage diff (10-clean-output.json, 12-growth-curve.json,
-	// 13-wacc.json, 15-valuation.json) is deferred to Stage K (R3b). The
-	// previous DiffStages bool was dropped — registering it without an
-	// engine consumer was a CLI contract leak (VERIFIER MAJOR-1). Re-add
-	// when Stage K wires the per-stage diff machinery.
+	// DiffStages enables Stage K's per-stage diff. When true, the
+	// orchestrator captures the engine's intermediate-stage snapshots
+	// (10-clean-output.json, 12-growth-curve.json, 13-wacc.json,
+	// 15-valuation.json) into an ephemeral bundle attached to the request
+	// context, then diffs each captured snapshot against the bundle's
+	// recorded version via diffStage. Output lands in Result.StageDiffs.
+	//
+	// Default false: DiffStages adds wall-clock cost (one extra Bundle
+	// open + close + per-snapshot JSON marshal) the watchlist-regression
+	// workflow doesn't pay for. Spec §7 wires this to the `--diff-stages`
+	// CLI flag.
+	//
+	// Hermeticity (F11) note: when true, Replay() opens a bundle pointed
+	// at a per-call temp directory (NOT the production artifact root) and
+	// removes it before returning. Spec D7 invariant ("replay produces no
+	// bundles of bundles") is preserved because the temp directory is
+	// ephemeral.
+	DiffStages bool
 }

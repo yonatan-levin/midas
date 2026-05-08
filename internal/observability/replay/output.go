@@ -80,6 +80,13 @@ type Result struct {
 	// SchemaDriftEntries enumerates the per-entity drift detected. Only
 	// populated when SchemaDrift is true.
 	SchemaDriftEntries []SchemaDriftEntry `json:"schema_drift_entries,omitempty"`
+	// StageDiffs carries Stage K's per-stage diff records, keyed by the
+	// stage filename (e.g. "13-wacc.json"). Populated only when
+	// Options.DiffStages is true; absent from JSON output (omitempty)
+	// otherwise. Each StageDiff carries Floats / Strings /
+	// DriftedWithinTolerance slices mirroring Result's response-level
+	// diff fields. Spec §7 + R3b plan §3 Stage K.
+	StageDiffs map[string]StageDiff `json:"stage_diffs,omitempty"`
 	// Error carries the error message for an Errored Result. Stable
 	// shape; the underlying error type is not promised.
 	Error string `json:"error,omitempty"`
