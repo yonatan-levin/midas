@@ -82,9 +82,10 @@ var sicToGICS = map[string]map[string]bool{
 
 // matchSICToGICS returns true when the SIC-derived label and the heuristic
 // GICS code agree per the sicToGICS table. Empty inputs are never a match.
-// Sub-industry refinements (TECH_SAAS, HEALTH_BIOTECH, FIN_IB, …) produced by
-// classifier Pass 2 are normalized to their parent prefix before lookup, so
-// "TECH_SAAS" vs "45" matches just like "TECH" vs "45" would.
+// Sub-industry refinements (TECH_SAAS, HEALTH_BIOTECH, FIN_IB, MFG_SEMI,
+// FIN_BANK, FIN_INSURANCE, …) produced by classifier Pass 2 are normalized
+// to their parent prefix before lookup, so "TECH_SAAS" vs "45" matches just
+// like "TECH" vs "45" would.
 func matchSICToGICS(sicLabel, gicsCode string) bool {
 	if sicLabel == "" || gicsCode == "" {
 		return false

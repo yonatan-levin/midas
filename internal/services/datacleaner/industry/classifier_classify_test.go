@@ -23,9 +23,9 @@ func TestIndustryClassifier_Classify_SICCodeMatching(t *testing.T) {
 			expected: "TECH",
 		},
 		{
-			name:     "exact SIC code match for financial services",
+			name:     "exact SIC code match for financial services (refines to FIN_BANK sub-industry per RM-2 P1)",
 			sicCode:  "6020",
-			expected: "FIN",
+			expected: "FIN_BANK",
 		},
 		{
 			name:     "exact SIC code match for healthcare",
@@ -138,9 +138,9 @@ func TestIndustryClassifier_Classify_KeywordMatching(t *testing.T) {
 		expected    string
 	}{
 		{
-			name:        "keyword match for bank",
+			name:        "keyword match for bank refines to FIN_BANK sub-industry (RM-2 P1)",
 			companyName: "First National Bank Corp",
-			expected:    "FIN",
+			expected:    "FIN_BANK",
 		},
 		{
 			name:        "keyword match for software",
@@ -310,17 +310,20 @@ func TestClassify_ReturnsClassificationResult(t *testing.T) {
 	classifier := newTestClassifier(t)
 
 	t.Run("parent-only match keeps Sector == Industry and SubIndustry empty", func(t *testing.T) {
-		// SIC 6020 maps to FIN parent and has no sub-industry matcher in the
-		// production config — exercises the no-sub-industry branch.
-		result, err := classifier.Classify(context.Background(), "6020", "", "")
+		// NAICS 523 lands on the FIN parent's NAICS prefix list. None of the
+		// FIN sub-industries (FIN_IB, FIN_AM, FIN_INSURANCE, FIN_BANK) declare
+		// NAICS matchers, so the sub-industry pass cannot fire — this
+		// reliably exercises the no-sub-industry branch even after RM-2 P1
+		// added bank/insurance subs that cover every FIN parent SIC.
+		result, err := classifier.Classify(context.Background(), "", "523", "")
 		require.NoError(t, err)
 
 		assert.Equal(t, "FIN", result.Sector, "Sector must be the parent code")
 		assert.Equal(t, "FIN", result.Industry, "Industry must equal Sector when no sub-industry matched")
 		assert.Empty(t, result.SubIndustry, "SubIndustry must be empty when only parent matched")
 		assert.Equal(t, "FIN", result.ModelHint, "ModelHint must equal Industry — model router keys on it")
-		assert.Equal(t, "6020", result.SIC, "SIC echo")
-		assert.Equal(t, "", result.NAICS, "NAICS echo (empty input)")
+		assert.Equal(t, "", result.SIC, "SIC echo (empty input)")
+		assert.Equal(t, "523", result.NAICS, "NAICS echo")
 	})
 
 	t.Run("sub-industry match diverges Sector from Industry and populates SubIndustry", func(t *testing.T) {

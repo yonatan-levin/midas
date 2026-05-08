@@ -952,22 +952,22 @@ func TestFairValueResponse_Industry_RealClassifier(t *testing.T) {
 		{
 			name:             "semiconductor_MFG_to_GICS_45",
 			ticker:           "AMD",
-			sicCode:          "3674", // in the 2000-3999 MFG range
+			sicCode:          "3674", // matches MFG_SEMI sub-industry under MFG (RM-2 P1)
 			heurCode:         "45",
 			heurName:         "Information Technology",
 			expectMatch:      true,
-			acceptableLabels: []string{"MFG"}, // MFG has no sub-industries in config
-			matchExplanation: "semiconductor: SIC MFG + GICS 45 is a canonical hybrid match",
+			acceptableLabels: []string{"MFG", "MFG_SEMI"}, // accept either parent or the new sub-industry
+			matchExplanation: "semiconductor: SIC MFG/MFG_SEMI + GICS 45 is a canonical hybrid match (sub normalizes to MFG parent for match)",
 		},
 		{
 			name:             "commercial_bank_FIN_to_GICS_40",
 			ticker:           "JPM",
-			sicCode:          "6020", // explicit FIN entry
+			sicCode:          "6020", // matches FIN_BANK sub-industry under FIN (RM-2 P1)
 			heurCode:         "40",
 			heurName:         "Financials",
 			expectMatch:      true,
-			acceptableLabels: []string{"FIN"},
-			matchExplanation: "commercial bank: SIC FIN + GICS 40; regression sentinel for B-1 FINL/FIN typo",
+			acceptableLabels: []string{"FIN", "FIN_BANK"}, // accept parent or sub-industry post-RM-2 P1
+			matchExplanation: "commercial bank: SIC FIN/FIN_BANK + GICS 40; regression sentinel for B-1 FINL/FIN typo (sub normalizes to FIN parent)",
 		},
 		{
 			name:             "prepackaged_software_TECH_to_GICS_45",
