@@ -573,3 +573,140 @@ func TestFormatTimestamp_StableUTC(t *testing.T) {
 		t.Errorf("FormatTimestamp = %q", out)
 	}
 }
+
+// stageDiffsFixture builds a Result populated with one passing stage,
+// one stage with a hard float diff, and one stage with a within-
+// tolerance drift. Used by the Stage L.1 verbose-render tests.
+func stageDiffsFixture() *Result {
+	return &Result{
+		Bundle: "/x",
+		Status: StatusFail,
+		StageDiffs: map[string]StageDiff{
+			"13-wacc.json": {
+				Floats: []FloatDiff{
+					{Path: "stages.13-wacc.json.cost_of_equity", Old: 0.118, New: 0.121, RelDrift: 0.0254},
+				},
+			},
+			"15-valuation.json": {
+				DriftedWithinTolerance: []FloatDiff{
+					{Path: "stages.15-valuation.json.dcf_value_per_share", Old: 156.42, New: 156.42 + 1e-9, RelDrift: 1e-11},
+				},
+			},
+			// 12-growth-curve.json with empty diff — should be skipped
+			// from output entirely.
+			"12-growth-curve.json": {},
+		},
+	}
+}
+
+// TestRenderText_VerboseFalse_OmitsStageDiffsSection pins the negative
+// contract — the "Stage diffs:" header must NOT appear in non-verbose
+// mode. Stage L.1.
+func TestRenderText_VerboseFalse_OmitsStageDiffsSection(t *testing.T) {
+	res := stageDiffsFixture()
+	var buf bytes.Buffer
+	if err := writeResultRow(&buf, res, false); err != nil {
+		t.Fatalf("writeResultRow: %v", err)
+	}
+	if strings.Contains(buf.String(), "Stage diffs:") {
+		t.Errorf("non-verbose must not emit Stage diffs section; got:\n%s", buf.String())
+	}
+}
+
+// TestRenderText_VerboseTrue_EmitsStageDiffsSection verifies the
+// section header AND per-field rows appear under verbose. Stage L.1.
+func TestRenderText_VerboseTrue_EmitsStageDiffsSection(t *testing.T) {
+	res := stageDiffsFixture()
+	var buf bytes.Buffer
+	if err := writeResultRow(&buf, res, true); err != nil {
+		t.Fatalf("writeResultRow: %v", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "Stage diffs:") {
+		t.Errorf("verbose must emit Stage diffs section; got:\n%s", out)
+	}
+	// Sorted by stage filename — 13- precedes 15-.
+	idx13 := strings.Index(out, "13-wacc.json:")
+	idx15 := strings.Index(out, "15-valuation.json:")
+	if idx13 < 0 || idx15 < 0 {
+		t.Fatalf("expected both 13- and 15- stage headers; got:\n%s", out)
+	}
+	if idx13 >= idx15 {
+		t.Errorf("expected 13-wacc.json BEFORE 15-valuation.json (sorted); got:\n%s", out)
+	}
+	// Field path must be stripped of the "stages.<file>." prefix.
+	if !strings.Contains(out, "      - cost_of_equity:") {
+		t.Errorf("expected stripped field path; got:\n%s", out)
+	}
+	// Within-tolerance entry uses tilde marker even inside Stage diffs.
+	if !strings.Contains(out, "      ~ dcf_value_per_share:") {
+		t.Errorf("expected tilde-marked within-tolerance line; got:\n%s", out)
+	}
+	// Empty stage (12-growth-curve.json) must be skipped.
+	if strings.Contains(out, "12-growth-curve.json:") {
+		t.Errorf("empty stage should be skipped; got:\n%s", out)
+	}
+}
+
+// TestRenderText_VerboseTrue_EmitsBothResponseAndStageDiffs verifies
+// that when a Result has BOTH response-level diffs AND stage diffs,
+// both render and the response-level diffs precede the Stage diffs
+// section (stable order, pinned by this test). Stage L.1.
+func TestRenderText_VerboseTrue_EmitsBothResponseAndStageDiffs(t *testing.T) {
+	res := &Result{
+		Bundle: "/x",
+		Status: StatusFail,
+		Diffs: []FloatDiff{
+			{Path: "wacc", Old: 0.092, New: 0.094, RelDrift: 0.0217},
+		},
+		StageDiffs: map[string]StageDiff{
+			"13-wacc.json": {
+				Floats: []FloatDiff{
+					{Path: "stages.13-wacc.json.cost_of_equity", Old: 0.118, New: 0.121, RelDrift: 0.0254},
+				},
+			},
+		},
+	}
+	var buf bytes.Buffer
+	if err := writeResultRow(&buf, res, true); err != nil {
+		t.Fatalf("writeResultRow: %v", err)
+	}
+	out := buf.String()
+	respIdx := strings.Index(out, "  - wacc:")
+	stageIdx := strings.Index(out, "  Stage diffs:")
+	if respIdx < 0 || stageIdx < 0 {
+		t.Fatalf("expected both response and stage diff sections; got:\n%s", out)
+	}
+	if respIdx >= stageIdx {
+		t.Errorf("response-level diffs must precede Stage diffs section; got:\n%s", out)
+	}
+}
+
+// TestRenderJSON_VerboseFlag_StageDiffsAlwaysIncluded verifies that
+// JSON output is byte-identical regardless of the verbose flag — JSON
+// emits everything because consumers post-filter via jq. Stage L.1.
+func TestRenderJSON_VerboseFlag_StageDiffsAlwaysIncluded(t *testing.T) {
+	r := &Report{
+		ReplayVersion: ReplayVersion,
+		Results:       []Result{*stageDiffsFixture()},
+		Summary:       Summary{Total: 1, Failed: 1},
+	}
+
+	var nonVerbose, verbose bytes.Buffer
+	r.Verbose = false
+	if err := r.RenderJSON(&nonVerbose); err != nil {
+		t.Fatalf("RenderJSON non-verbose: %v", err)
+	}
+	r.Verbose = true
+	if err := r.RenderJSON(&verbose); err != nil {
+		t.Fatalf("RenderJSON verbose: %v", err)
+	}
+	if !bytes.Equal(nonVerbose.Bytes(), verbose.Bytes()) {
+		t.Errorf("JSON output must be byte-identical regardless of verbose:\nnon-verbose:\n%s\nverbose:\n%s",
+			nonVerbose.String(), verbose.String())
+	}
+	// Both must carry the stage_diffs key.
+	if !bytes.Contains(nonVerbose.Bytes(), []byte(`"stage_diffs"`)) {
+		t.Errorf("JSON must include stage_diffs even in non-verbose; got:\n%s", nonVerbose.String())
+	}
+}

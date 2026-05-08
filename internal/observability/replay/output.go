@@ -328,7 +328,87 @@ func writeResultRow(w io.Writer, res *Result, verbose bool) error {
 			}
 		}
 	}
+
+	// Stage L.1 (R3b plan §3): per-stage diff rendering. Verbose-only —
+	// JSON output already carries the StageDiffs map regardless of
+	// verbose. Format mirrors spec §7's sample at L497-510:
+	//
+	//   Stage diffs:
+	//     13-wacc.json:
+	//       - cost_of_equity: 0.118 -> 0.121 (rel_drift=0.025)
+	//
+	// Stage filenames are emitted in sorted order for deterministic
+	// output (the underlying StageDiffs is a Go map). Entries with no
+	// diffs are skipped — emitting an empty stage section would be
+	// noise.
+	if verbose && len(res.StageDiffs) > 0 {
+		if err := writeStageDiffSection(w, res.StageDiffs); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// writeStageDiffSection emits the verbose "Stage diffs:" block
+// beneath a bundle row. Skips stages whose StageDiff is empty so the
+// output focuses on what actually drifted. Sort key is the stage
+// filename so output is byte-deterministic for golden tests.
+func writeStageDiffSection(w io.Writer, stageDiffs map[string]StageDiff) error {
+	// Collect filenames whose diff has at least one entry. Both real
+	// drift (Floats / Strings) and within-tolerance drift count for
+	// inclusion under verbose — the operator asked for detail.
+	keys := make([]string, 0, len(stageDiffs))
+	for k, sd := range stageDiffs {
+		if len(sd.Floats) == 0 && len(sd.Strings) == 0 && len(sd.DriftedWithinTolerance) == 0 {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	sort.Strings(keys)
+
+	if _, err := io.WriteString(w, "  Stage diffs:\n"); err != nil {
+		return err
+	}
+	for _, name := range keys {
+		sd := stageDiffs[name]
+		if _, err := fmt.Fprintf(w, "    %s:\n", name); err != nil {
+			return err
+		}
+		// Outside-tolerance floats — most actionable; emit first.
+		for _, d := range sd.Floats {
+			if _, err := fmt.Fprintf(w, "      - %s: %v -> %v (rel_drift=%.6f)\n",
+				stripStagePrefix(d.Path, name), d.Old, d.New, d.RelDrift); err != nil {
+				return err
+			}
+		}
+		// String / asymmetric / type drift.
+		for _, d := range sd.Strings {
+			if _, err := fmt.Fprintf(w, "      - %s: %q -> %q\n",
+				stripStagePrefix(d.Path, name), d.Old, d.New); err != nil {
+				return err
+			}
+		}
+		// Within-tolerance drift — verbose-only signal.
+		for _, d := range sd.DriftedWithinTolerance {
+			if _, err := fmt.Fprintf(w, "      ~ %s: %v -> %v (within tolerance, rel_drift=%.6e)\n",
+				stripStagePrefix(d.Path, name), d.Old, d.New, d.RelDrift); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// stripStagePrefix shortens a stage-diff path of the form
+// "stages.<stageFile>.<field-path>" to just "<field-path>" for inline
+// rendering inside a "<stageFile>:" block — the parent header already
+// names the stage file.
+func stripStagePrefix(path, stageFile string) string {
+	prefix := "stages." + stageFile + "."
+	return strings.TrimPrefix(path, prefix)
 }
 
 // FormatTimestamp formats t as the ISO-8601-ish string used in JSON
