@@ -1087,6 +1087,104 @@ func TestService_calculateTangibleValuePerShare(t *testing.T) {
 	})
 }
 
+// TestService_calculateTangibleValuePerShare_DilutedDenominator pins the
+// Graham-floor PR #2 denominator flip: when DilutedSharesOutstanding > 0 it
+// MUST be preferred over market.SharesOutstanding and financial.SharesOutstanding,
+// matching the share-resolution priority chain used for the DCF path
+// (service.go ~lines 862-873). This is the breaking 2-5% numeric drift called
+// out in graham-floor-metrics-spec.md §4.5 and §10 R1, AC-4.
+func TestService_calculateTangibleValuePerShare_DilutedDenominator(t *testing.T) {
+	service, _, _, _, _, _ := createTestService()
+
+	tests := []struct {
+		name           string
+		financial      *entities.FinancialData
+		market         *entities.MarketData
+		expectedShares float64 // chosen denominator
+		expectedValue  float64 // tangibleAssets / expectedShares
+	}{
+		{
+			// Diluted differs from basic; diluted MUST win over both market
+			// and financial basic. Pre-flip behaviour would have picked
+			// market.SharesOutstanding (100M) and produced 110.0.
+			name: "diluted preferred over market basic and financial basic",
+			financial: &entities.FinancialData{
+				TangibleAssets:           11_000_000_000, // $11B
+				DilutedSharesOutstanding: 110_000_000,    // 110M diluted
+				SharesOutstanding:        100_000_000,    // 100M basic (decoy)
+			},
+			market: &entities.MarketData{
+				Ticker:            "DILTEST",
+				AsOf:              time.Now(),
+				SharePrice:        50.0,
+				SharesOutstanding: 100_000_000, // 100M (decoy — should NOT be picked)
+			},
+			expectedShares: 110_000_000,
+			expectedValue:  11_000_000_000.0 / 110_000_000.0, // 100.0
+		},
+		{
+			// Diluted == 0 falls through to market basic.
+			name: "diluted zero falls back to market basic",
+			financial: &entities.FinancialData{
+				TangibleAssets:           10_000_000_000, // $10B
+				DilutedSharesOutstanding: 0,
+				SharesOutstanding:        120_000_000, // 120M (decoy financial basic)
+			},
+			market: &entities.MarketData{
+				Ticker:            "MKTFALLBACK",
+				AsOf:              time.Now(),
+				SharePrice:        50.0,
+				SharesOutstanding: 100_000_000, // 100M market basic — should win
+			},
+			expectedShares: 100_000_000,
+			expectedValue:  100.0,
+		},
+		{
+			// Diluted == 0 AND market <= 0 falls through to financial basic.
+			name: "diluted zero and market zero falls back to financial basic",
+			financial: &entities.FinancialData{
+				TangibleAssets:           12_000_000_000, // $12B
+				DilutedSharesOutstanding: 0,
+				SharesOutstanding:        120_000_000, // 120M financial basic — should win
+			},
+			market: &entities.MarketData{
+				Ticker:            "FINFALLBACK",
+				AsOf:              time.Now(),
+				SharePrice:        50.0,
+				SharesOutstanding: 0, // zero — falls through
+			},
+			expectedShares: 120_000_000,
+			expectedValue:  100.0,
+		},
+		{
+			// All share sources zero → returns 0 (no divide-by-zero).
+			name: "all shares zero returns zero",
+			financial: &entities.FinancialData{
+				TangibleAssets:           5_000_000_000,
+				DilutedSharesOutstanding: 0,
+				SharesOutstanding:        0,
+			},
+			market: &entities.MarketData{
+				Ticker:            "ZERO",
+				AsOf:              time.Now(),
+				SharePrice:        10.0,
+				SharesOutstanding: 0,
+			},
+			expectedShares: 0,
+			expectedValue:  0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := service.calculateTangibleValuePerShare(tc.financial, tc.market)
+			assert.InDelta(t, tc.expectedValue, got, 1e-9,
+				"expected tangible_value_per_share = TangibleAssets/%.0f = %.4f, got %.4f",
+				tc.expectedShares, tc.expectedValue, got)
+		})
+	}
+}
+
 func TestService_calculateTerminalGrowthRate(t *testing.T) {
 	service, _, _, _, _, _ := createTestService()
 	normalWACC := 0.10 // 10% — comfortably above all terminal growth rates
