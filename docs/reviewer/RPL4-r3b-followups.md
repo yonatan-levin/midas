@@ -1,6 +1,6 @@
 # RPL-4 — Phase 2.D R3b deferred items (post-merge follow-ups)
 
-**Status:** OPEN — filed 2026-05-09 as R3b's post-merge cleanup. R3b shipped on master via merge `0741958` (2026-05-09). Phase 2.D is COMPLETE; R3b's V/R/Q gate cycle returned zero MAJOR/BLOCKER findings. The 4 items below are MINOR-or-lower and were explicitly deferred per the merge-commit body. R3b's plan §10 outcome table marks each as "deferred to RPL-4."
+**Status:** OPEN — filed 2026-05-09 as R3b's post-merge cleanup. R3b shipped on master via merge `0741958` (2026-05-09). Phase 2.D is COMPLETE; R3b's V/R/Q gate cycle returned zero MAJOR/BLOCKER findings. The 4 items below are MINOR-or-lower and were explicitly deferred per the merge-commit body. R3b's plan §10 outcome table marks each as "deferred to RPL-4." **Update 2026-05-09 (same-day post-merge dispatch): RPL-4a RESOLVED — spec §7 sample updated to match shipped section order + format string. 3 items remain open (RPL-4b cross-platform polish, RPL-4c cleaner-team item, RPL-4d documented coverage residual).**
 **Severity:** Mixed — 1 MINOR (spec/sample divergence, documentation call), 2 MINOR (cross-platform polish + cleaner-team item), 1 documented-residual (coverage gap with explicit accept-clause from plan §6).
 **Origin:** Consolidated from R3b's V/R/Q gate-cycle reports:
 - VERIFIER (verdict: VERIFIED WITH NOTES) — coverage residuals
@@ -22,9 +22,10 @@ The 4 items below are what's left. None gate Phase 2.D's COMPLETE status; they a
 
 ## Section A — Spec / sample documentation divergence (MINOR)
 
-### RPL-4a — Stage L.1 section-order vs spec §7 sample
+### RPL-4a — Stage L.1 section-order vs spec §7 sample [RESOLVED 2026-05-09]
 
-**Severity:** MINOR (spec/sample divergence; documentation-only resolution preferred).
+**Status:** RESOLVED — folded into the post-shipment docs dispatch alongside spec v0.4 → v0.5 bump. Spec §7 sample at L498-510 updated to show the as-shipped section order (response-level diffs first without a "Response diffs:" header, then "Stage diffs:" section) and the as-shipped format string `(rel_drift=%.6f)` rather than v0.4's `+X.XX%`. Inline note added to the spec sample documenting the divergence between v0.4 and v0.5 + the format-string deviation as Deviation #3 on the merge-commit body of `0741958`.
+**Severity:** MINOR (spec/sample divergence; documentation-only resolution applied).
 **Origin:** REVIEWER cycle 1 finding #1.
 **Location:** `internal/observability/replay/output.go:347-353` (writeResultRow's section-emission order) + `docs/refactoring/observability-replay-tooling-spec.md` v0.4 §7 sample at L498-510.
 
@@ -143,7 +144,7 @@ Phase 2.D is COMPLETE as of merge `0741958` (2026-05-09). Filing this tracker pr
 
 ## Acceptance criteria
 
-- [ ] **RPL-4a** — Spec v0.5 §7 sample updated to match shipped section order (HUMAN post-shipment dispatch); OR code flipped to match spec sample (Phase 2.E).
+- [x] **RPL-4a** — Spec v0.5 §7 sample updated to match shipped section order — RESOLVED 2026-05-09 in the post-merge docs dispatch (folded into the same commit that bumps spec v0.4 → v0.5).
 - [ ] **RPL-4b** — `filepath.ToSlash` normalization applied to `Result.Bundle` in JSON output + test (Phase 2.E).
 - [ ] **RPL-4c** — Cleaner team investigates and routes `as_of` derivation through the bound `Clock` interface (Phase 2.E or later — owned by cleaner team, not replay).
 - [ ] **RPL-4d** — Either (a) close the coverage gap with `failingWriter` + array-shape fixtures (Phase 2.E), OR (b) keep the documented residual as-is per plan §6 escape clause (no action). Default: (b).

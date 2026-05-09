@@ -1,6 +1,6 @@
 # RPL-3 — Phase 2.D R3a deferred items + cleanup sweep (R3b backlog)
 
-**Status:** OPEN — filed 2026-05-06 as R3a's merge cleanup. R3a (parallel batch + filter flags + tolerance flags + Stage O sweep) shipped on master via merge `011d78c`. R3b dispatch will pick up this file as its implementation backlog.
+**Status:** **RESOLVED 2026-05-09** — all 16 items closed by R3b dispatch (merge `0741958`). R3a (parallel batch + filter flags + tolerance flags + Stage O sweep) shipped on master via merge `011d78c`; R3b (Stage K + L.1 + M.3 + M.1 + N + O.6 + R3b-Final cleanup + 3 polish commits) shipped on master via merge `0741958` 3 days later. See `## Resolution` section at end of this file for per-item commit-SHA mapping. Phase 2.D is COMPLETE.
 **Severity:** Mixed — 5 deferred Stages (capability work, ~700-800 LoC) + 8 LOW NITs (Go-style modernization, ~50 LoC) + 1 missing test + 1 R2 modernization sweep.
 **Origin:** R3a's 4 review-gate cycles surfaced the deferrals: BACKEND-1/2/3/4 ran out of quota before completing the full plan; VERIFIER cycles 1/2/3 + REVIEWER + QA confirmed the partial as mergeable; HUMAN approved the partial-merge with this file as the explicit backlog.
 
@@ -190,8 +190,68 @@ R3b dispatch should:
 ## Traceability
 
 - Filed by: R3a HUMAN merge step (2026-05-06) consolidating findings from VERIFIER × 3 + REVIEWER cycle 1 + QA cycle 1
-- Specs it relates to: `docs/refactoring/observability-replay-tooling-spec.md` (v0.4 post-merge), `docs/refactoring/observability-replay-tooling-r3-implementation-plan.md` (v2 — R3a stages SHIPPED, R3b deferred)
+- Specs it relates to: `docs/refactoring/observability-replay-tooling-spec.md` (v0.4 post-R3a, v0.5 post-R3b), `docs/refactoring/observability-replay-tooling-r3-implementation-plan.md` (v2 — R3a stages SHIPPED), `docs/refactoring/observability-replay-tooling-r3b-implementation-plan.md` (v1 — R3b stages SHIPPED per §10)
 - Code it relates to: `cmd/replay/main.go`, `internal/observability/replay/*.go`, `internal/observability/replay/integration_test.go`, `cmd/server/import_boundary_test.go`
 - R3a commits the items were observed against: 11 commits across `e793d77..959997f`, merged as `011d78c`
 - R3a merge: `011d78c` (2026-05-06)
+- R3b merge that closed all 16 items: `0741958` (2026-05-09)
 - Prior follow-up files: `RPL1-replay-walk-and-output-r3-followups.md` (R0+R1, all items folded into R3 plan v2), `RPL2-r2-followups.md` (R2, all items folded into R3 plan v2 except O.6/O.7 which deferred again to RPL-3f)
+- Subsequent follow-up file: `RPL4-r3b-followups.md` (R3b, 4 deferred items — 1 spec/sample documentation call + 2 cross-platform polish + 1 documented coverage residual; Phase 2.E candidates)
+
+---
+
+## Resolution (2026-05-09)
+
+All 16 items closed by R3b. Per-item commit-SHA mapping (commits live in worktree `worktree-agent-a927bf55184a27f2a`, merged into master as `0741958`):
+
+### Section A — 5 deferred Stages
+
+| Item | Commit | Notes |
+|---|---|---|
+| RPL-3a — Stage K (`--diff-stages` engine wiring + `stage_diff.go`) | `905b295` | Decision K.1 fallback used (ephemeral temp-dir bundle via `os.MkdirTemp` rather than tee-writer default — REVIEWER independently judged "better than the plan's documented fallback"). 9 tests in `stage_diff_test.go` cover inventory pin + asymmetric absences + within/outside tolerance + nested path + string change + new-field-on-current + malformed JSON. |
+| RPL-3b — Stage L.1 (verbose stage-diff text render) | `b87b3b7` | `writeStageDiffSection` in `output.go` emits sorted-by-stage-filename per-stage subheaders + per-field rows. 4 new render tests in `output_test.go`. |
+| RPL-3c — Stage M.1 (JSON contract golden tests) | `339a273` | 6 fixtures under `internal/observability/replay/testdata/golden/json_*.json` + `output_golden_test.go` + `UPDATE_GOLDEN=1` regeneration harness. |
+| RPL-3d — Stage M.3 (parsed-mode round-trip) | `145b23d` | New `seedFullBundle_ParsedMode` helper in `integration_test.go`; `TestRoundTrip_ReplaySelfConsistency_ParsedMode_ZeroDiffs` passes under `-race -count=10`. |
+| RPL-3e — Stage N (perf benches NF2/NF3) | `ab4b02b` | 3 benches in `replay_bench_test.go`: NF2 single-bundle (≤200ms gate, 3.5ms measured), NF3 sequential 100-bundle (≤30s gate, 329ms measured), NF3 parallel 100-bundle (≤30s gate, 87ms measured). Synthetic corpus generator inlined into the same file, bench-gated via `TestMain`'s `flag.Lookup("test.bench")` check. |
+| RPL-3f — Stage O.6 (`init()` reflection guard) | `a990173` | `init()` at `diff.go:36` panics if `countFairValueFields() = 36` disagrees with reflected count. Panic scope confined to replay binary per R3a Stage O.13's `cmd/server/import_boundary_test.go`. VERIFIER's panic-injection smoke confirmed the guard works (added junk field → panic with exact field-count breakdown → reverted cleanly). |
+
+### Section B — 8 LOW NITs (Go-style modernization sweep)
+
+All 8 landed across the planned R3b-Final commit + 2 iterative-cleanup sweeps that closed gopls's iterative-diagnostic surfacing pattern (the cleanup commit's narrowly-scoped sweep missed instances in R3b's own new code; subsequent sweeps closed those).
+
+| Item | Commit | Location after fix |
+|---|---|---|
+| RPL-3g — `i, b := i, b` shadow at `cmd/replay/main.go:430` | `257ff5c` | Removed (Go 1.22+ per-iteration semantics make it dead code) |
+| RPL-3h — `for i := 0; i < 16; i++` at `module.go:262` | `257ff5c` | Now `for range 16` |
+| RPL-3i — `rangeint` + `forvar` at `spike_parallel_fxapp_test.go` | `257ff5c` | Now `for i := range numWorkers` |
+| RPL-3j — `strings.HasSuffix + strings.TrimSuffix` at `duration.go:58` | `257ff5c` | Now `strings.CutSuffix` |
+| RPL-3k — Drop `--diff-stages` deferred-rationale comment at `main.go:128-132` | `905b295` (Stage K commit) | Removed when `--diff-stages` re-registered |
+| RPL-3l — `_ = marketGateway` clarity comment at `module.go:367-374` | `257ff5c` | Comment added explaining transitive consumption |
+| RPL-3m — `Summary.DurationMs` doc-comment clarity | `257ff5c` | Clarified that under `--workers > 1` it exceeds `ReplayDurationMs` |
+| RPL-3n — `--float-rel-tol=0` silent-default footgun note | `257ff5c` | Usage block at `main.go:82` notes "0 means use default, NOT exact-match" |
+| RPL-3p — `mapsloop` + `interface{}→any` at `integration_test.go` | `257ff5c` (initial sweep) + `a5f08f3` + `b7a9bdc` (gopls iterative tail in `replay_test.go`) | All instances across the package use `maps.Copy` and `any` |
+
+### Section C — 1 missing test
+
+| Item | Commit | Notes |
+|---|---|---|
+| RPL-3o — `evaluateBundleWithRecover` panic-coverage test | `257ff5c` | Test in `cmd/replay/main_test.go` exercises recover via 1-LoC `evaluateBundleFn` package-var seam (restored via `t.Cleanup`). Plan §3 default (build-tag-gated seam) deviated to package-var for simpler discoverability. Acceptable per Decision R3b-Final.9. |
+
+### Section D — 1 R2 modernization sweep
+
+Folded into the same `257ff5c` cleanup commit per RPL-3p mapping above.
+
+---
+
+## Resolution: post-impl + V/R/Q polish coverage
+
+Three more commits landed in the worktree before merge for items NOT in this RPL-3 backlog but discovered during the R3b cycle:
+
+| Commit | Origin | What it addressed |
+|---|---|---|
+| `7c4676f` | Plan §10 outcome | Populated R3b implementation plan §10 Implementation Outcome table |
+| `a5f08f3` | gopls iterative diagnostics post-stage commits | NIT sweep on R3b's new code (Stage N's bench file + Stage O.6's init guard introduced fresh instances of the same patterns RPL-3p targeted) |
+| `b7a9bdc` | gopls iterative tail | Final NIT sweep with explicit cutoff line ("after this commit, further gopls findings become a Phase 2.E followup") |
+| `573e517` | V/R/Q polish | REVIEWER #2-#4 (thread-safety doc on `evaluateBundleFn`; empty-marker doc on `Result.StageDiffs`; `StageDiff.Empty()` helper) + QA M3/D1/B2 (`.gitattributes` LF-pin; `--from=raw` error hint; empty-dir warn+exit-2) |
+
+**File-level status: RESOLVED.** Subsequent follow-ups tracked at `docs/reviewer/RPL4-r3b-followups.md`.

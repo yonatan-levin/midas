@@ -61,6 +61,43 @@ go run ./scripts/load_tester.go -url http://localhost:8080 -key <API_KEY> -type 
 # Requires ripgrep: `choco install ripgrep` (Windows) / `brew install ripgrep` / `apt-get install ripgrep`.
 ./scripts/lint-logs.sh           # Linux/macOS
 .\scripts\lint-logs.ps1          # Windows
+
+# Prometheus singleton-registerer lint guard (Phase 2.D R3a Stage I.0) — fails if
+# replay-package code references prometheus.DefaultRegisterer (must use per-instance
+# registries to keep replay binary hermetic under parallel --workers).
+./scripts/lint-prometheus-registers.sh   # Linux/macOS
+.\scripts\lint-prometheus-registers.ps1  # Windows
+
+# Replay tooling (Phase 2.D — replays captured artifact bundles through current code
+# and diffs against saved 17-response.json). All R0–R3 SHIPPED on master.
+
+# Single-bundle replay (default --from=raw)
+go run ./cmd/replay artifacts/2026-05-06/MXL/req_c01bec94-9c3c-46f6-afad-9458672c8534/
+
+# Parallel batch replay across a watchlist of bundles (R3a)
+go run ./cmd/replay --workers=4 --format=json artifacts/2026-04-25/
+
+# Filter to a specific ticker or recent bundles only (R3a)
+go run ./cmd/replay --filter-ticker=AAPL --filter-since=7d artifacts/
+
+# Tunable float tolerances (R3a — defaults: rel 1e-9, abs 1e-12; --float-rel-tol=0
+# means "use default", NOT exact-match)
+go run ./cmd/replay --float-rel-tol=1e-6 --float-abs-tol=1e-9 artifacts/
+
+# Per-stage diff detail (intermediate-stage drift inspection — R3b). Diffs the bundle's
+# saved 10-clean-output.json / 12-growth-curve.json / 13-wacc.json / 15-valuation.json
+# against what the engine produces today. --verbose renders per-stage diff sections
+# beneath each bundle row.
+go run ./cmd/replay --diff-stages --verbose --from=parsed artifacts/2026-05-06/MXL/req_c01bec94-9c3c-46f6-afad-9458672c8534/
+
+# Regenerate JSON contract golden fixtures (R3b Stage M.1) — only run after a
+# deliberate change to the JSON output shape. Then `git diff` to verify.
+UPDATE_GOLDEN=1 go test -run TestRenderJSON_GoldenFixture ./internal/observability/replay/
+
+# Performance benchmarks (R3b Stage N) — NF2 single-bundle ≤200ms / NF3 100-bundle
+# batch ≤30s, both with 3× CI slack. Bench-gated; the synthetic 100-bundle corpus
+# generator only fires when -bench is invoked, NOT on default `go test ./...`.
+go test -bench=BenchmarkReplay -benchtime=10x ./internal/observability/replay/
 ```
 
 ## Architecture
@@ -227,6 +264,6 @@ data/                   # SQLite database files (gitignored)
 - The `config.env.example` file is blocked by a pre-read hook; get config info from `internal/config/config.go` defaults instead
 - **Two parallel industry classifiers today** — `Classify(sic, …)` drives the valuation model router and is the canonical label; `ClassifyIndustry(ticker, data)` is a balance-sheet heuristic that drives industry-specific datacleaner rules. They can disagree on the same ticker. The `FairValueResponse.Industry` field surfaces both plus a `match` flag. Do NOT refactor `getIndustryCode` in `datacleaner/service.go` to prefer SIC — that's tracked as the unification refactor in `docs/refactoring/industry-classification-unification-spec.md` and is out of scope for incidental changes
 - **`sicToGICS` map in `fair_value.go` keys MUST match `config/datacleaner/industry_codes.json`** `code` fields one-to-one. The classifier emits labels like `FIN` (not `FINL`), plus sub-industry codes `TECH_SAAS`, `HEALTH_BIOTECH`, etc. A mismatch silently demotes entire sectors to `match: false`. Add new top-level labels to both the map and `matchSICToGICS`'s normalization logic simultaneously
-- **Replay tooling (Phase 2.D R0+R1+R2) is hermetic by construction** — `cmd/replay` and `internal/observability/replay/` MUST NOT touch the production database, Redis cache, metrics shipper, scheduler, or external APIs. The `replay.Module` hand-picks `fx.Provide` lines rather than wrapping `di.CoreModule` precisely because CoreModule transitively pulls `*sqlx.DB` and `*redis.Client` constructors which would side-effect even when downstream consumers are decorated away. **Bundle gateways MUST return `replay.ErrBundleMissingPayload` (NOT panic)** on missing files because `internal/services/datafetcher/coordinator.go:181-196` runs gateway calls inside parallel goroutines under `sync.WaitGroup` — a child-goroutine panic would not be recovered by the replay binary. Auth/Watchlist stubs DO panic (different layer; not on the goroutine path). When adding a new replay surface, preserve both invariants
+- **Replay tooling (Phase 2.D — ALL R0–R3 SHIPPED, COMPLETE as of merge `0741958` 2026-05-09) is hermetic by construction** — `cmd/replay` and `internal/observability/replay/` MUST NOT touch the production database, Redis cache, metrics shipper, scheduler, or external APIs. The `replay.Module` hand-picks `fx.Provide` lines rather than wrapping `di.CoreModule` precisely because CoreModule transitively pulls `*sqlx.DB` and `*redis.Client` constructors which would side-effect even when downstream consumers are decorated away. **Bundle gateways MUST return `replay.ErrBundleMissingPayload` (NOT panic)** on missing files because `internal/services/datafetcher/coordinator.go:181-196` runs gateway calls inside parallel goroutines under `sync.WaitGroup` — a child-goroutine panic would not be recovered by the replay binary. Auth/Watchlist stubs DO panic (different layer; not on the goroutine path). The `cmd/server` ↔ `replay` import-boundary CI guard at `cmd/server/import_boundary_test.go` (R3a Stage O.13) keeps Stage O.6's `init()` reflection panic confined to the replay binary. **Stage K's `--diff-stages` reads bundle JSON files via `os.ReadFile` directly** (rather than re-deriving from entities) so future struct-shape evolution doesn't break diff path. The "current" snapshot for diff comparison uses an ephemeral `os.MkdirTemp` bundle with `defer os.RemoveAll`; never persists (preserves D7 "no bundles of bundles" invariant). When adding a new replay surface, preserve all three invariants (F11 hermeticity, ErrBundleMissingPayload-not-panic, ephemeral-snapshot-only)
 - **Graham-floor diagnostic fields (`current_assets_per_share`, `ncav_per_share`, `graham_floor_per_share`, `graham_discount_pct`)** are computed in `internal/services/valuation/graham.go` and stamped onto `ValuationResult` from BOTH the DCF path and the alt-model path in `service.go`. All four are **omitted from the JSON response** when `TotalLiabilities` cannot be resolved (see `resolveTotalLiabilities` fallback chain) — a warning string `"graham_floor: insufficient balance-sheet data..."` or `"graham_floor: derived total_liabilities from balance-sheet identity..."` is appended to `result.Warnings` instead. `graham_discount_pct` uses `*float64 + omitempty` deliberately: nil distinguishes "floor==0, ratio undefined" from `&0.0` (price exactly equals the floor). The derivation fallback (`TotalAssets − StockholdersEquity`) emits a WARN log naming the ticker so operators can correlate against the cleaner asymmetry tracked in `docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md`. Do NOT add a config flag to suppress these warnings — they are a load-bearing data-quality signal
 - **`tangible_value_per_share` denominator changed from market-basic to diluted shares in v0.10.0 (Graham floor metrics PR #2).** Cached pre-v0.10.0 values may be ~2-5% higher; expect drift on first recompute. Priority chain mirrors DCF: diluted → market.basic → financial.basic. See `calculateTangibleValuePerShare` in `internal/services/valuation/service.go` and the regression pin in `service_test.go: TestService_calculateTangibleValuePerShare_DilutedDenominator`
