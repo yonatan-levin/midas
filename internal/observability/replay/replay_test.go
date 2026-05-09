@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,9 +29,7 @@ func writeReplayManifest(t *testing.T, bundleDir string, ticker string) {
 		Outcome:        "ok",
 		SchemaVersions: map[string]int{},
 	}
-	for k, v := range CurrentSchemaVersions {
-		mf.SchemaVersions[k] = v
-	}
+	maps.Copy(mf.SchemaVersions, CurrentSchemaVersions)
 	body, err := json.MarshalIndent(&mf, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal manifest: %v", err)
@@ -259,9 +258,7 @@ func TestReplay_GitDrift(t *testing.T) {
 			GitSHA:         bundleSHA,
 			SchemaVersions: map[string]int{},
 		}
-		for k, v := range CurrentSchemaVersions {
-			mf.SchemaVersions[k] = v
-		}
+		maps.Copy(mf.SchemaVersions, CurrentSchemaVersions)
 		body, err := json.MarshalIndent(&mf, "", "  ")
 		if err != nil {
 			t.Fatalf("marshal manifest: %v", err)

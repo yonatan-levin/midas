@@ -329,7 +329,7 @@ func (w *stageWalker) walkSlice(fieldPath string, bundle, current []any) {
 		// just added a new tail element.
 	}
 	n := min(len(bundle), len(current))
-	for i := 0; i < n; i++ {
+	for i := range n {
 		w.walk(childPath(fieldPath, fmt.Sprintf("[%d]", i)), bundle[i], current[i])
 	}
 }

@@ -438,7 +438,6 @@ func BenchmarkReplay_BatchOf100_NF3_Parallel(b *testing.B) {
 		sem := make(chan struct{}, workers)
 		var wg sync.WaitGroup
 		for _, bd := range bundles {
-			bd := bd
 			wg.Add(1)
 			sem <- struct{}{}
 			go func() {
