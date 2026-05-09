@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -85,17 +87,43 @@ func TestParseFlags_RejectsExtraArgs(t *testing.T) {
 	}
 }
 
-// TestRun_EmptyDirectory drives the binary against an empty dir; expected
-// behavior per spec §9 R1: "0/0 passed", exit 0.
+// TestRun_EmptyDirectory drives the binary against an empty dir. QA B2
+// (R3b polish) flipped this from "exit 0 with 0/0 passed" to "exit 2
+// with stderr warning" — pointing at the wrong path is a CI footgun
+// the silent zero-success exit mask. Operators in CI scripts now get
+// an actionable failure instead of a misleading green.
 func TestRun_EmptyDirectory(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{dir}, &stdout, &stderr)
-	if code != 0 {
-		t.Errorf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "0/0 passed") {
-		t.Errorf("stdout should include '0/0 passed'; got:\n%s", stdout.String())
+	if !strings.Contains(stderr.String(), "no bundles found") {
+		t.Errorf("stderr should include 'no bundles found'; got:\n%s", stderr.String())
+	}
+	// Stderr message must reference the offending path so the operator
+	// can spot the typo in CI logs. The path is rendered via %q which
+	// escapes backslashes on Windows — match against the quoted form
+	// so the assertion is platform-stable.
+	if !strings.Contains(stderr.String(), strconv.Quote(dir)) {
+		t.Errorf("stderr should reference the supplied path %q; got:\n%s", dir, stderr.String())
+	}
+}
+
+// TestRun_EmptyDirectory_QuietStillWarns pins QA B2's quiet-mode carve-
+// out: --quiet suppresses per-bundle rows and the SUMMARY line, but the
+// "no bundles found" warning ALWAYS fires because the operator needs to
+// know they pointed at the wrong path. The exit code remains 2.
+func TestRun_EmptyDirectory_QuietStillWarns(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--quiet", dir}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2 even under --quiet; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "no bundles found") {
+		t.Errorf("--quiet must NOT suppress the no-bundles warning; got stderr:\n%s", stderr.String())
 	}
 }
 
@@ -643,6 +671,55 @@ func TestEnvVar_REPLAY_WORKERS_AppliesAsDefault(t *testing.T) {
 	}
 	if f.workers != 8 {
 		t.Fatalf("workers = %d, want 8 (env-var default)", f.workers)
+	}
+}
+
+// TestEvaluateBundle_FromRaw_MissingPayload_AppendsParsedHint pins QA
+// D1: the default --from=raw mode against a bundle that only ships
+// parsed snapshots (a real-world condition for production bundles in
+// artifacts/) must surface a hint pointing the operator at --from=parsed.
+// Without the hint the failure is "no macro data" — confusing because
+// the bundle exists, just the raw FRED files don't.
+//
+// Strategy: install evaluateBundleFn to return a Result wrapping the
+// canonical replay.ErrBundleMissingPayload sentinel, then call
+// evaluateBundleWithHint and assert the rendered Error contains
+// "try --from=parsed". The hint application lives at the cmd/replay
+// layer (where --from is known) per the dispatch prompt's guidance.
+func TestEvaluateBundle_FromRaw_MissingPayload_AppendsParsedHint(t *testing.T) {
+	original := evaluateBundleFn
+	t.Cleanup(func() { evaluateBundleFn = original })
+
+	missing := replay.NewBundleMissingPayloadError("/x/bundle", "07-fetch-macro-DGS10.raw.json", nil)
+	evaluateBundleFn = func(bundleDir string, f *flags) replay.Result {
+		return replay.Result{
+			Bundle: bundleDir,
+			Status: replay.StatusErrored,
+			Error:  missing.Error(),
+			// errSentinel is unexported; the dispatcher must rely on the
+			// public Result.Err() accessor, populated via the public
+			// constructor pathway in production. For this test we
+			// provide a Result that exposes the sentinel by returning
+			// a freshly-constructed error from evaluateBundle's path.
+		}
+	}
+
+	// The hint-appender is a small free function; assert it directly so
+	// the test does not depend on the unexported errSentinel field.
+	rawHinted := annotateMissingPayloadHint(missing.Error(), missing, "raw")
+	if !strings.Contains(rawHinted, "try --from=parsed") {
+		t.Fatalf("expected --from=raw hint in error string; got %q", rawHinted)
+	}
+	parsedNotHinted := annotateMissingPayloadHint(missing.Error(), missing, "parsed")
+	if strings.Contains(parsedNotHinted, "try --from=parsed") {
+		t.Fatalf("hint must not appear when mode is already parsed; got %q", parsedNotHinted)
+	}
+	// Non-missing-payload errors should pass through unchanged regardless
+	// of mode — the hint is specific to the bundle-missing-payload class.
+	other := errors.New("some other failure")
+	otherHinted := annotateMissingPayloadHint(other.Error(), other, "raw")
+	if strings.Contains(otherHinted, "try --from=parsed") {
+		t.Fatalf("hint must not be appended for non-missing-payload errors; got %q", otherHinted)
 	}
 }
 

@@ -86,6 +86,19 @@ type Result struct {
 	// otherwise. Each StageDiff carries Floats / Strings /
 	// DriftedWithinTolerance slices mirroring Result's response-level
 	// diff fields. Spec §7 + R3b plan §3 Stage K.
+	//
+	// Empty-entry semantics (REVIEWER R3b #3): when DiffStages was set
+	// but a stage's file is absent on BOTH sides (common for non-DCF
+	// model paths that skip 15-valuation.json), the entry is
+	// present-but-empty: "15-valuation.json": {}. This is INTENTIONAL —
+	// it communicates "diff was attempted but both sides absent."
+	// Operators chasing drift can disambiguate "not diffed" (key
+	// absent — DiffStages was false) from "diffed and clean" (key
+	// present, value empty) at a glance. Asymmetric absences (one side
+	// has the file) populate Strings with a
+	// stages.<file>.bundle_missing or .current_missing marker per
+	// stage_diff.go's convention; outright drift populates Floats /
+	// Strings with field-level entries.
 	StageDiffs map[string]StageDiff `json:"stage_diffs,omitempty"`
 	// Error carries the error message for an Errored Result. Stable
 	// shape; the underlying error type is not promised.
@@ -359,10 +372,12 @@ func writeResultRow(w io.Writer, res *Result, verbose bool) error {
 func writeStageDiffSection(w io.Writer, stageDiffs map[string]StageDiff) error {
 	// Collect filenames whose diff has at least one entry. Both real
 	// drift (Floats / Strings) and within-tolerance drift count for
-	// inclusion under verbose — the operator asked for detail.
+	// inclusion under verbose — the operator asked for detail. The
+	// Empty() helper centralizes the predicate (REVIEWER R3b #4) so
+	// future consumers stay in sync with this rendering rule.
 	keys := make([]string, 0, len(stageDiffs))
 	for k, sd := range stageDiffs {
-		if len(sd.Floats) == 0 && len(sd.Strings) == 0 && len(sd.DriftedWithinTolerance) == 0 {
+		if sd.Empty() {
 			continue
 		}
 		keys = append(keys, k)

@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -285,6 +286,18 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 	}
 	walkDuration := time.Since(walkStart)
 
+	// QA B2 (R3b polish): zero bundles under a path that exists is
+	// almost always operator error (typo, wrong root, deleted tree).
+	// The pre-fix behavior — exit 0 with "0/0 passed" — silently masked
+	// this in CI scripts. Now we emit a stderr warning AND exit 2 so a
+	// bad path surfaces as a hard failure. The warning fires even under
+	// --quiet because the operator needs to see it; --quiet only
+	// governs the SUMMARY/per-bundle rendering on stdout.
+	if len(bundles) == 0 {
+		fmt.Fprintf(stderr, "replay: no bundles found under %q (looked for req_*/00-manifest.json structure)\n", path)
+		return 2
+	}
+
 	// Apply --filter-ticker / --filter-since AFTER the walk and BEFORE
 	// the dispatch. Filtering is policy that doesn't belong in WalkBundles
 	// (which is intentionally narrow); doing it here also lets us avoid
@@ -465,7 +478,31 @@ func evaluateBundleWithRecover(bundleDir string, f *flags) (res replay.Result) {
 			}
 		}
 	}()
-	return evaluateBundleFn(bundleDir, f)
+	res = evaluateBundleFn(bundleDir, f)
+	// QA D1: when the underlying error wraps replay.ErrBundleMissingPayload
+	// AND the operator is on the default --from=raw mode, append a hint
+	// pointing at --from=parsed. Production bundles in artifacts/ commonly
+	// ship only *.parsed.json snapshots for some gateways (notably macro),
+	// so the default-mode failure is otherwise confusing — the bundle
+	// exists, just the raw FRED files don't. Hint lives at the CLI layer
+	// where --from is known, not in the orchestrator.
+	res.Error = annotateMissingPayloadHint(res.Error, res.Err(), f.from)
+	return res
+}
+
+// annotateMissingPayloadHint appends a "try --from=parsed" hint to an
+// error string when (a) the underlying error wraps
+// replay.ErrBundleMissingPayload AND (b) the current mode is "raw".
+// Returns the input string unchanged when either condition fails. Pure
+// function; no I/O. QA D1 (R3b polish).
+func annotateMissingPayloadHint(errStr string, sentinel error, mode string) string {
+	if mode != "raw" {
+		return errStr
+	}
+	if !errors.Is(sentinel, replay.ErrBundleMissingPayload) {
+		return errStr
+	}
+	return fmt.Sprintf("%s (hint: this bundle may only have parsed snapshots; try --from=parsed)", errStr)
 }
 
 // evaluateBundleFn is the package-level indirection so tests can
@@ -480,6 +517,16 @@ func evaluateBundleWithRecover(bundleDir string, f *flags) (res replay.Result) {
 // production code (the var declaration) — the alternative would be
 // an unreachable test-only branch inside evaluateBundle, which is
 // dirtier.
+//
+// Thread-safety (REVIEWER R3b #2): tests overriding this var MUST
+// NOT call t.Parallel() — concurrent tests would race on the
+// package-var write/read. Mirrors the gitSHAResolver convention at
+// internal/observability/replay/replay.go (RPL-2e). The current
+// TestEvaluateBundleWithRecover_PanicConvertedToErroredResult
+// correctly runs sequentially. If a future test needs t.Parallel(),
+// promote the seam to a per-call dependency-injection point
+// instead (e.g. add an evaluator field to flags) rather than
+// guarding the package-var with a mutex.
 var evaluateBundleFn = evaluateBundle
 
 // applyFilters filters the bundle list by --filter-ticker and

@@ -85,6 +85,25 @@ func (sd StageDiff) HasMismatch() bool {
 	return len(sd.Floats) > 0 || len(sd.Strings) > 0
 }
 
+// Empty reports whether this StageDiff has zero recorded entries across
+// Floats, Strings, and DriftedWithinTolerance. An Empty StageDiff
+// communicates "diff was attempted but no field-level changes detected
+// or both sides absent" — distinct from absence of the StageDiff entry
+// in Result.StageDiffs (which means the diff was not attempted at all
+// because Options.DiffStages was false).
+//
+// Mirrors HasMismatch's shape; the two are NOT logical complements
+// because DriftedWithinTolerance entries are not mismatches but also
+// not "empty." A StageDiff that contains only within-tolerance drift
+// returns HasMismatch() == false AND Empty() == false.
+//
+// REVIEWER R3b #4 — used by output.go::writeStageDiffSection to gate
+// per-stage row emission, and exposed for future replay-CLI consumers
+// that need the same predicate.
+func (sd StageDiff) Empty() bool {
+	return len(sd.Floats)+len(sd.Strings)+len(sd.DriftedWithinTolerance) == 0
+}
+
 // diffStage compares <bundleDir>/<stageFile> against the engine-produced
 // `current` bytes. Returns the per-field diff record.
 //

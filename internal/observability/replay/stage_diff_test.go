@@ -205,3 +205,26 @@ func TestStageDiff_MalformedBundleJSON_RecordedAsParseError(t *testing.T) {
 		t.Fatalf("path: got %q, want %q", got.Strings[0].Path, want)
 	}
 }
+
+// TestStageDiff_Empty_ReturnsTrueForZeroValueAndFalseOtherwise pins the
+// helper's contract used by output.go::writeStageDiffSection. REVIEWER
+// R3b #4 — a future replay-CLI consumer wanting to filter "non-empty
+// stage diffs" relies on this helper to keep the predicate consistent
+// with the rendering site.
+func TestStageDiff_Empty_ReturnsTrueForZeroValueAndFalseOtherwise(t *testing.T) {
+	if !(StageDiff{}).Empty() {
+		t.Errorf("zero-value StageDiff.Empty() = false; want true")
+	}
+	nonEmpty := StageDiff{Strings: []StringDiff{{Path: "x"}}}
+	if nonEmpty.Empty() {
+		t.Errorf("StageDiff with one Strings entry .Empty() = true; want false")
+	}
+	onlyDrifted := StageDiff{DriftedWithinTolerance: []FloatDiff{{Path: "y"}}}
+	if onlyDrifted.Empty() {
+		t.Errorf("StageDiff with only DriftedWithinTolerance .Empty() = true; want false")
+	}
+	onlyFloats := StageDiff{Floats: []FloatDiff{{Path: "z"}}}
+	if onlyFloats.Empty() {
+		t.Errorf("StageDiff with only Floats entry .Empty() = true; want false")
+	}
+}
