@@ -1341,13 +1341,26 @@ func (s *Service) performAlternativeValuation(
 	return result, nil
 }
 
-// calculateTangibleValuePerShare calculates the tangible book value per share
+// calculateTangibleValuePerShare calculates the tangible book value per share.
+//
+// Share-resolution priority chain (matches the DCF-path chain at service.go
+// ~lines 862-873): diluted → market basic → financial basic → 0.
+//
+// The flip from market-basic-first to diluted-first landed in v0.10.0 as PR
+// #2 of the Graham-floor metrics work (graham-floor-metrics-spec.md §4.5).
+// It produces a 2-5% lower per-share value for issuers with material
+// option/RSU/convertible dilution (typical large-caps) and brings this field
+// into line with every other per-share number in the response (DCF, NCAV,
+// current_assets_per_share, graham_floor) which already use diluted shares.
 func (s *Service) calculateTangibleValuePerShare(financial *entities.FinancialData, market *entities.MarketData) float64 {
 	// Calculate tangible equity (total assets - intangibles - liabilities)
 	tangibleEquity := financial.TangibleAssets
 
-	// Use market data shares if available, otherwise use financial data
-	shares := market.SharesOutstanding
+	// Diluted-first priority chain (consistent with DCF path).
+	shares := financial.DilutedSharesOutstanding
+	if shares <= 0 {
+		shares = market.SharesOutstanding
+	}
 	if shares <= 0 {
 		shares = financial.SharesOutstanding
 	}
