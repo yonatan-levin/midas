@@ -288,6 +288,368 @@ func (h *HistoricalFinancialData) GetQuarterlyPeriods() map[string]*FinancialDat
 	return quarterly
 }
 
+// Source identifiers returned by TrailingTwelveMonthsRevenue. The string
+// values are part of the helper's public contract — replay tooling and
+// downstream dashboards key off them, so do not rename without coordinating
+// with consumers (see docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md).
+const (
+	revenueSourceTTM4Q             = "TTM_4Q"
+	revenueSourceTTMPriorBridge    = "TTM_PRIOR_BRIDGE"
+	revenueSourceAnnualFY          = "ANNUAL_FY"
+	revenueSourceAnnualizedQuarter = "ANNUALIZED_QUARTER"
+	revenueSourceInsufficient      = "INSUFFICIENT_HISTORY"
+)
+
+// TrailingTwelveMonthsRevenue returns a best-effort trailing-twelve-months
+// (TTM) revenue figure for use by EV/Revenue-style models. It walks a
+// documented fallback chain so callers can take the result at face value
+// for the headline number while still inspecting `source` and `warning`
+// for audit / replay purposes.
+//
+// Fallback chain (applied in order):
+//
+//  1. TTM_PRIOR_BRIDGE    — partial-year case (latest year has 1-3 quarters,
+//     prior year supplies the missing quarters at the
+//     same calendar position). Runs FIRST because it
+//     preserves the audit-trail signal that the latest
+//     year is partial; without this ordering the bridge
+//     is structurally unreachable when prior-year
+//     corresponding quarters are present (TTM_4Q would
+//     pick the same 4 quarters and produce the same
+//     numeric answer with a different source string,
+//     hiding the partial-year shape from replay tooling).
+//     Declines (returns no value) for full-year shapes,
+//     letting TTM_4Q take over.
+//  2. TTM_4Q              — sum of the 4 most recent contiguous quarters,
+//     possibly crossing a fiscal-year boundary. The
+//     gold-standard path for full-year shapes; warning
+//     is empty.
+//  3. ANNUAL_FY           — most recent fiscal-year filing when no usable
+//     quarterly window exists.
+//  4. ANNUALIZED_QUARTER  — naive scaling of the available quarters
+//     (4*Q1, 2*(Q1+Q2), or (4/3)*(Q1+Q2+Q3)). Lossy:
+//     ignores seasonality. Warning emitted.
+//  5. INSUFFICIENT_HISTORY — no revenue at all; returns (0, …) and lets
+//     the caller decide whether to fail.
+//
+// The signature is stable: replay tooling pattern-matches `source` strings
+// (see RM-1 spec). Adding a new source string requires updating the spec
+// and consumers; renaming an existing one is a breaking change.
+//
+// T7 stale-data check (>18mo) deferred — would couple the entity layer to a
+// clock dependency; tracked as the RM-1.A follow-up in
+// docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md.
+func (h *HistoricalFinancialData) TrailingTwelveMonthsRevenue() (revenue float64, source string, warning string) {
+	if h == nil || len(h.Data) == 0 {
+		return 0, revenueSourceInsufficient, "revenue_base: insufficient revenue history"
+	}
+
+	// 1) TTM_PRIOR_BRIDGE — partial-year + prior-year corresponding quarters.
+	// Runs first so the partial-year IPO shape is surfaced via the source
+	// string. Declines (returns false) when the latest year has 4 quarters,
+	// at which point TTM_4Q takes over.
+	if rev, ok := h.ttmPriorBridgeRevenue(); ok {
+		return rev, revenueSourceTTMPriorBridge,
+			"revenue_base: partial-year TTM bridged with prior-year quarters (handles seasonality)"
+	}
+
+	// 2) TTM_4Q — four most recent contiguous quarters, summed.
+	if rev, ok := h.ttmFourQuartersRevenue(); ok {
+		return rev, revenueSourceTTM4Q, ""
+	}
+
+	// 3) ANNUAL_FY — fall back to the latest fiscal-year filing.
+	if rev, period, date, ok := h.latestAnnualRevenue(); ok {
+		// When TTM was structurally unattempted (no quarters at all) the FY
+		// path is "clean" and produces no warning. When TTM was attempted
+		// but failed (gaps, missing prior-year quarters), surface the
+		// reason so callers can correlate against data-quality dashboards.
+		if len(h.GetQuarterlyPeriods()) == 0 {
+			return rev, revenueSourceAnnualFY, ""
+		}
+		return rev, revenueSourceAnnualFY,
+			fmt.Sprintf("revenue_base: TTM unavailable, used latest FY ($%.0f dated %s)",
+				rev, date.Format("2006-01-02")) + fmt.Sprintf(" [%s]", period)
+	}
+
+	// 4) ANNUALIZED_QUARTER — scale up 1-3 available quarters of the latest year.
+	if rev, ok := h.annualizedQuarterRevenue(); ok {
+		return rev, revenueSourceAnnualizedQuarter,
+			"revenue_base: annualized single-quarter revenue (4× extrapolation, ignores seasonality)"
+	}
+
+	// 5) INSUFFICIENT_HISTORY — no usable revenue at all.
+	return 0, revenueSourceInsufficient, "revenue_base: insufficient revenue history"
+}
+
+// ttmFourQuartersRevenue returns the sum of the 4 most recent quarters when
+// they form a contiguous span (no gaps, distinct quarters). Quarters may
+// cross a fiscal-year boundary (e.g. 2025Q4 + 2026Q1 + 2026Q2 + 2026Q3).
+// Returns (0, false) when the contiguity check fails or any quarter has
+// non-positive revenue (a zero quarter would silently shrink the TTM).
+func (h *HistoricalFinancialData) ttmFourQuartersRevenue() (float64, bool) {
+	quarterly := h.GetQuarterlyPeriods()
+	if len(quarterly) < 4 {
+		return 0, false
+	}
+
+	// Sort the quarterly keys in chronological order (uses the same
+	// (year, sub) tuple as GetSortedPeriods).
+	periods := make([]string, 0, len(quarterly))
+	for p := range quarterly {
+		periods = append(periods, p)
+	}
+	sort.Slice(periods, func(i, j int) bool {
+		yi, si := parsePeriodKey(periods[i])
+		yj, sj := parsePeriodKey(periods[j])
+		if yi != yj {
+			return yi < yj
+		}
+		return si < sj
+	})
+
+	// Take the latest 4 quarters and verify contiguity.
+	last4 := periods[len(periods)-4:]
+	if !quartersAreContiguous(last4) {
+		return 0, false
+	}
+
+	var sum float64
+	for _, p := range last4 {
+		d := quarterly[p]
+		if d == nil || d.Revenue <= 0 {
+			return 0, false
+		}
+		sum += d.Revenue
+	}
+	return sum, true
+}
+
+// quartersAreContiguous verifies that the given (chronologically-sorted)
+// quarter keys form an unbroken sequence — each subsequent quarter is
+// either the next quarter of the same year (Q2 after Q1) or Q1 of the
+// next year after Q4 of the prior year.
+func quartersAreContiguous(periods []string) bool {
+	if len(periods) < 2 {
+		return true
+	}
+	for i := 1; i < len(periods); i++ {
+		yPrev, sPrev := parsePeriodKey(periods[i-1])
+		yCur, sCur := parsePeriodKey(periods[i])
+		// parsePeriodKey returns sub in {1,2,3,4} for quarters; reject
+		// any zero/FY-marker that snuck through.
+		if sPrev < 1 || sPrev > 4 || sCur < 1 || sCur > 4 {
+			return false
+		}
+		// Same-year next quarter, e.g. Q2 follows Q1.
+		if yCur == yPrev && sCur == sPrev+1 {
+			continue
+		}
+		// Year boundary: Q1 of year N+1 follows Q4 of year N.
+		if yCur == yPrev+1 && sPrev == 4 && sCur == 1 {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// ttmPriorBridgeRevenue handles the partial-year IPO case: the latest
+// year has 1-3 quarters and the prior year supplies the (4-N) missing
+// quarters at the same calendar position. Example: latest year has
+// Q1+Q2 → bridge with prior year's Q3+Q4 to synthesise a 12-month sum.
+//
+// Runs ahead of ttmFourQuartersRevenue in the public fallback chain so
+// the partial-year IPO shape is reported via source=TTM_PRIOR_BRIDGE
+// instead of being silently absorbed into TTM_4Q. The function declines
+// (returns 0,false) for full-year shapes (latest year has 4 quarters),
+// letting TTM_4Q take over for the gold-standard path. It also declines
+// when the bridge cannot be cleanly built (no quarters, gaps in the
+// latest year's Q1-start run, or missing/non-positive prior-year
+// quarters).
+func (h *HistoricalFinancialData) ttmPriorBridgeRevenue() (float64, bool) {
+	quarterly := h.GetQuarterlyPeriods()
+	if len(quarterly) == 0 {
+		return 0, false
+	}
+
+	// Identify the latest year that has at least one quarter.
+	latestYear := 0
+	for p := range quarterly {
+		y, s := parsePeriodKey(p)
+		if s < 1 || s > 4 {
+			continue
+		}
+		if y > latestYear {
+			latestYear = y
+		}
+	}
+	if latestYear == 0 {
+		return 0, false
+	}
+
+	// Collect the latest year's quarters in ascending Q order.
+	type qEntry struct {
+		sub  int
+		data *FinancialData
+	}
+	var current []qEntry
+	for p, d := range quarterly {
+		y, s := parsePeriodKey(p)
+		if y == latestYear && s >= 1 && s <= 4 {
+			current = append(current, qEntry{sub: s, data: d})
+		}
+	}
+	sort.Slice(current, func(i, j int) bool { return current[i].sub < current[j].sub })
+
+	// The bridge only applies when the latest year has 1-3 quarters AND
+	// they form a contiguous run starting at Q1 (Q1, Q1+Q2, Q1+Q2+Q3).
+	// A non-Q1-starting sequence (e.g. Q2+Q3) would be a stub-period
+	// filer and is left for the annualized-quarter fallback to handle.
+	if len(current) < 1 || len(current) > 3 {
+		return 0, false
+	}
+	for i, q := range current {
+		if q.sub != i+1 {
+			return 0, false
+		}
+		if q.data == nil || q.data.Revenue <= 0 {
+			return 0, false
+		}
+	}
+
+	// Build the bridge: pull the missing quarters from latestYear-1 at
+	// the same calendar position. Every required quarter must be
+	// present and have positive revenue, otherwise we cannot construct
+	// a clean 12-month synthetic window.
+	var sum float64
+	for _, q := range current {
+		sum += q.data.Revenue
+	}
+	priorYear := latestYear - 1
+	for sub := len(current) + 1; sub <= 4; sub++ {
+		key := fmt.Sprintf("%dQ%d", priorYear, sub)
+		d, ok := quarterly[key]
+		if !ok || d == nil || d.Revenue <= 0 {
+			return 0, false
+		}
+		sum += d.Revenue
+	}
+	return sum, true
+}
+
+// latestAnnualRevenue returns the most recent fiscal-year filing's revenue,
+// the period key, and the filing date. Returns (_, _, _, false) when no FY
+// period has positive revenue.
+func (h *HistoricalFinancialData) latestAnnualRevenue() (float64, string, time.Time, bool) {
+	annual := h.GetAnnualPeriods()
+	if len(annual) == 0 {
+		return 0, "", time.Time{}, false
+	}
+
+	// Pick the latest period by (year, sub) ordering — this is robust
+	// even when FilingDate is zero in test fixtures.
+	periods := make([]string, 0, len(annual))
+	for p := range annual {
+		periods = append(periods, p)
+	}
+	sort.Slice(periods, func(i, j int) bool {
+		yi, si := parsePeriodKey(periods[i])
+		yj, sj := parsePeriodKey(periods[j])
+		if yi != yj {
+			return yi < yj
+		}
+		return si < sj
+	})
+
+	// Walk from latest backward to find an FY with positive revenue.
+	for i := len(periods) - 1; i >= 0; i-- {
+		d := annual[periods[i]]
+		if d == nil || d.Revenue <= 0 {
+			continue
+		}
+		return d.Revenue, periods[i], d.FilingDate, true
+	}
+	return 0, "", time.Time{}, false
+}
+
+// annualizedQuarterRevenue is the lossy third-tier fallback. It scales the
+// available 1-3 contiguous quarters of the latest year up to a synthetic
+// 12 months: 4*Q1, 2*(Q1+Q2), or (4/3)*(Q1+Q2+Q3). Ignores seasonality —
+// callers MUST surface the warning string emitted by the parent helper.
+func (h *HistoricalFinancialData) annualizedQuarterRevenue() (float64, bool) {
+	quarterly := h.GetQuarterlyPeriods()
+	if len(quarterly) == 0 {
+		return 0, false
+	}
+
+	// Identify the latest year that has at least one quarter.
+	latestYear := 0
+	for p := range quarterly {
+		y, s := parsePeriodKey(p)
+		if s < 1 || s > 4 {
+			continue
+		}
+		if y > latestYear {
+			latestYear = y
+		}
+	}
+	if latestYear == 0 {
+		return 0, false
+	}
+
+	// Collect contiguous Q1.. quarters from the latest year. We do NOT
+	// support non-Q1-starting stubs here because the seasonality
+	// assumptions would be even more questionable than the standard
+	// 4× annualisation already is.
+	var sum float64
+	count := 0
+	for sub := 1; sub <= 4; sub++ {
+		key := fmt.Sprintf("%dQ%d", latestYear, sub)
+		d, ok := quarterly[key]
+		if !ok || d == nil || d.Revenue <= 0 {
+			break
+		}
+		sum += d.Revenue
+		count++
+	}
+
+	// If we didn't find Q1 of the latest year, try the single most-recent
+	// quarter as a last-ditch 4× extrapolation. This covers stub-period
+	// filers and oddities where Q1 was never reported.
+	if count == 0 {
+		var latestSub int
+		var latestData *FinancialData
+		for p, d := range quarterly {
+			y, s := parsePeriodKey(p)
+			if y != latestYear || s < 1 || s > 4 || d == nil || d.Revenue <= 0 {
+				continue
+			}
+			if s > latestSub {
+				latestSub = s
+				latestData = d
+			}
+		}
+		if latestData == nil {
+			return 0, false
+		}
+		return latestData.Revenue * 4, true
+	}
+
+	switch count {
+	case 1:
+		return sum * 4, true
+	case 2:
+		return sum * 2, true
+	case 3:
+		return sum * 4.0 / 3.0, true
+	default:
+		// count == 4 should have been picked up by ttmFourQuartersRevenue;
+		// returning the raw sum here is the safe behaviour anyway.
+		return sum, true
+	}
+}
+
 // GetRecentYears returns financial data for the most recent N years
 func (h *HistoricalFinancialData) GetRecentYears(years int) []*FinancialData {
 	annual := h.GetAnnualPeriods()

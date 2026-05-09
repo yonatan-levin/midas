@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,7 +57,24 @@ func TestRevenueMultipleModel_Calculate_StandardTech(t *testing.T) {
 	assert.Equal(t, "revenue_multiple", result.ModelType)
 	assert.InDelta(t, 26.5, result.IntrinsicValuePerShare, 0.01)
 	assert.Equal(t, "low", result.Confidence, "revenue multiple should always be low confidence")
-	assert.Len(t, result.Warnings, 3) // base warning + multiple info + negative OI warning
+	// Warnings: base + multiple + revenue_base source line + negative OI = 4.
+	// FY-only data routes through ANNUAL_FY (no ttmWarning).
+	assert.Len(t, result.Warnings, 4)
+	// RM-1: source line MUST be present so dashboards can pivot on it.
+	assertHasWarningPrefix(t, result.Warnings, "revenue_base: source=ANNUAL_FY")
+}
+
+// assertHasWarningPrefix is a small helper used by RM-1 tests to verify
+// the revenue_base source line is emitted without coupling assertions to
+// the exact float formatting of the embedded revenue value.
+func assertHasWarningPrefix(t *testing.T, warnings []string, prefix string) {
+	t.Helper()
+	for _, w := range warnings {
+		if len(w) >= len(prefix) && w[:len(prefix)] == prefix {
+			return
+		}
+	}
+	t.Errorf("expected a warning starting with %q; got %v", prefix, warnings)
 }
 
 // TestRevenueMultipleModel_Calculate_ZeroRevenue tests revenue multiple with zero revenue
@@ -82,7 +100,10 @@ func TestRevenueMultipleModel_Calculate_ZeroRevenue(t *testing.T) {
 	result, err := model.Calculate(ctx, input)
 	assert.Error(t, err)
 	assert.Nil(t, result)
-	assert.Contains(t, err.Error(), "no revenue")
+	// RM-1: error message now references the TTM helper's INSUFFICIENT_HISTORY
+	// source identifier (replaces the legacy "no revenue" wording).
+	assert.Contains(t, err.Error(), "insufficient revenue history")
+	assert.Contains(t, err.Error(), "INSUFFICIENT_HISTORY")
 }
 
 // TestRevenueMultipleModel_Calculate_DefaultMultiple tests default multiple for unknown industry
@@ -305,8 +326,199 @@ func TestRevenueMultipleModel_Calculate_PositiveOI(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// Should have exactly 2 warnings (base + multiple info), not 3 (no negative OI warning)
-	assert.Len(t, result.Warnings, 2)
+	// RM-1: warnings = base + multiple info + revenue_base source line.
+	// No negative-OI warning fires because OI is positive. FY-only data
+	// routes through ANNUAL_FY so no ttmWarning is appended either.
+	assert.Len(t, result.Warnings, 3)
+	assertHasWarningPrefix(t, result.Warnings, "revenue_base: source=ANNUAL_FY")
+}
+
+// TestRevenueMultipleModel_Calculate_RM1_TTMWiring verifies the consumer
+// wiring of HistoricalFinancialData.TrailingTwelveMonthsRevenue for the
+// scenarios called out in docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md.
+// The helper itself is unit-tested in internal/core/entities; this table
+// confirms the model surfaces the right `source` and warnings end-to-end.
+func TestRevenueMultipleModel_Calculate_RM1_TTMWiring(t *testing.T) {
+	model := newTestRevenueMultipleModel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name              string
+		data              map[string]*entities.FinancialData
+		expectErr         bool
+		expectErrContains string
+		// expectRevenueInEV: revenue we expect the model to use as the
+		// EV base. Asserted via EnterpriseValue / multiple to dodge any
+		// reflection on the model internals.
+		expectRevenueInEV float64
+		expectSourceTag   string // substring expected in the source-line warning
+		expectWarnSub     string // additional warning substring (lossy paths only)
+	}{
+		{
+			name: "T1_TTM_4Q_four_contiguous_quarters",
+			data: map[string]*entities.FinancialData{
+				"2025Q1": {Revenue: 100, FilingPeriod: "2025Q1", FilingDate: time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)},
+				"2025Q2": {Revenue: 110, FilingPeriod: "2025Q2", FilingDate: time.Date(2025, 8, 1, 0, 0, 0, 0, time.UTC)},
+				"2025Q3": {Revenue: 120, FilingPeriod: "2025Q3", FilingDate: time.Date(2025, 11, 1, 0, 0, 0, 0, time.UTC)},
+				"2025Q4": {Revenue: 130, FilingPeriod: "2025Q4", FilingDate: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+			},
+			expectRevenueInEV: 460,
+			expectSourceTag:   "source=TTM_4Q",
+		},
+		{
+			name: "T2_gap_falls_back_to_annual",
+			data: map[string]*entities.FinancialData{
+				"2024Q4": {Revenue: 100, FilingPeriod: "2024Q4", FilingDate: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)},
+				"2025Q1": {Revenue: 105, FilingPeriod: "2025Q1", FilingDate: time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)},
+				"2025Q2": {Revenue: 110, FilingPeriod: "2025Q2", FilingDate: time.Date(2025, 8, 1, 0, 0, 0, 0, time.UTC)},
+				"2025Q4": {Revenue: 115, FilingPeriod: "2025Q4", FilingDate: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+				"2024FY": {Revenue: 400, FilingPeriod: "2024FY", FilingDate: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)},
+			},
+			expectRevenueInEV: 400,
+			expectSourceTag:   "source=ANNUAL_FY",
+			expectWarnSub:     "TTM unavailable",
+		},
+		{
+			name: "T3_T8_MXL_single_quarter_only",
+			data: map[string]*entities.FinancialData{
+				"2026Q1": {Revenue: 137_188_000, FilingPeriod: "2026Q1", FilingDate: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)},
+			},
+			expectRevenueInEV: 137_188_000 * 4,
+			expectSourceTag:   "source=ANNUALIZED_QUARTER",
+			expectWarnSub:     "annualized single-quarter",
+		},
+		{
+			name: "T4_two_quarters_only",
+			data: map[string]*entities.FinancialData{
+				"2026Q1": {Revenue: 100, FilingPeriod: "2026Q1", FilingDate: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)},
+				"2026Q2": {Revenue: 110, FilingPeriod: "2026Q2", FilingDate: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)},
+			},
+			expectRevenueInEV: 420,
+			expectSourceTag:   "source=ANNUALIZED_QUARTER",
+			expectWarnSub:     "annualized single-quarter",
+		},
+		{
+			name: "T5_all_annual_no_quarters",
+			data: map[string]*entities.FinancialData{
+				"2024FY": {Revenue: 900, FilingPeriod: "2024FY", FilingDate: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)},
+				"2025FY": {Revenue: 1000, FilingPeriod: "2025FY", FilingDate: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+			},
+			expectRevenueInEV: 1000,
+			expectSourceTag:   "source=ANNUAL_FY",
+		},
+		{
+			name: "T6_no_revenue_history_errors",
+			data: map[string]*entities.FinancialData{
+				// One financial-data row so GetLatestPeriod() returns non-nil,
+				// but with zero revenue everywhere the TTM helper can find.
+				"2025FY": {Revenue: 0, FilingPeriod: "2025FY", FilingDate: time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)},
+			},
+			expectErr:         true,
+			expectErrContains: "INSUFFICIENT_HISTORY",
+		},
+		{
+			// AAPL-shaped fixture: latest year 2025 has only Q1, prior year
+			// 2024 supplies Q2+Q3+Q4. With the bridge running first in the
+			// fallback chain, this routes to TTM_PRIOR_BRIDGE — the numeric
+			// answer is identical to what TTM_4Q would have produced on the
+			// same data; the source string preserves the audit-trail signal
+			// that the latest year is partial.
+			name: "T9_AAPL_FY_plus_Q1_with_prior_quarters_uses_TTM_PRIOR_BRIDGE",
+			data: map[string]*entities.FinancialData{
+				"2024Q1": {Revenue: 90, FilingPeriod: "2024Q1", FilingDate: time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)},
+				"2024Q2": {Revenue: 95, FilingPeriod: "2024Q2", FilingDate: time.Date(2024, 8, 1, 0, 0, 0, 0, time.UTC)},
+				"2024Q3": {Revenue: 100, FilingPeriod: "2024Q3", FilingDate: time.Date(2024, 11, 1, 0, 0, 0, 0, time.UTC)},
+				"2024Q4": {Revenue: 110, FilingPeriod: "2024Q4", FilingDate: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)},
+				"2024FY": {Revenue: 395, FilingPeriod: "2024FY", FilingDate: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)},
+				"2025Q1": {Revenue: 105, FilingPeriod: "2025Q1", FilingDate: time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)},
+			},
+			// Bridge: 2025Q1 (105) + 2024Q2 (95) + 2024Q3 (100) + 2024Q4 (110) = 410.
+			expectRevenueInEV: 410,
+			expectSourceTag:   "source=TTM_PRIOR_BRIDGE",
+			expectWarnSub:     "partial-year TTM bridged",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := &ModelInput{
+				HistoricalData: &entities.HistoricalFinancialData{
+					Ticker: "RM1_TEST",
+					Data:   tt.data,
+				},
+				Industry:               "TECH", // 5x in the test multiples map
+				SharesOutstanding:      100_000_000,
+				InterestBearingDebt:    0,
+				CashAndCashEquivalents: 0,
+			}
+			result, err := model.Calculate(ctx, input)
+			if tt.expectErr {
+				require.Error(t, err)
+				require.Nil(t, result)
+				assert.Contains(t, err.Error(), tt.expectErrContains)
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			// EV = revenue * 5.0 (TECH multiple).
+			assert.InDelta(t, tt.expectRevenueInEV*5.0, result.EnterpriseValue, 1.0,
+				"enterprise value should reflect the expected TTM revenue base")
+			assertHasWarningPrefix(t, result.Warnings, "revenue_base: "+tt.expectSourceTag)
+			if tt.expectWarnSub != "" {
+				found := false
+				for _, w := range result.Warnings {
+					if strings.Contains(w, tt.expectWarnSub) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected warning containing %q in %v", tt.expectWarnSub, result.Warnings)
+			}
+		})
+	}
+}
+
+// TestRevenueMultipleModel_Calculate_RM1_MXL_LiveShape asserts the headline
+// MXL fix: a Q1-only fixture (the exact shape from the live MXL response in
+// the RM-1 spec) now produces a per-share value derived from the
+// annualized-quarter base, not the raw single-quarter base. With the same
+// 1.5x MFG multiple and the same equity bridge, this is the smoke test
+// that the bug is gone.
+func TestRevenueMultipleModel_Calculate_RM1_MXL_LiveShape(t *testing.T) {
+	// 1.5x MFG multiple per config/industry_multiples.json at filing time.
+	model := NewRevenueMultipleModelWithMultiples(map[string]float64{
+		"default": 2.0,
+		"MFG":     1.5,
+	}, testLogger())
+	ctx := context.Background()
+
+	// MXL Q1 2026 shape from artifacts/2026-05-06/MXL/...
+	q1Revenue := 137_188_000.0
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "MXL",
+			Data: map[string]*entities.FinancialData{
+				"2026Q1": {Revenue: q1Revenue, FilingPeriod: "2026Q1",
+					FilingDate: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)},
+			},
+		},
+		Industry:               "MFG",
+		SharesOutstanding:      80_000_000, // representative; not load-bearing for the assertion
+		InterestBearingDebt:    100_000_000,
+		CashAndCashEquivalents: 50_000_000,
+	}
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// EV from annualized base: q1Revenue * 4 * 1.5 = ~$823M (vs legacy ~$206M).
+	expectedEV := q1Revenue * 4 * 1.5
+	assert.InDelta(t, expectedEV, result.EnterpriseValue, 1.0,
+		"EV should use 4x annualized Q1 revenue, not raw single-quarter revenue")
+
+	// Source line MUST identify the lossy ANNUALIZED_QUARTER path so
+	// downstream consumers can filter/flag this kind of result.
+	assertHasWarningPrefix(t, result.Warnings, "revenue_base: source=ANNUALIZED_QUARTER")
 }
 
 // TestLoadEVRevenueMultiples_UsesEmbed verifies loadEVRevenueMultiples reads
