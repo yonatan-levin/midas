@@ -990,6 +990,51 @@ func TestFairValueResponse_Industry_RealClassifier(t *testing.T) {
 			acceptableLabels: []string{"TECH_SAAS"}, // must be the sub-industry code
 			matchExplanation: "SaaS: SIC TECH_SAAS must normalize to TECH parent for GICS 45 match; regression sentinel for sub-industry normalization",
 		},
+		// VAL-3 P1+P4 REIT subsector regression sentinels (Stream-A V/R/Q
+		// MEDIUM #1). The sicToGICS table got new full-code exact-match
+		// entries — RETAIL_REIT, DATA_CENTER, CELLTOWER, HEALTHCARE_REIT,
+		// OFFICE, RESIDENTIAL, INDUSTRIAL, SPECIALTY — all of which must
+		// resolve to GICS 60 (Real Estate). Without explicit entries the
+		// fallback parent-prefix strip would route RETAIL_REIT → RETAIL →
+		// {25, 30}, DATA_CENTER → DATA → unknown, and CELLTOWER (no
+		// underscore) → CELLTOWER → unknown — silently demoting every REIT
+		// in those subsectors to match=false. These three cases pin the
+		// exact-match-first lookup ordering enforced by matchSICToGICS.
+		{
+			name:             "retail_reit_RETAIL_REIT_to_GICS_60",
+			ticker:           "SPG",
+			sicCode:          "6798",                 // RESTATE parent
+			companyName:      "Simon Property Group", // keyword "simon property" routes to RETAIL_REIT sub
+			heurCode:         "60",
+			heurName:         "Real Estate",
+			expectMatch:      true,
+			acceptableLabels: []string{"RETAIL_REIT"}, // sub-industry must be the produced label
+			matchExplanation: "mall REIT: SIC RETAIL_REIT must full-code match GICS 60 (NOT collapse to RETAIL → {25, 30})",
+		},
+		{
+			name:             "data_center_reit_DATA_CENTER_to_GICS_60",
+			ticker:           "EQIX",
+			sicCode:          "6798",         // RESTATE parent
+			companyName:      "Equinix Inc.", // keyword "equinix" routes to DATA_CENTER sub
+			heurCode:         "60",
+			heurName:         "Real Estate",
+			expectMatch:      true,
+			acceptableLabels: []string{"DATA_CENTER"},
+			matchExplanation: "data center REIT: SIC DATA_CENTER must full-code match GICS 60 (parent strip would yield DATA, unmapped)",
+		},
+		{
+			name:    "cell_tower_reit_CELLTOWER_to_GICS_60",
+			ticker:  "AMT",
+			sicCode: "6798", // RESTATE parent
+			// Exact name matches RESTATE parent's exact_names list AND the
+			// CELLTOWER sub-industry's "american tower" keyword.
+			companyName:      "American Tower Corporation",
+			heurCode:         "60",
+			heurName:         "Real Estate",
+			expectMatch:      true,
+			acceptableLabels: []string{"CELLTOWER"},
+			matchExplanation: "cell tower REIT: SIC CELLTOWER (no underscore — pure subsector code) must have an explicit sicToGICS entry to resolve to 60",
+		},
 	}
 
 	for _, tc := range tests {
@@ -1035,6 +1080,60 @@ func TestFairValueResponse_Industry_RealClassifier(t *testing.T) {
 			mockSvc.AssertExpectations(t)
 		})
 	}
+}
+
+// TestFairValueResponse_Industry_REITSubsector_NegativeGICS pins the
+// reverse-direction invariant for VAL-3 P1+P4 REIT subsectors: a REIT
+// subsector code (RETAIL_REIT) paired with a non-Real-Estate GICS sector
+// (25 = Consumer Discretionary) MUST yield Match=false.
+//
+// Without the explicit "RETAIL_REIT": {"60": true} entry in sicToGICS, the
+// matchSICToGICS fallback would strip at the first underscore to "RETAIL",
+// look up sicToGICS["RETAIL"] = {"25", "30"}, and return Match=true — the
+// exact silent-demotion class the MEDIUM #1 finding flagged: every mall REIT
+// labelled GICS 25 by the heuristic would falsely register as a "match"
+// just because the SIC label happens to start with RETAIL_.
+//
+// The bug here is asymmetric: with the fix, RETAIL_REIT exact-match wins
+// against GICS 60 (correct positive) and against GICS 25 (correct negative).
+// Without the fix, the parent-strip fallback fires on both, breaking only
+// the negative case while leaving the positive looking-correct-by-accident.
+// Hence this test is the load-bearing regression sentinel — the positive
+// counterpart in TestFairValueResponse_Industry_RealClassifier alone is
+// not sufficient because RETAIL → {25, 30} also includes 30, and a tester
+// who skipped this case might assume positive coverage equals correctness.
+func TestFairValueResponse_Industry_REITSubsector_NegativeGICS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockSvc := new(mockValuationService)
+	// Mismatched pair: SIC subsector code RETAIL_REIT (Real Estate) vs
+	// heuristic GICS 25 (Consumer Discretionary). The two classifiers
+	// genuinely disagree — drift signal must surface as Match=false.
+	mockSvc.On("CalculateValuation", mock.Anything, "SPG", (*valuation.ValuationOptions)(nil)).
+		Return(industryResultFor("SPG", "6798", "RETAIL_REIT", "25", "Consumer Discretionary"), nil)
+
+	handler := newTestFairValueHandler(mockSvc)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/api/v1/fair-value/SPG", nil)
+	c.Params = gin.Params{{Key: "ticker", Value: "SPG"}}
+	handler.GetFairValue(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp FairValueResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.Industry)
+	assert.Equal(t, "RETAIL_REIT", resp.Industry.SIC)
+	assert.Equal(t, "25", resp.Industry.HeuristicCode)
+	assert.False(t, resp.Industry.Match,
+		"RETAIL_REIT must NOT match GICS 25; if this fails, the parent-strip "+
+			"fallback is firing before the exact-match lookup and silently "+
+			"demoting every Real-Estate-labelled REIT whose heuristic drifts "+
+			"to Consumer Discretionary into a false-positive match (the exact "+
+			"regression class MEDIUM #1 was filed to prevent)")
+
+	mockSvc.AssertExpectations(t)
 }
 
 // TestBuildIndustryFromResult_NilResult verifies the helper returns nil for a
