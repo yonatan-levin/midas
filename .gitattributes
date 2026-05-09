@@ -1,0 +1,5 @@
+# Lock golden-fixture line endings to LF — UPDATE_GOLDEN=1 regenerates
+# them under whatever local autocrlf setting the dev has, and CI does
+# byte-equal comparison. Without this attribute, a Windows dev's git add
+# would silently CRLF-convert the fixtures, breaking CI.
+internal/observability/replay/testdata/golden/*.json text eol=lf

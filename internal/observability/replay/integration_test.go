@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
 )
@@ -44,9 +46,9 @@ func seedFullBundle(t *testing.T, ticker, manifestStartedAt string) string {
 		Outcome:        "ok",
 		SchemaVersions: map[string]int{},
 	}
-	for k, v := range CurrentSchemaVersions {
-		mf.SchemaVersions[k] = v
-	}
+	// RPL-3p (R3b cleanup): maps.Copy collapses the manual map-walk
+	// into a single stdlib call (Go 1.21+).
+	maps.Copy(mf.SchemaVersions, CurrentSchemaVersions)
 	body, err := json.MarshalIndent(&mf, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal manifest: %v", err)
@@ -60,6 +62,104 @@ func seedFullBundle(t *testing.T, ticker, manifestStartedAt string) string {
 	seedBundleFile(t, tmpDir, "07-fetch-macro-DGS10.raw.json", makeFREDObsRaw(t, "4.25"))
 	seedBundleFile(t, tmpDir, "07-fetch-macro-DGS5.raw.json", makeFREDObsRaw(t, "3.75"))
 	seedBundleFile(t, tmpDir, "07-fetch-macro-DGS2.raw.json", makeFREDObsRaw(t, "3.50"))
+
+	return tmpDir
+}
+
+// seedFullBundle_ParsedMode writes a fully populated bundle directory
+// shaped for the --from=parsed gateway dispatch path. Like
+// seedFullBundle but emits the *.parsed.json projections of the
+// production parser output (the post-parse domain types) so bundle
+// gateways read the snapshot directly without re-running the parser.
+//
+// Files emitted:
+//   - 00-manifest.json (with current schema_versions, identical to raw mode)
+//   - 05-fetch-sec.raw.json — STILL needed because BundleSECGateway.
+//     GetFinancialDataForTicker reads `secRawFile` unconditionally
+//     regardless of Mode. The .parsed.json sibling is consumed only by
+//     GetCompanyFacts which is a different code path.
+//   - 06-fetch-market.parsed.json (ports.YFinanceQuote) — consumed by
+//     BundleYFinanceGateway.GetQuote in ModeParsed.
+//   - 07-fetch-macro.parsed.json (entities.TreasuryRates) — consumed
+//     by BundleMacroGateway.GetTreasuryRates in ModeParsed.
+//
+// The shapes come from the production producers:
+//   - sec/client.go:184 — b.Snapshot("05-fetch-sec.parsed.json", facts)
+//     where facts is *ports.SECCompanyFacts. The replay-side reader in
+//     gateway_sec.go:160 unmarshal's into entities.CompanyFactsResponse,
+//     which is structurally compatible because both share the {CIK,
+//     EntityName, Facts} JSON keys at the top level.
+//   - market/yfinance_client.go:151 — b.Snapshot("06-fetch-market.parsed.json", &quote)
+//     where quote is ports.YFinanceQuote.
+//   - macro/gateway.go:115/131 — b.Snapshot("07-fetch-macro.parsed.json", rates)
+//     where rates is *entities.TreasuryRates.
+//
+// Self-referential limitation (mirror of seedFullBundle): both halves of
+// the round-trip test consume the same buildFairValueResponse helper.
+// The test asserts replay is deterministic against itself; functional
+// "parsed-mode reproduces production exactly" coverage comes from the
+// per-gateway unit tests and the cross-year regression test.
+//
+// R3b plan §3 Stage M.3 — closes the RPL-2b gap that R3a deferred.
+func seedFullBundle_ParsedMode(t *testing.T, ticker, manifestStartedAt string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+
+	mf := artifact.Manifest{
+		BundleVersion:  "1.0",
+		RequestID:      "req_integration_parsed_" + ticker,
+		Ticker:         ticker,
+		Trigger:        "header",
+		StartedAt:      manifestStartedAt,
+		Outcome:        "ok",
+		SchemaVersions: map[string]int{},
+	}
+	// RPL-3p (R3b cleanup): maps.Copy stdlib helper.
+	maps.Copy(mf.SchemaVersions, CurrentSchemaVersions)
+	body, err := json.MarshalIndent(&mf, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "00-manifest.json"), body, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	// SEC: raw is required even in parsed mode (see helper doc-comment).
+	seedBundleFile(t, tmpDir, secRawFile, makeMinimalSECRaw(t))
+
+	// Market parsed: ports.YFinanceQuote shape — same fixture values as
+	// makeMarketRaw so cross-mode determinism holds.
+	quote := ports.YFinanceQuote{
+		Symbol:               ticker,
+		RegularMarketPrice:   190.0,
+		MarketCap:            3.0e12,
+		SharesOutstanding:    1.5e10,
+		RegularMarketVolume:  5.5e7,
+		AverageDailyVolume3M: 6.0e7,
+		Beta:                 1.25,
+		Currency:             "USD",
+		MarketState:          "REGULAR",
+		RegularMarketTime:    1700000000,
+	}
+	mb, err := json.Marshal(&quote)
+	if err != nil {
+		t.Fatalf("marshal market parsed: %v", err)
+	}
+	seedBundleFile(t, tmpDir, marketParsedFile, mb)
+
+	// Macro parsed: entities.TreasuryRates shape, values mirror
+	// makeFREDObsRaw constants (DGS10=4.25, DGS5=3.75, DGS2=3.50; the
+	// gateway divides by 100 so production rate is 0.0425 etc).
+	rates := entities.TreasuryRates{
+		Yield10Year: 0.0425,
+		Yield5Year:  0.0375,
+		Yield2Year:  0.0350,
+	}
+	rb, err := json.Marshal(&rates)
+	if err != nil {
+		t.Fatalf("marshal macro parsed: %v", err)
+	}
+	seedBundleFile(t, tmpDir, macroParsedFile, rb)
 
 	return tmpDir
 }
@@ -159,23 +259,132 @@ func TestRoundTrip_ReplaySelfConsistency_ZeroDiffs(t *testing.T) {
 	}
 }
 
-// RPL-2b (R3 Stage M.3) — DEFERRED:
+// TestRoundTrip_ReplaySelfConsistency_ParsedMode_ZeroDiffs is the
+// parsed-mode counterpart to TestRoundTrip_ReplaySelfConsistency_
+// ZeroDiffs. R3a-BACKEND-2 left this gap because seedFullBundle was
+// raw-mode only (RPL-2b deferral note). R3b Stage M.3 adds the
+// parsed-mode fixture builder (seedFullBundle_ParsedMode) which closes
+// the gap.
 //
-// A parsed-mode counterpart to TestRoundTrip_ReplaySelfConsistency_
-// ZeroDiffs would require a separate seedFullBundle that emits the
-// 05-fetch-sec.parsed.json / 06-fetch-market.parsed.json /
-// 07-fetch-macro-*.parsed.json projections of the production parser
-// output. seedFullBundle today produces only the raw-mode payloads;
-// extending it for parsed mode is a non-trivial fixture-builder
-// addition (the parsed shapes mirror the post-parse domain types,
-// which evolve with engine schema). Plan §3 Stage M.3 estimated
-// ~30 LoC but the actual cost includes a parallel ~150 LoC seed
-// builder. Pushing this to a follow-up keeps R3 landable.
+// Strategy:
+//  1. Seed a complete parsed-mode bundle (raw SEC payload still required
+//     because BundleSECGateway.GetFinancialDataForTicker reads raw
+//     unconditionally; market+macro use *.parsed.json).
+//  2. First engine run captures the canonical response under ModeParsed
+//     into 17-response.json.
+//  3. Second engine run via Replay() with ModeParsed produces zero diffs.
 //
-// The unit-level gateway dispatch tests (gateway_*_test.go's
-// ModeParsed branches) and the CLI-level flag parse test
-// (TestParseFlags_FromParsed_Explicit) provide partial coverage;
-// the missing piece is end-to-end parsed-mode replay determinism.
+// Self-referential limitation (mirrors the raw-mode test): both halves
+// use the same buildFairValueResponse helper. The test asserts replay
+// is deterministic against itself in parsed mode; "parsed-mode reproduces
+// production exactly" coverage comes from the per-gateway unit tests
+// (gateway_*_test.go::ParsedMode_*) and the cross-year regression test.
+func TestRoundTrip_ReplaySelfConsistency_ParsedMode_ZeroDiffs(t *testing.T) {
+	const ticker = "AAPL"
+	const startedAt = "2026-01-15T12:00:00Z"
+
+	bundleDir := seedFullBundle_ParsedMode(t, ticker, startedAt)
+
+	// First engine run under ModeParsed — captures the canonical
+	// response.
+	_, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeParsed, nil)
+	if firstResp == nil {
+		t.Fatalf("first engine run produced nil response")
+	}
+	writeResponseFile(t, bundleDir, firstResp)
+
+	// Second engine run via Replay() — should produce zero diffs.
+	res := Replay(context.Background(), bundleDir, Options{Mode: ModeParsed})
+	if res.Status == StatusErrored {
+		t.Fatalf("Replay returned Errored: %s", res.Error)
+	}
+	if res.Status != StatusPass {
+		t.Fatalf("Status: want pass, got %s; floats=%v strings=%v", res.Status, res.Diffs, res.StringDiffs)
+	}
+	if res.FieldsChanged != 0 {
+		t.Fatalf("FieldsChanged: want 0, got %d; floats=%v strings=%v", res.FieldsChanged, res.Diffs, res.StringDiffs)
+	}
+}
+
+// TestRun_DiffStages_PopulatesStageDiffsField verifies Stage K's
+// engine wiring populates Result.StageDiffs when Options.DiffStages is
+// true. Setup mirrors the round-trip happy path; the assertion is that
+// at least one stage entry is present after the run, since the engine
+// writes `13-wacc.json` unconditionally on the DCF path. R3b Stage K.
+func TestRun_DiffStages_PopulatesStageDiffsField(t *testing.T) {
+	const ticker = "AAPL"
+	const startedAt = "2026-01-15T12:00:00Z"
+
+	bundleDir := seedFullBundle(t, ticker, startedAt)
+
+	// Capture canonical response so the response-level diff is clean.
+	_, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeRaw, nil)
+	writeResponseFile(t, bundleDir, firstResp)
+
+	// Replay with DiffStages enabled.
+	res := Replay(context.Background(), bundleDir, Options{Mode: ModeRaw, DiffStages: true})
+	if res.Status == StatusErrored {
+		t.Fatalf("Replay returned Errored: %s", res.Error)
+	}
+	if res.StageDiffs == nil {
+		t.Fatalf("StageDiffs nil with DiffStages=true; want non-nil map")
+	}
+	// 13-wacc.json is the load-bearing entry — always written by the DCF
+	// path (the only model path the AAPL fixture exercises).
+	if _, ok := res.StageDiffs["13-wacc.json"]; !ok {
+		t.Fatalf("StageDiffs missing 13-wacc.json key; got keys %v", stageDiffKeys(res.StageDiffs))
+	}
+	// 13-wacc.json should ALSO be in the bundle (because the test
+	// fixture's first engine run wrote it via the same Snapshot path).
+	// However, our seedFullBundle does NOT write stage files — only
+	// raw fetches. So the 13-wacc.json bundle side IS missing, and the
+	// diff path emits a `bundle_missing` asymmetric marker. Pin that.
+	bw, ok := res.StageDiffs["13-wacc.json"]
+	if !ok {
+		t.Fatal("13-wacc.json absent from StageDiffs")
+	}
+	foundMissingMarker := false
+	for _, sd := range bw.Strings {
+		if sd.Path == "stages.13-wacc.json.bundle_missing" {
+			foundMissingMarker = true
+			break
+		}
+	}
+	if !foundMissingMarker {
+		// The fixture writes raw fetches but not stage snapshots; the
+		// engine produces 13-wacc.json on the DCF path. Asymmetric
+		// marker is the expected outcome.
+		t.Fatalf("expected `bundle_missing` marker for 13-wacc.json (fixture has no stage files); got %+v", bw)
+	}
+}
+
+// TestRun_DiffStages_DisabledByDefault_ZeroStageDiffs verifies that
+// without the flag, Result.StageDiffs is nil. Catches a regression
+// where DiffStages defaulted to true and would silently slow every
+// replay.
+func TestRun_DiffStages_DisabledByDefault_ZeroStageDiffs(t *testing.T) {
+	const ticker = "AAPL"
+	const startedAt = "2026-01-15T12:00:00Z"
+
+	bundleDir := seedFullBundle(t, ticker, startedAt)
+	_, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeRaw, nil)
+	writeResponseFile(t, bundleDir, firstResp)
+
+	res := Replay(context.Background(), bundleDir, Options{Mode: ModeRaw}) // DiffStages omitted = false
+	if res.StageDiffs != nil {
+		t.Fatalf("StageDiffs = %+v; want nil with DiffStages omitted", res.StageDiffs)
+	}
+}
+
+// stageDiffKeys returns sorted keys of a StageDiff map for diagnostic
+// printing in test failures.
+func stageDiffKeys(m map[string]StageDiff) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
 
 // TestRoundTrip_MutatedResponse_FlagsDiff verifies that mutating the
 // canonical response after capture causes Replay to surface a diff.
@@ -238,8 +447,9 @@ func TestRoundTrip_MissingRawSEC_ReturnsErroredViaCoordinatorGoroutine(t *testin
 		t.Fatalf("remove SEC raw: %v", err)
 	}
 
-	// Wrap Replay in a recover to assert no panic.
-	var recovered interface{}
+	// Wrap Replay in a recover to assert no panic. RPL-3p (R3b cleanup):
+	// `any` instead of legacy `interface{}`.
+	var recovered any
 	var res Result
 	func() {
 		defer func() { recovered = recover() }()

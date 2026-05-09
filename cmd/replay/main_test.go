@@ -3,12 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/midas/dcf-valuation-api/internal/observability/replay"
 )
 
 // TestParseFlags_HappyPath drives the canonical flag set and confirms
@@ -83,17 +87,43 @@ func TestParseFlags_RejectsExtraArgs(t *testing.T) {
 	}
 }
 
-// TestRun_EmptyDirectory drives the binary against an empty dir; expected
-// behavior per spec §9 R1: "0/0 passed", exit 0.
+// TestRun_EmptyDirectory drives the binary against an empty dir. QA B2
+// (R3b polish) flipped this from "exit 0 with 0/0 passed" to "exit 2
+// with stderr warning" — pointing at the wrong path is a CI footgun
+// the silent zero-success exit mask. Operators in CI scripts now get
+// an actionable failure instead of a misleading green.
 func TestRun_EmptyDirectory(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
 	code := Run([]string{dir}, &stdout, &stderr)
-	if code != 0 {
-		t.Errorf("exit code = %d, want 0; stderr=%s", code, stderr.String())
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2; stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), "0/0 passed") {
-		t.Errorf("stdout should include '0/0 passed'; got:\n%s", stdout.String())
+	if !strings.Contains(stderr.String(), "no bundles found") {
+		t.Errorf("stderr should include 'no bundles found'; got:\n%s", stderr.String())
+	}
+	// Stderr message must reference the offending path so the operator
+	// can spot the typo in CI logs. The path is rendered via %q which
+	// escapes backslashes on Windows — match against the quoted form
+	// so the assertion is platform-stable.
+	if !strings.Contains(stderr.String(), strconv.Quote(dir)) {
+		t.Errorf("stderr should reference the supplied path %q; got:\n%s", dir, stderr.String())
+	}
+}
+
+// TestRun_EmptyDirectory_QuietStillWarns pins QA B2's quiet-mode carve-
+// out: --quiet suppresses per-bundle rows and the SUMMARY line, but the
+// "no bundles found" warning ALWAYS fires because the operator needs to
+// know they pointed at the wrong path. The exit code remains 2.
+func TestRun_EmptyDirectory_QuietStillWarns(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"--quiet", dir}, &stdout, &stderr)
+	if code != 2 {
+		t.Errorf("exit code = %d, want 2 even under --quiet; stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "no bundles found") {
+		t.Errorf("--quiet must NOT suppress the no-bundles warning; got stderr:\n%s", stderr.String())
 	}
 }
 
@@ -504,21 +534,30 @@ func TestParseFlags_R3FlagsAreRegistered(t *testing.T) {
 	}
 }
 
-// TestParseFlags_DiffStagesNotRegistered pins the contract that
-// --diff-stages is intentionally absent until Stage K (per-stage diff)
-// ships in R3b. Registering the flag without the engine consuming it
-// would be a CLI contract leak — passing the flag would silently do
-// nothing — same hazard the R2 follow-up #11 caught for --git-sha.
-//
-// When Stage K lands, this test should be replaced with a positive
-// "registered + behavior" pin in TestParseFlags_R3FlagsAreRegistered.
-func TestParseFlags_DiffStagesNotRegistered(t *testing.T) {
-	_, _, err := parseFlags([]string{"--diff-stages", "/x"})
-	if err == nil {
-		t.Fatal("--diff-stages must NOT be registered until Stage K ships; parseFlags accepted it")
+// TestParseFlags_DiffStages_DefaultFalse pins the default value of the
+// --diff-stages flag. Default off means the watchlist-regression
+// workflow doesn't pay the snapshot-capture cost unless the operator
+// explicitly opts in. R3b Stage K.
+func TestParseFlags_DiffStages_DefaultFalse(t *testing.T) {
+	f, _, err := parseFlags([]string{"/x"})
+	if err != nil {
+		t.Fatalf("parseFlags: %v", err)
 	}
-	if !strings.Contains(err.Error(), "flag provided but not defined") {
-		t.Fatalf("expected 'flag provided but not defined' error; got: %v", err)
+	if f.diffStages {
+		t.Fatalf("--diff-stages default = true, want false")
+	}
+}
+
+// TestParseFlags_DiffStages_ExplicitTrue verifies the bool flag flips
+// when explicitly passed. Plain `--diff-stages` (no value) is the spec
+// shape per §7's L515-554 sample.
+func TestParseFlags_DiffStages_ExplicitTrue(t *testing.T) {
+	f, _, err := parseFlags([]string{"--diff-stages", "/x"})
+	if err != nil {
+		t.Fatalf("parseFlags --diff-stages: %v", err)
+	}
+	if !f.diffStages {
+		t.Fatalf("--diff-stages = false after explicit pass; want true")
 	}
 }
 
@@ -632,5 +671,93 @@ func TestEnvVar_REPLAY_WORKERS_AppliesAsDefault(t *testing.T) {
 	}
 	if f.workers != 8 {
 		t.Fatalf("workers = %d, want 8 (env-var default)", f.workers)
+	}
+}
+
+// TestEvaluateBundle_FromRaw_MissingPayload_AppendsParsedHint pins QA
+// D1: the default --from=raw mode against a bundle that only ships
+// parsed snapshots (a real-world condition for production bundles in
+// artifacts/) must surface a hint pointing the operator at --from=parsed.
+// Without the hint the failure is "no macro data" — confusing because
+// the bundle exists, just the raw FRED files don't.
+//
+// Strategy: install evaluateBundleFn to return a Result wrapping the
+// canonical replay.ErrBundleMissingPayload sentinel, then call
+// evaluateBundleWithHint and assert the rendered Error contains
+// "try --from=parsed". The hint application lives at the cmd/replay
+// layer (where --from is known) per the dispatch prompt's guidance.
+func TestEvaluateBundle_FromRaw_MissingPayload_AppendsParsedHint(t *testing.T) {
+	original := evaluateBundleFn
+	t.Cleanup(func() { evaluateBundleFn = original })
+
+	missing := replay.NewBundleMissingPayloadError("/x/bundle", "07-fetch-macro-DGS10.raw.json", nil)
+	evaluateBundleFn = func(bundleDir string, f *flags) replay.Result {
+		return replay.Result{
+			Bundle: bundleDir,
+			Status: replay.StatusErrored,
+			Error:  missing.Error(),
+			// errSentinel is unexported; the dispatcher must rely on the
+			// public Result.Err() accessor, populated via the public
+			// constructor pathway in production. For this test we
+			// provide a Result that exposes the sentinel by returning
+			// a freshly-constructed error from evaluateBundle's path.
+		}
+	}
+
+	// The hint-appender is a small free function; assert it directly so
+	// the test does not depend on the unexported errSentinel field.
+	rawHinted := annotateMissingPayloadHint(missing.Error(), missing, "raw")
+	if !strings.Contains(rawHinted, "try --from=parsed") {
+		t.Fatalf("expected --from=raw hint in error string; got %q", rawHinted)
+	}
+	parsedNotHinted := annotateMissingPayloadHint(missing.Error(), missing, "parsed")
+	if strings.Contains(parsedNotHinted, "try --from=parsed") {
+		t.Fatalf("hint must not appear when mode is already parsed; got %q", parsedNotHinted)
+	}
+	// Non-missing-payload errors should pass through unchanged regardless
+	// of mode — the hint is specific to the bundle-missing-payload class.
+	other := errors.New("some other failure")
+	otherHinted := annotateMissingPayloadHint(other.Error(), other, "raw")
+	if strings.Contains(otherHinted, "try --from=parsed") {
+		t.Fatalf("hint must not be appended for non-missing-payload errors; got %q", otherHinted)
+	}
+}
+
+// TestEvaluateBundleWithRecover_PanicConvertedToErroredResult exercises
+// the defer-recover at the worker-goroutine boundary in
+// evaluateBundleWithRecover. Production: a panic in any layer outside
+// the F11 datafetcher goroutine path (e.g. an Auth/Watchlist stub
+// panic, an engine refactor that touches a panic-stub repo) escapes
+// up to evaluateBundleWithRecover where the deferred recover converts
+// it to a StatusErrored Result so the parent batch keeps running.
+//
+// Strategy: the production evaluateBundle is reached via the
+// evaluateBundleFn package-level indirection (RPL-3o test seam, ~5
+// LoC of production code). Test swaps in a stub that panics with a
+// known sentinel; assert the result's Status==StatusErrored and the
+// Error string contains the panic value.
+//
+// RPL-3o (R3b cleanup); spec §12 testing requirement.
+func TestEvaluateBundleWithRecover_PanicConvertedToErroredResult(t *testing.T) {
+	const panicMsg = "rpl-3o-test-panic"
+
+	original := evaluateBundleFn
+	t.Cleanup(func() { evaluateBundleFn = original })
+	evaluateBundleFn = func(bundleDir string, f *flags) replay.Result {
+		panic(panicMsg)
+	}
+
+	res := evaluateBundleWithRecover("/x/test-bundle", &flags{})
+	if res.Status != replay.StatusErrored {
+		t.Fatalf("Status: want errored, got %s", res.Status)
+	}
+	if res.Bundle != "/x/test-bundle" {
+		t.Errorf("Bundle: want /x/test-bundle, got %q", res.Bundle)
+	}
+	if !strings.Contains(res.Error, "panic in replay worker") {
+		t.Errorf("Error must mention 'panic in replay worker'; got %q", res.Error)
+	}
+	if !strings.Contains(res.Error, panicMsg) {
+		t.Errorf("Error must surface the panic value %q; got %q", panicMsg, res.Error)
 	}
 }

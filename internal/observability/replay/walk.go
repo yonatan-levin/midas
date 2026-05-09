@@ -21,7 +21,12 @@ import (
 //     sorted ascending for deterministic stdout. Sorting is essential for
 //     --workers=1 reproducibility (NF3 / spec §7).
 //   - rootDir contains no bundles → returns an empty slice (NOT an error).
-//     The CLI treats "0/0 passed" as exit 0 (spec §9 R1 acceptance).
+//     This primitive does NOT decide policy: the CLI layer
+//     (cmd/replay/main.go) decides what an empty walk means. As of
+//     QA B2 (R3b polish) the CLI treats an empty walk under an
+//     existing path as a hard error (stderr warning + exit 2) so a
+//     CI script pointed at the wrong path fails loudly instead of
+//     reporting a misleading "0/0 passed" success.
 //   - Symlinks are followed once (spec §5 D9): a directory symlink is
 //     descended into the first time it is seen, but cycle protection
 //     prevents infinite loops on self-loops or back-references. Cycle

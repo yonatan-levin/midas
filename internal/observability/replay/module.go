@@ -259,7 +259,8 @@ func resolveDataCleanerConfigPath(name string) string {
 	// Cap the search at 16 ancestors to avoid an unbounded walk on a
 	// pathological filesystem.
 	dir := filepath.Dir(thisFile)
-	for i := 0; i < 16; i++ {
+	// Go 1.22+ integer range form. RPL-3h (R3b cleanup).
+	for range 16 {
 		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
 			return filepath.Join(dir, "config", "datacleaner", name)
 		}
@@ -371,6 +372,13 @@ func replayValuationService(
 	// returns; doing it here would require an extra parameter the production
 	// constructor doesn't have, so we keep the post-construct hook for
 	// consistency with the di package wiring.
+	//
+	// marketGateway is consumed transitively by other fx providers in
+	// replay.Module (the datafetcher coordinator routes market reads
+	// through ports.MarketDataGateway). The underscore here is the
+	// explicit "intentionally unused at THIS site" marker so a future
+	// maintainer doesn't delete the parameter and break the fx dependency
+	// graph downstream. RPL-3l (R3b cleanup).
 	_ = marketGateway
 	return svc
 }

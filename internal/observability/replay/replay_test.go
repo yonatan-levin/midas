@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,28 +29,13 @@ func writeReplayManifest(t *testing.T, bundleDir string, ticker string) {
 		Outcome:        "ok",
 		SchemaVersions: map[string]int{},
 	}
-	for k, v := range CurrentSchemaVersions {
-		mf.SchemaVersions[k] = v
-	}
+	maps.Copy(mf.SchemaVersions, CurrentSchemaVersions)
 	body, err := json.MarshalIndent(&mf, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal manifest: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(bundleDir, "00-manifest.json"), body, 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
-	}
-}
-
-// writeFairValueResponse stamps a synthetic FairValueResponse to the
-// bundle's 17-response.json so Replay's diff step has a target.
-func writeFairValueResponse(t *testing.T, bundleDir string, resp *handlers.FairValueResponse) {
-	t.Helper()
-	body, err := json.MarshalIndent(resp, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal response: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(bundleDir, responseFile), body, 0o644); err != nil {
-		t.Fatalf("write response: %v", err)
 	}
 }
 
@@ -272,9 +258,7 @@ func TestReplay_GitDrift(t *testing.T) {
 			GitSHA:         bundleSHA,
 			SchemaVersions: map[string]int{},
 		}
-		for k, v := range CurrentSchemaVersions {
-			mf.SchemaVersions[k] = v
-		}
+		maps.Copy(mf.SchemaVersions, CurrentSchemaVersions)
 		body, err := json.MarshalIndent(&mf, "", "  ")
 		if err != nil {
 			t.Fatalf("marshal manifest: %v", err)

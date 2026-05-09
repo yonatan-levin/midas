@@ -80,6 +80,26 @@ type Result struct {
 	// SchemaDriftEntries enumerates the per-entity drift detected. Only
 	// populated when SchemaDrift is true.
 	SchemaDriftEntries []SchemaDriftEntry `json:"schema_drift_entries,omitempty"`
+	// StageDiffs carries Stage K's per-stage diff records, keyed by the
+	// stage filename (e.g. "13-wacc.json"). Populated only when
+	// Options.DiffStages is true; absent from JSON output (omitempty)
+	// otherwise. Each StageDiff carries Floats / Strings /
+	// DriftedWithinTolerance slices mirroring Result's response-level
+	// diff fields. Spec §7 + R3b plan §3 Stage K.
+	//
+	// Empty-entry semantics (REVIEWER R3b #3): when DiffStages was set
+	// but a stage's file is absent on BOTH sides (common for non-DCF
+	// model paths that skip 15-valuation.json), the entry is
+	// present-but-empty: "15-valuation.json": {}. This is INTENTIONAL —
+	// it communicates "diff was attempted but both sides absent."
+	// Operators chasing drift can disambiguate "not diffed" (key
+	// absent — DiffStages was false) from "diffed and clean" (key
+	// present, value empty) at a glance. Asymmetric absences (one side
+	// has the file) populate Strings with a
+	// stages.<file>.bundle_missing or .current_missing marker per
+	// stage_diff.go's convention; outright drift populates Floats /
+	// Strings with field-level entries.
+	StageDiffs map[string]StageDiff `json:"stage_diffs,omitempty"`
 	// Error carries the error message for an Errored Result. Stable
 	// shape; the underlying error type is not promised.
 	Error string `json:"error,omitempty"`
@@ -106,9 +126,12 @@ func (r *Result) Err() error {
 // Summary is the aggregate row at the bottom of every replay invocation.
 // Renderers append it to the per-bundle stream.
 //
-// Timing fields (R3 Stage L.3 — v2 plan Addition #4):
-//   - DurationMs: cumulative per-bundle replay duration (sum of Result.DurationMs).
-//     Pre-existing field; preserves R2 contract.
+// Timing fields (R3 Stage L.3 — v2 plan Addition #4; clarified RPL-3m R3b):
+//   - DurationMs: cumulative per-bundle replay duration (sum of
+//     Result.DurationMs). Pre-existing field; preserves R2 contract.
+//     Under --workers > 1, this exceeds ReplayDurationMs because workers
+//     run concurrently — operators wanting the user-facing wait time
+//     should read ReplayDurationMs instead.
 //   - WalkDurationMs: wall-clock time WalkBundles took to enumerate the bundle
 //     tree. Single batch-level measurement (one WalkBundles call covers the run).
 //   - ReplayDurationMs: wall-clock time the dispatcher spent running per-bundle
@@ -321,7 +344,89 @@ func writeResultRow(w io.Writer, res *Result, verbose bool) error {
 			}
 		}
 	}
+
+	// Stage L.1 (R3b plan §3): per-stage diff rendering. Verbose-only —
+	// JSON output already carries the StageDiffs map regardless of
+	// verbose. Format mirrors spec §7's sample at L497-510:
+	//
+	//   Stage diffs:
+	//     13-wacc.json:
+	//       - cost_of_equity: 0.118 -> 0.121 (rel_drift=0.025)
+	//
+	// Stage filenames are emitted in sorted order for deterministic
+	// output (the underlying StageDiffs is a Go map). Entries with no
+	// diffs are skipped — emitting an empty stage section would be
+	// noise.
+	if verbose && len(res.StageDiffs) > 0 {
+		if err := writeStageDiffSection(w, res.StageDiffs); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// writeStageDiffSection emits the verbose "Stage diffs:" block
+// beneath a bundle row. Skips stages whose StageDiff is empty so the
+// output focuses on what actually drifted. Sort key is the stage
+// filename so output is byte-deterministic for golden tests.
+func writeStageDiffSection(w io.Writer, stageDiffs map[string]StageDiff) error {
+	// Collect filenames whose diff has at least one entry. Both real
+	// drift (Floats / Strings) and within-tolerance drift count for
+	// inclusion under verbose — the operator asked for detail. The
+	// Empty() helper centralizes the predicate (REVIEWER R3b #4) so
+	// future consumers stay in sync with this rendering rule.
+	keys := make([]string, 0, len(stageDiffs))
+	for k, sd := range stageDiffs {
+		if sd.Empty() {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	sort.Strings(keys)
+
+	if _, err := io.WriteString(w, "  Stage diffs:\n"); err != nil {
+		return err
+	}
+	for _, name := range keys {
+		sd := stageDiffs[name]
+		if _, err := fmt.Fprintf(w, "    %s:\n", name); err != nil {
+			return err
+		}
+		// Outside-tolerance floats — most actionable; emit first.
+		for _, d := range sd.Floats {
+			if _, err := fmt.Fprintf(w, "      - %s: %v -> %v (rel_drift=%.6f)\n",
+				stripStagePrefix(d.Path, name), d.Old, d.New, d.RelDrift); err != nil {
+				return err
+			}
+		}
+		// String / asymmetric / type drift.
+		for _, d := range sd.Strings {
+			if _, err := fmt.Fprintf(w, "      - %s: %q -> %q\n",
+				stripStagePrefix(d.Path, name), d.Old, d.New); err != nil {
+				return err
+			}
+		}
+		// Within-tolerance drift — verbose-only signal.
+		for _, d := range sd.DriftedWithinTolerance {
+			if _, err := fmt.Fprintf(w, "      ~ %s: %v -> %v (within tolerance, rel_drift=%.6e)\n",
+				stripStagePrefix(d.Path, name), d.Old, d.New, d.RelDrift); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// stripStagePrefix shortens a stage-diff path of the form
+// "stages.<stageFile>.<field-path>" to just "<field-path>" for inline
+// rendering inside a "<stageFile>:" block — the parent header already
+// names the stage file.
+func stripStagePrefix(path, stageFile string) string {
+	prefix := "stages." + stageFile + "."
+	return strings.TrimPrefix(path, prefix)
 }
 
 // FormatTimestamp formats t as the ISO-8601-ish string used in JSON

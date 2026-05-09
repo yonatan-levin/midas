@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -79,8 +80,9 @@ Flags:
   --workers int           Parallel replay workers (default runtime.NumCPU(); env REPLAY_WORKERS)
   --filter-ticker string  Replay only bundles whose manifest ticker == this string (exact-case)
   --filter-since string   Replay only bundles whose manifest started_at is within this duration of now (e.g. 7d, 24h)
-  --float-rel-tol float   Relative tolerance for float diffs (default 1e-9)
-  --float-abs-tol float   Absolute tolerance for float diffs (default 1e-12)
+  --diff-stages           Diff intermediate-stage JSON files (10-clean-output, 12-growth-curve, 13-wacc, 15-valuation) in addition to the response-level diff
+  --float-rel-tol float   Relative tolerance for float diffs (default 1e-9; 0 means use default, NOT exact-match)
+  --float-abs-tol float   Absolute tolerance for float diffs (default 1e-12; 0 means use default, NOT exact-match)
 
 Exit codes:
   0   All bundles validated and replayed within tolerance
@@ -125,11 +127,13 @@ type flags struct {
 	filterSinceRaw string
 	filterSince    time.Duration
 
-	// --diff-stages was previously registered but had no R3 (Stages I+J+L)
-	// side-effect; the per-stage diff machinery (Stage K) is deferred to
-	// R3b. Registering the flag now would be a contract leak — passing
-	// --diff-stages would silently do nothing. Same fix shape as the
-	// R2-era --git-sha drop. Re-add when Stage K ships.
+	// diffStages enables per-stage JSON diff (Stage K). When true, the
+	// orchestrator captures the engine's intermediate snapshots
+	// (10-clean-output.json, 12-growth-curve.json, 13-wacc.json,
+	// 15-valuation.json) into an ephemeral bundle and diffs them against
+	// the bundle's recorded versions. Off by default to keep the
+	// watchlist-regression workflow as fast as the response-only diff.
+	diffStages bool
 
 	// floatRelTol / floatAbsTol override the default tolerances used by
 	// the diff layer. Defaults map to replay.DefaultFloatRelTol /
@@ -168,6 +172,7 @@ func parseFlags(argv []string) (*flags, string, error) {
 	fs.IntVar(&f.workers, "workers", defaultWorkers, "Parallel replay workers (default runtime.NumCPU(); env REPLAY_WORKERS)")
 	fs.StringVar(&f.filterTicker, "filter-ticker", "", "Replay only bundles whose manifest ticker == this string (exact-case)")
 	fs.StringVar(&f.filterSinceRaw, "filter-since", "", "Replay only bundles whose manifest started_at is within this duration of now (e.g. 7d, 24h)")
+	fs.BoolVar(&f.diffStages, "diff-stages", false, "Diff intermediate-stage JSON files in addition to the response-level diff (Stage K, Phase 2.D R3b)")
 	fs.Float64Var(&f.floatRelTol, "float-rel-tol", replay.DefaultFloatRelTol, "Relative tolerance for float diffs")
 	fs.Float64Var(&f.floatAbsTol, "float-abs-tol", replay.DefaultFloatAbsTol, "Absolute tolerance for float diffs")
 
@@ -280,6 +285,18 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	walkDuration := time.Since(walkStart)
+
+	// QA B2 (R3b polish): zero bundles under a path that exists is
+	// almost always operator error (typo, wrong root, deleted tree).
+	// The pre-fix behavior — exit 0 with "0/0 passed" — silently masked
+	// this in CI scripts. Now we emit a stderr warning AND exit 2 so a
+	// bad path surfaces as a hard failure. The warning fires even under
+	// --quiet because the operator needs to see it; --quiet only
+	// governs the SUMMARY/per-bundle rendering on stdout.
+	if len(bundles) == 0 {
+		fmt.Fprintf(stderr, "replay: no bundles found under %q (looked for req_*/00-manifest.json structure)\n", path)
+		return 2
+	}
 
 	// Apply --filter-ticker / --filter-since AFTER the walk and BEFORE
 	// the dispatch. Filtering is policy that doesn't belong in WalkBundles
@@ -427,7 +444,9 @@ func dispatchReplay(bundles []string, f *flags) []replay.Result {
 	var wg sync.WaitGroup
 
 	for i, b := range bundles {
-		i, b := i, b
+		// Go 1.23.0 (per go.mod): per-iteration loop semantics are in
+		// effect, so a closure capturing i/b sees fresh values without
+		// the historical `i, b := i, b` shadow. RPL-3g (R3b cleanup).
 		wg.Add(1)
 		sem <- struct{}{} // acquire slot
 		go func() {
@@ -459,8 +478,56 @@ func evaluateBundleWithRecover(bundleDir string, f *flags) (res replay.Result) {
 			}
 		}
 	}()
-	return evaluateBundle(bundleDir, f)
+	res = evaluateBundleFn(bundleDir, f)
+	// QA D1: when the underlying error wraps replay.ErrBundleMissingPayload
+	// AND the operator is on the default --from=raw mode, append a hint
+	// pointing at --from=parsed. Production bundles in artifacts/ commonly
+	// ship only *.parsed.json snapshots for some gateways (notably macro),
+	// so the default-mode failure is otherwise confusing — the bundle
+	// exists, just the raw FRED files don't. Hint lives at the CLI layer
+	// where --from is known, not in the orchestrator.
+	res.Error = annotateMissingPayloadHint(res.Error, res.Err(), f.from)
+	return res
 }
+
+// annotateMissingPayloadHint appends a "try --from=parsed" hint to an
+// error string when (a) the underlying error wraps
+// replay.ErrBundleMissingPayload AND (b) the current mode is "raw".
+// Returns the input string unchanged when either condition fails. Pure
+// function; no I/O. QA D1 (R3b polish).
+func annotateMissingPayloadHint(errStr string, sentinel error, mode string) string {
+	if mode != "raw" {
+		return errStr
+	}
+	if !errors.Is(sentinel, replay.ErrBundleMissingPayload) {
+		return errStr
+	}
+	return fmt.Sprintf("%s (hint: this bundle may only have parsed snapshots; try --from=parsed)", errStr)
+}
+
+// evaluateBundleFn is the package-level indirection so tests can
+// install a panic stub and exercise evaluateBundleWithRecover's
+// `defer recover()` path. Production wires it to evaluateBundle.
+//
+// Test-only seam (RPL-3o): main_test.go's
+// TestEvaluateBundleWithRecover_PanicConvertedToErroredResult swaps
+// this var with a panicking stub, calls evaluateBundleWithRecover,
+// and asserts the recover converted the panic to a StatusErrored
+// Result without crashing the binary. The seam is 1 line of
+// production code (the var declaration) — the alternative would be
+// an unreachable test-only branch inside evaluateBundle, which is
+// dirtier.
+//
+// Thread-safety (REVIEWER R3b #2): tests overriding this var MUST
+// NOT call t.Parallel() — concurrent tests would race on the
+// package-var write/read. Mirrors the gitSHAResolver convention at
+// internal/observability/replay/replay.go (RPL-2e). The current
+// TestEvaluateBundleWithRecover_PanicConvertedToErroredResult
+// correctly runs sequentially. If a future test needs t.Parallel(),
+// promote the seam to a per-call dependency-injection point
+// instead (e.g. add an evaluator field to flags) rather than
+// guarding the package-var with a mutex.
+var evaluateBundleFn = evaluateBundle
 
 // applyFilters filters the bundle list by --filter-ticker and
 // --filter-since. Both filters peek the manifest (cheap; <1 KiB read);
@@ -537,6 +604,7 @@ func evaluateBundle(bundleDir string, f *flags) replay.Result {
 		AllowGitDrift:    f.allowGitDrift,
 		FloatRelTol:      f.floatRelTol,
 		FloatAbsTol:      f.floatAbsTol,
+		DiffStages:       f.diffStages,
 	})
 }
 
