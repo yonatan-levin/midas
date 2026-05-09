@@ -328,10 +328,7 @@ func (w *stageWalker) walkSlice(fieldPath string, bundle, current []any) {
 		// useful diagnostic; it covers the common case where one side
 		// just added a new tail element.
 	}
-	n := len(bundle)
-	if len(current) < n {
-		n = len(current)
-	}
+	n := min(len(bundle), len(current))
 	for i := 0; i < n; i++ {
 		w.walk(childPath(fieldPath, fmt.Sprintf("[%d]", i)), bundle[i], current[i])
 	}

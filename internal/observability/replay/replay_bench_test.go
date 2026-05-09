@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -122,7 +123,7 @@ func generatePerfCorpus(rootDir string, n int) error {
 	macroDGS5 := makeFREDObsRawForPerf("3.75")
 	macroDGS2 := makeFREDObsRawForPerf("3.50")
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ticker := perfTickers[i%len(perfTickers)]
 		bundleID := fmt.Sprintf("perf_%04d", i)
 		bundleDir := filepath.Join(rootDir, ticker, "req_"+bundleID)
@@ -140,9 +141,7 @@ func generatePerfCorpus(rootDir string, n int) error {
 			Outcome:        "ok",
 			SchemaVersions: map[string]int{},
 		}
-		for k, v := range CurrentSchemaVersions {
-			mf.SchemaVersions[k] = v
-		}
+		maps.Copy(mf.SchemaVersions, CurrentSchemaVersions)
 		body, err := json.MarshalIndent(&mf, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshal manifest %s: %w", bundleID, err)
@@ -219,48 +218,48 @@ func warmUpResponse(bundleDir, ticker string) error {
 // but takes no testing.TB. Re-declared here to keep the bench file
 // self-contained.
 func makeMinimalSECRawForPerf() []byte {
-	facts := map[string]interface{}{
+	facts := map[string]any{
 		"cik":        320193,
 		"entityName": "Apple Inc.",
-		"facts": map[string]interface{}{
-			"us-gaap": map[string]interface{}{
-				"Revenues": map[string]interface{}{
+		"facts": map[string]any{
+			"us-gaap": map[string]any{
+				"Revenues": map[string]any{
 					"label":       "Revenues",
 					"description": "Aggregate revenue",
-					"units": map[string]interface{}{
-						"USD": []interface{}{
+					"units": map[string]any{
+						"USD": []any{
 							perfFact(383285000000.0),
 						},
 					},
 				},
-				"OperatingIncomeLoss": map[string]interface{}{
+				"OperatingIncomeLoss": map[string]any{
 					"label":       "Operating Income (Loss)",
 					"description": "Operating income",
-					"units": map[string]interface{}{
-						"USD": []interface{}{perfFact(114301000000.0)},
+					"units": map[string]any{
+						"USD": []any{perfFact(114301000000.0)},
 					},
 				},
-				"Assets": map[string]interface{}{
+				"Assets": map[string]any{
 					"label":       "Assets",
 					"description": "Total Assets",
-					"units": map[string]interface{}{
-						"USD": []interface{}{perfFact(352755000000.0)},
+					"units": map[string]any{
+						"USD": []any{perfFact(352755000000.0)},
 					},
 				},
-				"Liabilities": map[string]interface{}{
+				"Liabilities": map[string]any{
 					"label":       "Liabilities",
 					"description": "Total Liabilities",
-					"units": map[string]interface{}{
-						"USD": []interface{}{perfFact(290437000000.0)},
+					"units": map[string]any{
+						"USD": []any{perfFact(290437000000.0)},
 					},
 				},
 			},
-			"dei": map[string]interface{}{
-				"EntityCommonStockSharesOutstanding": map[string]interface{}{
+			"dei": map[string]any{
+				"EntityCommonStockSharesOutstanding": map[string]any{
 					"label":       "Entity Common Stock Shares Outstanding",
 					"description": "Shares outstanding",
-					"units": map[string]interface{}{
-						"shares": []interface{}{perfFact(15600000000.0)},
+					"units": map[string]any{
+						"shares": []any{perfFact(15600000000.0)},
 					},
 				},
 			},
@@ -270,8 +269,8 @@ func makeMinimalSECRawForPerf() []byte {
 	return body
 }
 
-func perfFact(val float64) map[string]interface{} {
-	return map[string]interface{}{
+func perfFact(val float64) map[string]any {
+	return map[string]any{
 		"val":   val,
 		"end":   "2023-09-30",
 		"fy":    2023,
@@ -286,9 +285,9 @@ func perfFact(val float64) map[string]interface{} {
 // makeMarketRawForPerf mirrors makeMarketRaw from gateway_market_test.go
 // without the testing dependency.
 func makeMarketRawForPerf(ticker string) []byte {
-	env := map[string]interface{}{
-		"quoteResponse": map[string]interface{}{
-			"result": []map[string]interface{}{
+	env := map[string]any{
+		"quoteResponse": map[string]any{
+			"result": []map[string]any{
 				{
 					"symbol":                   ticker,
 					"regularMarketPrice":       190.0,
@@ -313,10 +312,10 @@ func makeMarketRawForPerf(ticker string) []byte {
 // gateway_macro_test.go without the testing dependency. Produces a
 // FRED single-observation envelope.
 func makeFREDObsRawForPerf(value string) []byte {
-	body, _ := json.Marshal(map[string]interface{}{
+	body, _ := json.Marshal(map[string]any{
 		"observation_start": "2024-01-01",
 		"observation_end":   "2024-01-01",
-		"observations": []map[string]interface{}{
+		"observations": []map[string]any{
 			{"date": "2024-01-01", "value": value},
 		},
 	})

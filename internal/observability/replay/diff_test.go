@@ -22,9 +22,9 @@ import (
 //
 // Stage O.6 (R3b plan §3 Stage O.6).
 func TestCountFairValueFields_MatchesReflection(t *testing.T) {
-	responseFields := reflect.TypeOf(handlers.FairValueResponse{}).NumField()
-	industryFields := reflect.TypeOf(handlers.Industry{}).NumField()
-	sanityFields := reflect.TypeOf(entities.SanityCheck{}).NumField()
+	responseFields := reflect.TypeFor[handlers.FairValueResponse]().NumField()
+	industryFields := reflect.TypeFor[handlers.Industry]().NumField()
+	sanityFields := reflect.TypeFor[entities.SanityCheck]().NumField()
 	actual := responseFields + industryFields + sanityFields
 
 	if got := countFairValueFields(); got != actual {

@@ -40,19 +40,6 @@ func writeReplayManifest(t *testing.T, bundleDir string, ticker string) {
 	}
 }
 
-// writeFairValueResponse stamps a synthetic FairValueResponse to the
-// bundle's 17-response.json so Replay's diff step has a target.
-func writeFairValueResponse(t *testing.T, bundleDir string, resp *handlers.FairValueResponse) {
-	t.Helper()
-	body, err := json.MarshalIndent(resp, "", "  ")
-	if err != nil {
-		t.Fatalf("marshal response: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(bundleDir, responseFile), body, 0o644); err != nil {
-		t.Fatalf("write response: %v", err)
-	}
-}
-
 // TestReplay_MissingManifest_ReturnsErroredResult is the first checkpoint:
 // the orchestrator must surface a clean Errored Result rather than panic
 // when 00-manifest.json is absent.

@@ -34,9 +34,9 @@ import (
 // test fails first; the O.6 panic is reachable only after that
 // breakage.
 func init() {
-	responseFields := reflect.TypeOf(handlers.FairValueResponse{}).NumField()
-	industryFields := reflect.TypeOf(handlers.Industry{}).NumField()
-	sanityFields := reflect.TypeOf(entities.SanityCheck{}).NumField()
+	responseFields := reflect.TypeFor[handlers.FairValueResponse]().NumField()
+	industryFields := reflect.TypeFor[handlers.Industry]().NumField()
+	sanityFields := reflect.TypeFor[entities.SanityCheck]().NumField()
 	actual := responseFields + industryFields + sanityFields
 	expected := countFairValueFields()
 	if actual != expected {
@@ -478,7 +478,7 @@ func camelToSnake(name string) string {
 // nilOrType is a small helper used by CompareResponse for nil-vs-non-nil
 // reporting. Mirrors compare.go's stringOrNil but lives in diff.go to
 // keep the go-cmp consumer self-contained.
-func nilOrType(p interface{}) string {
+func nilOrType(p any) string {
 	if p == nil {
 		return "nil"
 	}
