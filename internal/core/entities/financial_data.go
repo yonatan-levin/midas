@@ -308,12 +308,22 @@ const (
 //
 // Fallback chain (applied in order):
 //
-//  1. TTM_4Q              — sum of the 4 most recent contiguous quarters,
-//     possibly crossing a fiscal-year boundary. The
-//     gold-standard path; warning is empty.
-//  2. TTM_PRIOR_BRIDGE    — partial-year case (latest year has 1-3 quarters,
+//  1. TTM_PRIOR_BRIDGE    — partial-year case (latest year has 1-3 quarters,
 //     prior year supplies the missing quarters at the
-//     same calendar position). Honors seasonality.
+//     same calendar position). Runs FIRST because it
+//     preserves the audit-trail signal that the latest
+//     year is partial; without this ordering the bridge
+//     is structurally unreachable when prior-year
+//     corresponding quarters are present (TTM_4Q would
+//     pick the same 4 quarters and produce the same
+//     numeric answer with a different source string,
+//     hiding the partial-year shape from replay tooling).
+//     Declines (returns no value) for full-year shapes,
+//     letting TTM_4Q take over.
+//  2. TTM_4Q              — sum of the 4 most recent contiguous quarters,
+//     possibly crossing a fiscal-year boundary. The
+//     gold-standard path for full-year shapes; warning
+//     is empty.
 //  3. ANNUAL_FY           — most recent fiscal-year filing when no usable
 //     quarterly window exists.
 //  4. ANNUALIZED_QUARTER  — naive scaling of the available quarters
@@ -325,20 +335,27 @@ const (
 // The signature is stable: replay tooling pattern-matches `source` strings
 // (see RM-1 spec). Adding a new source string requires updating the spec
 // and consumers; renaming an existing one is a breaking change.
+//
+// T7 stale-data check (>18mo) deferred — would couple the entity layer to a
+// clock dependency; tracked as the RM-1.A follow-up in
+// docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md.
 func (h *HistoricalFinancialData) TrailingTwelveMonthsRevenue() (revenue float64, source string, warning string) {
 	if h == nil || len(h.Data) == 0 {
 		return 0, revenueSourceInsufficient, "revenue_base: insufficient revenue history"
 	}
 
-	// 1) TTM_4Q — four most recent contiguous quarters, summed.
-	if rev, ok := h.ttmFourQuartersRevenue(); ok {
-		return rev, revenueSourceTTM4Q, ""
-	}
-
-	// 2) TTM_PRIOR_BRIDGE — partial-year + prior-year corresponding quarters.
+	// 1) TTM_PRIOR_BRIDGE — partial-year + prior-year corresponding quarters.
+	// Runs first so the partial-year IPO shape is surfaced via the source
+	// string. Declines (returns false) when the latest year has 4 quarters,
+	// at which point TTM_4Q takes over.
 	if rev, ok := h.ttmPriorBridgeRevenue(); ok {
 		return rev, revenueSourceTTMPriorBridge,
 			"revenue_base: partial-year TTM bridged with prior-year quarters (handles seasonality)"
+	}
+
+	// 2) TTM_4Q — four most recent contiguous quarters, summed.
+	if rev, ok := h.ttmFourQuartersRevenue(); ok {
+		return rev, revenueSourceTTM4Q, ""
 	}
 
 	// 3) ANNUAL_FY — fall back to the latest fiscal-year filing.
@@ -442,10 +459,14 @@ func quartersAreContiguous(periods []string) bool {
 // quarters at the same calendar position. Example: latest year has
 // Q1+Q2 → bridge with prior year's Q3+Q4 to synthesise a 12-month sum.
 //
-// Pre-condition: ttmFourQuartersRevenue already failed (i.e. four
-// contiguous quarters are not available). Returns (0, false) when the
-// bridge cannot be built (no quarters, gaps in the latest year, or
-// missing prior-year quarters).
+// Runs ahead of ttmFourQuartersRevenue in the public fallback chain so
+// the partial-year IPO shape is reported via source=TTM_PRIOR_BRIDGE
+// instead of being silently absorbed into TTM_4Q. The function declines
+// (returns 0,false) for full-year shapes (latest year has 4 quarters),
+// letting TTM_4Q take over for the gold-standard path. It also declines
+// when the bridge cannot be cleanly built (no quarters, gaps in the
+// latest year's Q1-start run, or missing/non-positive prior-year
+// quarters).
 func (h *HistoricalFinancialData) ttmPriorBridgeRevenue() (float64, bool) {
 	quarterly := h.GetQuarterlyPeriods()
 	if len(quarterly) == 0 {

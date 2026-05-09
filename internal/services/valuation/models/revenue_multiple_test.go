@@ -417,7 +417,13 @@ func TestRevenueMultipleModel_Calculate_RM1_TTMWiring(t *testing.T) {
 			expectErrContains: "INSUFFICIENT_HISTORY",
 		},
 		{
-			name: "T9_AAPL_FY_plus_Q1_with_prior_quarters_uses_TTM_4Q",
+			// AAPL-shaped fixture: latest year 2025 has only Q1, prior year
+			// 2024 supplies Q2+Q3+Q4. With the bridge running first in the
+			// fallback chain, this routes to TTM_PRIOR_BRIDGE — the numeric
+			// answer is identical to what TTM_4Q would have produced on the
+			// same data; the source string preserves the audit-trail signal
+			// that the latest year is partial.
+			name: "T9_AAPL_FY_plus_Q1_with_prior_quarters_uses_TTM_PRIOR_BRIDGE",
 			data: map[string]*entities.FinancialData{
 				"2024Q1": {Revenue: 90, FilingPeriod: "2024Q1", FilingDate: time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC)},
 				"2024Q2": {Revenue: 95, FilingPeriod: "2024Q2", FilingDate: time.Date(2024, 8, 1, 0, 0, 0, 0, time.UTC)},
@@ -426,9 +432,10 @@ func TestRevenueMultipleModel_Calculate_RM1_TTMWiring(t *testing.T) {
 				"2024FY": {Revenue: 395, FilingPeriod: "2024FY", FilingDate: time.Date(2025, 2, 1, 0, 0, 0, 0, time.UTC)},
 				"2025Q1": {Revenue: 105, FilingPeriod: "2025Q1", FilingDate: time.Date(2025, 5, 1, 0, 0, 0, 0, time.UTC)},
 			},
-			// Latest 4 by (year,sub): 2024Q2..Q4 + 2025Q1 = 95+100+110+105 = 410.
+			// Bridge: 2025Q1 (105) + 2024Q2 (95) + 2024Q3 (100) + 2024Q4 (110) = 410.
 			expectRevenueInEV: 410,
-			expectSourceTag:   "source=TTM_4Q",
+			expectSourceTag:   "source=TTM_PRIOR_BRIDGE",
+			expectWarnSub:     "partial-year TTM bridged",
 		},
 	}
 
