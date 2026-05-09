@@ -37,7 +37,7 @@
       "code": "FIN",
       "priority": 90,
       "matchers": {
-        "sic_codes": ["6020", "6021", "6022", "6029", "6035", "6036"],
+        "sic_codes": ["6020", "6021", "6022", "6029", "6035", "6036", "6311", "6321", "6411"],
         "naics_codes": ["522", "523", "524"],
         "keywords": ["bank", "financial", "investment", "insurance", "capital", "fund", "asset management"],
         "patterns": ["\\b(bank|finance|financial)\\b"],
@@ -58,6 +58,22 @@
           "matchers": {
             "keywords": ["asset management", "fund management", "portfolio management"],
             "sic_codes": ["6282"]
+          }
+        },
+        {
+          "name": "Insurance",
+          "code": "FIN_INSURANCE",
+          "matchers": {
+            "keywords": ["insurance", "reinsurance", "underwriter", "life insurance", "property casualty"],
+            "sic_codes": ["6311", "6321", "6411"]
+          }
+        },
+        {
+          "name": "Banks",
+          "code": "FIN_BANK",
+          "matchers": {
+            "keywords": ["bank", "banking", "savings institution", "thrift"],
+            "sic_codes": ["6020", "6021", "6022", "6029", "6035", "6036"]
           }
         }
       ]
@@ -124,7 +140,17 @@
         "keywords": ["manufacturing", "factory", "production", "industrial", "assembly"],
         "patterns": ["\\b(manufactur|factory|industrial)\\b"],
         "exact_names": ["General Electric", "3M Company", "Boeing Company"]
-      }
+      },
+      "sub_industries": [
+        {
+          "name": "Semiconductors",
+          "code": "MFG_SEMI",
+          "matchers": {
+            "keywords": ["semiconductor", "fabless", "foundry", "wafer"],
+            "sic_codes": ["3674", "3672", "3677"]
+          }
+        }
+      ]
     },
     {
       "name": "Energy",
@@ -153,12 +179,63 @@
       "code": "RESTATE",
       "priority": 65,
       "matchers": {
-        "sic_codes": ["6500-6599"],
+        "sic_codes": ["6500-6599", "6798"],
         "naics_codes": ["531"],
         "keywords": ["real estate", "property", "reit", "realty", "properties", "development"],
         "patterns": ["\\b(real.?estate|property|reit)\\b"],
         "exact_names": ["American Tower Corporation", "Prologis Inc.", "Simon Property Group"]
-      }
+      },
+      "sub_industries": [
+        {
+          "name": "Data Center REIT",
+          "code": "DATA_CENTER",
+          "matchers": {
+            "keywords": ["data center", "data centre", "digital realty", "equinix", "interconnection"]
+          }
+        },
+        {
+          "name": "Cell Tower REIT",
+          "code": "CELLTOWER",
+          "matchers": {
+            "keywords": ["cell tower", "communications tower", "american tower", "crown castle", "sba communications"]
+          }
+        },
+        {
+          "name": "Healthcare REIT",
+          "code": "HEALTHCARE_REIT",
+          "matchers": {
+            "keywords": ["healthcare", "medical office", "senior housing", "welltower", "ventas", "healthpeak"]
+          }
+        },
+        {
+          "name": "Retail REIT",
+          "code": "RETAIL_REIT",
+          "matchers": {
+            "keywords": ["mall", "shopping center", "shopping centre", "simon property", "kimco", "regency centers"]
+          }
+        },
+        {
+          "name": "Industrial REIT",
+          "code": "INDUSTRIAL",
+          "matchers": {
+            "keywords": ["industrial", "logistics", "warehouse", "prologis", "duke realty", "rexford"]
+          }
+        },
+        {
+          "name": "Residential REIT",
+          "code": "RESIDENTIAL",
+          "matchers": {
+            "keywords": ["residential", "apartment", "equity residential", "avalonbay", "essex property", "mid-america apartment"]
+          }
+        },
+        {
+          "name": "Office REIT",
+          "code": "OFFICE",
+          "matchers": {
+            "keywords": ["office", "boston properties", "vornado", "kilroy"]
+          }
+        }
+      ]
     },
     {
       "name": "Telecommunications",
