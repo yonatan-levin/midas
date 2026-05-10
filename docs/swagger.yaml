@@ -150,7 +150,7 @@ definitions:
         type: string
       calculation_version:
         description: Engine version that produced this result
-        example: "4.0"
+        example: "4.1"
         type: string
       currency:
         description: |-
@@ -163,6 +163,17 @@ definitions:
           can display "USD" alongside the per-share value rather than guessing.
         example: USD
         type: string
+      current_assets_per_share:
+        description: |-
+          Graham-school asset-floor diagnostics — see
+          docs/refactoring/graham-floor-metrics-spec.md. All four use *float64 +
+          omitempty: nil = TotalLiabilities unresolved (a warning is appended to
+          `warnings`). Non-nil = resolved; values may be negative (NCAV on
+          distressed companies) or 0 (floor clamped when NCAV is negative). Pointer
+          types preserve the deep-distress signal (resolved + negative + clamped)
+          distinct from the unresolved-fallback signal (all four absent + warning).
+        example: 55.13
+        type: number
       current_price:
         description: |-
           CurrentPrice is the live per-share market price captured from the
@@ -187,6 +198,12 @@ definitions:
         description: Discounted cash flow fair value per share
         example: 156.42
         type: number
+      graham_discount_pct:
+        example: 23.3
+        type: number
+      graham_floor_per_share:
+        example: 3.03
+        type: number
       growth_confidence:
         description: Growth estimation confidence
         example: high
@@ -208,6 +225,9 @@ definitions:
         allOf:
         - $ref: '#/definitions/handlers.Industry'
         description: Dual industry classification (SIC + heuristic) for drift detection
+      ncav_per_share:
+        example: 4.55
+        type: number
       sanity_check:
         allOf:
         - $ref: '#/definitions/entities.SanityCheck'

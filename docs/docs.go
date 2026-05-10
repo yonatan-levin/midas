@@ -377,12 +377,17 @@ const docTemplate = `{
                 "calculation_version": {
                     "description": "Engine version that produced this result",
                     "type": "string",
-                    "example": "4.0"
+                    "example": "4.1"
                 },
                 "currency": {
                     "description": "Currency is the ISO-4217 code that dcf_value_per_share and\ntangible_value_per_share are denominated in. Always \"USD\" — the\nvaluation service FX-converts each period's reporting-currency\nmonetary fields to USD via Phase B9 of the IFRS-FPI plan\n(docs/refactoring/ifrs-foreign-private-issuer-support-spec.md), so\nAPI consumers MUST NOT re-convert. Surfaced so a downstream client\ncan display \"USD\" alongside the per-share value rather than guessing.",
                     "type": "string",
                     "example": "USD"
+                },
+                "current_assets_per_share": {
+                    "description": "Graham-school asset-floor diagnostics — see\ndocs/refactoring/graham-floor-metrics-spec.md. All four use *float64 +\nomitempty: nil = TotalLiabilities unresolved (a warning is appended to\n` + "`" + `warnings` + "`" + `). Non-nil = resolved; values may be negative (NCAV on\ndistressed companies) or 0 (floor clamped when NCAV is negative). Pointer\ntypes preserve the deep-distress signal (resolved + negative + clamped)\ndistinct from the unresolved-fallback signal (all four absent + warning).",
+                    "type": "number",
+                    "example": 55.13
                 },
                 "current_price": {
                     "description": "CurrentPrice is the live per-share market price captured from the\nmarket-data gateway (Yahoo Finance / Finzive) at the moment the\nvaluation was computed. Same denomination and per-share basis as\nDCFValuePerShare and TangibleValuePerShare — for ADRs this is the\nper-ADR exchange price, directly comparable to the per-ADR DCF\nvalue the engine produces after applyADRRatio. Surfaced so a\nconsumer can compute the upside/downside discount ((dcf - price)\n/ price) without a second quote lookup. Omitted when zero.",
@@ -403,6 +408,14 @@ const docTemplate = `{
                     "description": "Discounted cash flow fair value per share",
                     "type": "number",
                     "example": 156.42
+                },
+                "graham_discount_pct": {
+                    "type": "number",
+                    "example": 23.3
+                },
+                "graham_floor_per_share": {
+                    "type": "number",
+                    "example": 3.03
                 },
                 "growth_confidence": {
                     "description": "Growth estimation confidence",
@@ -433,6 +446,10 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.Industry"
                         }
                     ]
+                },
+                "ncav_per_share": {
+                    "type": "number",
+                    "example": 4.55
                 },
                 "sanity_check": {
                     "description": "Multiples cross-check against sector medians",
