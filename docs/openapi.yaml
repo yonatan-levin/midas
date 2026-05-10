@@ -1,11 +1,11 @@
 openapi: 3.0.3
 info:
   title: Midas DCF Valuation API
-  version: 0.1.0
+  version: 0.9.0-rc1
   description: |
     REST API exposing intrinsic value metrics per ticker.
     - Net Tangible Asset Value per share
-    - DCF Fair Value per share (5-year projection, WACC-discounted)
+    - DCF Fair Value per share (7-year explicit projection, WACC-discounted)
 servers:
   - url: http://localhost:8080
     description: Local development
@@ -255,6 +255,49 @@ components:
         dcf_value_per_share:
           type: number
           format: float
+        growth_rates:
+          type: array
+          items:
+            type: number
+            format: float
+          description: |
+            Per-year growth rates for the explicit projection period (years 1-7).
+            Stage 1 (years 1-3) = high-growth rate from analyst/historical blend;
+            Stage 2 (years 4-7) = linear fade toward terminal rate.
+          example: [0.05, 0.048, 0.046, 0.044, 0.042, 0.038, 0.034]
+        growth_source:
+          type: string
+          enum: [analyst_blend, historical_only, default]
+          description: How growth was estimated.
+        growth_confidence:
+          type: string
+          enum: [high, medium, low]
+          description: Confidence in the estimated growth rate.
+        calculation_method:
+          type: string
+          enum: [multi_stage_dcf, ddm, ffo, revenue_multiple]
+          description: |
+            Which valuation model fired. Industry-aware router: REITs route to
+            `ffo`, banks to `ddm`, negative-OI tickers to `revenue_multiple`,
+            everything else to `multi_stage_dcf`.
+        calculation_version:
+          type: string
+          example: "4.1"
+          description: |
+            Calculation engine version. Bumped on shape-changing or breaking-numeric
+            changes (e.g., 4.1 added Graham-floor diagnostic fields and flipped the
+            tangible_value_per_share denominator to diluted shares).
+        warnings:
+          type: array
+          items:
+            type: string
+          description: |
+            Diagnostic warnings — sanity-check flags, revenue-base source path
+            (e.g. "revenue_base: source=ANNUAL_FY revenue=$467641000"), sector-multiple
+            applied notice (e.g. "Applied 6.5x EV/Revenue multiple for MFG_SEMI sector"),
+            NAV-divergence (FFO model), Graham-floor unresolved, etc.
+        sanity_check:
+          $ref: '#/components/schemas/SanityCheck'
         current_assets_per_share:
           type: number
           format: float
@@ -386,5 +429,49 @@ components:
         context:
           type: object
           additionalProperties: true
+    SanityCheck:
+      type: object
+      description: |
+        Cross-validation against sector median multiples. Advisory only —
+        flags are emitted to `warnings[]` but do not invalidate the valuation.
+        Populated only when the multi_stage_dcf path fires AND
+        config/industry_multiples.json has matching sector entries.
+      properties:
+        implied_pe:
+          type: number
+          format: float
+          nullable: true
+          description: DCF Value / EPS
+        implied_ev_ebitda:
+          type: number
+          format: float
+          nullable: true
+          description: Enterprise Value / EBITDA
+        implied_pfcf:
+          type: number
+          format: float
+          nullable: true
+          description: DCF Value / FCF per Share
+        sector_median_pe:
+          type: number
+          format: float
+        sector_median_ev_ebitda:
+          type: number
+          format: float
+        sector_median_pfcf:
+          type: number
+          format: float
+        is_reasonable:
+          type: boolean
+          description: |
+            true when ALL implied multiples fall within [0.5x, 2.0x] of their
+            sector median; false when any one breaches.
+        flags:
+          type: array
+          items:
+            type: string
+          description: |
+            Per-metric flag strings for any breach, e.g.
+            "DCF-implied P/E (9.3) is <0.5x sector median (28.0) for TECH".
 
 

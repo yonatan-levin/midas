@@ -349,7 +349,7 @@ curl -H "X-API-Key: <key>" \
   "sanity_check": {
     "implied_pe": 18.5,
     "implied_ev_ebitda": 14.2,
-    "implied_p_fcf": 22.1,
+    "implied_pfcf": 22.1,
     "is_reasonable": true,
     "flags": []
   },
