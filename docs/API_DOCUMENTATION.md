@@ -1089,7 +1089,7 @@ Example: `database.driver` becomes `DATABASE_DRIVER`
 | `valuation.max_bulk_size` | `VALUATION_MAX_BULK_SIZE` | `50` | Max tickers per bulk request |
 | `valuation.cache_ttl` | `VALUATION_CACHE_TTL` | `1h` | Valuation result cache |
 | `valuation.data_fetch_timeout` | `VALUATION_DATA_FETCH_TIMEOUT` | `10s` | Data fetching timeout |
-| `valuation.dcf_projection_years` | - | `5` | DCF forecast horizon |
+| `valuation.dcf_projection_years` | - | `5` | Reserved DCF forecast-horizon override. **Currently inert** — the live engine derives the horizon from the multi-stage growth estimator (`Stage1Years=3` + `Stage2Years=4` = 7 explicit years, hard-coded in `internal/services/growth/estimator.go`). See §5.2; the `growth_rates` array in the response is length 7 regardless of this config value. |
 | `valuation.dcf_max_growth_rate` | - | `0.5` | Growth rate ceiling (50%) |
 | `valuation.dcf_min_growth_rate` | - | `-0.3` | Growth rate floor (-30%) |
 
