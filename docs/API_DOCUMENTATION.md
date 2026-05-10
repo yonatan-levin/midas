@@ -49,13 +49,18 @@ Midas is a production-grade REST API for equity valuation using **Discounted Cas
 
 | Feature | Description |
 |---------|-------------|
-| Multi-Stage DCF | 3-stage growth model: high-growth, fade, terminal |
-| Industry-Aware Models | Auto-selects DDM (banks), FFO (REITs), Revenue Multiple (pre-profit), or DCF |
+| Multi-Stage DCF | 3-stage growth model: high-growth, fade, terminal (7-year explicit projection) |
+| Industry-Aware Models | Auto-selects DDM (banks), FFO (REITs, with subsector calibration), Revenue Multiple (pre-profit, TTM-based), or DCF |
+| Sub-Industry Sector Multiples | Sub-industry-keyed EV/Revenue, EV/EBITDA, P/E, P/FFO, and cap rate tables — semis (`MFG_SEMI`), banks (`FIN_BANK`), data center / cell tower / industrial REITs, etc. |
+| Graham-Floor Diagnostics | Per-share asset-floor block (`current_assets_per_share`, `ncav_per_share`, `graham_floor_per_share`, `graham_discount_pct`) on every valuation, independent of operating earnings/growth/WACC |
+| TTM Revenue Base | `revenue_multiple` model uses Trailing-Twelve-Months revenue with a 5-tier fallback chain (`TTM_PRIOR_BRIDGE` → `TTM_4Q` → `ANNUAL_FY` → `ANNUALIZED_QUARTER` → `INSUFFICIENT_HISTORY`) and surfaces the source path in warnings for replay-tooling auditability |
 | International (ADR) Support | Country risk premium adjustments for 50+ ADR tickers |
+| IFRS-FPI Pipeline | Foreign private issuers (TSM, ASML, BABA, …) auto-converted to USD per-ADR via `ifrs-full` taxonomy + FRED FX rates |
 | Data Quality Scoring | 0-100 score with A-F grade on every valuation |
-| Bulk Valuations | Value up to 10 tickers in a single request |
+| Bulk Valuations | Value up to 10 tickers in a single request (capped by `valuation.max_bulk_size`) |
 | Analyst Consensus Blending | Merges Yahoo Finance analyst estimates with historical data |
-| Sanity Cross-Checks | Compares DCF-implied multiples against sector medians |
+| Sanity Cross-Checks | Compares DCF-implied multiples against sector medians; REITs use subsector-specific cap rates for NAV cross-check |
+| Per-Request Artifact Bundles | Opt-in or auto-on-error / on-quality-flag / always-on capture of full request narrative to disk |
 | Rate Limiting | Per-key, per-IP, per-endpoint, and global rate limits |
 | Caching | Redis (distributed) + in-memory fallback with configurable TTLs |
 | Resilience | Circuit breaker + exponential retry on all external API calls |
@@ -319,24 +324,24 @@ curl -H "X-API-Key: <key>" \
      "http://localhost:8080/api/v1/fair-value/AAPL?override_beta=1.2&override_rf=0.045"
 ```
 
-**Success Response (200 OK):**
+**Success Response (200 OK) — healthy positive-NCAV case:**
 ```json
 {
-  "ticker": "AAPL",
+  "ticker": "EXAMPLE",
   "wacc": 0.092,
   "growth_rate": 0.045,
-  "growth_rates": [0.05, 0.048, 0.046, 0.044, 0.042],
+  "growth_rates": [0.05, 0.048, 0.046, 0.044, 0.042, 0.038, 0.034],
   "growth_source": "analyst_blend",
   "growth_confidence": "high",
-  "tangible_value_per_share": 24.73,
-  "dcf_value_per_share": 156.42,
-  "current_assets_per_share": 8.45,
-  "ncav_per_share": 2.10,
-  "graham_floor_per_share": 1.40,
-  "graham_discount_pct": 192.27,
-  "as_of": "2025-08-13T22:15:34Z",
-  "data_quality_score": 85.5,
-  "data_quality_grade": "B",
+  "tangible_value_per_share": 38.20,
+  "dcf_value_per_share": 84.50,
+  "current_assets_per_share": 55.13,
+  "ncav_per_share": 4.55,
+  "graham_floor_per_share": 3.03,
+  "graham_discount_pct": 23.30,
+  "as_of": "2026-05-10T22:15:34Z",
+  "data_quality_score": 90,
+  "data_quality_grade": "A",
   "calculation_method": "multi_stage_dcf",
   "calculation_version": "4.1",
   "warnings": [],
@@ -349,14 +354,51 @@ curl -H "X-API-Key: <key>" \
   },
   "industry": {
     "sic_code": "3571",
-    "sic": "MFG",
+    "sic": "TECH",
     "heuristic_code": "45",
     "heuristic_name": "Information Technology",
     "match": true
   },
   "currency": "USD",
   "adr_ratio_applied": 1,
-  "current_price": 270.17
+  "current_price": 73.64
+}
+```
+
+**Distressed (deep-value) case — negative NCAV, floor clamped to 0:**
+
+`graham_floor_per_share` stays in JSON as `0` (the data-says-zero signal); `graham_discount_pct` is **omitted** (no meaningful ratio against a zero floor):
+
+```json
+{
+  "ticker": "DISTRESSED",
+  "wacc": 0.105,
+  "tangible_value_per_share": 1.20,
+  "dcf_value_per_share": 12.40,
+  "current_assets_per_share": 2.85,
+  "ncav_per_share": -0.765,
+  "graham_floor_per_share": 0,
+  "calculation_method": "revenue_multiple",
+  "calculation_version": "4.1",
+  "current_price": 11.20,
+  "warnings": [
+    "Applied 6.5x EV/Revenue multiple for MFG_SEMI sector",
+    "revenue_base: source=ANNUAL_FY revenue=$467641000",
+    "revenue_base: TTM unavailable, used latest FY ($467641000 dated 2026-01-29) [2025FY]"
+  ]
+}
+```
+
+**Unresolved-liabilities case — all four Graham fields absent:**
+
+When `total_liabilities` cannot be sourced (umbrella XBRL tag missing AND derivation `TotalAssets − StockholdersEquity` produces a non-positive value — typically the cleaner-asymmetry signature documented in `docs/reviewer/DC-1-...`), all four Graham fields drop from the JSON and a single warning is appended:
+
+```json
+{
+  "ticker": "UNRESOLVED",
+  "warnings": [
+    "graham_floor: insufficient balance-sheet data (total_liabilities unresolved)"
+  ]
 }
 ```
 
@@ -369,8 +411,8 @@ curl -H "X-API-Key: <key>" \
 | `growth_rates` | Per-year growth rates across projection period |
 | `growth_source` | How growth was estimated: `analyst_blend`, `historical_only`, `default` |
 | `growth_confidence` | Confidence level: `high`, `medium`, `low` |
-| `tangible_value_per_share` | Net tangible book value per share (floor value) |
-| `dcf_value_per_share` | DCF-derived intrinsic value per share |
+| `tangible_value_per_share` | Net tangible book value per share (floor value). Denominator priority chain: **diluted shares first**, then market basic, then financial basic — same chain as `dcf_value_per_share`, `ncav_per_share`, and the Graham fields. Pre-v0.10.0 builds used market-basic first; expect a ~0.4-1% downward drift on first recompute for large-caps with options/RSU/convertible dilution |
+| `dcf_value_per_share` | DCF-derived intrinsic value per share. For tickers routed to non-DCF models (DDM, FFO, revenue_multiple) this field carries that model's per-share output — `calculation_method` distinguishes which math fired |
 | `current_assets_per_share` | Current assets ÷ diluted shares — pure asset-side floor with no liability subtraction. Omitted when `total_liabilities` cannot be resolved |
 | `ncav_per_share` | Graham's Net Current Asset Value per share: `(current_assets − total_liabilities) / diluted_shares`. **May be negative** for distressed companies (raw value, no clamping). Omitted when `total_liabilities` cannot be resolved |
 | `graham_floor_per_share` | Graham's "buy below" trigger: `max(ncav_per_share × 2/3, 0)`. Clamps to 0 when NCAV is negative — that case represents "no asset floor exists, the company has more obligations than liquid assets" |
@@ -391,10 +433,10 @@ The `industry` object exposes both classifiers the engine runs on every request:
 | Sub-field | Source | Description |
 |-----------|--------|-------------|
 | `sic_code` | SEC filing header | Raw SIC code (e.g., `3674` for semiconductors) |
-| `sic` | `IndustryClassifier.Classify` | High-level label from SIC code + company name: `TECH`, `MFG`, `RETAIL`, `UTIL`, `FIN`, `HEALTH`, `ENERGY`, `RESTATE`, `TELECOM`, `TRANS`, `CONS`, or sub-industry refinements like `TECH_SAAS`, `HEALTH_BIOTECH`, `FIN_IB` |
+| `sic` | `IndustryClassifier.Classify` | High-level label from SIC code + company name. Top-level codes: `TECH`, `MFG`, `RETAIL`, `UTIL`, `FIN`, `HEALTH`, `ENERGY`, `RESTATE`, `TELECOM`, `TRANS`, `CONS`. Sub-industry refinements: `TECH_SAAS`, `TECH_AI`, `MFG_SEMI` (fabless / IDM semis), `HEALTH_BIOTECH`, `HEALTH_PHARMA`, `FIN_BANK`, `FIN_INSURANCE`, `FIN_IB`. REIT subsectors (when `RESTATE` parent matches): `RESIDENTIAL`, `INDUSTRIAL`, `OFFICE`, `RETAIL_REIT`, `HEALTHCARE_REIT`, `DATA_CENTER`, `CELLTOWER`, `SPECIALTY` |
 | `heuristic_code` | `IndustryClassifier.ClassifyIndustry` | GICS sector code from balance-sheet ratios: `45` (IT), `25` (Consumer Discretionary), `20` (Industrials), `35` (Health Care), `55` (Utilities), `40` (Financials), `50` (Communication Services), `60` (Real Estate), `30` (Consumer Staples), `10` (Energy) |
 | `heuristic_name` | `IndustryClassifier.ClassifyIndustry` | Human-readable GICS sector name |
-| `match` | Computed in handler | `true` when `sic` and `heuristic_code` agree per a canonical SIC→GICS mapping (sub-industries normalize to their parent); `false` signals classification drift |
+| `match` | Computed in handler | `true` when `sic` and `heuristic_code` agree per a canonical SIC→GICS mapping (sub-industries normalize to their parent or have explicit entries); `false` signals classification drift |
 
 **Canonical match mapping** (handler-owned):
 
@@ -411,16 +453,20 @@ The `industry` object exposes both classifiers the engine runs on every request:
 | `TELECOM` | `50` |
 | `TRANS` | `20` |
 | `CONS` | `30`, `25` |
+| `RESIDENTIAL`, `INDUSTRIAL`, `OFFICE`, `RETAIL_REIT`, `HEALTHCARE_REIT`, `DATA_CENTER`, `CELLTOWER`, `SPECIALTY` | `60` (each REIT subsector has its own explicit `sicToGICS` entry — exact-match-first lookup prevents `RETAIL_REIT` falling through prefix-strip to `RETAIL → 25`) |
 
-Sub-industry codes (`TECH_SAAS`, `HEALTH_BIOTECH`, …) normalize to their parent prefix for match computation.
+Sub-industry codes for non-REIT sectors (`TECH_SAAS`, `MFG_SEMI`, `HEALTH_BIOTECH`, `FIN_BANK`, …) normalize to their parent prefix for match computation. REIT subsector codes have explicit map entries because they would otherwise prefix-strip into the wrong sector.
 
 **Known classifier gaps** (tracked in `docs/refactoring/industry-classification-unification-spec.md`):
 
 - **Financials** (`sic = "FIN"`): `ClassifyIndustry` has no GICS-40 config and defaults to `20` → `match: false` for banks like JPM. Not drift — a known heuristic config gap.
 - **Owned-store retailers** (Target, Home Depot, Costco, Lowe's): the heuristic's retail predicate rejects retailers with tangibles > 70% and intangibles < 10%, so they fall through to Industrials (`heuristic_code = "20"`) → `match: false`. Tracked as a 2026-04-24 FEEDBACK-LOG entry.
 - **Missing R&D data** (AMD and similar): when the datacleaner pipeline doesn't populate `ResearchAndDevelopment`, `isTechnologyCompany` returns false and the ticker drops to `heuristic_code = "20"` Industrials. `sic = "MFG"` multi-maps to `{20, 45}`, so `match: true` **still** — but the Industrials label is misleading.
+- **REIT subsectors** (`sic ∈ {RESIDENTIAL, INDUSTRIAL, OFFICE, RETAIL_REIT, HEALTHCARE_REIT, DATA_CENTER, CELLTOWER, SPECIALTY}`): the heuristic classifies REITs from balance-sheet ratios as Industrials (`heuristic_code = "20"`) because their asset structure looks industrial-shaped to the heuristic. SIC says GICS 60 (Real Estate). `match: false` is the intentional dual-classifier disagreement signal; the FFO model still routes correctly (it consumes `sic`, not `heuristic_code`).
+- **Digital Realty Trust class** — DLR has SIC 6798 (REIT) but its company name "Digital Realty" matches the TECH parent's keyword pattern at priority 100, outranking RESTATE (priority 65). Routes to TECH not RESTATE; misses the REIT FFO model. Documented inline at `internal/services/datacleaner/industry/classifier_val3p1_reit_test.go`. Same defect class as the next item.
+- **Healthpeak / Omega / Medical Properties Trust class** (`docs/reviewer/VAL-6-...`): healthcare REIT names containing `health` / `medical` match HEALTH parent (priority 85) before RESTATE (65), so they route to the HEALTH multiples instead of `HEALTHCARE_REIT`. The HEALTHCARE_REIT subsector multiple (17.5× P/FFO) and cap rate (6.0%) are bypassed. Welltower / Ventas don't trip this (no HEALTH keyword in name).
 
-The feature's purpose is drift detection. When `match: false`, consult the gaps above; it may be a known classifier limitation rather than a real disagreement. The long-term plan (tracked in `docs/refactoring/industry-classification-unification-spec.md`) is to unify on SIC alone and retire the heuristic.
+The feature's purpose is drift detection. When `match: false`, consult the gaps above; it may be a known classifier limitation rather than a real disagreement. The long-term plan (tracked in `docs/refactoring/industry-classification-unification-spec.md`) is to invert classifier precedence so SIC outranks company-name keywords, then unify on SIC alone and retire the heuristic.
 
 **Error Responses:**
 
@@ -458,7 +504,10 @@ Calculate fair values for multiple stocks in a single request. Supports partial 
 | `override_beta` | float | No | 0.0 - 3.0 | Shared beta override |
 | `override_rf` | float | No | 0.0 - 0.2 | Shared risk-free rate override |
 
-**Response (207 Multi-Status for partial success):**
+**Response (200 OK — all-success or partial-success share the same shape):**
+
+The bulk response carries `results[]` and a `summary` block. Failed tickers are inlined into the same `results` array (with their Problem-Details error fields populated) so consumers can iterate the array in request order. There is no separate `failures[]` array.
+
 ```json
 {
   "results": [
@@ -466,27 +515,24 @@ Calculate fair values for multiple stocks in a single request. Supports partial 
       "ticker": "AAPL",
       "wacc": 0.092,
       "dcf_value_per_share": 156.42,
-      "data_quality_score": 85.5,
-      "..."
+      "calculation_method": "multi_stage_dcf",
+      "calculation_version": "4.1",
+      "data_quality_score": 90,
+      "data_quality_grade": "A",
+      "...": "...full FairValueResponse fields..."
     },
     {
       "ticker": "MSFT",
       "wacc": 0.088,
       "dcf_value_per_share": 310.15,
-      "data_quality_score": 90.0,
-      "..."
-    }
-  ],
-  "failures": [
-    {
-      "ticker": "INVALID",
-      "error_code": "INVALID_TICKER",
-      "message": "Invalid ticker format: must be 1-5 alphanumeric characters"
+      "data_quality_score": 95,
+      "data_quality_grade": "A",
+      "...": "..."
     }
   ],
   "summary": {
-    "total_requested": 4,
-    "successful": 3,
+    "total_requested": 3,
+    "successful": 2,
     "failed": 1
   }
 }
@@ -717,22 +763,73 @@ Used for **Real Estate Investment Trusts (REITs)**.
 
 ```
 FFO = Net Income + D&A - Gains on Property Sales
-Value per Share = (FFO / Shares) * P/FFO Multiple
+Value per Share = (FFO / Diluted Shares) * P/FFO Multiple
 ```
 
-The P/FFO multiple comes from `config/industry_multiples.json` (default: 15.0x).
+The P/FFO multiple is **subsector-keyed** — REIT subsectors trade at meaningfully different multiples in 2025-2026 and the FFO model picks the right one per ticker:
+
+| Subsector | NTM P/FFO | Cap rate (NAV cross-check) | Examples |
+|-----------|-----------|----------------------------|----------|
+| `RESIDENTIAL` | 20× | 5.0% | EQR, AVB |
+| `INDUSTRIAL` | 22.5× | 4.5% | PLD, DRE |
+| `OFFICE` | 14× | 7.5% | BXP, VNO |
+| `RETAIL_REIT` | 10× | 8.5% | SPG, KIM |
+| `HEALTHCARE_REIT` | 17.5× | 6.0% | WELL, VTR |
+| `DATA_CENTER` | 31× | 4.0% | EQIX, DLR |
+| `CELLTOWER` | 25× | 4.5% | AMT, CCI, SBAC |
+| `SPECIALTY` | 17.5× | n/a (uses default 6.0%) | (classifier matchers TBD) |
+| _default REIT_ | 15× | 6.0% | unmapped subsector falls back here |
+
+Subsector resolution is keyword-based on company name (`equinix` → `DATA_CENTER`, `american tower` → `CELLTOWER`, `prologis` → `INDUSTRIAL`, `simon property` → `RETAIL_REIT`, etc.); see `config/datacleaner/industry_codes.json`. The model emits the subsector code on `industry.sic` and warns when the P/FFO value diverges from the NAV cross-check by >2× or <0.5×:
+
+```text
+"P/FFO value ($152.3) diverges from NAV cross-check ($32.12/share, cap rate 8.5%); ratio=4.74x"
+```
 
 #### Revenue Multiple
 
-Used for **pre-profit companies** with negative operating income (early-stage tech, biotech).
+Used for **pre-profit companies** with negative operating income (early-stage tech, biotech, capex-cyclical semis at trough).
 
 ```
-Enterprise Value = Revenue * Sector EV/Revenue Multiple
+Enterprise Value = TTM Revenue * Sector EV/Revenue Multiple
 Equity Value = EV - Debt + Cash
-Value per Share = Equity Value / Shares
+Value per Share = Equity Value / Diluted Shares
 ```
 
-Always flagged as **LOW confidence** since it ignores profitability.
+Two refinements from RM-1 + RM-2 Phase 1 (RM-3 forward model is tracked separately and not yet shipped):
+
+1. **TTM revenue base** (RM-1) — the model consumes `HistoricalFinancialData.TrailingTwelveMonthsRevenue()`, a 5-tier fallback chain that tries each path in order:
+
+   | Source | Fires when | Lossy? |
+   |--------|-----------|--------|
+   | `TTM_PRIOR_BRIDGE` | Latest year has 1-3 quarters AND prior year has corresponding 4-N quarters (partial-year IPO shape) | No — calendar-aligned |
+   | `TTM_4Q` | Latest 4 contiguous quarters span exactly 12 months | No |
+   | `ANNUAL_FY` | A 10-K is the most recent qualifying filing | No |
+   | `ANNUALIZED_QUARTER` | Only 1-3 partial-year quarters available with no prior-year bridge data; multiplies latest quarter × 4 | **Yes** — emits `revenue_base: annualized single-quarter revenue (4× extrapolation, ignores seasonality)` |
+   | `INSUFFICIENT_HISTORY` | No qualifying revenue at all | error path |
+
+   The source string is always surfaced in `result.Warnings` as `revenue_base: source=<TIER> revenue=$<amount>` so replay tooling and dashboards can audit which path fired.
+
+2. **Sub-industry sector multipliers** (RM-2 P1) — `config/industry_multiples.json` is keyed by sub-industry where the classifier resolves it. Populated entries (longest-prefix-match falls back to the parent code, then to default `2.0×`):
+
+   | Sub-industry | EV/Revenue | Note |
+   |--------------|-----------|------|
+   | `MFG_SEMI` | 6.5× | Fabless / IDM semiconductors (was incorrectly bucketed under `MFG: 1.5×` pre-RM-2) |
+   | `TECH_SAAS` | 8.0× | |
+   | `TECH_AI` | 10.0× | |
+   | `HEALTH_BIOTECH` | 6.0× | Clinical-stage biotechs |
+   | `HEALTH_PHARMA` | 4.0× | |
+   | `FIN_BANK` | 2.0× | |
+   | `FIN_INSURANCE` | 1.0× | |
+   | _parent codes_ | various (1.0×-5.0×) | `TECH`, `HEALTH`, `FIN`, `MFG`, `RETAIL`, `ENERGY`, `TELECOM`, `CONS`, `TRANS`, `RESTATE` |
+
+   The model emits a warning naming the sub-industry and the multiple applied:
+
+   ```text
+   "Applied 6.5x EV/Revenue multiple for MFG_SEMI sector"
+   ```
+
+Always flagged at the model's confidence level (typically `low`) since the revenue-multiple path ignores profitability and growth dynamics.
 
 ### 5.3 Growth Rate Estimation
 
@@ -791,7 +888,15 @@ After calculating the DCF value, Midas compares the implied multiples against se
 | Implied EV/EBITDA | Enterprise Value / EBITDA | > 2x or < 0.5x sector median |
 | Implied P/FCF | DCF Value / FCF per Share | > 2x or < 0.5x sector median |
 
-Cross-check flags are **advisory only** - they do not invalidate the valuation but are included in the `warnings` array for transparency.
+Cross-check flags are **advisory only** — they do not invalidate the valuation but are included in the `warnings` array for transparency.
+
+**REIT NAV cross-check.** When the FFO model fires, an additional NAV cross-check runs alongside the standard sanity checks. It uses the **subsector-specific cap rate** (see the FFO subsector table in §5.2) rather than a uniform 6% default — so a `RETAIL_REIT` divergence is computed against an 8.5% cap rate, while a `DATA_CENTER` divergence uses 4.0%. The warning surfaces both the NAV per share and the cap rate so consumers can recompute:
+
+```text
+"P/FFO value ($152.3) diverges from NAV cross-check ($32.12/share, cap rate 8.5%); ratio=4.74x"
+```
+
+A divergence ratio outside `[0.5x, 2.0x]` triggers the warning. The NAV is `OperatingIncome / cap_rate / DilutedShares`.
 
 ---
 
@@ -1749,10 +1854,12 @@ go run ./cmd/seed-demo-key -db ./data/midas.db
 | **FRED** | Federal Reserve Economic Data |
 | **Gordon Growth** | Terminal value model: `FCF*(1+g)/(WACC-g)` |
 | **MRP** | Market Risk Premium - excess return of stocks over risk-free rate |
+| **NCAV** | Net Current Asset Value = Current Assets − Total Liabilities. Graham's deep-value metric; the basis for the "buy below" floor (`ncav × 2/3`) |
 | **NOPAT** | Net Operating Profit After Tax |
 | **NWC** | Net Working Capital = Current Assets - Current Liabilities |
 | **P/E** | Price-to-Earnings ratio |
 | **P/FCF** | Price-to-Free-Cash-Flow ratio |
+| **P/FFO** | Price-to-Funds-From-Operations ratio — the equivalent of P/E for REITs (FFO replaces earnings because depreciation depresses GAAP earnings for property-heavy entities). Subsector-calibrated in Midas: residential 20×, industrial 22.5×, office 14×, retail 10×, healthcare 17.5×, data center 31×, cell tower 25×, default 15× |
 | **ROIC** | Return on Invested Capital |
 | **SEC EDGAR** | Securities and Exchange Commission's Electronic Data Gathering system |
 | **Terminal Value** | Value of all cash flows beyond the explicit forecast period |
