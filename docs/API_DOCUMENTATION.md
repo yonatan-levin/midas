@@ -61,7 +61,7 @@ Midas is a production-grade REST API for equity valuation using **Discounted Cas
 | Analyst Consensus Blending | Merges Yahoo Finance analyst estimates with historical data |
 | Sanity Cross-Checks | Compares DCF-implied multiples against sector medians; REITs use subsector-specific cap rates for NAV cross-check |
 | Per-Request Artifact Bundles | Opt-in or auto-on-error / on-quality-flag / always-on capture of full request narrative to disk |
-| Replay Tooling for Regression Testing | Standalone `cmd/replay` binary re-runs captured artifact bundles through current code and diffs the response against the saved `17-response.json`. Hermetic by construction (no SEC/Yahoo/FRED/DB/Redis). 14-flag CLI: parallel batch (`--workers`), filtering (`--filter-ticker` / `--filter-since`), tunable float tolerances (`--float-rel-tol` / `--float-abs-tol`), per-stage diff inspection (`--diff-stages`) localizing drift to one of cleaner / growth-curve / WACC / valuation. JSON output pinned by 6 golden fixtures + `UPDATE_GOLDEN=1` regeneration harness. See [§10.7](#107-replay-tooling). |
+| Replay Tooling for Regression Testing | `cmd/replay` re-runs captured artifact bundles through the current code and diffs the response against the saved `17-response.json`. Use it to check whether a code change moved any of your watchlist's fair values. See [§10.7](#107-replay-tooling). |
 | Rate Limiting | Per-key, per-IP, per-endpoint, and global rate limits |
 | Caching | Redis (distributed) + in-memory fallback with configurable TTLs |
 | Resilience | Circuit breaker + exponential retry on all external API calls |
@@ -1113,77 +1113,57 @@ Example: `database.driver` becomes `DATABASE_DRIVER`
 
 ### 8.10 Logging
 
-Consolidated reference for the entire `logging.*` config namespace. The runtime semantics (when each knob fires, what it changes about output, precedence interactions) are documented in [§10 Monitoring & Observability](#10-monitoring--observability) — this section is the **flat config surface**; the linked sections explain the WHY.
+All `logging.*` config knobs in one place. See [§10 Monitoring & Observability](#10-monitoring--observability) for what each knob actually does at runtime.
 
-#### 8.10.1 Core logging
-
-| Key | Env Var | Default | Description |
-|-----|---------|---------|-------------|
-| `logging.level` | `LOGGING_LEVEL` | `debug` (dev), `info` (staging/prod) | Minimum log level emitted (`debug` / `info` / `warn` / `error`). Falls back to top-level `log_level` / `LOG_LEVEL` for backward compatibility when `Logging.Level` is empty. |
-| `logging.format` | `LOGGING_FORMAT` | `console` (dev), `json` (staging/prod) | Encoder format. `console` is colored + aligned for `tail -f`; `json` is machine-parseable for log shippers. See [§10.2](#102-structured-logging). |
-| `logging.trace_calculations` | `LOGGING_TRACE_CALCULATIONS` | `true` (dev), `false` (staging/prod) | When `true`, emits the 12 per-stage DCF calc entries at Info; when `false`, demotes them to Debug so they're available on demand without polluting the default info stream. See [§10.4](#104-calculation-tracing). |
-| `logging.access_log_skip_paths` | `LOGGING_ACCESS_LOG_SKIP_PATHS` | `["/metrics", "/health", "/ready"]` | Paths whose access-log line is emitted at Debug instead of Info. Health/metrics endpoints scraped at high frequency would otherwise dominate the info stream. See [§10.2](#102-structured-logging). |
-
-#### 8.10.2 File sink (`logging.file.*`)
-
-Rolling-file sink backed by `lumberjack`. Disabled by default in staging/production (containers should rely on the orchestrator's stdout log driver); enabled by default in development for `tail -f ./logs/midas.log` ergonomics.
+**Core**
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
-| `logging.file.enabled` | `LOGGING_FILE_ENABLED` | `true` (dev), `false` (staging/prod) | Master switch for the file sink. Use `LOGGING_FILE_ENABLED=true` to opt in for production troubleshooting. |
-| `logging.file.path` | `LOGGING_FILE_PATH` | `./logs/midas.log` | File path. Lumberjack creates the parent directory if missing. |
-| `logging.file.max_size_mb` | `LOGGING_FILE_MAX_SIZE_MB` | `100` | Rotate after the file reaches this size. |
-| `logging.file.max_backups` | `LOGGING_FILE_MAX_BACKUPS` | `10` | Keep at most this many rotated backups. |
-| `logging.file.max_age_days` | `LOGGING_FILE_MAX_AGE_DAYS` | `14` | Delete rotated backups older than this many days. |
+| `logging.level` | `LOGGING_LEVEL` | `debug` (dev), `info` (staging/prod) | Minimum log level (`debug` / `info` / `warn` / `error`). |
+| `logging.format` | `LOGGING_FORMAT` | `console` (dev), `json` (staging/prod) | `console` for human reading, `json` for log shippers. |
+| `logging.trace_calculations` | `LOGGING_TRACE_CALCULATIONS` | `true` (dev), `false` (staging/prod) | Emit per-stage DCF calc entries at Info instead of Debug. |
+| `logging.access_log_skip_paths` | `LOGGING_ACCESS_LOG_SKIP_PATHS` | `["/metrics", "/health", "/ready"]` | Paths logged at Debug instead of Info to keep noise down. |
+
+**Rolling file sink (`logging.file.*`)** — off by default in staging/prod; on in dev for `tail -f ./logs/midas.log`.
+
+| Key | Env Var | Default | Description |
+|-----|---------|---------|-------------|
+| `logging.file.enabled` | `LOGGING_FILE_ENABLED` | `true` (dev), `false` (staging/prod) | Master switch for the file sink. |
+| `logging.file.path` | `LOGGING_FILE_PATH` | `./logs/midas.log` | File path. |
+| `logging.file.max_size_mb` | `LOGGING_FILE_MAX_SIZE_MB` | `100` | Rotate at this size. |
+| `logging.file.max_backups` | `LOGGING_FILE_MAX_BACKUPS` | `10` | Keep this many rotated backups. |
+| `logging.file.max_age_days` | `LOGGING_FILE_MAX_AGE_DAYS` | `14` | Delete backups older than this. |
 | `logging.file.compress` | `LOGGING_FILE_COMPRESS` | `true` | Gzip rotated backups. |
 
-#### 8.10.3 Narrate stream (`logging.narrate.*`)
-
-Tier-1 pipeline-phase narrative stream — one structured Info line per closed-enum phase (17 phases per fair-value request). Used by both the host log stream and the per-request artifact bundle's `99-narrate.jsonl`.
+**Narrate stream (`logging.narrate.*`)** — one structured Info line per pipeline phase.
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
-| `logging.narrate.enabled` | `LOGGING_NARRATE_ENABLED` | `true` | Master switch. When `false`, `narrate.Emitter.Emit` is a no-op for every request (artifact bundles still receive narrate via the BundleSink wrapper IF artifact_store is enabled). |
-| `logging.narrate.sample_rate` | `LOGGING_NARRATE_SAMPLE_RATE` | `1.0` | Per-request narration probability in `[0.0, 1.0]`. Decision is made ONCE at request entry and stuck on the emitter — a request is fully narrated or fully sampled out, never half-told. Useful for sustained high-RPS production where 100% narration would dominate the host log volume. |
-| `logging.narrate.redact_fields` | `LOGGING_NARRATE_REDACT_FIELDS` | `[]` | Field keys to drop from emitted narrate lines (e.g. `client_ip_hash`) for stricter privacy requirements. |
+| `logging.narrate.enabled` | `LOGGING_NARRATE_ENABLED` | `true` | Master switch. |
+| `logging.narrate.sample_rate` | `LOGGING_NARRATE_SAMPLE_RATE` | `1.0` | Fraction of requests to narrate (`[0.0, 1.0]`). |
+| `logging.narrate.redact_fields` | `LOGGING_NARRATE_REDACT_FIELDS` | `[]` | Field keys to drop from narrate lines. |
 
-#### 8.10.4 Artifact-store core (`logging.artifact_store.*`)
-
-Tier-3 per-request bundle on disk. Configurable triggers (manual, on-error, on-quality-flag, always-on) decide which requests get a bundle written.
+**Artifact-store core (`logging.artifact_store.*`)** — per-request bundles on disk; see [§10.5](#105-per-request-artifact-bundles).
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
-| `logging.artifact_store.enabled` | `LOGGING_ARTIFACT_STORE_ENABLED` | `true` (dev), `false` (staging/prod) | Master switch. When `false`, the `?trace=1` flag is recognized but bundles are suppressed (logged as `trace_enabled=false reason=disabled`); all auto-triggers also inert. |
-| `logging.artifact_store.root_path` | `LOGGING_ARTIFACT_STORE_ROOT_PATH` | `./artifacts` | Bundle root. Date-partitioned subdirectories (`<UTC-date>/<TICKER>/req_<id>/`) created beneath. |
-| `logging.artifact_store.retention_days` | `LOGGING_ARTIFACT_STORE_RETENTION_DAYS` | `7` | Reaper deletes bundles older than this many days (1-hour tick). `0` disables age-based eviction. |
-| `logging.artifact_store.max_total_bytes` | `LOGGING_ARTIFACT_STORE_MAX_TOTAL_BYTES` | `5368709120` (5 GiB) | Soft cap for the whole bundle root. When exceeded, reaper evicts oldest-first. `0` disables size-based eviction. |
-| `logging.artifact_store.queue_size` | `LOGGING_ARTIFACT_STORE_QUEUE_SIZE` | `256` | Per-bundle snapshot queue depth. Bursty captures drop snapshots (recorded as `outcome=partial` + `notes` counter increment) rather than blocking the request thread. |
-| `logging.artifact_store.pending_bytes_cap` | `LOGGING_ARTIFACT_STORE_PENDING_BYTES_CAP` | `10485760` (10 MiB) | Per-bundle in-memory buffer ceiling for **deferred mode** (auto-on-error). Bounds heap footprint when many requests are buffering snapshots "just in case" they 5xx. Overflow drops oldest snapshots first. |
+| `logging.artifact_store.enabled` | `LOGGING_ARTIFACT_STORE_ENABLED` | `true` (dev), `false` (staging/prod) | Master switch. When `false`, all triggers are inert. |
+| `logging.artifact_store.root_path` | `LOGGING_ARTIFACT_STORE_ROOT_PATH` | `./artifacts` | Where bundles land. |
+| `logging.artifact_store.retention_days` | `LOGGING_ARTIFACT_STORE_RETENTION_DAYS` | `7` | Delete bundles older than this. |
+| `logging.artifact_store.max_total_bytes` | `LOGGING_ARTIFACT_STORE_MAX_TOTAL_BYTES` | `5368709120` (5 GiB) | Evict oldest-first when total exceeds this. |
+| `logging.artifact_store.queue_size` | `LOGGING_ARTIFACT_STORE_QUEUE_SIZE` | `256` | Per-bundle snapshot queue depth. |
+| `logging.artifact_store.pending_bytes_cap` | `LOGGING_ARTIFACT_STORE_PENDING_BYTES_CAP` | `10485760` (10 MiB) | Per-bundle in-memory buffer ceiling. |
 
-#### 8.10.5 Artifact-store triggers (`logging.artifact_store.triggers.*`)
-
-The four triggers that decide which requests get a bundle. Precedence at request-end: **manual > on_quality_flag > on_error > always**. See [§10.5](#105-per-request-artifact-bundles) for the full mechanism.
+**Artifact-store triggers (`logging.artifact_store.triggers.*`)** — which requests get a bundle. Precedence: header/query > `on_quality_flag` > `on_error` > `always`.
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
-| `logging.artifact_store.triggers.manual` | _(not via env)_ | `true` | Honors `?trace=1` query param OR `X-Midas-Trace: 1` header. Always at top of precedence ladder. Disable to lock out client-driven captures (rare). |
-| `logging.artifact_store.triggers.on_error` | `LOGGING_ARTIFACT_STORE_TRIGGERS_ON_ERROR` | `false` | Phase 2.A. Auto-capture when response status >= 500 (or handler panics). Mechanism: every request opens a deferred bundle; only flushed on 5xx, dissolved otherwise. Memory cost per request when active: ~10 KiB headers + bounded snapshot queue. |
-| `logging.artifact_store.triggers.quality_flag_threshold` | `LOGGING_ARTIFACT_STORE_TRIGGERS_QUALITY_FLAG_THRESHOLD` | `""` (disabled) | Phase 2.B. Auto-capture when cleaner raises 1+ flags at-or-above this severity. Accepts `info` / `low` / `warning` / `medium` / `high` / `critical`. Operator-friendly normalization: `Warning` (uppercase env-var style) and `" warning "` (YAML-quoting whitespace) both resolve to canonical `warning`. **Typos fail loud** via boot-time Warn `config.artifact_store.quality_flag_threshold.unknown`, NOT silently. |
-| `logging.artifact_store.triggers.always` | `LOGGING_ARTIFACT_STORE_TRIGGERS_ALWAYS` | `false` | Phase 2.C. Auto-capture EVERY request. Intended for sustained debugging sessions ("flip on for an hour, flip off when done"). Boot-time Warn `config.artifact_store.always_on_active` fires on activation. Per-request `trace.bundle.promoted` Info line is suppressed for this path to avoid host-log flooding (would emit ~6,000 lines/min at 100 req/s). **Disk-fill caveat:** at default 5 GiB cap and ~50-200 KiB per bundle, the root fills in ~25k-100k requests (4-17 minutes at 100 req/s) before reaper begins evicting interesting bundles. |
+| `logging.artifact_store.triggers.manual` | _(not via env)_ | `true` | Honors `?trace=1` and `X-Midas-Trace: 1`. |
+| `logging.artifact_store.triggers.on_error` | `LOGGING_ARTIFACT_STORE_TRIGGERS_ON_ERROR` | `false` | Capture every 5xx response. |
+| `logging.artifact_store.triggers.quality_flag_threshold` | `LOGGING_ARTIFACT_STORE_TRIGGERS_QUALITY_FLAG_THRESHOLD` | `""` (disabled) | Capture when cleaner raises a flag at this severity or above. Accepts `info` / `low` / `warning` / `medium` / `high` / `critical`. |
+| `logging.artifact_store.triggers.always` | `LOGGING_ARTIFACT_STORE_TRIGGERS_ALWAYS` | `false` | Capture every request. For short debugging sessions only. |
 
-#### 8.10.6 Cross-reference quick map
-
-Where to read about the runtime behavior of each logging knob:
-
-| Knob group | Runtime semantics documented in |
-|------------|----------------------------------|
-| `logging.level` / `format` / `file.*` / `access_log_skip_paths` | [§10.2 Structured Logging](#102-structured-logging) |
-| `logging.trace_calculations` | [§10.4 Calculation Tracing](#104-calculation-tracing) |
-| `logging.narrate.*` | [§10.5 Per-Request Artifact Bundles](#105-per-request-artifact-bundles) (BundleSink integration) |
-| `logging.artifact_store.*` (everything) | [§10.5 Per-Request Artifact Bundles](#105-per-request-artifact-bundles) |
-| Replay-binary CLI flags (NOT config; runtime-only) | [§10.7 Replay Tooling](#107-replay-tooling) |
-
-The replay binary (`cmd/replay`) is configured **only via CLI flags**, NOT via the `logging.*` config namespace. It runs hermetically — no production config loading, no database, no Redis. See §10.7 for its 14-flag surface.
+The replay binary (`cmd/replay`) takes CLI flags only — see [§10.7 Replay Tooling](#107-replay-tooling).
 
 ---
 
@@ -1291,18 +1271,9 @@ Available at `GET /metrics` (no auth). Key metrics include:
 
 ### 10.2 Structured Logging
 
-All logs are structured via `go.uber.org/zap`. The logger is composed from two cores — stdout (always) and an optional rotating file sink — using `zapcore.NewTee`. Output format is controlled per environment.
+All logs are structured JSON (or colored console in development). Format defaults are environment-driven; override with `LOGGING_FORMAT=console|json`. See [§8.10 Logging](#810-logging) for all knobs.
 
-**Format selection (`logging.format` / `LOGGING_FORMAT`):**
-
-| Environment | Default format | Rationale |
-|-------------|----------------|-----------|
-| `development` | `console` | Colored, aligned, human-readable for `tail -f` |
-| `staging`, `production` | `json` | Machine-parseable; Docker's log driver captures stdout |
-
-**File sink (`logging.file.*`):** Disabled by default in `staging` / `production`. Enabled by default in `development` (`./logs/midas.log`, rotated by size via `lumberjack`). Containers should rely on the orchestrator's log driver; enabling the file sink in production is intentional opt-in only.
-
-**Access log — one line per HTTP request (post-handler):**
+Every HTTP request emits one access-log line after the handler returns:
 
 ```json
 {
@@ -1323,262 +1294,108 @@ All logs are structured via `go.uber.org/zap`. The logger is composed from two c
 }
 ```
 
-`user_id` / `key_id` are present only on authenticated routes. `route` is `"(unmatched)"` for 404s. On `respondWithError`, an additional `error_code` field carries the RFC 7807 extension value (e.g. `"INVALID_TICKER"`). Paths listed in `logging.access_log_skip_paths` (default `/metrics`, `/health`, `/ready`) emit at `debug` level instead of `info`.
+`user_id` / `key_id` appear only on authenticated routes. Errors include `error_code`. Paths in `logging.access_log_skip_paths` (default `/metrics`, `/health`, `/ready`) log at `debug` to keep the info stream clean.
 
 ### 10.3 Request Tracing (`X-Request-ID`)
 
-Every HTTP request is correlated by a **UUIDv4 request ID** that flows through every downstream log line.
+Every request gets a UUIDv4 request ID that appears on every log line for that request and on the `X-Request-ID` response header.
 
-- **Inbound:** If the client supplies `X-Request-ID` and the value matches `^[A-Za-z0-9_.:-]{1,128}$`, the API trusts and reuses it. Otherwise (missing, malformed, or overlong), a fresh UUIDv4 is generated. Malformed values are silently replaced — there is no 4xx for this.
-- **Propagation:** A child `zap.Logger` is built with `request_id` attached and injected into `context.Context`. Every handler and every request-path service uses `logctx.From(ctx)` rather than a singleton logger, so all log lines on that request automatically carry `request_id`, plus `user_id` / `key_id` after auth succeeds, plus any async-task fields for goroutine-borne logs.
-- **Outbound:** The effective ID is always echoed on the `X-Request-ID` response header, whether the client supplied it or the server generated it. On recovered panics, the access line and the `"panic recovered"` error line share the same `request_id`.
-- **Service + gateway depth:** Every service (`valuation`, `datacleaner`, `growth`, `datafetcher`) and gateway (`sec`, `market/yfinance`, `macro/fred`) emits its log lines through `logctx.Or(ctx, <fallback>)` — so a single `request_id` correlates a request all the way from the handler down to the outbound HTTP calls to SEC EDGAR, Yahoo Finance, and FRED. The same methods, when invoked from the scheduler (background context), fall back to the fx-provided singleton logger and still emit, just without request correlation.
+- Supply `X-Request-ID` on the request and the server reuses it (must match `^[A-Za-z0-9_.:-]{1,128}$`; malformed values are silently replaced with a fresh one).
+- Otherwise the server generates a fresh ID.
+- The same ID flows through every service and gateway log line for that request, so `jq 'select(.request_id == "...")'` reconstructs the full story.
 
 ### 10.4 Calculation Tracing
 
-Every DCF valuation emits 12 structured trace entries, one per math stage, all correlated to the triggering request via `logctx`. Set `logging.trace_calculations=true` (the default in `development`) to surface them at `info`; staging / production emit them at `debug` so they're available on demand without polluting the default info stream.
+Every DCF valuation emits 12 structured trace entries — one per math stage (`data_fetch`, `wacc`, `fcf_projection`, `terminal_value`, `discount`, `equity_bridge`, `cross_check`, `final`, etc.) — all sharing the request's `request_id`.
 
-Example stage emission (JSON format):
+Set `LOGGING_TRACE_CALCULATIONS=true` to surface them at Info (default in development). When `false` (default in staging/prod), they emit at Debug so they're available on demand without dominating the info stream.
+
+Example:
 
 ```json
-{"ts":"2026-04-23T06:14:02.212Z","level":"info","msg":"calc","event":"calc","request_id":"7f9b3e0a-...","stage":"wacc","ticker":"AAPL","rf":0.0421,"beta_raw":1.18,"beta_blume":1.12,"beta_unlevered":0.95,"beta_relevered":1.05,"erp":0.055,"crp":0.000,"tax_rate":0.21,"cost_of_debt":0.045,"wacc":0.1039}
+{"ts":"...","level":"info","msg":"calc","event":"calc","request_id":"...","stage":"wacc","ticker":"AAPL","rf":0.0421,"beta_raw":1.18,"beta_blume":1.12,"erp":0.055,"crp":0.000,"tax_rate":0.21,"cost_of_debt":0.045,"wacc":0.1039}
 ```
 
-The full stage set emitted per request:
-
-| Stage | Emits | Key fields |
-|-------|-------|------------|
-| `data_fetch` | After data acquisition | `ticker`, `via_fetcher`, `sources_tried`, `sources_ok`, `duration_ms` |
-| `data_clean_summary` | After normalization | `ticker`, `adjustments_count`, `flags_count`, `quality_score`, `quality_grade` |
-| `industry_classification` | After SIC/NAICS classification | `ticker`, `sic`, `naics`, `sector`, `industry`, `sub_industry`, `industry_code`, `model_hint` |
-| `model_selection` | After model router decision | `model_chosen` (`dcf`/`ddm`/`ffo`/`revenue_multiple`), `reason` |
-| `growth` | After growth estimation | `source` (analyst/historical/blended), `growth_rates`, `roic_ceiling`, `sustainability` |
-| `wacc` | After WACC computation | `rf`, `beta_*`, `erp`, `crp`, `tax_rate`, `cost_of_debt`, `wacc` |
-| `fcf_projection` | After FCF series build | `years`, `growth_rates`, `fcf_series` |
-| `terminal_value` | After terminal value | `ticker`, `gordon_tv`, `exit_multiple_tv`, `exit_multiple_used`, `averaged_tv`, `terminal_growth` |
-| `discount` | After discounting | `pv_explicit`, `pv_terminal`, `enterprise_value` |
-| `equity_bridge` | In equity-bridge block | `cash`, `debt`, `minority_interest`, `preferred`, `equity_value`, `diluted_shares`, `per_share` |
-| `cross_check` | After sanity check (if multiples config present) | `implied_pe`, `implied_ev_ebitda`, `sector_median_pe`, `sector_median_ev_ebitda`, `flags` |
-| `final` | Happy-path return | `dcf_per_share`, `tangible_per_share`, `method`, `version`, `quality_score`, `warnings_count` |
-
-All 12 entries carry identical `request_id`, `user_id`, and `key_id` field values, so `jq 'select(.request_id == "...")'` reconstructs the full math story for any single request.
+`jq 'select(.request_id == "...") | {stage, msg}'` reconstructs the full math story for any one request.
 
 ### 10.5 Per-Request Artifact Bundles
 
-When deeper forensics are needed than the structured log stream alone provides — e.g. inspecting the exact raw SEC payload returned for a ticker, or comparing the cleaner's input vs output for a single request — the server can write a self-describing directory of JSON / JSONL files to disk for that request. Triggers are either **client-driven** (per-request opt-in via header or query) or **server-driven** (auto-capture on 5xx responses, opt-in via config).
+When you need to inspect a request's full state — raw upstream payloads, cleaner before/after, full math — the server can write a self-describing directory of JSON / JSONL files for that request. By default no bundle is written; you opt in per-request or configure auto-capture for specific conditions. To inspect a captured bundle, see [§10.7 Replay Tooling](#107-replay-tooling).
 
 #### Triggers
 
-| Trigger | Where it lives | When it fires | Manifest `trigger` field |
-|---------|---------------|---------------|--------------------------|
-| Header  | `X-Midas-Trace: 1` on the request | Always (when client opts in) | `header` |
-| Query   | `?trace=1` on the request URL | Always (when client opts in) | `query`  |
-| On-quality-flag | `logging.artifact_store.triggers.quality_flag_threshold=<severity>` config | Cleaner output contains 1+ flags at-or-above the configured severity (`info`/`low`/`warning`/`medium`/`high`/`critical`) | `on_quality_flag` |
-| On-error | `logging.artifact_store.triggers.on_error=true` config | Response status >= 500 | `on_error` |
-| Always-on (debugging) | `logging.artifact_store.triggers.always=true` config | Every request, regardless of status or flag count | `always` |
+Five ways to capture a bundle. When more than one applies to the same request, precedence is **header/query > on_quality_flag > on_error > always**.
 
-Without any trigger fired, **no bundle is written** and there is zero per-request disk overhead. Precedence ladder when multiple triggers fire on the same request: **manual (header/query) > on_quality_flag > on_error > always**. `Promote()` is called exactly once per request — a manually-traced 5xx with quality flags is still attributed to the client; a 5xx with quality flags is attributed to `on_quality_flag` (more diagnostic than just "5xx happened"); a 200 response under `always=true` is attributed to `always` only when no more-diagnostic trigger also fired.
+| Trigger | How to enable | Fires when |
+|---------|---------------|------------|
+| Header | `X-Midas-Trace: 1` request header | Every request you set it on |
+| Query | `?trace=1` query param | Every request you set it on |
+| On error | `LOGGING_ARTIFACT_STORE_TRIGGERS_ON_ERROR=true` | Response status ≥ 500 (or handler panic) |
+| On quality flag | `LOGGING_ARTIFACT_STORE_TRIGGERS_QUALITY_FLAG_THRESHOLD=<severity>` (`info` / `low` / `warning` / `medium` / `high` / `critical`) | Cleaner produces 1+ flags at or above this severity |
+| Always-on (debugging) | `LOGGING_ARTIFACT_STORE_TRIGGERS_ALWAYS=true` | Every request — for short debugging sessions only |
 
-#### Opt-in by client (per request)
-
-Either of the following on a `GET /api/v1/fair-value/{ticker}` request enables capture:
+Per-request capture from a client:
 
 ```bash
-# Header form
+# Either form works
 curl -H "X-API-Key: <key>" -H "X-Midas-Trace: 1" \
   "http://localhost:8080/api/v1/fair-value/AAPL"
 
-# Query-param form
 curl -H "X-API-Key: <key>" \
   "http://localhost:8080/api/v1/fair-value/AAPL?trace=1"
 ```
 
-Both are equivalent. The `response.sent` narrate line carries `artifact_path` so log readers can navigate from log → bundle.
+#### Server-side master switch
 
-#### Auto-capture on 5xx (server-driven)
-
-Set `logging.artifact_store.triggers.on_error=true` (or env var `LOGGING_ARTIFACT_STORE_TRIGGERS_ON_ERROR=true`) and any request returning HTTP >= 500 will produce a bundle, even without `?trace=1`. Mechanism: every request opens a `*Bundle` in **deferred mode** (in-memory only, no disk I/O); at request end the middleware either flushes the buffered snapshots/streams to disk on 5xx or dissolves them on 2xx/3xx/4xx. Pre-trigger snapshots (e.g., the SEC raw payload that contributed to the failure) survive the deferred → promoted transition and land on disk along with the `99-narrate.jsonl` stream — the bundle reconstructs the WHOLE request narrative, not just the post-error portion. Memory cost per request when the trigger is configured: ~10 KB headers + bounded snapshot queue (capped by `pending_bytes_cap`, default 10 MiB) + per-line cap of 256 KiB on stream entries. Overflow drops the oldest snapshot and increments a counter that surfaces in the manifest's `notes` field.
-
-If `Promote()` itself fails (disk-full, mkdir error), a `trace.bundle.promote_failed` Warn line fires with the request_id and error; the response still completes normally with the original 5xx status, and the `response.sent` narrate line omits the `artifact_path` field so operators don't follow a dead link.
-
-#### Auto-capture on data-quality flags (server-driven)
-
-Set `logging.artifact_store.triggers.quality_flag_threshold` to a severity level (or env var `LOGGING_ARTIFACT_STORE_TRIGGERS_QUALITY_FLAG_THRESHOLD=warning`) and any request whose data cleaner produces 1+ flags at-or-above that severity will produce a bundle, even without `?trace=1`. Accepted values: `info`, `low`, `warning`, `medium`, `high`, `critical`. Default `""` (disabled).
-
-The threshold uses **at-or-above** semantics on a unified rank: `info`/`low`=1, `warning`/`medium`=2, `high`=3, `critical`=4. So `quality_flag_threshold=warning` catches `warning`, `medium`, `high`, AND `critical` flags — not just warnings. The two parallel severity vocabularies (`info`/`warning` legacy + `low`/`medium`/`high` modern) are collapsed; a flag's vocabulary doesn't matter, only its rank.
-
-**Operator-friendly value normalisation**: the configured value is lowercased and trimmed at config-load, so `LOGGING_ARTIFACT_STORE_TRIGGERS_QUALITY_FLAG_THRESHOLD=Warning` (uppercase, the conventional env-var style) and `" warning "` (YAML-quoting whitespace) both resolve to canonical `warning`. **Typos fail loud, not silently**: an unknown value like `warnng` triggers a startup Warn line `config.artifact_store.quality_flag_threshold.unknown` so operators learn from the boot log instead of from a missing bundle during an incident. The trigger then fails closed (no bundles produced) until the typo is corrected.
-
-The cleaner counts qualifying flags on BOTH the cache-miss AND cache-hit paths via a shared helper, so a repeat-ticker request whose cleaning result is served from cache (default 6h TTL) still triggers the bundle. This is the dominant production path for triage — operators querying the same suspect ticker repeatedly get a bundle every time, not just on first touch.
-
-#### Auto-capture every request (always-on debugging mode)
-
-Set `logging.artifact_store.triggers.always=true` (or env var `LOGGING_ARTIFACT_STORE_TRIGGERS_ALWAYS=true`) and EVERY request will produce a bundle, regardless of status code or quality-flag count. Default `false` (disabled).
-
-**Intended use case:** sustained debugging session — "flip on for an hour while we investigate the SAP/IFRS regression, flip off when done." Not intended as a steady-state production setting; the disk-fill caveat below makes it impractical at sustained production rates.
-
-**Disk-fill caveat:** at the default `max_total_bytes=5 GiB` cap and a typical bundle size of ~50–200 KiB, the bundle root fills in roughly **25k–100k requests** before the reaper begins evicting oldest-first. At 100 req/s that is **4–17 minutes** of capture before the most recent always-on bundles start displacing the oldest interesting (`on_error` / `on_quality_flag`) bundles. The reaper sweeps on a 1-hour tick AND on the over-cap condition, so eviction is best-effort, not predictive — flip the knob OFF as soon as the debug session ends and let `retention_days` (default 7) clean up. Pair with a tightened `max_total_bytes` if you need a longer always-on window without crowding out historical interesting bundles.
-
-**Boot-time signal:** when `Always=true` is detected at server boot, the singleton logger emits a Warn line `config.artifact_store.always_on_active` carrying the operator-facing effect description and the configured values of `OnError` / `QualityFlagThreshold` so operators reading the boot log see the FULL trigger picture in one line. The line fires INDEPENDENTLY of the `quality_flag_threshold` typo Warn — both can fire on the same boot if both knobs are misconfigured. This is the primary in-process reminder that the knob is still on, since the per-request `trace.bundle.promoted` Info line is suppressed for the always path (see below).
-
-**Precedence ladder position:** `always` sits at the BOTTOM. Manual (header/query) wins first, then `on_quality_flag`, then `on_error`, then `always`. So a 5xx response under `always=true` records `trigger=on_error` in the manifest, NOT `trigger=always` — operators reading bundle directories want to see WHY a bundle is interesting, not just "the always-knob was on." Only requests that fire NO other trigger record `trigger=always`. Pinned by `TestTrace_Always_PrecedenceOnError`, `TestTrace_Always_PrecedenceOnQualityFlag`, and `TestTrace_Manual_PrecedenceOverAlways` in `internal/api/middleware/trace_test.go`.
-
-**Recommended workflow:**
-1. `LOGGING_ARTIFACT_STORE_TRIGGERS_ALWAYS=true ./midas` (or set in YAML and restart)
-2. Confirm the `config.artifact_store.always_on_active` Warn appears in the boot log
-3. Reproduce the bug; bundles for every request land under `artifacts/<date>/<ticker>/<request_id>/`
-4. `LOGGING_ARTIFACT_STORE_TRIGGERS_ALWAYS=false ./midas` (or unset) and restart
-5. The `retention_days` reaper cleans up the always-only captures over the next 7 days; interesting (`on_error` / `on_quality_flag`) captures from the same window survive.
-
-**Narrate-line caveat:** the `trace.bundle.promoted` suppression handles per-request bundle-creation noise, but the `request.received` / `response.sent` narrate lines (gated by `logging.narrate.enabled`, NOT by trigger type) STILL fire per request. An operator with both `always=true` AND `narrate.enabled=true` (a likely combination during a debugging session) will see hundreds of narrate Info lines/min on the host log stream. If host-log volume is a cost concern during the always-on window, set `LOGGING_NARRATE_ENABLED=false` for the same window — the on-disk bundles' `99-narrate.jsonl` files still capture the full per-request narrative regardless of the host-log narrate setting.
-
-#### Operator log signal — `trace.bundle.promoted`
-
-After any auto-trigger Promote succeeds (`on_error` OR `on_quality_flag`), the trace middleware emits a structured Info line:
-
-```json
-{
-  "level": "info",
-  "msg": "trace.bundle.promoted",
-  "request_id": "req_01HW8ZQXKR...",
-  "trigger": "on_quality_flag",
-  "artifact_path": "/var/midas/artifacts/2026-04-29/AAPL/req_01HW8ZQXKR.../"
-}
-```
-
-Operators tailing the host log can `grep trace.bundle.promoted host.log | jq '.artifact_path'` to enumerate every auto-bundle created today and navigate directly to its directory. Manual triggers (`?trace=1`/`X-Midas-Trace`) do NOT emit this line because the client already knows the bundle is being created — the line exists specifically for the auto-trigger surprise case where the operator didn't ask for capture but got one anyway.
-
-The line does NOT fire when Promote itself fails — that path emits `trace.bundle.promote_failed` Warn instead, so the two log keys are mutually exclusive on a given request.
-
-The line is also **suppressed for `trigger=always`**. When the always-on knob is active, every request creates a bundle for the same trigger value, so the line stops carrying signal — at 100 req/s it would emit 6,000 Info lines/min, all redundant. The on-disk manifest still records `trigger=always` for postmortem grep, only the per-request host-log line is suppressed. Operators relying on the Warn at boot (`config.artifact_store.always_on_active`, see the always-on subsection above) for the in-process reminder. Pinned by `TestTrace_Always_NoPromotedLogLine` in `internal/api/middleware/trace_test.go`.
-
-#### Server-side gate
-
-Capture is also gated by `logging.artifact_store.enabled` (master switch). Defaults:
-
-| Environment | `artifact_store.enabled` | Effect |
-|-------------|--------------------------|--------|
-| `development` | `true` | Per-request bundles honored when client opts in OR when `triggers.on_error` / `triggers.quality_flag_threshold` / `triggers.always` fires |
-| `staging`, `production` | `false` | Opt-in flag is recognized but the bundle is suppressed (logged as `trace_enabled=false reason=disabled`); `on_error`, `on_quality_flag`, and `always` triggers all inert |
-
-Override via `LOGGING_ARTIFACT_STORE_ENABLED=true|false`.
-
-#### Memory bounds (deferred-mode buffer caps)
-
-| Knob | Default | Override env var | Behavior on overflow |
-|------|---------|------------------|----------------------|
-| `logging.artifact_store.pending_bytes_cap` | `10 MiB` (`10485760`) | `LOGGING_ARTIFACT_STORE_PENDING_BYTES_CAP` | Drop oldest buffered snapshot to make room; increment `dropped` counter |
-| `artifact.MaxStreamLineBytes` (compile-time constant) | `256 KiB` (`262144`) | n/a — exported Go constant | Drop the oversize line entirely; increment `oversize_lines` counter |
-| `logging.artifact_store.queue_size` | `256` jobs | `LOGGING_ARTIFACT_STORE_QUEUE_SIZE` | Drop with `dropped` counter increment when worker is saturated |
-
-Counters surface in `00-manifest.json::notes` as `write_failures=N queue_drops=M oversize_lines=O` (only printed when at least one is non-zero); `outcome` degrades to `"partial"` whenever any drop occurred.
+`LOGGING_ARTIFACT_STORE_ENABLED` defaults to `true` in development and `false` in staging/production. Even with triggers configured, bundles are suppressed when this is `false`. Override per environment as needed.
 
 #### Bundle layout on disk
 
+Bundles land under `./artifacts/<UTC-date>/<TICKER>/req_<id>/`. Each directory is one request:
+
 ```
 artifacts/
-  2026-04-25/                        # date partition (UTC)
-    AAPL/                            # ticker partition
-      req_01HW8ZQXKR.../             # per-request directory; one bundle per request
-        00-manifest.json             # bundle manifest (see schema below)
+  2026-05-09/
+    AAPL/
+      req_01HW8ZQXKR.../
+        00-manifest.json             # request id, trigger, ticker, schema versions, git_sha
         01-request.json              # original HTTP request (auth headers redacted)
-        02-handler-options.json      # parsed ValuationOptions (overrides applied)
-        05-fetch-sec.raw.json        # raw SEC companyfacts response bytes
-        05-fetch-sec.parsed.json     # parsed SECCompanyFacts struct
-        06-fetch-market.raw.json     # raw Yahoo / Finzive response (after redaction)
+        02-handler-options.json      # parsed ValuationOptions
+        05-fetch-sec.raw.json        # raw SEC EDGAR payload (auth-redacted)
+        05-fetch-sec.parsed.json     # parsed SEC struct
+        06-fetch-market.raw.json     # Yahoo / Finzive raw payload
         06-fetch-market.parsed.json
-        07-fetch-macro.raw.json      # raw FRED response (api_key redacted from URL)
+        07-fetch-macro.raw.json      # FRED raw payload (api_key redacted)
         07-fetch-macro.parsed.json
-        10-clean-input.json          # FinancialData going into cleaner
-        10-clean-output.json         # FinancialData after cleaner
-        11-classify.json             # both classifier outputs + match flag
-        12-growth-curve.json         # final multi-stage growth curve
-        13-wacc.json                 # all WACC inputs + final value
-        14-model-selection.json      # router decision + reason
+        10-clean-input.json          # cleaner input
+        10-clean-output.json         # cleaner output
+        11-classify.json             # industry classification
+        12-growth-curve.json         # multi-stage growth curve
+        13-wacc.json                 # WACC inputs + final value
+        14-model-selection.json      # model router decision
         15-valuation.json            # full DCF / DDM working
-        16-crosscheck.json           # implied multiples + sector medians
+        16-crosscheck.json           # implied multiples vs sector medians
         17-response.json             # final response body sent to client
-        99-narrate.jsonl             # full narrate stream for this request
-        99-debug-trace.jsonl         # full Debug stream (only if log level is debug)
+        99-narrate.jsonl             # narrate stream
+        99-debug-trace.jsonl         # debug stream (only when log level = debug)
 ```
 
-The numeric prefix matches the narrate phase number (see `internal/observability/narrate/phases.go` for the canonical 17-phase taxonomy). `ls` of any bundle directory reads in pipeline order.
+The numeric prefix matches the request's pipeline phase, so `ls` reads in pipeline order. `.raw.json` files are exactly what the upstream API returned (after auth redaction); `.parsed.json` files are what the gateway parser produced. Diff them to separate upstream drift from parser drift.
 
-`.raw.json` files contain the exact upstream bytes after auth redaction. `.parsed.json` files contain `json.Marshal(...)` of the domain struct after the gateway's parser ran. The two together let you `diff` upstream API drift vs parser drift independently.
-
-#### Manifest schema (`00-manifest.json`)
-
-```json
-{
-  "bundle_version": "1.0",
-  "request_id": "req_01HW8ZQXKR...",
-  "ticker": "AAPL",
-  "trigger": "header",
-  "started_at": "2026-04-25T10:23:14.470Z",
-  "finished_at": "2026-04-25T10:23:18.221Z",
-  "outcome": "ok",
-  "phases_recorded": [
-    {"phase": "fetch.sec", "files": ["05-fetch-sec.raw.json", "05-fetch-sec.parsed.json"], "bytes": 6212048}
-  ],
-  "redactions_applied": ["headers.authorization", "headers.cookie", "headers.x-api-key", "yahoo.crumb", "fred.api_key"],
-  "schema_versions": {
-    "SECCompanyFacts": 3,
-    "FinancialData": 7,
-    "ValuationResult": 2
-  },
-  "git_sha": "83cbfc7",
-  "build_version": "v0.9.0-rc1"
-}
-```
-
-| Field | Meaning |
-|-------|---------|
-| `bundle_version` | Bundle layout version (`"1.0"` for Phase 1) |
-| `request_id` | Same value carried on every log line and the response header |
-| `ticker` | Late-bound after URL parsing; may be `_no-ticker` for early-failing requests |
-| `trigger` | `header` (X-Midas-Trace: 1), `query` (?trace=1), `on_quality_flag` (auto-capture when cleaner raises 1+ flags at-or-above configured severity), `on_error` (auto-capture on HTTP >= 500), or `always` (auto-capture every request when the always-on debugging knob is set). Precedence when multiple fire on the same request: manual > on_quality_flag > on_error > always |
-| `outcome` | `ok` / `partial` (some snapshots failed to write, were dropped, or exceeded the per-line cap — see `notes`) / `error` (HTTP status >= 500) |
-| `notes` | Human-readable annotation. When any of `write_failures`, `queue_drops`, or `oversize_lines` is non-zero, formatted as `"write_failures=N queue_drops=M oversize_lines=O"` |
-| `phases_recorded[]` | Index of which pipeline phases contributed files |
-| `redactions_applied[]` | Hard-coded list of secret fields scrubbed before disk write — never config-driven |
-| `schema_versions{}` | Domain-struct versions in effect when the bundle was written; pin replay against the matching code revision |
-| `git_sha`, `build_version` | Build identity for replay / audit |
+Secrets are always redacted: `Authorization`, `Cookie`, `X-API-Key`, Yahoo `crumb`, FRED `api_key`, and any JSON key matching `password` / `secret` / `token` / `bearer`.
 
 #### Retention
 
-A reaper goroutine sweeps `artifacts/` on a 1-hour tick and prunes:
-- Bundles older than `logging.artifact_store.retention_days` (default `7`)
-- Oldest-first eviction once total size exceeds `logging.artifact_store.max_total_bytes` (default 5 GiB)
+A reaper sweeps `artifacts/` once per hour and removes bundles older than `LOGGING_ARTIFACT_STORE_RETENTION_DAYS` (default 7). When the bundle root exceeds `LOGGING_ARTIFACT_STORE_MAX_TOTAL_BYTES` (default 5 GiB), oldest bundles are evicted first.
 
-In-flight bundles (locked file handles) are never deleted.
+#### Phase 2 status
 
-#### Redaction (hard-coded, fail-on-leak tested)
-
-| Field path | Action |
-|------------|--------|
-| `headers.Authorization` | replaced with `"<redacted>"` |
-| `headers.Cookie`, `headers.Set-Cookie` | replaced with `"<redacted>"` |
-| `headers.X-API-Key` | replaced with `"<redacted>"` |
-| Yahoo `crumb` query param | replaced with `"<redacted>"` |
-| FRED `api_key` query param | replaced with `"<redacted>"` |
-| Any JSON key matching `(?i)(password|secret|token|bearer)` | replaced with `"<redacted>"` |
-
-A unit test in `internal/observability/artifact/redact_test.go` pins the redaction list against fixtures. Adding a new external API requires adding its auth field to this list.
-
-#### Error semantics
-
-If a bundle can't be opened (disk-full, permission denied), the request still completes normally; the trace middleware logs a Warn line via `logctx.From(ctx).Warn("trace.bundle.open_failed", ...)` and the `request.received` narrate line carries `trace_enabled=false reason=open_failed`. If individual snapshot writes fail mid-request, the bundle's manifest `outcome` degrades to `partial` and the `notes` field carries `write_failures=N queue_drops=M`.
-
-#### Phase 2 status — ALL SUB-PHASES SHIPPED (Phase 2.D COMPLETE 2026-05-09)
-
-Phase 2 of the observability narrative + artifacts spec (`docs/refactoring/observability-narrative-and-artifacts-spec.md` §13) shipped in four sub-phases:
-
-- **Phase 2.A — Auto-on-error trigger**: SHIPPED 2026-04-27 as `48a9578`. `logging.artifact_store.triggers.on_error=true` writes a bundle when the response status is HTTP >= 500 (or the handler panics).
-- **Phase 2.B — Auto-on-quality-flag trigger**: SHIPPED 2026-04-29 as `fa89aa2`. `logging.artifact_store.triggers.quality_flag_threshold=<severity>` writes a bundle when the cleaner raises one or more flags at-or-above the configured severity.
-- **Phase 2.C — Always-on knob**: SHIPPED 2026-05-01 as `6e3ad8f`. `logging.artifact_store.triggers.always=true` writes a bundle for every request, capped by retention. Boot-time Warn surfaces when active. Per-request `trace.bundle.promoted` Info line is suppressed for the always path to avoid host-log flooding (see the always-on subsection above).
-- **Phase 2.D — Replay tooling**: SHIPPED across 4 sub-merges 2026-05-03 → 2026-05-09 (R0+R1 `8a9878f`, R2 `e4d2fb2`, R3a `011d78c`, R3b `0741958`). The `cmd/replay` binary re-runs captured bundles through current code and diffs the produced response against the saved `17-response.json`. 14-flag CLI surface for filtering, parallelism, tolerance tuning, and per-stage diff inspection. **See [§10.7 Replay Tooling](#107-replay-tooling) below for full usage.** Phase 2.D is COMPLETE; no further sub-phases pending.
-
-Phase 2 = COMPLETE. The artifact-bundle capture path (Phase 1 + 2.A/B/C) and the replay-binary read path (Phase 2.D) together close the observability loop: any request's full input/output/intermediate-stage state is on disk, and any saved bundle can be re-played through current code to localize regression drift to a specific pipeline stage.
+All sub-phases of the observability narrative + artifacts spec are SHIPPED on master:
+- **Phase 1** — manual triggers + bundle layout
+- **Phase 2.A** — auto-on-error trigger
+- **Phase 2.B** — auto-on-quality-flag trigger
+- **Phase 2.C** — always-on knob
+- **Phase 2.D** — replay tooling (`cmd/replay`); see [§10.7](#107-replay-tooling)
 
 ### 10.6 Health Checks
 
@@ -1590,85 +1407,71 @@ Phase 2 = COMPLETE. The artifact-bundle capture path (Phase 1 + 2.A/B/C) and the
 
 ### 10.7 Replay Tooling
 
-`cmd/replay` is a standalone binary that re-runs a captured artifact bundle through the **current** valuation code and diffs the produced response against the bundle's saved `17-response.json`. Use cases:
-
-- **Regression check before commit** — change growth-blend weights, replay watchlist, see which tickers' fair values moved + which pipeline stage introduced the drift.
-- **Validate refactors** — restructure the cleaner; replay the bundle corpus to confirm byte-for-byte response equivalence (or surface intentional drift within tolerance).
-- **Localize drift to a stage** — `--diff-stages` reads the saved `10-clean-output.json`, `12-growth-curve.json`, `13-wacc.json`, `15-valuation.json` and diffs each against what the engine produces today; you see WHERE the change cascaded from, not just THAT something changed.
-- **Postmortem reproducibility** — a request that produced a suspect valuation last Tuesday can be re-replayed against today's code to confirm whether the suspect behavior persists.
-
-**Hermetic by construction**: replay performs zero external network calls (no SEC, no Yahoo, no FRED), zero database reads, zero cache writes, zero metrics shipping. Bundle gateways serve the SEC/Market/Macro payloads from the bundle's `*.parsed.json` (or `*.raw.json`) files. The valuation engine sees the same inputs that fired during the original request; the only thing that's different is the code revision.
+`cmd/replay` is a standalone binary that re-runs a captured artifact bundle through the current code and diffs the produced response against the bundle's saved `17-response.json`. Use it to regression-test code changes against your watchlist without re-fetching upstream data. No external network calls — bundle files supply everything.
 
 #### Build
 
 ```bash
-# Linux/macOS
-go build -o /tmp/replay ./cmd/replay
-# Windows
-go build -o ./replay.exe ./cmd/replay
+go build -o ./replay.exe ./cmd/replay   # Windows
+go build -o /tmp/replay ./cmd/replay    # Linux/macOS
 ```
-
-The binary has no transitive `*sqlx.DB` / `*redis.Client` constructors thanks to the hand-picked `replay.Module` fx composition (which sidesteps `di.CoreModule`'s production-network providers). Build output is ~10 MiB.
 
 #### Quick start
 
 ```bash
-# Replay one bundle (default --from=raw mode reads from *.raw.json files)
-./replay artifacts/2026-05-06/MXL/req_c01bec94-9c3c-46f6-afad-9458672c8534/
+# Replay one bundle. Production bundles often only ship *.parsed.json for
+# some gateways, so the default --from=raw may fail with a hint to use --from=parsed.
+./replay --from=parsed artifacts/2026-05-09/AAPL/req_<id>/
 
-# Production bundles in your artifacts/ tree may only ship *.parsed.json files
-# for some gateways (e.g. macro). When --from=raw fails with
-# "failed to fetch macro data: no macro data", the error message hints at the
-# fix: switch to --from=parsed which reads from *.parsed.json directly.
-./replay --from=parsed artifacts/2026-05-06/MXL/req_c01bec94-9c3c-46f6-afad-9458672c8534/
+# See WHERE the drift came from (which pipeline stage)
+./replay --diff-stages --verbose --from=parsed artifacts/2026-05-09/AAPL/req_<id>/
 
-# Headline R3b feature — per-stage diff inspection in verbose text mode
-./replay --diff-stages --verbose --from=parsed artifacts/2026-05-06/MXL/req_c01bec94-9c3c-46f6-afad-9458672c8534/
+# Replay a whole day's worth of bundles in parallel
+./replay --workers=4 --from=parsed artifacts/2026-05-09/
 
-# Batch across a watchlist with parallel workers
-./replay --workers=4 --from=parsed artifacts/2026-05-06/
-
-# Filter to a specific ticker or recent bundles only
+# Filter to one ticker, or only recent bundles
 ./replay --filter-ticker=AAPL --filter-since=7d artifacts/
 
-# JSON output for scripting (jq-friendly; shape pinned by golden tests)
+# JSON output for scripting
 ./replay --diff-stages --format=json --from=parsed <bundle-dir> | jq '.results[0].stage_diffs'
 
-# Help text covering all 14 flags
+# Full flag help
 ./replay --help
 ```
 
-#### CLI flag reference (14 flags)
+#### CLI flag reference
 
-| Flag | Type | Default | Purpose |
-|------|------|---------|---------|
-| `<bundle-dir>` (positional) | path | _(required)_ | Bundle directory OR a parent directory containing many bundles. Walked recursively, depth-first. Each detected `req_*/00-manifest.json` triggers a replay. |
-| `--format` | `text\|json` | `text` | Output format. `text` is human-readable (one row per bundle + SUMMARY); `json` is machine-parseable and pinned by the 6 golden fixtures under `internal/observability/replay/testdata/golden/`. |
-| `--out` | path | stdout | Write output to a file instead of stdout. Stderr (warnings, schema-drift diagnostics) is unaffected. |
-| `--from` | `raw\|parsed` | `raw` | Entry depth. `raw` re-runs the gateway parsers from `*.raw.json`. `parsed` skips parsers and injects `*.parsed.json` directly into the pipeline. **Production bundles often only have `*.parsed.json` for macro — when `--from=raw` errors with `"no macro data"`, the error message includes a `(hint: try --from=parsed)` suggestion.** |
-| `--quiet` | bool | `false` | Suppress per-bundle output rows; only emit the SUMMARY line. JSON mode emits an empty `results` array. |
-| `--verbose` | bool | `false` | Text-mode only: emit per-field diff rows beneath each bundle row, AND emit the `Stage diffs:` section under each row when `--diff-stages` is also set. JSON mode emits everything regardless of `--verbose`. |
-| `--diff-stages` | bool | `false` | Stage K (R3b). Diffs the bundle's saved `10-clean-output.json`, `12-growth-curve.json`, `13-wacc.json`, `15-valuation.json` against an ephemeral in-memory snapshot of the current engine's stage outputs. Per-result JSON gains a `stage_diffs` field keyed by stage filename. Empty entries (`"15-valuation.json": {}`) are intentional and indicate "diff was attempted but both sides absent" — distinct from absence of the key entirely. |
-| `--workers` | int >= 1 | `1` | Parallel-replay worker count (R3a). Sequential walk + per-bundle parallel replay via a hand-coded bounded semaphore. NaN / negative / 0 rejected at parse with usage block + exit 2. F11 hermeticity preserved under parallelism via per-app `*prometheus.Registry` isolation + `evaluateBundleWithRecover` outer wrapper. |
-| `--filter-ticker` | string | _(unset)_ | Case-sensitive ticker match against `manifest.ticker`. Bundles with non-matching ticker are skipped (NOT errored). Empty filter passes all bundles. |
-| `--filter-since` | duration | _(unset)_ | Bundles whose `manifest.started_at` is older than `time.Now() − filter_since` are skipped. Accepts standard Go duration syntax (`30m`, `2h`) plus the `d` suffix (`7d` = 7 days). NaN / unparseable rejected at parse. |
-| `--float-rel-tol` | float >= 0 | `1e-9` | Per-field relative tolerance for the float diff. **`--float-rel-tol=0` means "use the default 1e-9", NOT "exact match"** — sentinel-zero is a tooling convenience, not a contract. NaN / ±Inf / negative rejected at parse. |
-| `--float-abs-tol` | float >= 0 | `1e-12` | Per-field absolute tolerance. Same `0`-as-sentinel + NaN/±Inf/negative rejection rules as `--float-rel-tol`. |
-| `--allow-schema-drift` | bool | `false` | Default behavior: if `manifest.schema_versions` disagrees with the binary's `replay.CurrentSchemaVersions`, replay refuses with exit 2. With this flag, drift downgrades to a stderr warning and replay proceeds. Useful when intentionally regressing across breaking schema changes. |
-| `--allow-git-drift` | bool | `false` | Default: if `manifest.git_sha` disagrees with the binary's compiled-in `runtime/debug.ReadBuildInfo` SHA, the per-bundle row carries a `git_drift=true` annotation but does NOT exit 2 — git drift is the EXPECTED case (replay is for cross-revision regression). With this flag set, the annotation is suppressed entirely. |
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `<bundle-dir>` (positional, required) | — | Bundle directory OR a parent directory; walked recursively to find every `req_*/00-manifest.json`. |
+| `--format` | `text` | `text` (one row per bundle + SUMMARY) or `json` (machine-parseable, stable shape). |
+| `--out` | stdout | Write output to a file instead of stdout. |
+| `--from` | `raw` | `raw` re-runs gateway parsers from `*.raw.json`; `parsed` reads `*.parsed.json` directly. Use `parsed` when a bundle lacks raw payloads (common). |
+| `--quiet` | off | Suppress per-bundle rows; only emit the SUMMARY. |
+| `--verbose` | off | Text-mode only: emit per-field diff rows + `Stage diffs:` section (when combined with `--diff-stages`). |
+| `--diff-stages` | off | Also diff the bundle's intermediate-stage files (`10-clean-output.json`, `12-growth-curve.json`, `13-wacc.json`, `15-valuation.json`) against current engine output — pinpoints WHICH stage drifted. |
+| `--workers` | `1` | Parallel-replay worker count. Use 4-8 for batches. |
+| `--filter-ticker` | _(unset)_ | Skip bundles whose manifest ticker doesn't match (case-sensitive). |
+| `--filter-since` | _(unset)_ | Skip bundles older than this duration. Accepts `30m`, `2h`, `7d`. |
+| `--float-rel-tol` | `1e-9` | Relative float tolerance. `0` means "use default", NOT "exact match". |
+| `--float-abs-tol` | `1e-12` | Absolute float tolerance. Same `0`-as-default rule. |
+| `--allow-schema-drift` | off | Allow replay to proceed when the bundle's schema versions don't match the current code (downgrades to warning). |
+| `--allow-git-drift` | off | Suppress the `git_drift` annotation when the bundle was captured against a different code revision (the expected case). |
 
 #### Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | All replayed bundles produced responses byte-equivalent to their saved `17-response.json` (modulo float tolerance). |
-| `1` | At least one bundle's response differed outside tolerance. SUMMARY line carries pass/fail/errored counts. |
-| `2` | Infrastructure failure: missing files, schema-version mismatch (without `--allow-schema-drift`), invalid flag value, NaN tolerance, **empty bundle directory** (operator pointed at the wrong path), `--workers=0`, etc. |
+| `0` | Every bundle's response matched its saved `17-response.json` (within tolerance). |
+| `1` | At least one bundle differed outside tolerance. |
+| `2` | Infrastructure failure: missing files, schema-version mismatch, invalid flags, empty bundle directory, etc. |
 
-#### Sample text-mode output (verbose + diff-stages)
+#### Sample output
+
+Verbose text mode with `--diff-stages`:
 
 ```
-artifacts/2026-05-06/MXL/req_c01bec94.../   FAIL   fields=2/47   duration=92ms
+artifacts/2026-05-09/AAPL/req_<id>/   FAIL   fields=2/47   duration=92ms
   - dcf_value_per_share: 156.42 -> 156.81 (rel_drift=0.002494)
   - wacc: 0.092 -> 0.094 (rel_drift=0.021739)
   Stage diffs:
@@ -1677,121 +1480,29 @@ artifacts/2026-05-06/MXL/req_c01bec94.../   FAIL   fields=2/47   duration=92ms
     15-valuation.json:
       - dcf_value_per_share: 156.42 -> 156.81 (rel_drift=0.002494)
 
-SUMMARY: 0/1 passed, 1 failed, 0 errored, total duration=92ms (walk=8ms replay=84ms)
+SUMMARY: 0/1 passed, 1 failed, 0 errored, total duration=92ms
 ```
 
-The `~` marker on a row means "drifted within tolerance" — the field moved but stayed inside `--float-rel-tol` / `--float-abs-tol`, so the bundle still PASSed.
+A `~` marker means "drifted within tolerance" — the field moved but stayed inside the configured tolerance, so the bundle still PASSed.
 
-#### Sample JSON output
+JSON mode emits the same information under `results[].diffs` and `results[].stage_diffs`. The shape is stable; consumers can rely on the field names and nesting.
+
+#### Workflow — regression-test a code change
 
 ```bash
-./replay --diff-stages --format=json --from=parsed artifacts/2026-05-06/MXL/req_c01bec94-9c3c-46f6-afad-9458672c8534/ | jq .
+# 1. Make your code change (e.g., adjust growth blend, retune WACC).
+
+# 2. Replay your watchlist with full per-stage detail.
+./replay --diff-stages --verbose --workers=4 --from=parsed artifacts/2026-05-09/
+
+# 3. Read the SUMMARY:
+#    - 0 failed → no drift; safe to commit.
+#    - N failed → the per-stage diffs show WHICH pipeline stage introduced the drift.
+#    - errored → if you used --from=raw, try --from=parsed.
+
+# 4. If drifts are intentional but small, loosen tolerances to confirm magnitude bounds.
+./replay --diff-stages --verbose --float-rel-tol=1e-3 --from=parsed artifacts/2026-05-09/
 ```
-
-```json
-{
-  "replay_version": "0.1",
-  "git_sha_current": "0741958",
-  "summary": {
-    "total": 1,
-    "passed": 0,
-    "failed": 1,
-    "errored": 0,
-    "duration_ms": 92,
-    "walk_duration_ms": 8,
-    "replay_duration_ms": 84
-  },
-  "results": [
-    {
-      "bundle": "artifacts/2026-05-06/MXL/req_c01bec94...",
-      "status": "fail",
-      "ticker": "MXL",
-      "fields_total": 47,
-      "fields_changed": 2,
-      "schema_drift": false,
-      "git_drift": true,
-      "duration_ms": 92,
-      "diffs": [
-        {"path": "dcf_value_per_share", "old": 156.42, "new": 156.81, "rel_drift": 0.002494},
-        {"path": "wacc", "old": 0.092, "new": 0.094, "rel_drift": 0.021739}
-      ],
-      "stage_diffs": {
-        "13-wacc.json": {
-          "floats": [{"path": "cost_of_equity", "old": 0.118, "new": 0.121, "rel_drift": 0.025424}]
-        },
-        "15-valuation.json": {
-          "floats": [{"path": "dcf_value_per_share", "old": 156.42, "new": 156.81, "rel_drift": 0.002494}]
-        }
-      }
-    }
-  ]
-}
-```
-
-The 6 golden fixtures under `internal/observability/replay/testdata/golden/json_*.json` document the canonical shape across the cases (pass / fail / errored / drifted-within-tolerance / with-stage-diffs / mixed-with-workers-4). To regenerate the fixtures after a deliberate JSON-shape change:
-
-```bash
-UPDATE_GOLDEN=1 go test -run TestRenderJSON_GoldenFixture ./internal/observability/replay/
-```
-
-Then `git diff` the regenerated fixtures to verify the shape change is what you intended.
-
-#### Performance characteristics
-
-NF2 (single-bundle replay) target ≤ 200ms; NF3 (100-bundle batch) target ≤ 30s. Both with 3× CI slack ceilings (600ms / 90s). Measured locally on a developer laptop:
-
-| Bench | Measured | Ceiling (3× slack) | Margin |
-|-------|----------|--------------------|--------|
-| `BenchmarkReplay_SingleBundle_NF2` | ~3.5 ms/op | 600 ms | ~170× |
-| `BenchmarkReplay_BatchOf100_NF3_Sequential` | ~329 ms/op | 90 s | ~270× |
-| `BenchmarkReplay_BatchOf100_NF3_Parallel` (workers=NumCPU) | ~87 ms/op | 90 s | ~1000× |
-
-Run them yourself:
-
-```bash
-go test -bench=BenchmarkReplay -benchtime=10x ./internal/observability/replay/
-```
-
-The synthetic 100-bundle corpus generator is inlined into `replay_bench_test.go` and **bench-gated** via `flag.Lookup("test.bench")` — `go test ./...` does NOT pay the generation cost.
-
-#### Hermetic-by-construction invariants
-
-Stage K's `--diff-stages` introduced a temp-dir snapshot mechanism for the "current" side of each stage diff. The invariants that keep replay safe:
-
-- **F11**: `replay.Module` hand-picks fx providers; never touches `*sqlx.DB`, `*redis.Client`, scheduler, metrics shipper, or external APIs.
-- **D7**: Replay produces no bundles of bundles. Stage K's snapshot is in-memory via `os.MkdirTemp` + `defer os.RemoveAll`; never persists to the production artifact root.
-- **D8**: Stage K reads bundle JSON files via `os.ReadFile` directly (NOT re-derived from entities), decoupling from entity-shape evolution.
-- **Init guard (Stage O.6)**: An `init()` reflection guard panics at package load if `countFairValueFields() = 36` disagrees with `reflect.TypeFor[FairValueResponse]().NumField() + reflect.TypeFor[Industry]().NumField() + reflect.TypeFor[SanityCheck]().NumField()`. Panic scope confined to the replay binary by `cmd/server/import_boundary_test.go` (an additional CI guard ensuring `cmd/server` does NOT import the replay package). If a future contributor adds a field to any of the three structs without updating `goFieldToJSON` and `countFairValueFields`, the replay binary refuses to start with a precise drift message naming the field counts.
-
-If you're adding a new replay surface (e.g., a new bundle gateway, a new diff helper), preserve all four invariants. The full design doc is at `docs/refactoring/observability-replay-tooling-spec.md` v0.5; the per-stage implementation history is at `docs/refactoring/observability-replay-tooling-r3b-implementation-plan.md` v1 (and the prior R0+R1, R2, R3 plans).
-
-#### Workflow recipe — regression-test a code change
-
-```bash
-# 1. Confirm clean state on master before your edit
-git status --short
-go test ./internal/observability/replay/...   # baseline green
-
-# 2. Make your code change (e.g., adjust growth blend, retune WACC tax rate)
-# ... edit, save ...
-
-# 3. Replay your watchlist with full per-stage detail
-./replay --diff-stages --verbose --workers=4 --from=parsed artifacts/2026-05-06/
-
-# 4. Read the SUMMARY line
-#    - 0 failed → change is a no-op against your watchlist (likely safe to commit)
-#    - N failed → drill into the per-stage diffs to localize WHERE the change cascaded
-#    - errored → infrastructure issue (try --from=parsed if you used --from=raw)
-
-# 5. If drifts are intentional and within reason, loosen tolerances to confirm
-#    drift magnitude is bounded
-./replay --diff-stages --verbose --float-rel-tol=1e-3 --from=parsed artifacts/2026-05-06/
-
-# 6. If drifts are surprising or unbounded, the per-stage diff tells you which
-#    pipeline phase introduced them. Bisect from there.
-```
-
-Phase 2.D = COMPLETE; the binary is ready for personal-investment regression workflows against your captured `artifacts/` corpus.
 
 ---
 
