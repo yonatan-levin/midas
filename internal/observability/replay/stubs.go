@@ -162,7 +162,18 @@ func (r *notFoundMacroDataRepo) Store(ctx context.Context, data *entities.MacroD
 }
 
 func (r *notFoundMacroDataRepo) GetLatest(ctx context.Context) (*entities.MacroData, error) {
-	return nil, fmt.Errorf("no macro data")
+	// Wrap ErrBundleMissingPayload so the cmd/replay CLI's
+	// annotateMissingPayloadHint catches this error class and appends
+	// the "(hint: try --from=parsed)" suggestion when the operator is
+	// on the default --from=raw mode. Without the wrap, valuation's
+	// `failed to fetch macro data: %w` chain surfaces a bare
+	// "no macro data" string and the operator has no actionable next
+	// step from the error message alone (observed in live use 2026-05-11).
+	//
+	// Repository semantics are preserved: the engine still treats this
+	// as a fatal repo miss; the only difference is that errors.Is on the
+	// wrapped chain now matches the bundle-missing sentinel.
+	return nil, fmt.Errorf("no macro data: %w", ErrBundleMissingPayload)
 }
 
 func (r *notFoundMacroDataRepo) IsStale(ctx context.Context, maxAge time.Duration) (bool, error) {

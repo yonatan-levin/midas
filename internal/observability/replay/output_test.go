@@ -710,3 +710,75 @@ func TestRenderJSON_VerboseFlag_StageDiffsAlwaysIncluded(t *testing.T) {
 		t.Errorf("JSON must include stage_diffs even in non-verbose; got:\n%s", nonVerbose.String())
 	}
 }
+
+// TestRenderJSON_BundlePathUsesForwardSlash pins RPL-4b: the JSON
+// contract's "bundle" field uses forward-slash separators on all
+// platforms so Linux shell pipelines piping bundle paths through
+// `jq '.results[].bundle' | xargs ...` handle Windows-captured bundles
+// correctly.
+//
+// Strategy: feed a Result with a Windows-style backslash path,
+// render JSON, and assert the marshaled string contains no
+// backslashes in the bundle field. Use a fixed input — the test
+// runs cross-platform (filepath.ToSlash on Linux is a no-op for
+// already-forward-slash paths, so a backslash input is the only
+// reliable way to assert the normalization fires).
+//
+// The TEXT-mode renderer keeps native separators (operators see them
+// visually; native is fine there). This test does NOT assert text-mode
+// behavior — see writeResultRow for the unchanged text path.
+func TestRenderJSON_BundlePathUsesForwardSlash(t *testing.T) {
+	winPath := `C:\Users\op\artifacts\2026-05-09\MXL\req_a293c059`
+	results := []Result{
+		{
+			Bundle:        winPath,
+			Status:        StatusPass,
+			Ticker:        "MXL",
+			FieldsTotal:   36,
+			FieldsChanged: 0,
+			DurationMs:    87,
+		},
+	}
+	r := &Report{
+		ReplayVersion: ReplayVersion,
+		GitSHACurrent: "test",
+		Summary:       ComputeSummary(results),
+		Results:       results,
+	}
+
+	var buf bytes.Buffer
+	if err := r.RenderJSON(&buf); err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+
+	// Decode the JSON and check the actual field value — string-grep on
+	// the rendered output is brittle because Go's encoder escapes
+	// backslashes as "\\". Decoding gives us the unescaped value.
+	var got struct {
+		Results []struct {
+			Bundle string `json:"bundle"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("Unmarshal: %v\nrendered:\n%s", err, buf.String())
+	}
+	if len(got.Results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(got.Results))
+	}
+	if strings.ContainsRune(got.Results[0].Bundle, '\\') {
+		t.Errorf("JSON bundle must use forward-slash separators on all platforms; got %q", got.Results[0].Bundle)
+	}
+	// Spot-check the expected normalized form.
+	want := "C:/Users/op/artifacts/2026-05-09/MXL/req_a293c059"
+	if got.Results[0].Bundle != want {
+		t.Errorf("bundle = %q, want %q", got.Results[0].Bundle, want)
+	}
+
+	// Input Report.Results.Bundle must NOT have been mutated — the text
+	// renderer downstream may want the native form. This is the
+	// "per-call copy" invariant the implementation comment promises.
+	if r.Results[0].Bundle != winPath {
+		t.Errorf("RenderJSON must not mutate input Report.Results; got %q, want %q",
+			r.Results[0].Bundle, winPath)
+	}
+}

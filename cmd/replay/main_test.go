@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -299,6 +301,49 @@ func TestRun_HelpFlagExits0(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Usage: replay") {
 		t.Errorf("expected usage on stdout; got: %s", stdout.String())
+	}
+}
+
+// TestUsage_ListsEveryRegisteredFlag pins Fix 1 (2026-05-11): every flag
+// registered via newFlagSet appears in the --help output, in the format
+// "--<name>". Without this guard, a contributor adding a new fs.*Var
+// could ship a flag that's invisible to operators (the regression that
+// triggered Fix 1 — a 4-flag --help block while the binary accepted 14).
+//
+// Strategy: build a flag set against a fresh *flags, render the usage
+// to a buffer, then walk the same flag set and assert every flag name
+// appears in the rendered output. The test fails loudly with the
+// missing flag names so the fix is obvious.
+func TestUsage_ListsEveryRegisteredFlag(t *testing.T) {
+	var buf bytes.Buffer
+	renderUsage(&buf)
+	rendered := buf.String()
+
+	// Build a flag set the same way renderUsage does so we have the
+	// authoritative list to compare against.
+	probe := newFlagSet(&flags{})
+	var missing []string
+	probe.VisitAll(func(f *flag.Flag) {
+		token := "--" + f.Name
+		if !strings.Contains(rendered, token) {
+			missing = append(missing, f.Name)
+		}
+	})
+	if len(missing) > 0 {
+		t.Fatalf("usage output is missing %d flag(s): %v\nrendered:\n%s",
+			len(missing), missing, rendered)
+	}
+
+	// Sanity-check the static sections are present so a refactor that
+	// accidentally drops the header / footer fails loudly.
+	for _, want := range []string{
+		"Usage: replay",
+		"Exit codes:",
+		"<path>",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("usage missing required section %q\nrendered:\n%s", want, rendered)
+		}
 	}
 }
 
@@ -720,6 +765,55 @@ func TestEvaluateBundle_FromRaw_MissingPayload_AppendsParsedHint(t *testing.T) {
 	otherHinted := annotateMissingPayloadHint(other.Error(), other, "raw")
 	if strings.Contains(otherHinted, "try --from=parsed") {
 		t.Fatalf("hint must not be appended for non-missing-payload errors; got %q", otherHinted)
+	}
+}
+
+// TestEvaluateBundle_FromRaw_MacroMissPropagatesHint pins Fix 2
+// (2026-05-11 live-session UX gap): when the engine's macro-fetch step
+// fails because the bundle's macro repository stub returned a
+// "no macro data: %w ErrBundleMissingPayload" error, the wrapped chain
+// must propagate through valuation.Service's
+// `fmt.Errorf("failed to fetch macro data: %w", err)` and runEngine's
+// `fmt.Errorf("replay: CalculateValuation %s: %w", ticker, err)` so
+// errors.Is(chain, ErrBundleMissingPayload) still matches at the cmd/replay
+// layer — which lets annotateMissingPayloadHint append the
+// "(hint: try --from=parsed)" suggestion the operator needs.
+//
+// Strategy: synthesize the exact wrap chain the production code emits
+// when notFoundMacroDataRepo.GetLatest returns the wrapped sentinel.
+// Run that error through annotateMissingPayloadHint with mode="raw"
+// and assert the hint string appears.
+//
+// Without the wrap, the chain bottom is a bare fmt.Errorf("no macro data")
+// (the pre-fix behavior); errors.Is misses and the operator sees a
+// confusing "no macro data" with no actionable next step.
+func TestEvaluateBundle_FromRaw_MacroMissPropagatesHint(t *testing.T) {
+	// Reproduce the production wrap chain exactly:
+	//   notFoundMacroDataRepo.GetLatest:    "no macro data: %w" + sentinel
+	//   valuation.Service.CalculateValuation: "failed to fetch macro data: %w"
+	//   replay.runEngine:                    "replay: CalculateValuation MXL: %w"
+	repoErr := fmt.Errorf("no macro data: %w", replay.ErrBundleMissingPayload)
+	svcErr := fmt.Errorf("failed to fetch macro data: %w", repoErr)
+	engineErr := fmt.Errorf("replay: CalculateValuation MXL: %w", svcErr)
+
+	// Sanity-check the wrap chain — if this assertion fails, the
+	// downstream hint assertion below will also fail and the diagnostic
+	// would be confusing.
+	if !errors.Is(engineErr, replay.ErrBundleMissingPayload) {
+		t.Fatalf("wrap-chain regression: errors.Is(engineErr, ErrBundleMissingPayload) returned false — the macro stub must wrap the sentinel; got chain %v", engineErr)
+	}
+
+	hinted := annotateMissingPayloadHint(engineErr.Error(), engineErr, "raw")
+	if !strings.Contains(hinted, "try --from=parsed") {
+		t.Fatalf("expected hint in --from=raw macro-miss error chain; got %q", hinted)
+	}
+
+	// --from=parsed must NOT append the hint regardless — the chain
+	// already executed on parsed snapshots, so re-suggesting the same
+	// mode would be incoherent.
+	notHinted := annotateMissingPayloadHint(engineErr.Error(), engineErr, "parsed")
+	if strings.Contains(notHinted, "try --from=parsed") {
+		t.Fatalf("hint must not appear when mode is already parsed; got %q", notHinted)
 	}
 }
 

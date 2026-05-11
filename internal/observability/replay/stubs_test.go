@@ -2,6 +2,7 @@ package replay
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -103,6 +104,23 @@ func TestNotFoundMacroDataRepo_GetLatest_ReturnsError(t *testing.T) {
 	_, err := repo.GetLatest(context.Background())
 	if err == nil {
 		t.Fatalf("GetLatest: expected error; got nil")
+	}
+}
+
+// TestNotFoundMacroDataRepo_GetLatest_WrapsErrBundleMissingPayload pins
+// the Fix 2 (2026-05-11) behavior: the macro repo stub must wrap
+// ErrBundleMissingPayload so cmd/replay's annotateMissingPayloadHint
+// surfaces the "(hint: try --from=parsed)" suggestion for the macro
+// missing-data path. Without this wrap the operator sees a bare "no
+// macro data" with no actionable next step — observed in live use.
+func TestNotFoundMacroDataRepo_GetLatest_WrapsErrBundleMissingPayload(t *testing.T) {
+	repo := NewNotFoundMacroDataRepo()
+	_, err := repo.GetLatest(context.Background())
+	if err == nil {
+		t.Fatalf("GetLatest: expected error; got nil")
+	}
+	if !errors.Is(err, ErrBundleMissingPayload) {
+		t.Fatalf("GetLatest: error must wrap ErrBundleMissingPayload so cmd/replay can annotate the --from=parsed hint; got %v", err)
 	}
 }
 
