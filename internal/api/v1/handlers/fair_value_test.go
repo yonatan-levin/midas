@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
 )
@@ -738,6 +740,44 @@ func TestFairValueHandler_GetBulkFairValue(t *testing.T) {
 			mockSvc.AssertExpectations(t)
 		})
 	}
+}
+
+func TestFairValueHandler_GetBulkFairValue_StampsArtifactBundleSubject(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockSvc := new(mockValuationService)
+	mockSvc.On("CalculateValuation", mock.Anything, "AAPL", (*valuation.ValuationOptions)(nil)).
+		Return(sampleValuationResult("AAPL"), nil)
+	mockSvc.On("CalculateValuation", mock.Anything, "MSFT", (*valuation.ValuationOptions)(nil)).
+		Return(sampleValuationResult("MSFT"), nil)
+
+	handler := newTestFairValueHandler(mockSvc)
+
+	bundle, err := artifact.OpenDeferredBundle(artifact.Config{
+		Enabled:   true,
+		RootPath:  t.TempDir(),
+		QueueSize: 8,
+		Triggers:  artifact.TriggerConfig{Always: true},
+	}, "req-bulk-artifact", "", artifact.TriggerAlways)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = bundle.Close() })
+
+	require.Equal(t, "_no-ticker", filepath.Base(filepath.Dir(bundle.Root())),
+		"precondition: deferred bulk bundle starts in the generic partition")
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("POST", "/api/v1/fair-value/bulk", strings.NewReader(`{"tickers":["aapl","MSFT"]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request = c.Request.WithContext(artifact.Inject(c.Request.Context(), bundle))
+
+	handler.GetBulkFairValue(c)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	assert.Equal(t, "BULK_AAPL_MSFT", filepath.Base(filepath.Dir(bundle.Root())),
+		"bulk requests should promote under their body-derived subject, not _no-ticker")
+
+	mockSvc.AssertExpectations(t)
 }
 
 // extractErrorCode extracts the trailing segment from an error type URI.

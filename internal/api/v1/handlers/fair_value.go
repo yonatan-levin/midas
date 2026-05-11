@@ -490,6 +490,17 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		return
 	}
 
+	// Bulk requests do not have a URL :ticker param, but they still carry
+	// useful ticker context in the body. Stamp a stable pseudo-ticker so
+	// always/on-error/on-quality-flag artifact bundles do not promote under
+	// the generic _no-ticker partition.
+	if subject := bulkArtifactSubject(request.Tickers); subject != "" {
+		narrate.From(c.Request.Context()).WithTicker(subject)
+		if b := artifact.From(c.Request.Context()); b != nil {
+			b.SetTicker(subject)
+		}
+	}
+
 	// Validate override ranges (same bounds as single endpoint)
 	if request.OverrideBeta != nil && (*request.OverrideBeta < 0 || *request.OverrideBeta > 3.0) {
 		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
@@ -701,6 +712,20 @@ func isValidTicker(ticker string) bool {
 	}
 
 	return true
+}
+
+func bulkArtifactSubject(tickers []string) string {
+	parts := make([]string, 0, len(tickers))
+	for _, ticker := range tickers {
+		t := strings.ToUpper(strings.TrimSpace(ticker))
+		if isValidTicker(t) {
+			parts = append(parts, t)
+		}
+	}
+	if len(parts) == 0 {
+		return "BULK_INVALID"
+	}
+	return "BULK_" + strings.Join(parts, "_")
 }
 
 // parseFloatParam safely parses a float query parameter
