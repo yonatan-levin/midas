@@ -2,11 +2,17 @@
 
 | | |
 |---|---|
-| **Status** | DESIGN (ready for BACKEND) |
+| **Status** | ✅ **ARCHIVED — COMPLETE** (B1-B9 shipped; AC-1 to AC-9 satisfied; V/R/Q-gated) |
 | **Author** | ARCH (code-architect) |
-| **Date** | 2026-05-05 |
-| **Related** | `internal/services/valuation/service.go` (`calculateTangibleValuePerShare`), `internal/api/v1/handlers/fair_value.go` (`FairValueResponse`), `internal/core/entities/valuation.go` (`ValuationResult`), `internal/core/entities/financial_data.go` (`FinancialData`), `internal/infra/gateways/sec/parser.go`, `docs/openapi.yaml`, `internal/infra/database/schema.sql` |
-| **Out-of-scope** | Model router changes, growth/WACC math, screening endpoints |
+| **Date** | 2026-05-05 (drafted), 2026-05-11 (archived) |
+| **Resolution** | PR #1 (B1-B3, B5-B9): commit `96759d9` shipped 2026-05-06 — four Graham diagnostic fields, SEC parser plumbing, schema migration `0008`, OpenAPI updates, tests. PR #2 (B4): commit `360d677` merged via `cc163ff` on 2026-05-09 — `tangible_value_per_share` denominator flipped to diluted shares. AC-1 through AC-9 satisfied per live-API verification on 2026-05-09 (AAPL/MSFT/JPM drift 0.42-0.94% in diluted direction; MXL/TSM ifrs-full pipeline correct; bulk handler shape conformant). |
+| **Related** | `internal/services/valuation/service.go` (`calculateTangibleValuePerShare`, `calculateGrahamFloorMetrics`), `internal/services/valuation/graham.go`, `internal/api/v1/handlers/fair_value.go` (`FairValueResponse`), `internal/core/entities/valuation.go` (`ValuationResult`), `internal/core/entities/financial_data.go` (`FinancialData.TotalLiabilities`), `internal/infra/gateways/sec/parser.go`, `docs/openapi.yaml`, `internal/infra/database/schema.sql`, `migrations/0008_add_graham_floor_columns.sql` |
+| **Out-of-scope** | Model router changes, growth/WACC math, screening endpoints (out-of-scope per the original spec; remain so post-archival) |
+| **Follow-up trackers** | `docs/reviewer/VAL-4-tangible-share-flip-followups.md` (2 NITs from PR #2 REVIEWER) — only Graham-scope item still open; everything else (RM-1, RM-2, VAL-3 sibling work) is sibling not Graham |
+
+---
+
+> **Archival note**: this spec is preserved verbatim below as historical record. The implementation matches the spec's §11 implementation roadmap (B2 → B6 → B1 → B3 → B4 → B5 → B7/B8 → B9). The only post-spec design refinement was the `*float64 + omitempty` pointer-flip pattern for `graham_floor_per_share` and `graham_discount_pct` (§4.1 of the spec already documented this; emphasized during V/R/Q to distinguish "data says zero" from "data unavailable").
 
 ---
 
