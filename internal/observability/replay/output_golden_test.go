@@ -281,3 +281,38 @@ func TestRenderJSON_GoldenFixture_WithStageDiffs(t *testing.T) {
 func TestRenderJSON_GoldenFixture_MixedWithWorkers4(t *testing.T) {
 	assertGolden(t, fixtureMixedWithWorkers4(), "json_mixed_with_workers_4.json")
 }
+
+// fixtureWindowsBundlePath builds a Report with a Windows-style backslash
+// bundle path. The golden fixture pins the post-ToSlash normalized form
+// emitted by RenderJSON (RPL-4b — Fix 3 of the 2026-05-11 UX dispatch).
+//
+// Strategy: a Linux operator running `jq '.results[].bundle' | xargs ...`
+// against a JSON report captured on Windows must NOT see backslashes in
+// the bundle field. The fixture's input has a backslash path; the golden
+// JSON file has forward slashes — the diff between them IS the
+// normalization contract.
+func fixtureWindowsBundlePath() *Report {
+	results := []Result{
+		{
+			Bundle:        `C:\Users\op\artifacts\2026-05-09\MXL\req_a293c059`,
+			Status:        StatusPass,
+			Ticker:        "MXL",
+			FieldsTotal:   36,
+			FieldsChanged: 0,
+			DurationMs:    87,
+		},
+	}
+	return &Report{
+		ReplayVersion: ReplayVersion,
+		GitSHACurrent: "test-build",
+		Summary:       ComputeSummary(results),
+		Results:       results,
+	}
+}
+
+// TestRenderJSON_GoldenFixture_WindowsBundlePath — fixture #7 of 7.
+// Pins the RPL-4b Windows-path normalization: the JSON "bundle" field
+// must use forward slashes regardless of the input separator.
+func TestRenderJSON_GoldenFixture_WindowsBundlePath(t *testing.T) {
+	assertGolden(t, fixtureWindowsBundlePath(), "json_windows_bundle_path.json")
+}

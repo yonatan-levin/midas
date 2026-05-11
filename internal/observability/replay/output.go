@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -233,7 +234,20 @@ func (r *Report) RenderJSON(w io.Writer) error {
 	// Sort results for deterministic JSON output. Idempotent.
 	sort.Slice(r.Results, func(i, j int) bool { return r.Results[i].Bundle < r.Results[j].Bundle })
 
-	body, err := json.MarshalIndent(r, "", "  ")
+	// RPL-4b (2026-05-11): the JSON contract's "bundle" field must use
+	// forward-slash separators on all platforms so Linux shell pipelines
+	// (jq | xargs ...) handle bundle paths captured on Windows correctly.
+	// Mutate a per-call copy of Results — the input Report.Results are kept
+	// in their native form for the text-mode renderer (operators see them
+	// visually; native separators are fine there).
+	normalized := *r
+	normalized.Results = make([]Result, len(r.Results))
+	for i, res := range r.Results {
+		res.Bundle = filepath.ToSlash(res.Bundle)
+		normalized.Results[i] = res
+	}
+
+	body, err := json.MarshalIndent(&normalized, "", "  ")
 	if err != nil {
 		return fmt.Errorf("replay: marshal report: %w", err)
 	}

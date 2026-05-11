@@ -24,6 +24,7 @@ import (
 	"runtime/debug"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,34 +62,136 @@ func resolveGitSHA() string {
 // captures the code.
 var exitFn = os.Exit
 
-// usageMessage is the short help printed on -h or on a flag-parse error.
-// Lives near main so it's obvious what flags exist; keep in sync with
-// spec §7.
-const usageMessage = `Usage: replay [flags] <path>
+// usageHeader is the static introduction printed above the auto-generated
+// flag table. The flag listing itself is produced by formatFlagSetUsage so
+// that adding a new fs.*Var call automatically extends --help — operators
+// observed a 4-flag --help block while the binary actually accepted 14
+// (live session 2026-05-11). Auto-walking the flag set keeps the help and
+// the registrations in lockstep without a "remember to update both" rule.
+const usageHeader = `Usage: replay [flags] <path>
 
   <path>  A bundle directory (containing 00-manifest.json) OR a parent
           directory containing one or more bundles (recursively walked).
 
 Flags:
-  --format string         Output format: text or json (default "text")
-  --out string            Output path (default "-" for stdout)
-  --allow-schema-drift    Treat schema-version mismatch as a warning instead of an error
-  --allow-git-drift       Treat git_sha mismatch as a warning instead of an error
-  --quiet                 Suppress per-bundle rows; only print the aggregate summary
-  --verbose               Verbose per-field diff output (text mode)
-  --from string           Gateway substitution mode: raw or parsed (default "raw")
-  --workers int           Parallel replay workers (default runtime.NumCPU(); env REPLAY_WORKERS)
-  --filter-ticker string  Replay only bundles whose manifest ticker == this string (exact-case)
-  --filter-since string   Replay only bundles whose manifest started_at is within this duration of now (e.g. 7d, 24h)
-  --diff-stages           Diff intermediate-stage JSON files (10-clean-output, 12-growth-curve, 13-wacc, 15-valuation) in addition to the response-level diff
-  --float-rel-tol float   Relative tolerance for float diffs (default 1e-9; 0 means use default, NOT exact-match)
-  --float-abs-tol float   Absolute tolerance for float diffs (default 1e-12; 0 means use default, NOT exact-match)
+`
 
+// usageFooter is the static trailer printed below the auto-generated flag
+// table. Exit codes are stable contract (spec §7) and live here so a flag
+// rename does not perturb the exit-code documentation.
+const usageFooter = `
 Exit codes:
   0   All bundles validated and replayed within tolerance
   1   At least one bundle's diff exceeded tolerance
   2   Infrastructure failure (missing files, malformed manifest, schema drift without --allow-schema-drift)
 `
+
+// renderUsage emits the full --help text to w. Strategy: build the flag
+// set as in parseFlags (so the listing matches the real registration set
+// byte-for-byte), then walk it with fs.VisitAll to render one line per
+// flag in deterministic (alphabetical) order, followed by the static
+// footer. Returns nothing — write errors on a usage path are not
+// actionable.
+//
+// Test seam: TestUsage_ListsEveryRegisteredFlag pins that every flag
+// parseFlags registers has a matching line in the rendered output. That
+// test is the canonical defense against future drift.
+func renderUsage(w io.Writer) {
+	fmt.Fprint(w, usageHeader)
+	fs := newFlagSet(&flags{})
+	formatFlagSetUsage(w, fs)
+	fmt.Fprint(w, usageFooter)
+}
+
+// formatFlagSetUsage walks fs in alphabetical order and prints one line per
+// flag in the format "  --<name> <type-hint>  <usage> (default <default>)".
+// Booleans omit the type hint and the default-true/false noise to keep the
+// listing readable. Extracted so the test pin can render against a freshly-
+// constructed flag set without depending on Run() execution.
+func formatFlagSetUsage(w io.Writer, fs *flag.FlagSet) {
+	// Collect flag names so output is stable regardless of registration
+	// order. Go's flag.VisitAll iterates lexicographically already, but we
+	// gather first to compute the column width for alignment.
+	type row struct {
+		flag     *flag.Flag
+		left     string // "--name <type>" or "--name"
+		typeHint string
+	}
+	var rows []row
+	maxLeft := 0
+	fs.VisitAll(func(f *flag.Flag) {
+		hint := flagTypeHint(f)
+		left := "  --" + f.Name
+		if hint != "" {
+			left += " " + hint
+		}
+		if len(left) > maxLeft {
+			maxLeft = len(left)
+		}
+		rows = append(rows, row{flag: f, left: left, typeHint: hint})
+	})
+
+	for _, r := range rows {
+		// Pad left column to a stable width so the usage text aligns.
+		pad := maxLeft - len(r.left) + 2
+		fmt.Fprintf(w, "%s%s%s", r.left, strings.Repeat(" ", pad), r.flag.Usage)
+		// Append the default value when meaningfully non-zero. Booleans
+		// suppress "default false" noise; strings suppress empty default.
+		if def := defaultRepr(r.flag); def != "" {
+			fmt.Fprintf(w, " (default %s)", def)
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+// flagTypeHint returns the Go-stdlib-style type label printed after the
+// flag name (e.g. "string", "int", "float"). Booleans are unlabelled to
+// match `go help` conventions and keep the listing tidy.
+func flagTypeHint(f *flag.Flag) string {
+	switch f.DefValue {
+	case "true", "false":
+		return ""
+	}
+	// Probe the underlying Getter (most stdlib flag types implement it) to
+	// distinguish int/float/string/duration. Fall back to "value" when the
+	// flag does not implement Getter — defensive, but the stdlib types we
+	// use (Bool/String/Int/Float64) all do.
+	if getter, ok := f.Value.(flag.Getter); ok {
+		switch getter.Get().(type) {
+		case int, int64:
+			return "int"
+		case float64:
+			return "float"
+		case string:
+			return "string"
+		case time.Duration:
+			return "duration"
+		}
+	}
+	return "value"
+}
+
+// defaultRepr returns a human-friendly default-value snippet, or "" when
+// the default should be suppressed (false booleans, empty strings — they
+// add noise without information). Numeric and string defaults are quoted
+// where appropriate so the rendering matches the Go-stdlib `flag.PrintDefaults`
+// convention.
+func defaultRepr(f *flag.Flag) string {
+	switch f.DefValue {
+	case "", "false":
+		return ""
+	case "true":
+		return "true"
+	}
+	// String defaults get quoted; numeric defaults render bare so a
+	// reader can copy-paste them.
+	if getter, ok := f.Value.(flag.Getter); ok {
+		if _, isStr := getter.Get().(string); isStr {
+			return strconv.Quote(f.DefValue)
+		}
+	}
+	return f.DefValue
+}
 
 // flags is the parsed flag set. Hoisted so tests can reset it cleanly.
 type flags struct {
@@ -143,17 +246,18 @@ type flags struct {
 	floatAbsTol float64
 }
 
-// parseFlags parses argv (without the program name). Returns the parsed
-// flags struct, the positional path argument, and any error. Errors are
-// either flag.ErrHelp (the user passed -h) or a usage error.
+// newFlagSet constructs the replay binary's canonical flag set and binds
+// every flag to fields on f. Extracted from parseFlags so renderUsage can
+// instantiate an equivalent set and walk it to print --help — keeping the
+// help output and the actual registration list in one place.
 //
-// Splitting parse from Run() lets main_test.go assert flag parsing
-// independently of the rest of the orchestration.
-func parseFlags(argv []string) (*flags, string, error) {
+// IMPORTANT: every fs.*Var call in this function automatically appears in
+// `--help` output (TestUsage_ListsEveryRegisteredFlag pins this). New flags
+// only need a single addition here.
+func newFlagSet(f *flags) *flag.FlagSet {
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // suppress flag's stderr; we render usage ourselves
 
-	f := &flags{}
 	fs.StringVar(&f.format, "format", "text", "Output format (text|json)")
 	fs.StringVar(&f.out, "out", "-", "Output destination (- for stdout)")
 	fs.BoolVar(&f.allowSchemaDrift, "allow-schema-drift", false, "Warn instead of refusing on schema_versions mismatch")
@@ -175,6 +279,19 @@ func parseFlags(argv []string) (*flags, string, error) {
 	fs.BoolVar(&f.diffStages, "diff-stages", false, "Diff intermediate-stage JSON files in addition to the response-level diff (Stage K, Phase 2.D R3b)")
 	fs.Float64Var(&f.floatRelTol, "float-rel-tol", replay.DefaultFloatRelTol, "Relative tolerance for float diffs")
 	fs.Float64Var(&f.floatAbsTol, "float-abs-tol", replay.DefaultFloatAbsTol, "Absolute tolerance for float diffs")
+
+	return fs
+}
+
+// parseFlags parses argv (without the program name). Returns the parsed
+// flags struct, the positional path argument, and any error. Errors are
+// either flag.ErrHelp (the user passed -h) or a usage error.
+//
+// Splitting parse from Run() lets main_test.go assert flag parsing
+// independently of the rest of the orchestration.
+func parseFlags(argv []string) (*flags, string, error) {
+	f := &flags{}
+	fs := newFlagSet(f)
 
 	// --git-sha was previously registered but had no R1-side effect; it
 	// would have been a contract leak (REVIEWER #11). It will return as
@@ -271,10 +388,11 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		// flag.ErrHelp is the user explicitly requesting help — not an
 		// error condition. Print usage to stdout and exit 0.
 		if err == flag.ErrHelp {
-			fmt.Fprint(stdout, usageMessage)
+			renderUsage(stdout)
 			return 0
 		}
-		fmt.Fprintf(stderr, "replay: %v\n\n%s", err, usageMessage)
+		fmt.Fprintf(stderr, "replay: %v\n\n", err)
+		renderUsage(stderr)
 		return 2
 	}
 
