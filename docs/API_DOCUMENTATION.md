@@ -1020,13 +1020,16 @@ Example: `database.driver` becomes `DATABASE_DRIVER`
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
+| `environment` | `ENVIRONMENT` | `development` | `development` / `staging` / `production`. Drives per-environment defaults (logging format, file sink, artifact store, log level). |
 | `port` | `PORT` | `8080` | HTTP server port |
 | `server.read_timeout` | `SERVER_READ_TIMEOUT` | `30s` | Request read timeout |
 | `server.write_timeout` | `SERVER_WRITE_TIMEOUT` | `30s` | Response write timeout |
 | `server.idle_timeout` | `SERVER_IDLE_TIMEOUT` | `120s` | Keep-alive idle timeout |
-| `log_level` | `LOG_LEVEL` | `debug` | Logging level (debug, info, warn, error) |
+| `log_level` | `LOG_LEVEL` | `debug` | Legacy logging level. Prefer `LOGGING_LEVEL` (see §8.10); falls back to this when `LOGGING_LEVEL` is unset. |
 | `enable_swagger` | `ENABLE_SWAGGER` | `false` | Enable Swagger UI at `/swagger` |
 | `enable_pprof` | `ENABLE_PPROF` | `false` | Enable Go pprof at `/debug/pprof` |
+
+Container-only flags consumed outside the Viper config (so not in the table above): `RUN_MIGRATIONS=true` triggers `cmd/migrate` from `docker-entrypoint.sh`; `GIN_MODE=debug|release` is read by the Gin framework directly.
 
 ### 8.2 Database
 
@@ -1056,26 +1059,44 @@ Example: `database.driver` becomes `DATABASE_DRIVER`
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
 | `sec.base_url` | `SEC_BASE_URL` | `https://data.sec.gov/api/xbrl` | SEC API base URL |
-| `sec.user_agent` | `SEC_USER_AGENT` | `Midas DCF API admin@example.com` | Required User-Agent header |
+| `sec.ticker_mapping_url` | `SEC_TICKER_MAPPING_URL` | `https://www.sec.gov/files/company_tickers.json` | Ticker → CIK mapping endpoint |
+| `sec.user_agent` | `SEC_USER_AGENT` | `Midas DCF API admin@example.com` | Required User-Agent header — SEC policy mandates a real contact email |
 | `sec.rate_limit` | `SEC_RATE_LIMIT` | `10` | Max requests per second |
 | `sec.request_timeout` | `SEC_REQUEST_TIMEOUT` | `30s` | Per-request timeout |
 | `sec.max_retries` | `SEC_MAX_RETRIES` | `3` | Retry attempts |
+| `sec.retry_backoff_base` | `SEC_RETRY_BACKOFF_BASE` | `1s` | Base for exponential retry backoff |
 
 ### 8.5 Market Data
+
+**Yahoo Finance (primary)**
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
 | `market.yfinance.enabled` | `MARKET_YFINANCE_ENABLED` | `true` | Enable Yahoo Finance |
-| `market.yfinance.request_timeout` | `MARKET_YFINANCE_REQUEST_TIMEOUT` | `30s` | Request timeout |
-| `market.yfinance.auth_ttl` | `MARKET_YFINANCE_AUTH_TTL` | `6h` | Cookie+crumb validity |
+| `market.yfinance.base_url` | `MARKET_YFINANCE_BASE_URL` | `https://query2.finance.yahoo.com` | API base URL |
+| `market.yfinance.cookie_url` | `MARKET_YFINANCE_COOKIE_URL` | `https://fc.yahoo.com` | Cookie endpoint for auth |
+| `market.yfinance.crumb_url` | `MARKET_YFINANCE_CRUMB_URL` | `https://query2.finance.yahoo.com/v1/test/getcrumb` | Crumb endpoint for auth |
+| `market.yfinance.request_timeout` | `MARKET_YFINANCE_REQUEST_TIMEOUT` | `30s` | Per-request timeout |
+| `market.yfinance.max_retries` | `MARKET_YFINANCE_MAX_RETRIES` | `3` | Retry attempts |
+| `market.yfinance.auth_ttl` | `MARKET_YFINANCE_AUTH_TTL` | `6h` | Cookie+crumb cache duration |
+
+**Finzive (fallback scraper)**
+
+| Key | Env Var | Default | Description |
+|-----|---------|---------|-------------|
 | `market.finzive.enabled` | `MARKET_FINZIVE_ENABLED` | `true` | Enable Finzive fallback |
+| `market.finzive.base_url` | `MARKET_FINZIVE_BASE_URL` | `https://finzive.com` | Base URL |
+| `market.finzive.request_timeout` | `MARKET_FINZIVE_REQUEST_TIMEOUT` | `60s` | Per-request timeout (longer; scraper) |
+| `market.finzive.max_retries` | `MARKET_FINZIVE_MAX_RETRIES` | `2` | Retry attempts |
+| `market.finzive.user_agent` | `MARKET_FINZIVE_USER_AGENT` | `Mozilla/5.0 (compatible; Midas/1.0)` | User-Agent header (be polite) |
 
 ### 8.6 Macro Data (FRED)
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
 | `macro.fred_enabled` | `MACRO_FRED_ENABLED` | `false` | Enable FRED API |
-| `macro.fred_api_key` | `MACRO_FRED_API_KEY` | _(required if enabled)_ | FRED API key |
+| `macro.fred_base_url` | `MACRO_FRED_BASE_URL` | `https://api.stlouisfed.org/fred` | FRED API base URL |
+| `macro.fred_api_key` | `MACRO_FRED_API_KEY` | _(required if enabled)_ | FRED API key — free at fred.stlouisfed.org |
 | `macro.manual_risk_free_rate` | `MACRO_MANUAL_RISK_FREE_RATE` | `0.045` | Manual risk-free rate (when FRED disabled) |
 | `macro.manual_market_risk_premium` | `MACRO_MANUAL_MARKET_RISK_PREMIUM` | `0.05` | Manual market risk premium |
 
@@ -1083,33 +1104,48 @@ Example: `database.driver` becomes `DATABASE_DRIVER`
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
-| `valuation.default_market_risk_premium` | - | `0.05` | Default equity risk premium |
-| `valuation.default_terminal_growth_cap` | - | `0.03` | Max terminal growth (3%) |
-| `valuation.default_tax_rate` | - | `0.21` | Corporate tax rate (21%) |
-| `valuation.max_bulk_size` | `VALUATION_MAX_BULK_SIZE` | `50` | Max tickers per bulk request |
+| `valuation.default_market_risk_premium` | `VALUATION_DEFAULT_MARKET_RISK_PREMIUM` | `0.05` | Default equity risk premium |
+| `valuation.default_terminal_growth_cap` | `VALUATION_DEFAULT_TERMINAL_GROWTH_CAP` | `0.03` | Max terminal growth (3%) |
+| `valuation.default_tax_rate` | `VALUATION_DEFAULT_TAX_RATE` | `0.21` | Corporate tax rate (21%) |
+| `valuation.min_data_points_for_growth` | `VALUATION_MIN_DATA_POINTS_FOR_GROWTH` | `2` | Min historical points required for growth estimate |
+| `valuation.max_bulk_size` | `VALUATION_MAX_BULK_SIZE` | `50` | Max tickers per bulk request (1-100) |
 | `valuation.cache_ttl` | `VALUATION_CACHE_TTL` | `1h` | Valuation result cache |
+| `valuation.slow_request_threshold` | `VALUATION_SLOW_REQUEST_THRESHOLD` | `5s` | Warn-log threshold for slow valuations |
 | `valuation.data_fetch_timeout` | `VALUATION_DATA_FETCH_TIMEOUT` | `10s` | Data fetching timeout |
-| `valuation.dcf_projection_years` | - | `5` | Reserved DCF forecast-horizon override. **Currently inert** — the live engine derives the horizon from the multi-stage growth estimator (`Stage1Years=3` + `Stage2Years=4` = 7 explicit years, hard-coded in `internal/services/growth/estimator.go`). See §5.2; the `growth_rates` array in the response is length 7 regardless of this config value. |
-| `valuation.dcf_max_growth_rate` | - | `0.5` | Growth rate ceiling (50%) |
-| `valuation.dcf_min_growth_rate` | - | `-0.3` | Growth rate floor (-30%) |
+| `valuation.dcf_projection_years` | `VALUATION_DCF_PROJECTION_YEARS` | `5` | Reserved DCF forecast-horizon override. **Currently inert** — the live engine derives the horizon from the multi-stage growth estimator (`Stage1Years=3` + `Stage2Years=4` = 7 explicit years, hard-coded in `internal/services/growth/estimator.go`). See §5.2; the `growth_rates` array in the response is length 7 regardless of this config value. |
+| `valuation.dcf_max_growth_rate` | `VALUATION_DCF_MAX_GROWTH_RATE` | `0.5` | Growth rate ceiling (50%) |
+| `valuation.dcf_min_growth_rate` | `VALUATION_DCF_MIN_GROWTH_RATE` | `-0.3` | Growth rate floor (-30%) |
+| `valuation.dcf_iteration_tolerance` | `VALUATION_DCF_ITERATION_TOLERANCE` | `0.0001` | Tolerance for implied-growth iteration |
+| `valuation.dcf_max_iterations` | `VALUATION_DCF_MAX_ITERATIONS` | `100` | Max iterations for implied-growth |
 
 ### 8.8 Data Cleaner
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
-| `datacleaner.enabled` | - | `true` | Enable cleaning pipeline |
-| `datacleaner.enable_ai_integration` | `DATACLEANER_ENABLE_AI_INTEGRATION` | `false` | Enable AI footnote analysis |
-| `datacleaner.min_quality_score` | - | `60.0` | Minimum acceptable quality |
-| `datacleaner.enable_risk_flags` | - | `true` | Enable risk flag detection |
-| `datacleaner.enable_caching` | - | `true` | Cache cleaned results |
+| `datacleaner.enabled` | `DATACLEANER_ENABLED` | `true` | Enable cleaning pipeline |
+| `datacleaner.rules_path` | `DATACLEANER_RULES_PATH` | `./config/datacleaner/rules.json` | Path to main rules file |
+| `datacleaner.industry_rules_path` | `DATACLEANER_INDUSTRY_RULES_PATH` | `./config/datacleaner/industry` | Path to industry-specific rules directory |
+| `datacleaner.schema_path` | `DATACLEANER_SCHEMA_PATH` | `./config/datacleaner/schema.json` | Path to JSON schema |
+| `datacleaner.min_quality_score` | `DATACLEANER_MIN_QUALITY_SCORE` | `60.0` | Minimum acceptable quality score (0-100) |
+| `datacleaner.high_quality_score` | `DATACLEANER_HIGH_QUALITY_SCORE` | `85.0` | High-quality threshold (0-100) |
+| `datacleaner.enable_risk_flags` | `DATACLEANER_ENABLE_RISK_FLAGS` | `true` | Enable risk flag detection |
+| `datacleaner.enable_caching` | `DATACLEANER_ENABLE_CACHING` | `true` | Cache cleaned results |
+| `datacleaner.cache_ttl` | `DATACLEANER_CACHE_TTL` | `6h` | Cleaning-result cache TTL |
+| `datacleaner.enable_industry_rules` | `DATACLEANER_ENABLE_INDUSTRY_RULES` | `true` | Apply industry-specific rules |
+| `datacleaner.enable_audit_trail` | `DATACLEANER_ENABLE_AUDIT_TRAIL` | `true` | Capture full adjustment audit trail |
+| `datacleaner.log_adjustments` | `DATACLEANER_LOG_ADJUSTMENTS` | `true` | Log every adjustment made |
+| `datacleaner.log_flags` | `DATACLEANER_LOG_FLAGS` | `true` | Log every flag raised |
+| `datacleaner.enable_ai_integration` | `DATACLEANER_ENABLE_AI_INTEGRATION` | `false` | Enable AI footnote analysis (requires AI service) |
+| `datacleaner.ai_service_url` | `DATACLEANER_AI_SERVICE_URL` | _(unset)_ | External AI service URL |
+| `datacleaner.ai_service_timeout` | `DATACLEANER_AI_SERVICE_TIMEOUT` | `30s` | AI service request timeout |
 
 ### 8.9 Scheduler
 
 | Key | Env Var | Default | Description |
 |-----|---------|---------|-------------|
 | `scheduler.enabled` | `SCHEDULER_ENABLED` | `false` | Enable background scheduler |
-| `scheduler.interval` | - | `24h` | Batch refresh interval |
-| `scheduler.max_concurrency` | - | `2` | Concurrent fetch workers |
+| `scheduler.interval` | `SCHEDULER_INTERVAL` | `24h` | Batch refresh interval |
+| `scheduler.max_concurrency` | `SCHEDULER_MAX_CONCURRENCY` | `2` | Concurrent fetch workers |
 
 ### 8.10 Logging
 

@@ -13,41 +13,37 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Application settings
-      - ENV=development
+      # Env-var names match config struct mapstructure tags — see .env.example
+      # and docs/API_DOCUMENTATION.md §8 for the full canonical surface.
+
+      # Application
+      - ENVIRONMENT=development
       - LOG_LEVEL=debug
       - PORT=8080
-      - GIN_MODE=debug
+      - GIN_MODE=debug                                 # Gin framework (not Viper)
       - ENABLE_SWAGGER=true
       - ENABLE_PPROF=true
-      # Database settings
+
+      # Database
       - DATABASE_DRIVER=sqlite3
-      - DATABASE_SQLITE_PATH=/app/data/dcf.db
-      - RUN_MIGRATIONS=true
+      - DATABASE_SQLITE_PATH=/app/data/midas.db
       - DATABASE_MAX_OPEN_CONN=25
       - DATABASE_MAX_IDLE_CONN=5
-      
-      # Cache settings
+      - RUN_MIGRATIONS=true                            # docker-entrypoint.sh hook
+
+      # Cache (Redis)
       - CACHE_REDIS_URL=redis://redis:6379
-      - CACHE_ENABLE=true
-      - CACHE_TTL=3600
-      
-      # SEC API settings
-      - SEC_BASE_URL=https://data.sec.gov
-      - SEC_USER_AGENT=DCF-Valuation-API development@example.com
+
+      # SEC EDGAR — uses default base_url; override SEC_USER_AGENT with real contact
+      - SEC_USER_AGENT=Midas DCF API development@example.com
       - SEC_RATE_LIMIT=10
-      - SEC_TIMEOUT=30s
-      
-      # Market data settings
-      - MARKET_YFINANCE_ENABLED=true
-      - MARKET_YFINANCE_TIMEOUT=10s
-      
-      # Macro data settings
+
+      # Macro data (FRED disabled in dev; uses manual rates)
       - MACRO_FRED_ENABLED=false
       - MACRO_MANUAL_RISK_FREE_RATE=0.045
       - MACRO_MANUAL_MARKET_RISK_PREMIUM=0.05
-      
-      # DataCleaner settings
+
+      # Data Cleaner
       - DATACLEANER_ENABLED=true
       - DATACLEANER_RULES_PATH=/app/config/datacleaner/rules.json
       - DATACLEANER_INDUSTRY_RULES_PATH=/app/config/datacleaner/industry

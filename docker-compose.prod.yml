@@ -17,55 +17,46 @@ services:
     ports:
       - "8080:8080"
     environment:
-      # Application settings
-      - ENV=production
+      # Env-var names match config struct mapstructure tags — see .env.example
+      # and docs/API_DOCUMENTATION.md §8 for the full canonical surface.
+      # The ${VAR:-default} expansions read from the operator's host .env file.
+
+      # Application
+      - ENVIRONMENT=production
       - LOG_LEVEL=info
       - PORT=8080
-      - GIN_MODE=release
-      
-      # Database settings (use external PostgreSQL in production)
+      - GIN_MODE=release                               # Gin framework (not Viper)
+
+      # Database (operator supplies DATABASE_URL via host .env)
       - DATABASE_DRIVER=${DATABASE_DRIVER:-postgres}
       - DATABASE_POSTGRES_URL=${DATABASE_URL}
       - DATABASE_MAX_OPEN_CONN=50
       - DATABASE_MAX_IDLE_CONN=10
-      
-      # Cache settings
+
+      # Cache (operator supplies REDIS_URL via host .env)
       - CACHE_REDIS_URL=${REDIS_URL}
-      - CACHE_ENABLE=true
-      - CACHE_TTL=3600
-      
-      # SEC API settings
-      - SEC_BASE_URL=https://data.sec.gov
+
+      # SEC EDGAR — operator MUST supply SEC_USER_AGENT with real contact email
       - SEC_USER_AGENT=${SEC_USER_AGENT}
       - SEC_RATE_LIMIT=10
-      - SEC_TIMEOUT=30s
-      
-      # Market data settings
-      - MARKET_YFINANCE_ENABLED=true
-      - MARKET_YFINANCE_TIMEOUT=10s
-      
-      # Macro data settings
+
+      # Macro data (operator supplies FRED_API_KEY when MACRO_FRED_ENABLED=true)
       - MACRO_FRED_ENABLED=${FRED_ENABLED:-false}
       - MACRO_FRED_API_KEY=${FRED_API_KEY}
       - MACRO_MANUAL_RISK_FREE_RATE=${MANUAL_RISK_FREE_RATE:-0.045}
       - MACRO_MANUAL_MARKET_RISK_PREMIUM=${MANUAL_MARKET_RISK_PREMIUM:-0.05}
-      
-      # DataCleaner settings
+
+      # Data Cleaner
       - DATACLEANER_ENABLED=true
       - DATACLEANER_RULES_PATH=/app/config/datacleaner/rules.json
       - DATACLEANER_INDUSTRY_RULES_PATH=/app/config/datacleaner/industry
       - DATACLEANER_MIN_QUALITY_SCORE=60.0
       - DATACLEANER_ENABLE_CACHING=true
       - DATACLEANER_CACHE_TTL=6h
-      
-      # Security settings
-      - API_KEY_VALIDATION=strict
-      - RATE_LIMIT_ENABLED=true
-      - RATE_LIMIT_REQUESTS_PER_MINUTE=60
-      
-      # Monitoring
-      - ENABLE_METRICS=true
-      - METRICS_PORT=9090
+
+      # Observability — opt-in artifact-bundle auto-capture on 5xx for postmortem
+      - LOGGING_ARTIFACT_STORE_ENABLED=true
+      - LOGGING_ARTIFACT_STORE_TRIGGERS_ON_ERROR=true
     volumes:
       # Logs: stdout only; captured by Docker's log driver. Do NOT bind-mount
       # /app/logs in production — the app's file sink is disabled by default

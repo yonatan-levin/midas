@@ -56,7 +56,7 @@ testdata/**/Fuzz*/minimization/
 *.swo
 *~
 .vs/
-
+.codex/
 *.suo
 *.ntvs*
 *.njsproj
@@ -107,6 +107,9 @@ artifacts/
 .env.development.local
 .env.test.local
 .env.production.local
+
+# But DO track the canonical template — operators read it to learn the config surface
+!.env.example
 
 # Ensure Go module files are not ignored
 !go.mod
