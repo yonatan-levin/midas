@@ -1178,9 +1178,22 @@ func TestService_calculateTangibleValuePerShare_DilutedDenominator(t *testing.T)
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := service.calculateTangibleValuePerShare(tc.financial, tc.market)
+			// Pin the math invariant directly: tangible_value_per_share must
+			// equal TangibleAssets / expectedShares. Surfacing expectedShares
+			// in the assertion (not just the format string) prevents the
+			// declared field from drifting away from the value it implies.
+			// When expectedShares == 0, the function short-circuits to 0
+			// (no divide-by-zero), so the invariant collapses to got == 0.
+			if tc.expectedShares > 0 {
+				assert.InDelta(t, tc.financial.TangibleAssets/tc.expectedShares, got, 1e-9,
+					"tangible_value_per_share invariant: TangibleAssets(%.0f)/expectedShares(%.0f) != got(%.4f)",
+					tc.financial.TangibleAssets, tc.expectedShares, got)
+			} else {
+				assert.Equal(t, 0.0, got,
+					"expected zero when no positive share source is available (expectedShares=%.0f)", tc.expectedShares)
+			}
 			assert.InDelta(t, tc.expectedValue, got, 1e-9,
-				"expected tangible_value_per_share = TangibleAssets/%.0f = %.4f, got %.4f",
-				tc.expectedShares, tc.expectedValue, got)
+				"expected tangible_value_per_share = %.4f, got %.4f", tc.expectedValue, got)
 		})
 	}
 }
