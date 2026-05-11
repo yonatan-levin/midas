@@ -336,9 +336,11 @@ const (
 // (see RM-1 spec). Adding a new source string requires updating the spec
 // and consumers; renaming an existing one is a breaking change.
 //
-// T7 stale-data check (>18mo) deferred — would couple the entity layer to a
-// clock dependency; tracked as the RM-1.A follow-up in
-// docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md.
+// T7 stale-data check (>=18mo) lives in the consumer
+// (internal/services/valuation/models/revenue_multiple.go), not here:
+// adding a clock to this leaf entity would violate the layering invariant
+// and break replay determinism. Resolved per RM-1.A Option B — the consumer
+// receives a clock seam via ModelInput.Now plumbed from *Service.clock.
 func (h *HistoricalFinancialData) TrailingTwelveMonthsRevenue() (revenue float64, source string, warning string) {
 	if h == nil || len(h.Data) == 0 {
 		return 0, revenueSourceInsufficient, "revenue_base: insufficient revenue history"

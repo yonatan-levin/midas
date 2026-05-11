@@ -521,6 +521,222 @@ func TestRevenueMultipleModel_Calculate_RM1_MXL_LiveShape(t *testing.T) {
 	assertHasWarningPrefix(t, result.Warnings, "revenue_base: source=ANNUALIZED_QUARTER")
 }
 
+// TestRevenueMultipleModel_Calculate_StaleData_Warning verifies the RM-1.A
+// resolution: when the latest filing is >= 18 months old (relative to the
+// injected clock), the model emits a "revenue_base: data is N months old"
+// warning. The check lives at the consumer (this model) rather than the
+// entity-layer TTM helper so the entity package stays clock-free and replay
+// determinism is preserved through the same Clock seam used by *Service.
+//
+// The check is orthogonal to the source-path classification: it fires
+// regardless of which fallback path (TTM_4Q / TTM_PRIOR_BRIDGE / ANNUAL_FY /
+// ANNUALIZED_QUARTER) won, because staleness is a property of the underlying
+// filing date, not the synthesis algorithm.
+func TestRevenueMultipleModel_Calculate_StaleData_Warning(t *testing.T) {
+	model := newTestRevenueMultipleModel()
+	ctx := context.Background()
+
+	// "Now" pinned to 2026-05-11; latest filing date set 20 months earlier
+	// (2024-09-11) so monthsOld = 20 >= 18 — staleness threshold crossed.
+	pinnedNow := time.Date(2026, 5, 11, 0, 0, 0, 0, time.UTC)
+	staleFilingDate := time.Date(2024, 9, 11, 0, 0, 0, 0, time.UTC)
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "STALE_TICKER",
+			Data: map[string]*entities.FinancialData{
+				"2024FY": {
+					Revenue:      1_000_000_000,
+					FilingPeriod: "2024FY",
+					FilingDate:   staleFilingDate,
+				},
+			},
+		},
+		Industry:          "TECH",
+		SharesOutstanding: 100_000_000,
+		Now:               func() time.Time { return pinnedNow },
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Spec format: "revenue_base: data is N months old". N=20 for this fixture.
+	expected := "revenue_base: data is 20 months old"
+	found := false
+	for _, w := range result.Warnings {
+		if w == expected {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"expected stale-data warning %q in warnings %v", expected, result.Warnings)
+}
+
+// TestRevenueMultipleModel_Calculate_StaleData_BoundaryAt18Months verifies
+// the staleness threshold uses >= 18 months (inclusive). Exactly 18 months
+// old fires the warning; 17 months stays silent.
+func TestRevenueMultipleModel_Calculate_StaleData_BoundaryAt18Months(t *testing.T) {
+	model := newTestRevenueMultipleModel()
+	ctx := context.Background()
+
+	pinnedNow := time.Date(2026, 5, 11, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name        string
+		filingDate  time.Time
+		expectStale bool
+		expectMsg   string
+	}{
+		{
+			name:        "exactly_18_months_old_fires",
+			filingDate:  time.Date(2024, 11, 11, 0, 0, 0, 0, time.UTC),
+			expectStale: true,
+			expectMsg:   "revenue_base: data is 18 months old",
+		},
+		{
+			name:        "17_months_old_silent",
+			filingDate:  time.Date(2024, 12, 11, 0, 0, 0, 0, time.UTC),
+			expectStale: false,
+		},
+		{
+			name:        "fresh_data_silent",
+			filingDate:  time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+			expectStale: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := &ModelInput{
+				HistoricalData: &entities.HistoricalFinancialData{
+					Ticker: "BOUNDARY",
+					Data: map[string]*entities.FinancialData{
+						"2024FY": {
+							Revenue:      1_000_000_000,
+							FilingPeriod: "2024FY",
+							FilingDate:   tt.filingDate,
+						},
+					},
+				},
+				Industry:          "TECH",
+				SharesOutstanding: 100_000_000,
+				Now:               func() time.Time { return pinnedNow },
+			}
+
+			result, err := model.Calculate(ctx, input)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			hasStaleWarn := false
+			for _, w := range result.Warnings {
+				if strings.HasPrefix(w, "revenue_base: data is ") &&
+					strings.HasSuffix(w, " months old") {
+					hasStaleWarn = true
+					if tt.expectStale {
+						assert.Equal(t, tt.expectMsg, w)
+					}
+					break
+				}
+			}
+			assert.Equal(t, tt.expectStale, hasStaleWarn,
+				"stale warning presence; warnings=%v", result.Warnings)
+		})
+	}
+}
+
+// TestRevenueMultipleModel_Calculate_StaleData_NilNowFallsBackToWallClock
+// verifies that when the caller omits the Now func (production path before
+// the Service plumbs it, or any test that doesn't care about staleness), the
+// model falls back to time.Now and does not panic. Asserts the function
+// does not error and does not introduce a spurious stale warning for a
+// fixture dated "now" (computed via the same wall clock).
+func TestRevenueMultipleModel_Calculate_StaleData_NilNowFallsBackToWallClock(t *testing.T) {
+	model := newTestRevenueMultipleModel()
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "NIL_NOW",
+			Data: map[string]*entities.FinancialData{
+				"2025FY": {
+					Revenue:      1_000_000_000,
+					FilingPeriod: "2025FY",
+					FilingDate:   time.Now(), // fresh as of test execution
+				},
+			},
+		},
+		Industry:          "TECH",
+		SharesOutstanding: 100_000_000,
+		// Now intentionally left nil.
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	for _, w := range result.Warnings {
+		assert.False(t,
+			strings.HasPrefix(w, "revenue_base: data is ") && strings.HasSuffix(w, " months old"),
+			"fresh fixture should not emit a stale warning; got %q", w)
+	}
+}
+
+// TestMonthsSince_EdgeBranches exercises the small set of guard branches in
+// the monthsSince helper that the higher-level Calculate tests don't reach:
+// zero filing date, future filing date, and the day-of-month adjustment that
+// keeps the 18-month threshold from firing at 17.x months.
+func TestMonthsSince_EdgeBranches(t *testing.T) {
+	now := time.Date(2026, 5, 11, 10, 0, 0, 0, time.UTC)
+	nowFn := func() time.Time { return now }
+
+	tests := []struct {
+		name       string
+		filingDate time.Time
+		want       int
+	}{
+		{
+			name:       "zero_filing_date_returns_zero",
+			filingDate: time.Time{},
+			want:       0,
+		},
+		{
+			name:       "future_filing_date_returns_zero",
+			filingDate: now.Add(30 * 24 * time.Hour),
+			want:       0,
+		},
+		{
+			name:       "same_instant_returns_zero",
+			filingDate: now,
+			want:       0,
+		},
+		{
+			// 2024-12-15 → 2026-05-11: raw delta is (2026-2024)*12 + (5-12) = 17,
+			// then day-of-month adjustment fires because 11 < 15, decrementing
+			// to 16. Without the adjustment we'd over-report by a month at the
+			// 18-month threshold.
+			name:       "day_of_month_adjustment_decrements",
+			filingDate: time.Date(2024, 12, 15, 0, 0, 0, 0, time.UTC),
+			want:       16,
+		},
+		{
+			// 2024-12-01 → 2026-05-11: raw delta is 17 months and no
+			// day-of-month adjustment fires (11 >= 1).
+			name:       "day_of_month_no_adjustment",
+			filingDate: time.Date(2024, 12, 1, 0, 0, 0, 0, time.UTC),
+			want:       17,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := monthsSince(tt.filingDate, nowFn)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // TestLoadEVRevenueMultiples_UsesEmbed verifies loadEVRevenueMultiples reads
 // from the embedded industry_multiples.json. Replaces the legacy tmpfile-path
 // tests that exercised os.ReadFile error branches no longer possible with
