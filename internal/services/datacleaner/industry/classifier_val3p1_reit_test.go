@@ -52,6 +52,13 @@ func TestClassify_VAL3P1_REITSubsectors(t *testing.T) {
 		// Office
 		{name: "Boston Properties → OFFICE", companyName: "Boston Properties Inc.", expected: "OFFICE"},
 		{name: "Vornado → OFFICE", companyName: "Vornado Realty Trust", expected: "OFFICE"},
+		// Specialty (VAL-7): self-storage, billboard, prison/corrections, timber.
+		// Wires the previously-inert SPECIALTY config so these tickers stop
+		// falling through to the 15x / 6% default in the FFO model.
+		{name: "Public Storage → SPECIALTY (self-storage)", companyName: "Public Storage", expected: "SPECIALTY"},
+		{name: "Lamar Advertising → SPECIALTY (billboard)", companyName: "Lamar Advertising Company", expected: "SPECIALTY"},
+		{name: "CoreCivic → SPECIALTY (prison/corrections)", companyName: "CoreCivic, Inc.", expected: "SPECIALTY"},
+		{name: "Weyerhaeuser → SPECIALTY (timber)", companyName: "Weyerhaeuser Company", expected: "SPECIALTY"},
 	}
 
 	for _, tt := range tests {
