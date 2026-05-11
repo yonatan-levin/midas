@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -44,6 +45,13 @@ type ModelInput struct {
 	// Balance sheet items for equity bridge
 	InterestBearingDebt    float64
 	CashAndCashEquivalents float64
+
+	// Now is the wall-clock seam used by consumers that need a current
+	// timestamp (e.g., RevenueMultipleModel's RM-1.A staleness check).
+	// Service populates this from its Clock binding so replay
+	// determinism is preserved (manifest-pinned clock flows through to
+	// the staleness check). When nil, consumers fall back to time.Now.
+	Now func() time.Time
 }
 
 // ModelResult contains the standardized output from any valuation model.

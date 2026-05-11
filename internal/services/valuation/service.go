@@ -1260,7 +1260,11 @@ func (s *Service) performAlternativeValuation(
 		zap.String("model_type", model.ModelType()),
 		zap.String("industry", industryCode))
 
-	// Build the model input with all pre-computed values
+	// Build the model input with all pre-computed values.
+	// Now plumbs the *Service Clock seam through to model consumers
+	// (RM-1.A: RevenueMultipleModel's staleness check). Replay binds
+	// the Clock to manifest.started_at, so the staleness threshold is
+	// evaluated deterministically against captured bundle time.
 	modelInput := &models.ModelInput{
 		HistoricalData:         historicalData,
 		MarketData:             marketData,
@@ -1273,6 +1277,7 @@ func (s *Service) performAlternativeValuation(
 		SharesOutstanding:      sharesOutstanding,
 		InterestBearingDebt:    latestFinancialData.InterestBearingDebt,
 		CashAndCashEquivalents: latestFinancialData.CashAndCashEquivalents,
+		Now:                    s.clock.Now,
 	}
 
 	// Execute the alternative model

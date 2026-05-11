@@ -134,8 +134,8 @@ Findings from external research (perplexity-ask sourced from Damodaran NYU Stern
 Updated fallback chain (replaces the `TTM_4Q → ANNUAL_FY → ANNUALIZED_QUARTER → INSUFFICIENT_HISTORY` chain in Option B above):
 
 ```
+TTM_PRIOR_BRIDGE   → for partial-year IPOs: current N quarters + prior-year equivalent (4-N) quarters (partial-year shape preserved for replay audit)
 TTM_4Q             → sum of 4 most recent contiguous quarters (gold standard)
-TTM_PRIOR_BRIDGE   → for partial-year IPOs: current N quarters + prior-year equivalent (4-N) quarters
 ANNUAL_FY          → most recent fiscal year filing
 ANNUALIZED_QUARTER → naive 4×latest, with explicit "purists frown on this" warning
 INSUFFICIENT_HISTORY → fail
@@ -155,7 +155,7 @@ Adding the `source` and `warning` returns in the helper signature makes the fall
 | T6 | No revenue data at all | `INSUFFICIENT_HISTORY` | `"revenue_base: insufficient revenue history"` |
 | T7 | Stale data: latest quarter > 18 months old | `STALE_TTM` (or whichever path fired) | `"revenue_base: data is N months old"` |
 | T8 | MXL fixture (Q1 2026 only): produces ~$549M annualised | `ANNUALIZED_QUARTER` | the warning |
-| T9 | AAPL fixture (FY 2025 + Q1 2026): produces TTM = sum of 4 quarters spanning the boundary | `TTM_4Q` | none |
+| T9 | AAPL fixture (FY 2025 + Q1 2026): produces TTM = sum of 4 quarters spanning the boundary | `TTM_PRIOR_BRIDGE` | `"revenue_base: partial-year TTM bridged with prior-year quarters (handles seasonality)"` |
 
 Coverage target: 100% on the new helper (per CLAUDE.md ≥90% finance floor).
 

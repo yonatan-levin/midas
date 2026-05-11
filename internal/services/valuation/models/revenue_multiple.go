@@ -5,12 +5,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"go.uber.org/zap"
 
 	configfs "github.com/midas/dcf-valuation-api/config"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
+
+// staleDataThresholdMonths defines when the consumer-side T7 staleness check
+// fires: latest filing date >= 18 months in the past relative to the
+// injected clock. Matches the threshold documented in spec RM-1 T7 and
+// resolved via the RM-1.A consumer-layer placement (entity layer stays
+// clock-free, replay determinism preserved via the existing Clock seam).
+const staleDataThresholdMonths = 18
 
 // DefaultEVRevenueMultiple is the fallback EV/Revenue multiple when no sector-specific
 // multiple is configured.
@@ -76,9 +84,11 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 	// RM-1: never read latest.Revenue directly — that's single-quarter for
 	// 10-Q filings and produces ~4x understatement against an annual
 	// EV/Revenue multiple. The TTM helper enforces a documented fallback
-	// chain (TTM_4Q -> TTM_PRIOR_BRIDGE -> ANNUAL_FY -> ANNUALIZED_QUARTER ->
+	// chain (TTM_PRIOR_BRIDGE -> TTM_4Q -> ANNUAL_FY -> ANNUALIZED_QUARTER ->
 	// INSUFFICIENT_HISTORY) and surfaces the path via `source` so replay
-	// tooling and dashboards can audit lossy fallbacks.
+	// tooling and dashboards can audit lossy fallbacks. The bridge runs
+	// first so partial-year IPO shapes are preserved as TTM_PRIOR_BRIDGE
+	// instead of being silently absorbed into TTM_4Q.
 	revenue, source, ttmWarning := input.HistoricalData.TrailingTwelveMonthsRevenue()
 	if revenue <= 0 {
 		return nil, fmt.Errorf("revenue_multiple: insufficient revenue history (%s)", source)
@@ -117,6 +127,18 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 	warnings = append(warnings, fmt.Sprintf("revenue_base: source=%s revenue=$%.0f", source, revenue))
 	if ttmWarning != "" {
 		warnings = append(warnings, ttmWarning)
+	}
+
+	// RM-1.A: stale-data check (T7 from spec, deferred from the entity layer).
+	// Lives here at the consumer rather than in HistoricalFinancialData so the
+	// entity package stays clock-free and replay-deterministic. The clock seam
+	// flows from *valuation.Service.clock -> input.Now (set when the Service
+	// builds ModelInput); when nil (older test call sites that pre-date this
+	// plumbing), we fall back to time.Now. Fires regardless of which TTM
+	// source path won — staleness is a property of the filing date, not the
+	// synthesis algorithm.
+	if monthsOld := monthsSince(latest.FilingDate, input.Now); monthsOld >= staleDataThresholdMonths {
+		warnings = append(warnings, fmt.Sprintf("revenue_base: data is %d months old", monthsOld))
 	}
 
 	// Additional warning for negative OI companies
@@ -183,6 +205,38 @@ func (m *RevenueMultipleModel) getMultiple(industry string) float64 {
 	}
 
 	return DefaultEVRevenueMultiple
+}
+
+// monthsSince returns the whole-month difference between now() and filingDate.
+// Returns 0 when filingDate is the zero value (no signal to measure against)
+// or when filingDate is in the future relative to now (clock skew / fixtures
+// dated ahead — never report negative staleness). When now is nil, falls
+// back to time.Now so older call sites that did not plumb the clock are
+// safe; production wiring routes input.Now through *Service.clock so replay
+// stays deterministic.
+func monthsSince(filingDate time.Time, now func() time.Time) int {
+	if filingDate.IsZero() {
+		return 0
+	}
+	clockNow := time.Now
+	if now != nil {
+		clockNow = now
+	}
+	current := clockNow()
+	if !current.After(filingDate) {
+		return 0
+	}
+	// Whole-month delta via (Y*12 + M) decomposition; matches Bloomberg/FactSet
+	// "months stale" reporting convention. Day-of-month adjustment ensures the
+	// 18-month boundary fires at exactly 18 months elapsed, not 17.x.
+	months := (current.Year()-filingDate.Year())*12 + int(current.Month()-filingDate.Month())
+	if current.Day() < filingDate.Day() {
+		months--
+	}
+	if months < 0 {
+		return 0
+	}
+	return months
 }
 
 // loadEVRevenueMultiples loads EV/Revenue multiples from the embedded
