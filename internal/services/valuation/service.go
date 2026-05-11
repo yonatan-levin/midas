@@ -1343,8 +1343,9 @@ func (s *Service) performAlternativeValuation(
 
 // calculateTangibleValuePerShare calculates the tangible book value per share.
 //
-// Share-resolution priority chain (matches the DCF-path chain at service.go
-// ~lines 862-873): diluted → market basic → financial basic → 0.
+// Share-resolution priority chain uses the same chain as performValuation
+// (the DCF-path share-resolution block): diluted → market basic → financial
+// basic → 0.
 //
 // The flip from market-basic-first to diluted-first landed in v0.10.0 as PR
 // #2 of the Graham-floor metrics work (graham-floor-metrics-spec.md §4.5).
