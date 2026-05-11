@@ -67,6 +67,10 @@ func TestFFOModel_GetCapRate_Subsectors(t *testing.T) {
 		{name: "HEALTHCARE_REIT 6.0%", industry: "HEALTHCARE_REIT", expected: 0.06},
 		{name: "OFFICE 7.5%", industry: "OFFICE", expected: 0.075},
 		{name: "RETAIL_REIT 8.5%", industry: "RETAIL_REIT", expected: 0.085},
+		// SPECIALTY (VAL-7): self-storage / billboard / corrections / timber blended
+		// median. Pins the new reit_cap_rates.SPECIALTY entry so the bucket no
+		// longer falls through to the 6% default.
+		{name: "SPECIALTY 5.5%", industry: "SPECIALTY", expected: 0.055},
 		{name: "RESTATE parent falls back to default 6%", industry: "RESTATE", expected: 0.06},
 		{name: "empty industry falls back to default 6%", industry: "", expected: 0.06},
 	}

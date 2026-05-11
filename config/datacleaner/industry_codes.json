@@ -234,6 +234,18 @@
           "matchers": {
             "keywords": ["office", "boston properties", "vornado", "kilroy"]
           }
+        },
+        {
+          "name": "Specialty REIT",
+          "code": "SPECIALTY",
+          "matchers": {
+            "keywords": [
+              "self storage", "public storage", "extra space", "cubesmart", "national storage",
+              "lamar", "outfront", "clear channel outdoor",
+              "corecivic", "geo group",
+              "weyerhaeuser", "rayonier", "potlatch"
+            ]
+          }
         }
       ]
     },

@@ -76,7 +76,8 @@
     "RETAIL_REIT": 0.085,
     "HEALTHCARE_REIT": 0.06,
     "DATA_CENTER": 0.04,
-    "CELLTOWER": 0.045
+    "CELLTOWER": 0.045,
+    "SPECIALTY": 0.055
   },
   "sector_median_pfcf": {
     "default": 22.0,
