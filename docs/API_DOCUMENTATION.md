@@ -1486,7 +1486,7 @@ go build -o /tmp/replay ./cmd/replay    # Linux/macOS
 | `--quiet` | off | Suppress per-bundle rows; only emit the SUMMARY. |
 | `--verbose` | off | Text-mode only: emit per-field diff rows + `Stage diffs:` section (when combined with `--diff-stages`). |
 | `--diff-stages` | off | Also diff the bundle's intermediate-stage files (`10-clean-output.json`, `12-growth-curve.json`, `13-wacc.json`, `15-valuation.json`) against current engine output — pinpoints WHICH stage drifted. |
-| `--workers` | `1` | Parallel-replay worker count. Use 4-8 for batches. |
+| `--workers` | `runtime.NumCPU()` | Parallel-replay worker count. Override with `REPLAY_WORKERS=N` env var or `--workers=N` flag. Use lower values (1-4) for laptops on battery; higher for batches on workstations. |
 | `--filter-ticker` | _(unset)_ | Skip bundles whose manifest ticker doesn't match (case-sensitive). |
 | `--filter-since` | _(unset)_ | Skip bundles older than this duration. Accepts `30m`, `2h`, `7d`. |
 | `--float-rel-tol` | `1e-9` | Relative float tolerance. `0` means "use default", NOT "exact match". |
@@ -1521,7 +1521,7 @@ SUMMARY: 0/1 passed, 1 failed, 0 errored, total duration=92ms
 
 A `~` marker means "drifted within tolerance" — the field moved but stayed inside the configured tolerance, so the bundle still PASSed.
 
-JSON mode emits the same information under `results[].diffs` and `results[].stage_diffs`. The shape is stable; consumers can rely on the field names and nesting.
+JSON mode emits the same information under `results[].diffs` and `results[].stage_diffs`. The shape is stable; consumers can rely on the field names and nesting. **Bundle paths in JSON output use forward-slash separators on all platforms** (so `jq '.results[].bundle' | xargs ...` pipelines work portably between Windows-captured bundles and Linux processing). Text-mode output preserves native separators for human readability.
 
 #### Workflow — regression-test a code change
 

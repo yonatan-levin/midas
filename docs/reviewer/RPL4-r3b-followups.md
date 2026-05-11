@@ -1,6 +1,6 @@
 # RPL-4 — Phase 2.D R3b deferred items (post-merge follow-ups)
 
-**Status:** OPEN — filed 2026-05-09 as R3b's post-merge cleanup. R3b shipped on master via merge `0741958` (2026-05-09). Phase 2.D is COMPLETE; R3b's V/R/Q gate cycle returned zero MAJOR/BLOCKER findings. The 4 items below are MINOR-or-lower and were explicitly deferred per the merge-commit body. R3b's plan §10 outcome table marks each as "deferred to RPL-4." **Update 2026-05-09 (same-day post-merge dispatch): RPL-4a RESOLVED — spec §7 sample updated to match shipped section order + format string. 3 items remain open (RPL-4b cross-platform polish, RPL-4c cleaner-team item, RPL-4d documented coverage residual).**
+**Status:** OPEN — filed 2026-05-09 as R3b's post-merge cleanup. R3b shipped on master via merge `0741958` (2026-05-09). Phase 2.D is COMPLETE; R3b's V/R/Q gate cycle returned zero MAJOR/BLOCKER findings. The 4 items below are MINOR-or-lower and were explicitly deferred per the merge-commit body. R3b's plan §10 outcome table marks each as "deferred to RPL-4." **Update 2026-05-09: RPL-4a RESOLVED — spec §7 sample updated.** **Update 2026-05-11: RPL-4b RESOLVED via merge `6efef62` (worktree commit `2d623c9`) — `filepath.ToSlash` applied in `RenderJSON` per-call copy; new golden fixture `json_windows_bundle_path.json`; 5 new tests covering forward-slash + input-non-mutation invariants. 2 items remain open (RPL-4c cleaner-team item, RPL-4d documented coverage residual).**
 **Severity:** Mixed — 1 MINOR (spec/sample divergence, documentation call), 2 MINOR (cross-platform polish + cleaner-team item), 1 documented-residual (coverage gap with explicit accept-clause from plan §6).
 **Origin:** Consolidated from R3b's V/R/Q gate-cycle reports:
 - VERIFIER (verdict: VERIFIED WITH NOTES) — coverage residuals
@@ -145,7 +145,7 @@ Phase 2.D is COMPLETE as of merge `0741958` (2026-05-09). Filing this tracker pr
 ## Acceptance criteria
 
 - [x] **RPL-4a** — Spec v0.5 §7 sample updated to match shipped section order — RESOLVED 2026-05-09 in the post-merge docs dispatch (folded into the same commit that bumps spec v0.4 → v0.5).
-- [ ] **RPL-4b** — `filepath.ToSlash` normalization applied to `Result.Bundle` in JSON output + test (Phase 2.E).
+- [x] **RPL-4b** — `filepath.ToSlash` normalization applied to `Result.Bundle` in JSON output + test — RESOLVED 2026-05-11 via merge `6efef62` (worktree commit `2d623c9`). Implementation in `RenderJSON` uses a per-call copy of `[]Result` to avoid mutating input; new tests `TestRenderJSON_BundlePathUsesForwardSlash` and golden fixture `json_windows_bundle_path.json` pin the contract. Text mode preserves native separators.
 - [ ] **RPL-4c** — Cleaner team investigates and routes `as_of` derivation through the bound `Clock` interface (Phase 2.E or later — owned by cleaner team, not replay).
 - [ ] **RPL-4d** — Either (a) close the coverage gap with `failingWriter` + array-shape fixtures (Phase 2.E), OR (b) keep the documented residual as-is per plan §6 escape clause (no action). Default: (b).
 
