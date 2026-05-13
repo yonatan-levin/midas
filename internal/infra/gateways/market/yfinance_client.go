@@ -648,9 +648,36 @@ func (c *YFinanceClient) makeEarningsTrendRequest(ctx context.Context, reqURL st
 		return nil, fmt.Errorf("yahoo finance API returned status %d", resp.StatusCode)
 	}
 
+	// Tier-3 artifact bundle: TeeReader the response body so reads dual-stream
+	// into both the JSON decoder AND a per-request raw-bytes buffer. Buffer
+	// is bounded by the Yahoo earningsTrend payload (typically <20 KB).
+	// Mirrors the tap pattern in makeQuoteRequest above.
+	//
+	// This tap closes the gap that caused replay drift on `growth_source`:
+	// without it, replayed bundles had no captured analyst estimates, the
+	// replay-side gateway returned ErrBundleMissingPayload, and the growth
+	// blender fell back to historical_only — even when the original capture
+	// produced analyst_blend output.
+	body := resp.Body
+	var rawBuf *bytes.Buffer
+	if b := artifact.From(ctx); b != nil {
+		rawBuf = &bytes.Buffer{}
+		body = io.NopCloser(io.TeeReader(resp.Body, rawBuf))
+	}
+
 	var result YFinanceEarningsTrendResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	// Push the captured raw bytes + parsed envelope into the bundle so
+	// replay-side BundleYFinanceGateway.GetAnalystEstimates can serve them.
+	if rawBuf != nil {
+		raw, redacted := artifact.RedactJSONBytes(rawBuf.Bytes())
+		if b := artifact.From(ctx); b != nil {
+			b.SnapshotRaw(ctx, "fetch.market", "06-fetch-market-analyst.raw.json", raw, redacted)
+			b.Snapshot(ctx, "fetch.market", "06-fetch-market-analyst.parsed.json", &result)
+		}
 	}
 
 	return &result, nil

@@ -565,13 +565,44 @@ func (c *Client) GetCompanySIC(ctx context.Context, cik string) (string, error) 
 		return "", fmt.Errorf("SEC submissions endpoint returned status %d for CIK %s", resp.StatusCode, cik)
 	}
 
+	// Tier-3 artifact bundle: TeeReader the response body so reads dual-stream
+	// into both the JSON decoder AND a per-request raw-bytes capture buffer.
+	// Buffer is bounded by the SEC submissions payload size (~50-200 KB);
+	// SEC's standard limits make OOM impossible in practice. Mirrors the
+	// pattern in makeRequest above for the company-facts endpoint.
+	//
+	// This tap closes the gap that caused replay drift on `industry.sic`:
+	// without it, replayed bundles had no captured SIC, the replay-side
+	// gateway stamped an empty SIC, the industry classifier fell back to
+	// keyword matching, and downstream model selection drifted (e.g. MXL
+	// 2026-05-12 dropped 71% — MFG_SEMI's 6.5× revenue multiple was replaced
+	// by the generic 2.0×).
+	body := resp.Body
+	var rawBuf *bytes.Buffer
+	if b := artifact.From(ctx); b != nil {
+		rawBuf = &bytes.Buffer{}
+		body = io.NopCloser(io.TeeReader(resp.Body, rawBuf))
+	}
+
 	// Parse only the fields we need (SIC code). The submissions response is large
 	// but we only decode the top-level metadata fields.
 	var submission struct {
 		SIC string `json:"sic"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&submission); err != nil {
+	if err := json.NewDecoder(body).Decode(&submission); err != nil {
 		return "", fmt.Errorf("failed to decode submissions response: %w", err)
+	}
+
+	// Now that decoding has fully drained the TeeReader, push the captured
+	// raw bytes AND the parsed shape into the bundle. Redaction runs first;
+	// SEC submissions are pure public metadata so the redactor will normally
+	// find nothing to redact.
+	if rawBuf != nil {
+		raw, redacted := artifact.RedactJSONBytes(rawBuf.Bytes())
+		if b := artifact.From(ctx); b != nil {
+			b.SnapshotRaw(ctx, "fetch.sec", "05-fetch-sec-submissions.raw.json", raw, redacted)
+			b.Snapshot(ctx, "fetch.sec", "05-fetch-sec-submissions.parsed.json", &submission)
+		}
 	}
 
 	c.sicCache.Store(formattedCIK, submission.SIC)

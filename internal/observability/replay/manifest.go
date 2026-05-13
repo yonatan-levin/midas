@@ -20,8 +20,14 @@ const ManifestFileName = "00-manifest.json"
 // because the manifest schema is documented as additive-only. A wholly-new
 // major version (e.g. "2.0") would change file naming or required fields,
 // so refuse it explicitly until the parser is updated.
+//
+// 1.1 added the SEC-submissions and YFinance-analyst snapshots
+// (05-fetch-sec-submissions.*, 06-fetch-market-analyst.*). Pre-1.1 bundles
+// are still accepted; missing files trigger backward-compat fallbacks in
+// the replay-side bundle gateways.
 var SupportedBundleVersions = map[string]bool{
 	"1.0": true,
+	"1.1": true,
 }
 
 // ReadManifest opens 00-manifest.json under bundleDir, parses it, and

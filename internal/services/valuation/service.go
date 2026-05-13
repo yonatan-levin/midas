@@ -1343,6 +1343,20 @@ func (s *Service) performAlternativeValuation(
 		result.Warnings = append(result.Warnings, gf.Warnings...)
 	}
 
+	// Tier-3 artifact bundle: snapshot the alt-model valuation result and
+	// stamp the ValuationResult schema version. The DCF path emits the same
+	// pair (service.go:1234-1235); the alt-model path previously omitted
+	// them, which caused two issues for replay:
+	//   1. No 15-valuation.json snapshot for alt-model bundles, breaking
+	//      Stage K --diff-stages comparisons.
+	//   2. ValuationResult missing from manifest.schema_versions, surfacing
+	//      a false-positive schema_drift entry on every same-SHA replay of
+	//      an alt-model bundle (e.g. MXL → revenue_multiple).
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "valuation.computed", "15-valuation.json", result)
+		b.AddSchemaVersion("ValuationResult", 2)
+	}
+
 	return result, nil
 }
 

@@ -11,9 +11,18 @@ import (
 )
 
 // ManifestVersion is the on-disk schema version of 00-manifest.json. Bump
-// when adding/renaming fields so old bundles can be detected and read with
-// the right decoder.
-const ManifestVersion = "1.0"
+// when adding/renaming fields OR when the bundle file layout changes so
+// old bundles can be detected and read with the right decoder.
+//
+// Version history:
+//   - 1.0 — initial release (Phase 2.D R0)
+//   - 1.1 — adds 05-fetch-sec-submissions.{raw,parsed}.json (SIC code
+//     capture) and 06-fetch-market-analyst.{raw,parsed}.json (Yahoo
+//     earningsTrend capture). Closes replay-drift gaps for industry
+//     classification and analyst-blend growth. Pre-1.1 bundles still
+//     replay; the missing files trigger backward-compat fallbacks in the
+//     replay-side bundle gateways.
+const ManifestVersion = "1.1"
 
 // Manifest is the bundle's self-describing index. Written to
 // 00-manifest.json at the root of every bundle directory.

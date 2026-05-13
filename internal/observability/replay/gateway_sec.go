@@ -22,9 +22,17 @@ import (
 // internal/infra/gateways/sec/client.go (SnapshotRaw/Snapshot calls). Stable
 // across producers and replay readers; bumping either requires a coordinated
 // change in both packages plus a manifest schema_version bump.
+//
+// secSubmissionsRawFile / secSubmissionsParsedFile capture the SIC code via
+// the submissions endpoint. Added to the bundle layout in bundle_version 1.1;
+// pre-1.1 bundles do not contain these files and the replay-side reader falls
+// back to an empty SIC (matching the prior "graceful classifier fallback"
+// behavior, preserving backward compat).
 const (
-	secRawFile    = "05-fetch-sec.raw.json"
-	secParsedFile = "05-fetch-sec.parsed.json"
+	secRawFile               = "05-fetch-sec.raw.json"
+	secParsedFile            = "05-fetch-sec.parsed.json"
+	secSubmissionsRawFile    = "05-fetch-sec-submissions.raw.json"
+	secSubmissionsParsedFile = "05-fetch-sec-submissions.parsed.json"
 )
 
 // BundleSECGateway is the bundle-backed replay implementation of
@@ -235,16 +243,22 @@ func (g *BundleSECGateway) GetTickerCIKMapping(ctx context.Context) (map[string]
 }
 
 // GetFinancialDataForTicker is the high-level entry the production gateway
-// exposes (fetch + parse + normalize + SIC fetch). For replay we only need
-// the parse path; this method calls GetCompanyFacts then runs the parser
-// over the captured ports.SECCompanyFacts directly — mirroring
-// sec.Gateway.GetFinancialDataForTicker minus the live SIC fetch.
+// exposes (fetch + parse + normalize + SIC fetch). For replay we read both
+// the SEC company-facts snapshot AND, when present, the SIC stamp from the
+// captured submissions endpoint payload.
 //
-// SIC code: bundles do not currently capture the submissions endpoint
-// separately. The valuation engine path consults SIC via
-// historical.SICCode after this call returns; we leave SICCode empty —
-// the production code already handles a missing SIC gracefully (industry
-// classifier falls back to keyword matching).
+// SIC code resolution:
+//   - Read `05-fetch-sec-submissions.parsed.json` from the bundle directory.
+//     When found, decode the {"sic": "..."} shape and stamp it onto every
+//     period of historical.Data (mirroring production's
+//     sec.Gateway.GetFinancialDataForTicker behavior).
+//   - When the file is absent OR malformed, leave SICCode empty. This
+//     preserves backward compat with pre-bundle_version-1.1 bundles that
+//     never captured the submissions endpoint. The valuation engine handles
+//     a missing SIC gracefully (industry classifier falls back to keyword
+//     matching), but the replay will then drift on industry-classified
+//     fields versus a bundle that DID capture SIC. That drift is expected
+//     for old bundles and load-bearing for new ones.
 func (g *BundleSECGateway) GetFinancialDataForTicker(ctx context.Context, ticker, cik string) (*entities.HistoricalFinancialData, error) {
 	atomic.AddUint64(&g.callsCount, 1)
 
@@ -264,6 +278,22 @@ func (g *BundleSECGateway) GetFinancialDataForTicker(ctx context.Context, ticker
 	for _, period := range historical.Data {
 		period.Ticker = ticker
 	}
+
+	// Best-effort SIC lookup: read the submissions snapshot if present.
+	// Decoding into a minimal {SIC string} shape — the full submissions
+	// JSON has many fields but only `sic` matters here. Errors (missing
+	// file or malformed JSON) leave SIC empty without failing the call.
+	// SICCode lives only on HistoricalFinancialData (not on the per-period
+	// FinancialData), matching the entity layout in financial_data.go.
+	if sicBody, sicErr := g.readPayload(secSubmissionsParsedFile); sicErr == nil {
+		var sub struct {
+			SIC string `json:"sic"`
+		}
+		if jsonErr := json.Unmarshal(sicBody, &sub); jsonErr == nil && sub.SIC != "" {
+			historical.SICCode = sub.SIC
+		}
+	}
+
 	// Normalize each period through the parser, mirroring production
 	// sec.Gateway.GetFinancialDataForTicker step 5. NormalizeFinancialData is
 	// pure — no I/O — so safe in replay.

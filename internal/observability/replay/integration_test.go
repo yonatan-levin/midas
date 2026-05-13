@@ -559,3 +559,71 @@ func diffValuationResults(a, b *entities.ValuationResult) string {
 	// Walk top-level fields with a single-pass print.
 	return string(bA) + "\n---vs---\n" + string(bB)
 }
+
+// TestReplayFidelity_FreshBundle_ZeroDiffs is the regression pin for the
+// QA-identified replay-drift bug (MXL 2026-05-12, 71% DCF drop, 15 fields
+// drifting). The bug had three root causes:
+//
+//  1. SEC submissions endpoint was never snapshotted, so SIC was lost on
+//     replay → industry classifier fell back to keyword matching → wrong
+//     model selection (revenue_multiple's MFG_SEMI 6.5× became generic 2.0×).
+//  2. YFinance earningsTrend endpoint was never snapshotted, so analyst
+//     estimates were lost on replay → growth blender flipped from
+//     analyst_blend to historical_only.
+//  3. Bundle's manifest schema_versions map omitted ValuationResult
+//     (alt-model path didn't stamp it), surfacing a false-positive
+//     schema_drift entry on every same-SHA replay of an alt-model bundle.
+//
+// This test seeds a complete 1.1-layout bundle including BOTH new snapshot
+// files, runs the engine twice, and asserts zero diffs. If either snapshot
+// is removed (regression to the pre-fix state), the engine on the second
+// run will see different inputs and the diff will surface.
+func TestReplayFidelity_FreshBundle_ZeroDiffs(t *testing.T) {
+	const ticker = "AAPL"
+	const startedAt = "2026-01-15T12:00:00Z"
+
+	bundleDir := seedFullBundle(t, ticker, startedAt)
+
+	// Add the 1.1-only snapshots that close the QA-identified gaps.
+	// Without these, replay would see different inputs than the original
+	// capture and surface a non-zero diff.
+	seedBundleFile(t, bundleDir, secSubmissionsParsedFile, makeSECSubmissionsParsed(t, "3571"))
+	seedBundleFile(t, bundleDir, analystRawFile, makeAnalystRaw(t))
+
+	// First engine run — captures the canonical response into 17-response.json.
+	_, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeRaw, nil)
+	if firstResp == nil {
+		t.Fatalf("first engine run produced nil response")
+	}
+	writeResponseFile(t, bundleDir, firstResp)
+
+	// Second engine run via Replay() — should produce zero diffs because
+	// the SIC + analyst snapshots feed the same inputs back to the engine.
+	res := Replay(context.Background(), bundleDir, Options{Mode: ModeRaw})
+	if res.Status == StatusErrored {
+		t.Fatalf("Replay returned Errored: %s", res.Error)
+	}
+	if res.FieldsChanged != 0 {
+		t.Fatalf("FieldsChanged: want 0, got %d; floats=%v strings=%v",
+			res.FieldsChanged, res.Diffs, res.StringDiffs)
+	}
+	if len(res.Diffs) != 0 {
+		t.Fatalf("Diffs: want empty, got %v", res.Diffs)
+	}
+	if len(res.StringDiffs) != 0 {
+		t.Fatalf("StringDiffs: want empty, got %v", res.StringDiffs)
+	}
+}
+
+// makeSECSubmissionsParsed produces a minimal SEC submissions parsed-form
+// payload — only the SIC field matters for the replay-side reader. Real
+// submissions JSON has many more fields (entity name, fiscal year end,
+// filing history, etc.) but the gateway decodes into struct{SIC string}.
+func makeSECSubmissionsParsed(t *testing.T, sic string) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"sic": sic})
+	if err != nil {
+		t.Fatalf("marshal submissions parsed: %v", err)
+	}
+	return body
+}
