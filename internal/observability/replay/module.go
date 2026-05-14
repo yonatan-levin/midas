@@ -196,25 +196,35 @@ func replayConfig() *config.Config {
 	return &config.Config{
 		Valuation: config.ValuationConfig{
 			// MUST mirror production viper defaults at
-			// internal/config/config.go:504-505 (DCF growth-rate caps).
-			// These knobs feed *growth.Estimator.MaxGrowthRate /
-			// MinGrowthRate via valuation.NewService:88-93. They are NOT
+			// internal/config/config.go:494,504-505 (DCF growth-rate caps
+			// + terminal-growth fallback). These knobs feed
+			// *growth.Estimator.MaxGrowthRate / MinGrowthRate via
+			// valuation.NewService:88-93 (caps) and are consulted directly
+			// in service.go:569 as the terminal-growth fallback when
+			// historical CAGR computation errors out. They are NOT
 			// snapshotted into the bundle today, so the replay-side
 			// config must mirror production defaults — any divergence
 			// silently clips/floors the blended Stage 1 growth rate when
-			// |blended| > replay-cap, which then cascades through the
-			// Stage 2 fade interpolation and corrupts every projected
-			// rate (and downstream `growth_rate` summary, DCF value, etc).
-			// Debug cycle 2 (MAJOR-1 / MXL 2026-05-13): the prior
-			// 0.40 / -0.10 values clipped MXL's blended 0.516 down to
-			// 0.40, producing a ~0.10 absolute drop on every stage and
+			// |blended| > replay-cap (which cascades through the Stage 2
+			// fade interpolation and corrupts every projected rate, the
+			// `growth_rate` summary, DCF value, etc.), OR substitutes a
+			// different terminal-growth rate when the historical fallback
+			// fires (sparse OI history, all-negative OI, etc.) — the
+			// MXL bundle does not exercise the fallback because its
+			// analyst+historical data is clean, but biotech/startup-shape
+			// bundles will. Debug cycle 2 (MAJOR-1 / MXL 2026-05-13): the
+			// prior 0.40 / -0.10 values clipped MXL's blended 0.516 down
+			// to 0.40, producing a ~0.10 absolute drop on every stage and
 			// 9 drift fields in replay diffs against a production-captured
 			// 17-response.json (which had used the 0.50 cap). Bundles
 			// captured against a non-default production config cannot be
-			// faithfully replayed until the manifest captures config; see
-			// docs/reviewer/ tracker for that follow-up.
-			DCFMaxGrowthRate: 0.50,
-			DCFMinGrowthRate: -0.30,
+			// faithfully replayed until the manifest captures config
+			// (tracker filing pending).
+			// Regression-pinned by TestReplayFidelity_MXLClassFixture_ZeroDiffs
+			// in integration_test.go.
+			DCFMaxGrowthRate:         0.50,
+			DCFMinGrowthRate:         -0.30,
+			DefaultTerminalGrowthCap: 0.03,
 		},
 		// Mirror viper default at config.go:490
 		// (viper.SetDefault "macro.manual_market_risk_premium", 0.05).

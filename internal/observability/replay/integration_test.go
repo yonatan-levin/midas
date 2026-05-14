@@ -706,7 +706,7 @@ func TestReplayFidelity_FreshBundle_AltModel_ZeroDiffs(t *testing.T) {
 	seedBundleFile(t, bundleDir, secSubmissionsParsedFile, makeSECSubmissionsParsed(t, "3674"))
 	seedBundleFile(t, bundleDir, analystRawFile, makeAnalystRaw(t))
 
-	_, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeRaw, nil)
+	firstResult, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeRaw, nil)
 	if firstResp == nil {
 		t.Fatalf("first engine run produced nil response")
 	}
@@ -720,8 +720,44 @@ func TestReplayFidelity_FreshBundle_AltModel_ZeroDiffs(t *testing.T) {
 			firstResp.CalculationMethod)
 	}
 
-	// Round-trip the bundle and assert zero diffs.
-	res := Replay(context.Background(), bundleDir, Options{Mode: ModeRaw})
+	// Seed the bundle's 15-valuation.json from the first engine's result.
+	// In production this is written by the engine via b.Snapshot(...) when
+	// an artifact bundle is in ctx; runEngineForTest doesn't wire one, so
+	// we marshal firstResult here. Pairing this seed with the DiffStages
+	// pin below makes a Gap-3 regression observable: when the engine's
+	// alt-model path stops calling b.Snapshot, the diff layer flags
+	// `stages.15-valuation.json.current_missing` because the bundle side
+	// is present but the engine side is empty.
+	stageBody, err := json.MarshalIndent(firstResult, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal 15-valuation.json fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "15-valuation.json"), stageBody, 0o644); err != nil {
+		t.Fatalf("write 15-valuation.json fixture: %v", err)
+	}
+
+	// Round-trip the bundle. DiffStages is enabled so the engine writes
+	// per-stage snapshots into an ephemeral capture bundle, letting us
+	// pin Gap-3 via the asymmetric-absence marker.
+	res := Replay(context.Background(), bundleDir, Options{Mode: ModeRaw, DiffStages: true})
+
+	// Load-bearing Gap-3 pin: the alt-model path MUST snapshot
+	// 15-valuation.json alongside the DCF path. Before cycle 1's Gap-3
+	// fix this snapshot was emitted only by the DCF path; without this
+	// pin, a regression would still satisfy FieldsChanged == 0 because
+	// schema_drift is a separate Result field and DiffStages defaults to
+	// false. The pin asserts the engine-side capture is NOT marked
+	// `current_missing` — i.e., the alt-model path actually produced a
+	// 15-valuation.json snapshot for the diff layer to read.
+	if res.StageDiffs == nil {
+		t.Fatalf("StageDiffs is nil; Options.DiffStages=true should populate it")
+	}
+	stage := res.StageDiffs["15-valuation.json"]
+	for _, sd := range stage.Strings {
+		if sd.Path == "stages.15-valuation.json.current_missing" {
+			t.Fatalf("alt-model path failed to snapshot 15-valuation.json (Gap-3 regression): %+v", sd)
+		}
+	}
 	if res.Status == StatusErrored {
 		t.Fatalf("Replay returned Errored: %s", res.Error)
 	}
@@ -877,6 +913,15 @@ func seedAltModelSECPayload(t *testing.T) []byte {
 //   - sustainable_growth_rate = 0 → no blend-down
 //   - production cap: stage1Rate = min(0.512, 0.50) = 0.50 ✓ (captured)
 //   - prior replay cap: stage1Rate = min(0.512, 0.40) = 0.40 ✗ (-0.10 drift)
+//
+// Note on fixture vs. live MXL: the numerical inputs below (50M → 150M → 450M
+// revenue, sign-alternating OI, 80M shares, sentinel CIK 999999, etc.) are NOT
+// MXL's actual values — only the structural signature is preserved (positive
+// multi-period OI ramp with a negative latest period to force revenue_multiple
+// selection, 10 analysts to drive the 80/20 weighting, no "+5y" analyst entry
+// so the blender derives growth from Y1→Y2, and a pre-cap blended rate well
+// above 0.50). That structure is what triggers the cap divergence; specific
+// magnitudes are tuned for fixture compactness, not bundle parity.
 //
 // Fix: replayConfig now uses 0.50 / -0.30. This test asserts the fix:
 // a captured bundle whose math hits the cap should now round-trip with
