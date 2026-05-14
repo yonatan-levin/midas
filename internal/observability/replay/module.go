@@ -195,8 +195,26 @@ func Module(bundleDir string, opts Options) fx.Option {
 func replayConfig() *config.Config {
 	return &config.Config{
 		Valuation: config.ValuationConfig{
-			DCFMaxGrowthRate: 0.40,
-			DCFMinGrowthRate: -0.10,
+			// MUST mirror production viper defaults at
+			// internal/config/config.go:504-505 (DCF growth-rate caps).
+			// These knobs feed *growth.Estimator.MaxGrowthRate /
+			// MinGrowthRate via valuation.NewService:88-93. They are NOT
+			// snapshotted into the bundle today, so the replay-side
+			// config must mirror production defaults — any divergence
+			// silently clips/floors the blended Stage 1 growth rate when
+			// |blended| > replay-cap, which then cascades through the
+			// Stage 2 fade interpolation and corrupts every projected
+			// rate (and downstream `growth_rate` summary, DCF value, etc).
+			// Debug cycle 2 (MAJOR-1 / MXL 2026-05-13): the prior
+			// 0.40 / -0.10 values clipped MXL's blended 0.516 down to
+			// 0.40, producing a ~0.10 absolute drop on every stage and
+			// 9 drift fields in replay diffs against a production-captured
+			// 17-response.json (which had used the 0.50 cap). Bundles
+			// captured against a non-default production config cannot be
+			// faithfully replayed until the manifest captures config; see
+			// docs/reviewer/ tracker for that follow-up.
+			DCFMaxGrowthRate: 0.50,
+			DCFMinGrowthRate: -0.30,
 		},
 		// Mirror viper default at config.go:490
 		// (viper.SetDefault "macro.manual_market_risk_premium", 0.05).
