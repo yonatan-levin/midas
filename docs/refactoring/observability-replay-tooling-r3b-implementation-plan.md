@@ -5,7 +5,7 @@
 **Builds on:**
 - [`observability-replay-tooling-spec.md`](./observability-replay-tooling-spec.md) v0.4 (R0+R1+R2+R3a SHIPPED). All design decisions, ADRs, CLI contract, and testing strategy are owned by that spec.
 - [`observability-replay-tooling-r3-implementation-plan.md`](./observability-replay-tooling-r3-implementation-plan.md) v2 (R3a SHIPPED at merge `011d78c`, 2026-05-06; deferred items captured in this plan). This R3b plan mirrors its structure (Pre-Flight + ordered Stages + per-task contracts + Test Plan + Coverage Gates + Done-When + Risks + Spec Updates + Implementation Outcome placeholder).
-- [`docs/reviewer/RPL3-r3a-followups.md`](../reviewer/RPL3-r3a-followups.md) — the consolidated R3b backlog (5 deferred Stages + 8 LOW NITs + 1 missing test + 1 R2 modernization sweep). This file IS R3b's scope.
+- [`docs/reviewer/archive/RPL3-r3a-followups.md`](../reviewer/RPL3-r3a-followups.md) — the consolidated R3b backlog (5 deferred Stages + 8 LOW NITs + 1 missing test + 1 R2 modernization sweep). This file IS R3b's scope.
 
 This document does **not** redesign anything. It sequences BACKEND's work for R3b only — the final dispatch that completes Phase 2.D.
 
@@ -30,7 +30,7 @@ The RPL-3 estimate of ~925 LoC tracks; the +50 LoC delta is the panic-coverage t
 
 ## Revision History
 
-- **v1 (initial)**: Stage breakdown for R3b derived from `docs/reviewer/RPL3-r3a-followups.md` Sections A/B/C/D. Resolves the 7 implementation-level decisions called out by the dispatch instructions. Mirrors the R3 plan v2 structure for continuity. Spike NOT required (R3a's Pre-Flight spike covered the parallel-fx.App question; R3b builds on top of already-shipped R3a infrastructure).
+- **v1 (initial)**: Stage breakdown for R3b derived from `docs/reviewer/archive/RPL3-r3a-followups.md` Sections A/B/C/D. Resolves the 7 implementation-level decisions called out by the dispatch instructions. Mirrors the R3 plan v2 structure for continuity. Spike NOT required (R3a's Pre-Flight spike covered the parallel-fx.App question; R3b builds on top of already-shipped R3a infrastructure).
 
 ---
 
@@ -744,7 +744,7 @@ Forward-looking; **do not apply during R3b implementation.** Enumerated for the 
   | `internal/observability/replay/stage_diff.go` | Stage K (`--diff-stages`) per-stage JSON diff logic against bundle's saved 10/12/13/15 files |
   ```
 
-### `docs/reviewer/RPL3-r3a-followups.md`
+### `docs/reviewer/archive/RPL3-r3a-followups.md`
 
 - Append a "Resolution" section noting which R3b commit closes each item (RPL-3a → Stage K commit; RPL-3b → Stage L.1 commit; etc).
 - Mark file-level status as RESOLVED.

@@ -1,6 +1,6 @@
 # Observability Replay Tooling — Phase R3 Implementation Plan
 
-**Status:** R3a SHIPPED on master (merge `011d78c`, 2026-05-06). 9 of 14 plan stages executed across 11 commits and 4 BACKEND continuation cycles; 5 stages deferred to R3b (tracked at `docs/reviewer/RPL3-r3a-followups.md`). Validated through 4 review-gate cycles (VERIFIER × 3, REVIEWER, QA × 1). This plan is now historical — kept for traceability.
+**Status:** R3a SHIPPED on master (merge `011d78c`, 2026-05-06). 9 of 14 plan stages executed across 11 commits and 4 BACKEND continuation cycles; 5 stages deferred to R3b (tracked at `docs/reviewer/archive/RPL3-r3a-followups.md`). Validated through 4 review-gate cycles (VERIFIER × 3, REVIEWER, QA × 1). This plan is now historical — kept for traceability.
 
 ---
 
@@ -9,8 +9,8 @@
 **Builds on:**
 - [`observability-replay-tooling-spec.md`](./observability-replay-tooling-spec.md) v0.3 (R0+R1+R2 SHIPPED). All design decisions, ADRs, CLI contract, and testing strategy are owned by that spec.
 - [`observability-replay-tooling-r2-implementation-plan.md`](./observability-replay-tooling-r2-implementation-plan.md) v2 (historical — R2 SHIPPED at merge `e4d2fb2`). This R3 plan mirrors its structure (Pre-Flight + ordered Stages + per-task contracts + coverage gates + done-when checklist).
-- `docs/reviewer/RPL1-replay-walk-and-output-r3-followups.md` (3 advisory items folded in).
-- `docs/reviewer/RPL2-r2-followups.md` (15 advisory items folded in).
+- `docs/reviewer/archive/RPL1-replay-walk-and-output-r3-followups.md` (3 advisory items folded in).
+- `docs/reviewer/archive/RPL2-r2-followups.md` (15 advisory items folded in).
 
 This document does **not** redesign anything. It sequences BACKEND's work for the R3 phase only — the final phase of the Phase 2.D replay tooling refactor.
 
@@ -63,7 +63,7 @@ The spec §1 estimate of ~600 LoC excludes the cleanup sweep; with the RPL fold-
 | Stage O.6 (`init()` reflection guard) | **DEFERRED to R3b** — RPL-2h carry-forward | RPL-3f (deferred) |
 | Stage O.13 (`cmd/server` import-boundary guard — v2 Addition #2) | DONE — `cmd/server/import_boundary_test.go` uses `os/exec` + `go list -deps` | `5d5d5dc` |
 
-**5 deferred stages total** (K, L.1, M.1, M.3, N, O.6) — see `docs/reviewer/RPL3-r3a-followups.md` for the consolidated R3b backlog including 8 LOW NITs from REVIEWER + the missing `evaluateBundleWithRecover` panic-coverage test.
+**5 deferred stages total** (K, L.1, M.1, M.3, N, O.6) — see `docs/reviewer/archive/RPL3-r3a-followups.md` for the consolidated R3b backlog including 8 LOW NITs from REVIEWER + the missing `evaluateBundleWithRecover` panic-coverage test.
 
 **Architectural deviations from v2 plan** (all documented at the code site):
 - Decision I.1.b chose sequential walk + per-bundle parallel replay (NOT parallel walking) — RPL-1b's `visited` slice mutex concern dissolves into a doc-comment per the chosen architecture.
@@ -503,7 +503,7 @@ Each task is `Test first → Implementation → Acceptance`. Stages run sequenti
 
 ### Stage O — RPL-2 cleanup sweep (7 LOW + 5 NIT items)
 
-**Goal:** Land the 12 LOW + NIT items from `docs/reviewer/RPL2-r2-followups.md` that haven't been folded into Stages I-N. Each is a focused commit-grain change.
+**Goal:** Land the 12 LOW + NIT items from `docs/reviewer/archive/RPL2-r2-followups.md` that haven't been folded into Stages I-N. Each is a focused commit-grain change.
 
 **Note:** RPL-2a (MEDIUM) is folded into Stage M.2. RPL-2b (MINOR) is folded into Stage M.3. RPL-2g (Prometheus registry) is half-folded into Stage I.2 (the metrics no-op) and half-completed here (documentation). The remaining 11 items are tackled in this stage.
 
@@ -829,12 +829,12 @@ Forward-looking; **do not apply during R3 implementation.** Enumerated for the p
   ```
 - Reorganize the "Replay tooling is hermetic by construction" Common Gotcha to mention parallelism preservation: "F11 hermeticity is preserved under `--workers > 1` because each worker constructs its own `replay.Module` fx app; bundle gateway structs are immutable post-construction and `*metrics.Service` is replaced with a no-op stub to avoid Prometheus registry accumulation."
 
-### `docs/reviewer/RPL1-replay-walk-and-output-r3-followups.md`
+### `docs/reviewer/archive/RPL1-replay-walk-and-output-r3-followups.md`
 
 - Append a section documenting which decision in Stage I addressed each item (RPL-1a dropped per Decision I.4, RPL-1b documented per Decision I.2, RPL-1c left as-is per Decision I.5).
 - Mark file-level status as RESOLVED.
 
-### `docs/reviewer/RPL2-r2-followups.md`
+### `docs/reviewer/archive/RPL2-r2-followups.md`
 
 - Append a section documenting which Stage in R3 addressed each item.
 - Mark RPL-2i as "subsumed by Stage O.6's compile-time field-count guard."

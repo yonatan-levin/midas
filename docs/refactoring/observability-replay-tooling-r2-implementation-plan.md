@@ -1,6 +1,6 @@
 # Observability Replay Tooling — Phase R2 Implementation Plan
 
-**Status:** R2 SHIPPED on master (merge `e4d2fb2`, 2026-05-05). All Stages (Pre-Flight + D1.1 + A.1 + A.2 + A.3 + A.4 + A.6 + B + C + D + E + F + G) executed per plan across 3 BACKEND dispatches; A.5 (Finzive) skipped per plan §4 (Finzive not wired in production). Validated through 4 review gates (VERIFIER × 2, REVIEWER, QA). 15 advisory follow-ups deferred to R3, tracked at `docs/reviewer/RPL2-r2-followups.md`. This plan is now historical — kept for traceability.
+**Status:** R2 SHIPPED on master (merge `e4d2fb2`, 2026-05-05). All Stages (Pre-Flight + D1.1 + A.1 + A.2 + A.3 + A.4 + A.6 + B + C + D + E + F + G) executed per plan across 3 BACKEND dispatches; A.5 (Finzive) skipped per plan §4 (Finzive not wired in production). Validated through 4 review gates (VERIFIER × 2, REVIEWER, QA). 15 advisory follow-ups deferred to R3, tracked at `docs/reviewer/archive/RPL2-r2-followups.md`. This plan is now historical — kept for traceability.
 
 ---
 

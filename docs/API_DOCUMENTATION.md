@@ -1394,29 +1394,35 @@ artifacts/
   2026-05-09/
     AAPL/
       req_01HW8ZQXKR.../
-        00-manifest.json             # request id, trigger, ticker, schema versions, git_sha
-        01-request.json              # original HTTP request (auth headers redacted)
-        02-handler-options.json      # parsed ValuationOptions
-        05-fetch-sec.raw.json        # raw SEC EDGAR payload (auth-redacted)
-        05-fetch-sec.parsed.json     # parsed SEC struct
-        06-fetch-market.raw.json     # Yahoo / Finzive raw payload
+        00-manifest.json                       # bundle_version, request id, trigger, ticker, schema versions, git_sha
+        01-request.json                        # original HTTP request (auth headers redacted)
+        02-handler-options.json                # parsed ValuationOptions
+        05-fetch-sec.raw.json                  # raw SEC EDGAR company-facts payload (auth-redacted)
+        05-fetch-sec.parsed.json               # parsed SEC company-facts struct
+        05-fetch-sec-submissions.raw.json      # raw SEC submissions endpoint (carries SIC) — bundle ≥ 1.1
+        05-fetch-sec-submissions.parsed.json   # parsed submissions struct — bundle ≥ 1.1
+        06-fetch-market.raw.json               # Yahoo / Finzive raw price/beta payload
         06-fetch-market.parsed.json
-        07-fetch-macro.raw.json      # FRED raw payload (api_key redacted)
+        06-fetch-market-analyst.raw.json       # raw Yahoo earningsTrend endpoint (carries analyst estimates) — bundle ≥ 1.1
+        06-fetch-market-analyst.parsed.json    # parsed analyst estimates struct — bundle ≥ 1.1
+        07-fetch-macro.raw.json                # FRED raw payload (api_key redacted)
         07-fetch-macro.parsed.json
-        10-clean-input.json          # cleaner input
-        10-clean-output.json         # cleaner output
-        11-classify.json             # industry classification
-        12-growth-curve.json         # multi-stage growth curve
-        13-wacc.json                 # WACC inputs + final value
-        14-model-selection.json      # model router decision
-        15-valuation.json            # full DCF / DDM working
-        16-crosscheck.json           # implied multiples vs sector medians
-        17-response.json             # final response body sent to client
-        99-narrate.jsonl             # narrate stream
-        99-debug-trace.jsonl         # debug stream (only when log level = debug)
+        10-clean-input.json                    # cleaner input
+        10-clean-output.json                   # cleaner output
+        11-classify.json                       # industry classification
+        12-growth-curve.json                   # multi-stage growth curve
+        13-wacc.json                           # WACC inputs + final value
+        14-model-selection.json                # model router decision
+        15-valuation.json                      # full DCF / alt-model working
+        16-crosscheck.json                     # implied multiples vs sector medians
+        17-response.json                       # final response body sent to client
+        99-narrate.jsonl                       # narrate stream
+        99-debug-trace.jsonl                   # debug stream (only when log level = debug)
 ```
 
 The numeric prefix matches the request's pipeline phase, so `ls` reads in pipeline order. `.raw.json` files are exactly what the upstream API returned (after auth redaction); `.parsed.json` files are what the gateway parser produced. Diff them to separate upstream drift from parser drift.
+
+**Bundle versions**: `bundle_version: "1.0"` covers Phase 1 + 2.A/B/C/D-R3 layouts. `bundle_version: "1.1"` adds the two SEC-submissions + earningsTrend file pairs above — required for clean replay (per [§10.7](#107-replay-tooling)) because the engine consumes SIC from the submissions endpoint and analyst estimates from the earningsTrend endpoint at request time. Replay accepts both versions; pre-1.1 bundles fall back to the missing-payload path and surface expected drift on `industry.sic` / `growth_source` until recaptured.
 
 Secrets are always redacted: `Authorization`, `Cookie`, `X-API-Key`, Yahoo `crumb`, FRED `api_key`, and any JSON key matching `password` / `secret` / `token` / `bearer`.
 
@@ -1432,6 +1438,8 @@ All sub-phases of the observability narrative + artifacts spec are SHIPPED on ma
 - **Phase 2.B** — auto-on-quality-flag trigger
 - **Phase 2.C** — always-on knob
 - **Phase 2.D** — replay tooling (`cmd/replay`); see [§10.7](#107-replay-tooling)
+
+**Bundle version 1.1** (capture layout, 2026-05-14): adds SEC-submissions + Yahoo earningsTrend snapshot pairs so replay can reproduce SIC-driven industry classification and analyst-blended growth. Without these two file pairs (pre-1.1 bundles), replay falls back to keyword-based industry classification + historical-only growth — accurate for the request that was made, but divergent from what the engine actually produced at capture time. New bundles auto-stamp `1.1`; old bundles still replay via `--allow-schema-drift`.
 
 ### 10.6 Health Checks
 
