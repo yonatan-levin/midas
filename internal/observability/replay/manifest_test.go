@@ -127,6 +127,24 @@ func TestReadManifest_RejectsUnsupportedVersion(t *testing.T) {
 	}
 }
 
+// TestReadManifest_AcceptsBundleVersion_1_1 pins that the 1.1 bundle layout
+// (adds SEC-submissions + YFinance-analyst snapshots) reads cleanly. Both
+// 1.0 and 1.1 are in SupportedBundleVersions; the parser does not pin to
+// the latest.
+func TestReadManifest_AcceptsBundleVersion_1_1(t *testing.T) {
+	dir := t.TempDir()
+	body := validBaseManifest()
+	body["bundle_version"] = "1.1"
+	writeManifest(t, dir, body)
+	mf, err := ReadManifest(dir)
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if mf.BundleVersion != "1.1" {
+		t.Errorf("BundleVersion = %q, want 1.1", mf.BundleVersion)
+	}
+}
+
 func TestReadManifest_RejectsMissingRequiredFields(t *testing.T) {
 	tests := []struct {
 		name string

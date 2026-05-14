@@ -559,3 +559,579 @@ func diffValuationResults(a, b *entities.ValuationResult) string {
 	// Walk top-level fields with a single-pass print.
 	return string(bA) + "\n---vs---\n" + string(bB)
 }
+
+// TestReplayFidelity_FreshBundle_ZeroDiffs is the regression pin for the
+// QA-identified replay-drift bug (MXL 2026-05-12, 71% DCF drop, 15 fields
+// drifting). The bug had three root causes:
+//
+//  1. SEC submissions endpoint was never snapshotted, so SIC was lost on
+//     replay → industry classifier fell back to keyword matching → wrong
+//     model selection (revenue_multiple's MFG_SEMI 6.5× became generic 2.0×).
+//  2. YFinance earningsTrend endpoint was never snapshotted, so analyst
+//     estimates were lost on replay → growth blender flipped from
+//     analyst_blend to historical_only.
+//  3. Bundle's manifest schema_versions map omitted ValuationResult
+//     (alt-model path didn't stamp it), surfacing a false-positive
+//     schema_drift entry on every same-SHA replay of an alt-model bundle.
+//
+// This test seeds a complete 1.1-layout bundle including BOTH new snapshot
+// files, runs the engine twice, and asserts zero diffs. If either snapshot
+// is removed (regression to the pre-fix state), the engine on the second
+// run will see different inputs and the diff will surface.
+func TestReplayFidelity_FreshBundle_ZeroDiffs(t *testing.T) {
+	const ticker = "AAPL"
+	const startedAt = "2026-01-15T12:00:00Z"
+
+	bundleDir := seedFullBundle(t, ticker, startedAt)
+
+	// REVIEWER MINOR-1 (debug cycle 2): the test seeds 1.1-only payload
+	// files (secSubmissionsParsedFile + analystRawFile) but the manifest
+	// declared "1.0". A future bundle-version-tightening guard
+	// (e.g., "1.1 manifests MUST contain submissions+analyst files") would
+	// have silently passed this test even though the contract was wrong.
+	// Bump to "1.1" so the test exercises the actual fresh-bundle layout.
+	rewriteManifestBundleVersion(t, bundleDir, "1.1")
+
+	// Add the 1.1-only snapshots that close the QA-identified gaps.
+	// Without these, replay would see different inputs than the original
+	// capture and surface a non-zero diff.
+	seedBundleFile(t, bundleDir, secSubmissionsParsedFile, makeSECSubmissionsParsed(t, "3571"))
+	seedBundleFile(t, bundleDir, analystRawFile, makeAnalystRaw(t))
+
+	// First engine run — captures the canonical response into 17-response.json.
+	_, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeRaw, nil)
+	if firstResp == nil {
+		t.Fatalf("first engine run produced nil response")
+	}
+	writeResponseFile(t, bundleDir, firstResp)
+
+	// Second engine run via Replay() — should produce zero diffs because
+	// the SIC + analyst snapshots feed the same inputs back to the engine.
+	res := Replay(context.Background(), bundleDir, Options{Mode: ModeRaw})
+	if res.Status == StatusErrored {
+		t.Fatalf("Replay returned Errored: %s", res.Error)
+	}
+	if res.FieldsChanged != 0 {
+		t.Fatalf("FieldsChanged: want 0, got %d; floats=%v strings=%v",
+			res.FieldsChanged, res.Diffs, res.StringDiffs)
+	}
+	if len(res.Diffs) != 0 {
+		t.Fatalf("Diffs: want empty, got %v", res.Diffs)
+	}
+	if len(res.StringDiffs) != 0 {
+		t.Fatalf("StringDiffs: want empty, got %v", res.StringDiffs)
+	}
+}
+
+// makeSECSubmissionsParsed produces a minimal SEC submissions parsed-form
+// payload — only the SIC field matters for the replay-side reader. Real
+// submissions JSON has many more fields (entity name, fiscal year end,
+// filing history, etc.) but the gateway decodes into struct{SIC string}.
+func makeSECSubmissionsParsed(t *testing.T, sic string) []byte {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"sic": sic})
+	if err != nil {
+		t.Fatalf("marshal submissions parsed: %v", err)
+	}
+	return body
+}
+
+// rewriteManifestBundleVersion overwrites the bundle_version field on an
+// existing manifest. Used by tests that need a fixture written by
+// seedFullBundle (which always writes "1.0") to declare a different
+// version — typically "1.1" when the test seeds 1.1-only payload files
+// alongside.
+//
+// Implemented as a read-modify-write rather than re-marshalling the
+// artifact.Manifest struct so future manifest fields (added without
+// changing the test helper) propagate through untouched.
+func rewriteManifestBundleVersion(t *testing.T, bundleDir, version string) {
+	t.Helper()
+	manifestPath := filepath.Join(bundleDir, "00-manifest.json")
+	body, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read manifest for rewrite: %v", err)
+	}
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	raw["bundle_version"] = version
+	out, err := json.MarshalIndent(&raw, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(manifestPath, out, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+}
+
+// TestReplayFidelity_FreshBundle_AltModel_ZeroDiffs is the REVIEWER MINOR-2
+// regression pin for cycle 1's Gap-3 fix (alt-model paths now stamp the
+// ValuationResult bundle snapshot + schema version).
+//
+// The existing TestReplayFidelity_FreshBundle_ZeroDiffs only exercises the
+// DCF path (AAPL SIC 3571 → MFG_TECH → DCF model). Cycle 1's Gap-3 fix
+// affects the alt-model paths (revenue_multiple, FFO, DDM) where the
+// service emits `15-valuation.json` separately. This test routes through
+// the revenue_multiple model via SIC 3674 (semiconductors → MFG_SEMI in
+// the SIC→GICS map) so the alt-model snapshot path is exercised.
+//
+// Pin:
+//   - 17-response.json is produced by the engine (calculation_method is
+//     alt-model, not "discounted_cash_flow")
+//   - Replay round-trip produces FieldsChanged == 0
+//
+// The bundle's 15-valuation.json existence is implicitly tested: if Gap-3
+// regressed and alt-model paths stopped stamping ValuationResult into the
+// bundle, the manifest's schema_versions map would omit ValuationResult,
+// the round-trip would emit a schema_drift entry, and the assertion below
+// (Status != StatusErrored && FieldsChanged == 0) would still pass because
+// schema_drift is a separate Result field. We add an explicit assertion on
+// the bundle 15-valuation.json file to make that contract load-bearing.
+func TestReplayFidelity_FreshBundle_AltModel_ZeroDiffs(t *testing.T) {
+	const ticker = "MXLT" // synthetic ticker — alt-model fixture, not the live MXL bundle
+	const startedAt = "2026-01-15T12:00:00Z"
+
+	bundleDir := seedFullBundle(t, ticker, startedAt)
+	rewriteManifestBundleVersion(t, bundleDir, "1.1")
+
+	// SIC 3674 → MFG_SEMI → revenue_multiple model. The classifier returns
+	// MFG_SEMI for SIC 3674; the router picks revenue_multiple when the
+	// company has negative operating income (which the AAPL fixture does
+	// NOT have — AAPL has $114B OI). We pair the SIC override with a
+	// modified SEC payload that DOES have negative OI to force alt-model
+	// selection. See seedAltModelSECPayload below.
+	seedBundleFile(t, bundleDir, secRawFile, seedAltModelSECPayload(t))
+	seedBundleFile(t, bundleDir, secSubmissionsParsedFile, makeSECSubmissionsParsed(t, "3674"))
+	seedBundleFile(t, bundleDir, analystRawFile, makeAnalystRaw(t))
+
+	firstResult, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeRaw, nil)
+	if firstResp == nil {
+		t.Fatalf("first engine run produced nil response")
+	}
+	writeResponseFile(t, bundleDir, firstResp)
+
+	// Sanity-check: confirm we actually exercised the alt-model path.
+	// If the fixture accidentally routes to DCF the test would still
+	// pass against zero diffs but wouldn't be pinning what we claim.
+	if firstResp.CalculationMethod == "discounted_cash_flow" || firstResp.CalculationMethod == "" {
+		t.Fatalf("fixture did not route to alt-model path: calculation_method=%q (want non-DCF)",
+			firstResp.CalculationMethod)
+	}
+
+	// Seed the bundle's 15-valuation.json from the first engine's result.
+	// In production this is written by the engine via b.Snapshot(...) when
+	// an artifact bundle is in ctx; runEngineForTest doesn't wire one, so
+	// we marshal firstResult here. Pairing this seed with the DiffStages
+	// pin below makes a Gap-3 regression observable: when the engine's
+	// alt-model path stops calling b.Snapshot, the diff layer flags
+	// `stages.15-valuation.json.current_missing` because the bundle side
+	// is present but the engine side is empty.
+	stageBody, err := json.MarshalIndent(firstResult, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal 15-valuation.json fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "15-valuation.json"), stageBody, 0o644); err != nil {
+		t.Fatalf("write 15-valuation.json fixture: %v", err)
+	}
+
+	// Round-trip the bundle. DiffStages is enabled so the engine writes
+	// per-stage snapshots into an ephemeral capture bundle, letting us
+	// pin Gap-3 via the asymmetric-absence marker.
+	res := Replay(context.Background(), bundleDir, Options{Mode: ModeRaw, DiffStages: true})
+
+	// Load-bearing Gap-3 pin: the alt-model path MUST snapshot
+	// 15-valuation.json alongside the DCF path. Before cycle 1's Gap-3
+	// fix this snapshot was emitted only by the DCF path; without this
+	// pin, a regression would still satisfy FieldsChanged == 0 because
+	// schema_drift is a separate Result field and DiffStages defaults to
+	// false. The pin asserts the engine-side capture is NOT marked
+	// `current_missing` — i.e., the alt-model path actually produced a
+	// 15-valuation.json snapshot for the diff layer to read.
+	if res.StageDiffs == nil {
+		t.Fatalf("StageDiffs is nil; Options.DiffStages=true should populate it")
+	}
+	stage := res.StageDiffs["15-valuation.json"]
+	for _, sd := range stage.Strings {
+		if sd.Path == "stages.15-valuation.json.current_missing" {
+			t.Fatalf("alt-model path failed to snapshot 15-valuation.json (Gap-3 regression): %+v", sd)
+		}
+	}
+	if res.Status == StatusErrored {
+		t.Fatalf("Replay returned Errored: %s", res.Error)
+	}
+	if res.FieldsChanged != 0 {
+		t.Fatalf("FieldsChanged: want 0, got %d; floats=%v strings=%v",
+			res.FieldsChanged, res.Diffs, res.StringDiffs)
+	}
+	if len(res.Diffs) != 0 {
+		t.Fatalf("Diffs: want empty, got %v", res.Diffs)
+	}
+	if len(res.StringDiffs) != 0 {
+		t.Fatalf("StringDiffs: want empty, got %v", res.StringDiffs)
+	}
+}
+
+// seedAltModelSECPayload produces a minimal SEC raw payload shaped to route
+// through the alt-model (revenue_multiple) path. Differences from
+// makeMinimalSECRaw:
+//   - OperatingIncomeLoss is NEGATIVE (forces "negative OI → revenue_multiple"
+//     selection in the model router); the standard DCF model returns
+//     ErrModelNotApplicable.
+//   - Revenue is still positive so revenue_multiple has a base to multiply.
+//
+// All values are small (millions) rather than billions so the test fixture
+// isn't confused with a real-company payload. CIK 999999 is a sentinel that
+// will not collide with any real filer.
+func seedAltModelSECPayload(t *testing.T) []byte {
+	t.Helper()
+	facts := map[string]interface{}{
+		"cik":        999999,
+		"entityName": "Alt-Model Test Fixture Inc.",
+		"facts": map[string]interface{}{
+			"us-gaap": map[string]interface{}{
+				"Revenues": map[string]interface{}{
+					"label":       "Revenues",
+					"description": "Aggregate revenue",
+					"units": map[string]interface{}{
+						"USD": []interface{}{
+							map[string]interface{}{
+								"val":   500e6,
+								"end":   "2023-12-31",
+								"fy":    2023,
+								"fp":    "FY",
+								"form":  "10-K",
+								"filed": "2024-02-15",
+								"accn":  "0000999999-23-000001",
+								"frame": "CY2023",
+							},
+						},
+					},
+				},
+				"OperatingIncomeLoss": map[string]interface{}{
+					"label":       "Operating Income (Loss)",
+					"description": "Negative — forces alt-model selection",
+					"units": map[string]interface{}{
+						"USD": []interface{}{
+							map[string]interface{}{
+								"val":   -20e6,
+								"end":   "2023-12-31",
+								"fy":    2023,
+								"fp":    "FY",
+								"form":  "10-K",
+								"filed": "2024-02-15",
+								"accn":  "0000999999-23-000001",
+								"frame": "CY2023",
+							},
+						},
+					},
+				},
+				"Assets": map[string]interface{}{
+					"label": "Assets",
+					"units": map[string]interface{}{
+						"USD": []interface{}{
+							map[string]interface{}{
+								"val":   600e6,
+								"end":   "2023-12-31",
+								"fy":    2023,
+								"fp":    "FY",
+								"form":  "10-K",
+								"filed": "2024-02-15",
+								"accn":  "0000999999-23-000001",
+								"frame": "CY2023",
+							},
+						},
+					},
+				},
+				"Liabilities": map[string]interface{}{
+					"label": "Liabilities",
+					"units": map[string]interface{}{
+						"USD": []interface{}{
+							map[string]interface{}{
+								"val":   300e6,
+								"end":   "2023-12-31",
+								"fy":    2023,
+								"fp":    "FY",
+								"form":  "10-K",
+								"filed": "2024-02-15",
+								"accn":  "0000999999-23-000001",
+								"frame": "CY2023",
+							},
+						},
+					},
+				},
+			},
+			"dei": map[string]interface{}{
+				"EntityCommonStockSharesOutstanding": map[string]interface{}{
+					"label": "Shares outstanding",
+					"units": map[string]interface{}{
+						"shares": []interface{}{
+							map[string]interface{}{
+								"val":   80e6,
+								"end":   "2023-12-31",
+								"fy":    2023,
+								"fp":    "FY",
+								"form":  "10-K",
+								"filed": "2024-02-15",
+								"accn":  "0000999999-23-000001",
+								"frame": "CY2023Q4I",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	body, err := json.Marshal(facts)
+	if err != nil {
+		t.Fatalf("marshal alt-model raw fixture: %v", err)
+	}
+	return body
+}
+
+// TestReplayFidelity_MXLClassFixture_ZeroDiffs is the MAJOR-1 regression
+// pin: a synthetic bundle that mimics MXL's data shape — alt-model path
+// (revenue_multiple via SIC 3674) AND a blended Stage 1 growth rate that
+// EXCEEDS DCFMaxGrowthRate so the cap-divergence between replay's prior
+// 0.40 cap and production's 0.50 cap is exercised.
+//
+// Debug cycle 2 root cause: the replay-side replayConfig hardcoded
+// DCFMaxGrowthRate=0.40 / DCFMinGrowthRate=-0.10 while production viper
+// defaults are 0.50 / -0.30 (internal/config/config.go:504-505). For
+// tickers with very high historical CAGR (MXL: 176%) the blender
+// produces a Stage 1 rate > 0.40 that production caps at 0.50 but replay
+// caps at 0.40 — a 0.10 absolute drop that cascades through the Stage 2
+// fade interpolation, producing 9 drift fields (growth_rate, all 7
+// growth_rates, data_freshness_score).
+//
+// Math (MXL bundle 2026-05-13):
+//   - historical_cagr = 1.76 (multi-year OI ramp)
+//   - analyst Y1/Y2 derived analystGrowthRate ~= 0.20
+//   - 10 analysts → 80% analyst + 20% historical weights
+//   - blended = 0.80*0.20 + 0.20*1.76 = 0.16 + 0.352 = 0.512
+//   - sustainable_growth_rate = 0 → no blend-down
+//   - production cap: stage1Rate = min(0.512, 0.50) = 0.50 ✓ (captured)
+//   - prior replay cap: stage1Rate = min(0.512, 0.40) = 0.40 ✗ (-0.10 drift)
+//
+// Note on fixture vs. live MXL: the numerical inputs below (50M → 150M → 450M
+// revenue, sign-alternating OI, 80M shares, sentinel CIK 999999, etc.) are NOT
+// MXL's actual values — only the structural signature is preserved (positive
+// multi-period OI ramp with a negative latest period to force revenue_multiple
+// selection, 10 analysts to drive the 80/20 weighting, no "+5y" analyst entry
+// so the blender derives growth from Y1→Y2, and a pre-cap blended rate well
+// above 0.50). That structure is what triggers the cap divergence; specific
+// magnitudes are tuned for fixture compactness, not bundle parity.
+//
+// Fix: replayConfig now uses 0.50 / -0.30. This test asserts the fix:
+// a captured bundle whose math hits the cap should now round-trip with
+// FieldsChanged == 0 instead of the prior 9.
+//
+// The fixture seeds:
+//   - Multi-period SEC payload with high CAGR (50M → 150M → 450M revenue;
+//     -20M → -10M → 50M OI alternating sign so revenue_multiple is selected)
+//   - SIC 3674 → MFG_SEMI → revenue_multiple model
+//   - Analyst data with NO "+5y" entry (forces Y1→Y2 revenue derivation,
+//     matching MXL's actual data shape)
+func TestReplayFidelity_MXLClassFixture_ZeroDiffs(t *testing.T) {
+	const ticker = "MXLT" // synthetic — NOT the live MXL bundle
+	const startedAt = "2026-01-15T12:00:00Z"
+
+	bundleDir := seedFullBundle(t, ticker, startedAt)
+	rewriteManifestBundleVersion(t, bundleDir, "1.1")
+
+	// SEC payload with multi-year OI ramp producing high CAGR. Pair with
+	// negative operating income for the LATEST period so revenue_multiple
+	// is selected (not DCF).
+	seedBundleFile(t, bundleDir, secRawFile, seedMXLClassSECPayload(t))
+	seedBundleFile(t, bundleDir, secSubmissionsParsedFile, makeSECSubmissionsParsed(t, "3674"))
+	// Analyst data with NO "+5y" entry — forces the blender to derive
+	// analystGrowthRate from (Y2-Y1)/Y1, matching MXL's actual shape.
+	seedBundleFile(t, bundleDir, analystRawFile, makeAnalystRawNoFiveYearGrowth(t))
+
+	_, firstResp := runEngineForTest(t, bundleDir, ticker, startedAt, ModeRaw, nil)
+	if firstResp == nil {
+		t.Fatalf("first engine run produced nil response")
+	}
+	writeResponseFile(t, bundleDir, firstResp)
+
+	// Confirm we actually exercised the alt-model + cap-fired path.
+	if firstResp.CalculationMethod == "discounted_cash_flow" || firstResp.CalculationMethod == "" {
+		t.Fatalf("fixture did not route to alt-model path: calculation_method=%q (want non-DCF)",
+			firstResp.CalculationMethod)
+	}
+	// growth_rate is the averaged Stage1+Stage2 rate. The cap-firing
+	// signature is Stage 1 == DCFMaxGrowthRate (0.50). We can't assert
+	// growth_rate directly without re-implementing the average, but we
+	// CAN assert the first element of growth_rates equals 0.50 (which
+	// signals the cap fired AND the fix made it 0.50 not 0.40).
+	if len(firstResp.GrowthRates) == 0 {
+		t.Fatalf("growth_rates is empty; cannot assert cap-firing pattern")
+	}
+	if firstResp.GrowthRates[0] < 0.49 || firstResp.GrowthRates[0] > 0.51 {
+		t.Fatalf("growth_rates[0] = %v; want ~0.50 (cap-firing signature). "+
+			"If <0.49 the cap is set lower than production's 0.50 (regression of debug cycle 2 fix). "+
+			"If >0.51 the cap didn't fire — fixture inputs may be too small.",
+			firstResp.GrowthRates[0])
+	}
+
+	// Round-trip and assert zero diffs.
+	res := Replay(context.Background(), bundleDir, Options{Mode: ModeRaw})
+	if res.Status == StatusErrored {
+		t.Fatalf("Replay returned Errored: %s", res.Error)
+	}
+	if res.FieldsChanged != 0 {
+		t.Fatalf("MAJOR-1 regression: FieldsChanged: want 0, got %d; floats=%v strings=%v. "+
+			"The replay-side DCFMaxGrowthRate likely diverges from production's 0.50 again.",
+			res.FieldsChanged, res.Diffs, res.StringDiffs)
+	}
+}
+
+// seedMXLClassSECPayload produces a multi-period SEC payload with a
+// high-CAGR operating-income ramp so the historical CAGR exceeds the
+// growth cap and the blender's output triggers the cap-firing path.
+//
+// Shape:
+//   - 3 fiscal periods (2021FY, 2022FY, 2023FY)
+//   - OI ramp: 10M → 50M → 200M (per-period growth 400%/300% — Yields
+//     CAGR substantially above 0.50)
+//   - Latest-period OI is set NEGATIVE (-20M) to force revenue_multiple
+//     model selection; the older periods retain positive OI so
+//     CalculateAverageGrowthRate has values to consume.
+//
+// The 4th period (latest, -20M OI) is the one the model router consults
+// via GetLatestPeriod; the CAGR calculator skips negative values
+// (see entities/financial_data.go:724) so it operates on the 3 positive
+// periods.
+func seedMXLClassSECPayload(t *testing.T) []byte {
+	t.Helper()
+	mkFact := func(val float64, end string, fy int, accn string) map[string]interface{} {
+		return map[string]interface{}{
+			"val":   val,
+			"end":   end,
+			"fy":    fy,
+			"fp":    "FY",
+			"form":  "10-K",
+			"filed": end, // approximation; filed date is unused by the test path
+			"accn":  accn,
+			"frame": "CY" + end[:4],
+		}
+	}
+	revenues := []interface{}{
+		mkFact(80e6, "2021-12-31", 2021, "0000999998-21-000001"),
+		mkFact(200e6, "2022-12-31", 2022, "0000999998-22-000001"),
+		mkFact(400e6, "2023-12-31", 2023, "0000999998-23-000001"),
+		// 2024 ("latest") — keeps revenue positive for revenue_multiple but
+		// the model selection uses OperatingIncomeLoss sign below.
+		mkFact(500e6, "2024-12-31", 2024, "0000999998-24-000001"),
+	}
+	ois := []interface{}{
+		mkFact(10e6, "2021-12-31", 2021, "0000999998-21-000001"),
+		mkFact(50e6, "2022-12-31", 2022, "0000999998-22-000001"),
+		mkFact(200e6, "2023-12-31", 2023, "0000999998-23-000001"),
+		// 2024 ("latest") — NEGATIVE OI forces alt-model
+		mkFact(-20e6, "2024-12-31", 2024, "0000999998-24-000001"),
+	}
+	assetsList := []interface{}{
+		mkFact(600e6, "2024-12-31", 2024, "0000999998-24-000001"),
+	}
+	liabilitiesList := []interface{}{
+		mkFact(300e6, "2024-12-31", 2024, "0000999998-24-000001"),
+	}
+	sharesList := []interface{}{
+		map[string]interface{}{
+			"val":   80e6,
+			"end":   "2024-12-31",
+			"fy":    2024,
+			"fp":    "FY",
+			"form":  "10-K",
+			"filed": "2024-12-31",
+			"accn":  "0000999998-24-000001",
+			"frame": "CY2024Q4I",
+		},
+	}
+	facts := map[string]interface{}{
+		"cik":        999998,
+		"entityName": "MXL-Class High-CAGR Alt-Model Fixture",
+		"facts": map[string]interface{}{
+			"us-gaap": map[string]interface{}{
+				"Revenues": map[string]interface{}{
+					"label": "Revenues",
+					"units": map[string]interface{}{"USD": revenues},
+				},
+				"OperatingIncomeLoss": map[string]interface{}{
+					"label": "Operating Income (Loss)",
+					"units": map[string]interface{}{"USD": ois},
+				},
+				"Assets": map[string]interface{}{
+					"label": "Assets",
+					"units": map[string]interface{}{"USD": assetsList},
+				},
+				"Liabilities": map[string]interface{}{
+					"label": "Liabilities",
+					"units": map[string]interface{}{"USD": liabilitiesList},
+				},
+			},
+			"dei": map[string]interface{}{
+				"EntityCommonStockSharesOutstanding": map[string]interface{}{
+					"label": "Shares outstanding",
+					"units": map[string]interface{}{"shares": sharesList},
+				},
+			},
+		},
+	}
+	body, err := json.Marshal(facts)
+	if err != nil {
+		t.Fatalf("marshal MXL-class raw fixture: %v", err)
+	}
+	return body
+}
+
+// makeAnalystRawNoFiveYearGrowth produces an analyst envelope WITHOUT the
+// "+5y" trend entry — forces the growth blender to derive analystGrowthRate
+// from the Y1→Y2 revenue ratio (matches MXL's actual shape; see the
+// captured 06-fetch-market-analyst.raw.json from req_390b3380... — its +5y
+// entry is missing because Yahoo did not publish a 5-year forecast for MXL).
+//
+// 10 analysts → high-confidence weights (80% analyst / 20% historical).
+// Y1=120M / Y2=132M → analyst growth = (132-120)/120 = 0.10.
+func makeAnalystRawNoFiveYearGrowth(t *testing.T) []byte {
+	t.Helper()
+	mkVal := func(v float64) map[string]interface{} {
+		return map[string]interface{}{"raw": v, "fmt": ""}
+	}
+	env := map[string]interface{}{
+		"quoteSummary": map[string]interface{}{
+			"result": []map[string]interface{}{
+				{
+					"earningsTrend": map[string]interface{}{
+						"trend": []map[string]interface{}{
+							{
+								"period": "0y",
+								"revenueEstimate": map[string]interface{}{
+									"avg":              mkVal(120e6),
+									"low":              mkVal(115e6),
+									"high":             mkVal(125e6),
+									"numberOfAnalysts": mkVal(10),
+								},
+							},
+							{
+								"period": "+1y",
+								"revenueEstimate": map[string]interface{}{
+									"avg": mkVal(132e6),
+								},
+							},
+							// NO +5y entry — matches MXL's captured shape.
+						},
+					},
+				},
+			},
+			"error": nil,
+		},
+	}
+	body, err := json.Marshal(env)
+	if err != nil {
+		t.Fatalf("marshal analyst raw (no +5y): %v", err)
+	}
+	return body
+}
