@@ -8,6 +8,31 @@ The goal is simple: every agent reads the same files in the same order, so conte
 
 ---
 
+## Subject-Folder Convention (`docs/<subject>/{archive,spec,implementations}/`)
+
+Every subject folder under `docs/` follows a three-subfolder convention:
+
+| Subfolder | Purpose | Lifecycle |
+|---|---|---|
+| `spec/` | Design specs, kickoff briefs, future-work trackers, multi-phase rollout plans. The *what* and *why*. Reviewable by an architect. | Durable reference. Stays after implementation ships. |
+| `implementations/` | Implementer-grade plans BACKEND consumes — exact file paths, full code blocks per task, RED→GREEN TDD steps, commit templates. The *how* and *in what order*. | One file per implementation cycle. Historical plans stay here for traceability. |
+| `archive/` | Explicitly retired or superseded work — closed trackers, replaced specs, deprecated plans. | Read-only reference; not maintained. |
+
+**Authoring flow (ARCH → BACKEND handoff):**
+1. ARCH writes a spec under `<subject>/spec/<feature>-spec.md`
+2. ARCH writes (or regenerates via `/plan-and-create`) an implementer plan under `<subject>/implementations/<feature>-implementation-plan.md`
+3. BACKEND executes the implementer plan task-by-task
+4. After implementation ships, the spec stays in `spec/`; the implementation plan stays in `implementations/`; only closed trackers move to `archive/`
+
+**Reading flow (any agent picking up work):**
+1. Read `<subject>/spec/` first for design context
+2. Read `<subject>/implementations/<feature>-implementation-plan.md` for the executable steps
+3. Reference `<subject>/archive/` only when researching historical decisions
+
+This convention applies to every subject folder under `docs/` (currently: `refactoring/`, `reviewer/`, `bugs/`, `integration/`, `superpowers/`). New subject folders adopt the same shape.
+
+---
+
 ## Loading Order (Read Top-to-Bottom)
 
 At the start of any work session, read these files in order. Stop at the first tier that gives you enough context for the task.
@@ -44,10 +69,11 @@ At the start of any work session, read these files in order. Stop at the first t
 |---|------|---------|
 | 12 | `docs/API_DOCUMENTATION.md` | Full API reference, valuation engine internals, config, deployment |
 | 13 | `docs/openapi.yaml` | Machine-readable API contract |
-| 14 | `docs/refactoring/valuation-engine-upgrade-spec.md` | Upgrade spec details |
-| 15 | `docs/refactoring/industry-classification-unification-spec.md` | Planned SIC-only classification refactor (heuristic retirement) |
-| 16 | `docs/refactoring/observability-upgrade-spec.md` | Observability upgrade v1.1 (request correlation, file logging, 12-stage calc tracing) — ALL PHASES COMPLETE |
-| 17 | `docs/refactoring/observability-narrative-and-artifacts-spec.md` | Observability narrative + artifacts (Tier-1 narrate stream, Tier-2 Debug-tracer convention, Tier-3 per-request artifact bundle) — PHASE 1 + 2.A + 2.B + 2.C SHIPPED (manual `?trace=1`/`X-Midas-Trace` triggers + auto-on-error via `logging.artifact_store.triggers.on_error` + auto-on-quality-flag via `logging.artifact_store.triggers.quality_flag_threshold` + always-on via `logging.artifact_store.triggers.always`); **Phase 2.D (replay tooling) ALL R0–R3 SHIPPED** — `cmd/replay/main.go` re-runs captured artifact bundles through current code via `internal/observability/replay/`; see standalone spec `docs/refactoring/observability-replay-tooling-spec.md` v0.5 for full design + the 14-flag CLI surface (`--format`, `--out`, `--allow-schema-drift`, `--allow-git-drift`, `--quiet`, `--verbose`, `--from`, `--workers`, `--filter-ticker`, `--filter-since`, `--float-rel-tol`, `--float-abs-tol`, `--diff-stages`) |
+| 14 | `docs/refactoring/spec/valuation-engine-upgrade-spec.md` | Upgrade spec details |
+| 15 | `docs/refactoring/spec/industry-classification-unification-spec.md` | Planned SIC-only classification refactor (heuristic retirement) |
+| 16 | `docs/refactoring/spec/observability-upgrade-spec.md` | Observability upgrade v1.1 (request correlation, file logging, 12-stage calc tracing) — ALL PHASES COMPLETE |
+| 17 | `docs/refactoring/spec/observability-narrative-and-artifacts-spec.md` + `docs/refactoring/implementations/observability-replay-tooling-r{2,3,3b}-implementation-plan.md` | Observability narrative + artifacts (Tier-1 narrate stream, Tier-2 Debug-tracer convention, Tier-3 per-request artifact bundle) — PHASE 1 + 2.A + 2.B + 2.C SHIPPED (manual `?trace=1`/`X-Midas-Trace` triggers + auto-on-error via `logging.artifact_store.triggers.on_error` + auto-on-quality-flag via `logging.artifact_store.triggers.quality_flag_threshold` + always-on via `logging.artifact_store.triggers.always`); **Phase 2.D (replay tooling) ALL R0–R3 SHIPPED** — `cmd/replay/main.go` re-runs captured artifact bundles through current code via `internal/observability/replay/`; see standalone spec `docs/refactoring/spec/observability-replay-tooling-spec.md` v0.5 for full design + the 14-flag CLI surface (`--format`, `--out`, `--allow-schema-drift`, `--allow-git-drift`, `--quiet`, `--verbose`, `--from`, `--workers`, `--filter-ticker`, `--filter-since`, `--float-rel-tol`, `--float-abs-tol`, `--diff-stages`); per-phase implementer plans live under `implementations/` |
+| 17a | `docs/refactoring/spec/assumption-profile-spec.md` + `docs/refactoring/implementations/assumption-profile-implementation-plan.md` | **Tier 2 AssumptionProfile architectural sprint (in flight)** — unified profile backbone keyed by `(archetype × maturity)` driving DCF/DDM/FFO/RevenueMultiple calibration; closes RM-3 + VAL-1 + VAL-2 + VAL-3 P3. Spec, kickoff brief, future-DB tracker live in `spec/`; ARCH-produced implementer plan that BACKEND consumes lives in `implementations/` |
 | 18 | `docs/superpowers/specs/` | Per-feature design specs (chronological by date) |
 | 19 | `docs/reviewer/` | Review follow-up tracker — currently only `archive/` (all open items closed 2026-04-24/25 sweep). File new docs here when issues surface. |
 | 20 | `docs/bugs/` | Bug tracker |
@@ -158,3 +184,4 @@ Cursor auto-discovers rules from `.cursor/rules/` only. Since the canonical loca
 | 2026-04-29 | Updated Tier 4 entry #17 status to "PHASE 1 + 2.A + 2.B SHIPPED" after Phase 2.B (auto-on-quality-flag trigger) merged to master as `fa89aa2`. Entry now lists only 2.C (always-on) and 2.D (replay tooling) as deferred. No row renumbering. |
 | 2026-05-01 | Updated Tier 4 entry #17 status to "PHASE 1 + 2.A + 2.B + 2.C SHIPPED" after Phase 2.C (always-on knob) merged to master as `6e3ad8f`. Entry now lists only 2.D (replay tooling) as deferred. No row renumbering. |
 | 2026-05-09 | Updated Tier 4 entry #17 status: **Phase 2.D (replay tooling) ALL R0–R3 SHIPPED** after R3b merged to master as `0741958` (preceded by R0+R1 `8a9878f` 2026-05-03, R2 `e4d2fb2` 2026-05-05, R3a `011d78c` 2026-05-06). Entry text now references the standalone spec `docs/refactoring/observability-replay-tooling-spec.md` v0.5 (carved out from §13 of the parent narrative spec during R0+R1 dispatch) and lists the full 14-flag `cmd/replay` CLI surface. **Phase 2.D = COMPLETE; no further sub-phases pending.** Entry #17 reads as one consolidated observability-narrative-and-artifacts row covering both the parent spec (Phases 1-2.C narrative/triggers/auto-on-error/quality-flag/always-on) AND the carved-out replay-tooling spec (R0+R1+R2+R3a+R3b: Clock + skeleton + gateway substitution + parallel batch + filter flags + tolerance flags + diff-stages + perf benches + reflection guard). No row renumbering. |
+| 2026-05-14 | **Subject-Folder Convention established.** Added new top-level section "Subject-Folder Convention" describing the `docs/<subject>/{archive,spec,implementations}/` three-subfolder shape: `spec/` holds design specs + kickoff briefs + future-trackers + multi-phase rollout plans (the *what*); `implementations/` holds BACKEND-consumable implementer plans with full code blocks per task (the *how*); `archive/` holds retired/superseded work. Authoring flow: ARCH writes spec → ARCH writes implementer plan via `/plan-and-create` → BACKEND executes. Initial migration: `docs/refactoring/` files redistributed into `spec/` (all `*-spec.md` + `tier-2-assumption-profile-kickoff.md` + `assumption-profile-db-backed-future.md` + `assumption-profile-implementation-plan.md` (the multi-phase rollout plan)) and `implementations/` (the 3 `observability-replay-tooling-r*-implementation-plan.md` files). Added Tier 4 row 17a for the in-flight Tier 2 AssumptionProfile work. Tier 4 paths updated to new sub-folder locations. Other subject folders (`reviewer/`, `bugs/`, `integration/`, `superpowers/`) adopt the same convention going forward but are NOT migrated in this pass — they'll be reshaped lazily as they receive new work. |
