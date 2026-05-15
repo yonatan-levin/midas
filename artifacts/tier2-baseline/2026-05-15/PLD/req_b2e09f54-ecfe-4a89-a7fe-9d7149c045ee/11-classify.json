@@ -1,0 +1,14 @@
+{
+  "chosen_industry_code": "INDUSTRIAL",
+  "heuristic_code": "20",
+  "heuristic_name": "Industrials",
+  "match": true,
+  "sic_classifier": {
+    "Sector": "RESTATE",
+    "Industry": "INDUSTRIAL",
+    "SubIndustry": "INDUSTRIAL",
+    "ModelHint": "INDUSTRIAL",
+    "NAICS": "",
+    "SIC": "6798"
+  }
+}

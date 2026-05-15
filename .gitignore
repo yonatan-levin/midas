@@ -87,7 +87,16 @@ ehthumbs.db
 # Logs
 *.log
 logs/
-artifacts/
+# Ignore everything under artifacts/ EXCEPT the tier2-baseline subtree.
+# Bundle captures otherwise pile up locally; the tier2-baseline directory
+# holds pre-Tier-2 regression baselines that are checked in. Consumed by
+# valuation/profile/tier2_regression_test.go and by future bundle-replay
+# verification. See docs/refactoring/implementations/
+# assumption-profile-implementation-plan.md Task B.1. Using artifacts/*
+# (rather than artifacts/) so the negation can reach into the directory —
+# Git skips recursion into a fully-ignored parent.
+artifacts/*
+!artifacts/tier2-baseline/
 *.gz
 
 # Caches (tooling may create these locally)

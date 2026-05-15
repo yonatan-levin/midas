@@ -1,0 +1,14 @@
+{
+  "chosen_industry_code": "DATA_CENTER",
+  "heuristic_code": "20",
+  "heuristic_name": "Industrials",
+  "match": true,
+  "sic_classifier": {
+    "Sector": "RESTATE",
+    "Industry": "DATA_CENTER",
+    "SubIndustry": "DATA_CENTER",
+    "ModelHint": "DATA_CENTER",
+    "NAICS": "",
+    "SIC": "6798"
+  }
+}

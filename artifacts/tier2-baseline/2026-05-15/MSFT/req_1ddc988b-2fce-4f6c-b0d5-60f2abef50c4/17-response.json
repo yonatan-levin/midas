@@ -1,0 +1,45 @@
+{
+  "ticker": "MSFT",
+  "wacc": 0.09621509181687515,
+  "growth_rate": 0.09885755778913885,
+  "growth_rates": [
+    0.1064406717881326,
+    0.1064406717881326,
+    0.1064406717881326,
+    0.10115253743050608,
+    0.09586440307287956,
+    0.09057626871525304,
+    0.08528813435762653
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 77.17488247145735,
+  "dcf_value_per_share": 68.06731474539879,
+  "current_assets_per_share": 23.54989926124916,
+  "ncav_per_share": -14.0405641370047,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-05-15T21:29:37Z",
+  "data_quality_score": 100,
+  "data_quality_grade": "A",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.1",
+  "sanity_check": {
+    "implied_pe": 15.946917939439047,
+    "sector_median_pe": 28,
+    "implied_ev_ebitda": 11.332886583389469,
+    "sector_median_ev_ebitda": 18,
+    "implied_pfcf": 51.17765686522864,
+    "sector_median_pfcf": 32,
+    "is_reasonable": true
+  },
+  "industry": {
+    "sic_code": "7372",
+    "sic": "TECH",
+    "heuristic_code": "45",
+    "heuristic_name": "Information Technology",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 425.97
+}

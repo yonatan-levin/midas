@@ -1,0 +1,12 @@
+{
+  "symbol": "AAPL",
+  "regularMarketPrice": 301.31,
+  "marketCap": 4425447374848,
+  "sharesOutstanding": 14687356000,
+  "regularMarketVolume": 32193087,
+  "averageDailyVolume3Month": 43612950,
+  "beta": 1.065,
+  "currency": "USD",
+  "marketState": "REGULAR",
+  "regularMarketTime": 1778869772
+}

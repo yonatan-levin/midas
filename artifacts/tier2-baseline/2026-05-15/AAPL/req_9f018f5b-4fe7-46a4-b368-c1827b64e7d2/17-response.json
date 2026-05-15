@@ -1,0 +1,55 @@
+{
+  "ticker": "AAPL",
+  "wacc": 0.09539482103486288,
+  "growth_rate": 0.07499038445934136,
+  "growth_rates": [
+    0.07499038445934139,
+    0.07499038445934139,
+    0.07499038445934139,
+    0.07499038445934139,
+    0.07499038445934139,
+    0.07499038445934139,
+    0.07499038445934139
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 23.447506304040513,
+  "dcf_value_per_share": 19.08640643284476,
+  "current_assets_per_share": 9.786448654011888,
+  "ncav_per_share": -8.181314615439097,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-05-15T21:29:36Z",
+  "data_quality_score": 90,
+  "data_quality_grade": "A",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.1",
+  "warnings": [
+    "DCF-implied P/E (9.5) is \u003c0.5x sector median (28.0) for TECH",
+    "DCF-implied EV/EBITDA (7.5) is \u003c0.5x sector median (18.0) for TECH",
+    "DCF-implied P/FCF (8.8) is \u003c0.5x sector median (32.0) for TECH"
+  ],
+  "sanity_check": {
+    "implied_pe": 9.50246795444097,
+    "sector_median_pe": 28,
+    "implied_ev_ebitda": 7.480182358278597,
+    "sector_median_ev_ebitda": 18,
+    "implied_pfcf": 8.814375675242418,
+    "sector_median_pfcf": 32,
+    "is_reasonable": false,
+    "flags": [
+      "DCF-implied P/E (9.5) is \u003c0.5x sector median (28.0) for TECH",
+      "DCF-implied EV/EBITDA (7.5) is \u003c0.5x sector median (18.0) for TECH",
+      "DCF-implied P/FCF (8.8) is \u003c0.5x sector median (32.0) for TECH"
+    ]
+  },
+  "industry": {
+    "sic_code": "3571",
+    "sic": "TECH",
+    "heuristic_code": "45",
+    "heuristic_name": "Information Technology",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 301.31
+}

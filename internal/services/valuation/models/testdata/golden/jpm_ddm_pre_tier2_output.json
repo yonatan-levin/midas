@@ -1,0 +1,10 @@
+{
+  "intrinsic_value_per_share": 243.29233206497682,
+  "enterprise_value": 651904581679.9529,
+  "equity_value": 651904581679.9529,
+  "model_type": "ddm",
+  "warnings": [
+    "Low ROE (4.5%) may indicate stressed financials"
+  ],
+  "confidence": "medium"
+}
