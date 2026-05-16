@@ -845,6 +845,14 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		return nil, fmt.Errorf("insufficient data: no revenue or operating income")
 	}
 
+	// DC-1 Phase 0: fill the four Other* plug fields as residuals so components
+	// sum to umbrellas. Runs after every findValue/sumValues call and after
+	// the missing-fields stamp; runs before return so callers see a balanced
+	// FinancialData. computePlugs assumes currency coherence — guaranteed by
+	// extractFiscalPeriods's dominant-currency collapse (parser.go:309-363).
+	// See docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md.
+	computePlugs(financialData, p.logger)
+
 	return financialData, nil
 }
 

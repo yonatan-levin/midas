@@ -1528,3 +1528,81 @@ func TestParser_ParsePeriodData_IFRS_Borrowings_Umbrella_Wins_Over_Components(t 
 	assert.NotEqual(t, 600000000000.0, result.TotalDebt,
 		"TotalDebt must NOT equal Borrowings + components — that would be the double-count regression")
 }
+
+// TestParser_ParseFinancialData_ComputesPlugs verifies that parsePeriodData
+// fills the four Other* plug fields after extracting components and umbrellas.
+// DC-1 Phase 0 — see docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md.
+func TestParser_ParseFinancialData_ComputesPlugs(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	// Minimal AAPL-shaped fixture: enough fields to exercise each plug.
+	facts := &ports.SECCompanyFacts{
+		CIK:        "0000320193",
+		EntityName: "Apple Inc.",
+		Facts: map[string]map[string]ports.SECFactGroup{
+			"us-gaap": {
+				"Revenues":                              factGroupUSD(383_285_000_000, 2023),
+				"OperatingIncomeLoss":                   factGroupUSD(114_301_000_000, 2023),
+				"Assets":                                factGroupUSD(352_755_000_000, 2023),
+				"AssetsCurrent":                         factGroupUSD(143_566_000_000, 2023),
+				"LiabilitiesCurrent":                    factGroupUSD(145_308_000_000, 2023),
+				"Liabilities":                           factGroupUSD(290_437_000_000, 2023),
+				"CashAndCashEquivalentsAtCarryingValue": factGroupUSD(29_965_000_000, 2023),
+				"InventoryNet":                          factGroupUSD(6_331_000_000, 2023),
+				"LongTermDebt":                          factGroupUSD(111_088_000_000, 2023),
+				// Note (REVIEWER A-2): today's parser treats the lease split
+				// XBRL tags as fallbacks for the umbrella OperatingLeaseLiability
+				// — they do NOT propagate to fd.OperatingLeaseLiabilityCurrent /
+				// fd.OperatingLeaseLiabilityNoncurrent. The fixture entries below
+				// document the AAPL-shaped XBRL surface but are inert against
+				// today's entity; the test verifies plug arithmetic only.
+				// Lease-split decomposition is deferred to Phase 1+.
+				"OperatingLeaseLiabilityCurrent":    factGroupUSD(1_410_000_000, 2023),
+				"OperatingLeaseLiabilityNoncurrent": factGroupUSD(10_550_000_000, 2023),
+				"CommonStockSharesOutstanding":      factGroupShares(15_550_061_000, 2023),
+			},
+		},
+	}
+
+	historical, err := parser.ParseFinancialData(context.Background(), facts)
+	require.NoError(t, err)
+	require.NotEmpty(t, historical.Data)
+
+	fd := historical.Data["2023FY"]
+	require.NotNil(t, fd)
+
+	// Plug invariant: umbrella == sum(known components) + plug.
+	assert.InDelta(t, fd.CurrentAssets,
+		fd.CashAndCashEquivalents+fd.Inventory+fd.OtherCurrentAssets, 1.0)
+	assert.InDelta(t, fd.TotalAssets-fd.CurrentAssets,
+		fd.Goodwill+fd.OtherIntangibles+fd.DeferredTaxAssets+fd.OtherNonCurrentAssets, 1.0)
+	assert.InDelta(t, fd.CurrentLiabilities,
+		fd.OperatingLeaseLiabilityCurrent+fd.OtherCurrentLiabilities, 1.0)
+	assert.InDelta(t, fd.TotalLiabilities-fd.CurrentLiabilities,
+		fd.TotalDebt+fd.OperatingLeaseLiabilityNoncurrent+fd.OtherNonCurrentLiabilities, 1.0)
+
+	// All four plugs must be non-negative.
+	assert.GreaterOrEqual(t, fd.OtherCurrentAssets, 0.0)
+	assert.GreaterOrEqual(t, fd.OtherNonCurrentAssets, 0.0)
+	assert.GreaterOrEqual(t, fd.OtherCurrentLiabilities, 0.0)
+	assert.GreaterOrEqual(t, fd.OtherNonCurrentLiabilities, 0.0)
+}
+
+// factGroupUSD is a small helper to keep the AAPL fixture readable.
+func factGroupUSD(val float64, fy int) ports.SECFactGroup {
+	return ports.SECFactGroup{
+		Units: map[string][]ports.SECFact{
+			"USD": {{End: "2023-09-30", Val: val, Fy: fy, Fp: "FY", Form: "10-K", Filed: "2023-11-03"}},
+		},
+	}
+}
+
+// factGroupShares is a small helper for dimensionless share-count facts.
+func factGroupShares(val float64, fy int) ports.SECFactGroup {
+	return ports.SECFactGroup{
+		Units: map[string][]ports.SECFact{
+			"shares": {{End: "2023-09-30", Val: val, Fy: fy, Fp: "FY", Form: "10-K", Filed: "2023-11-03"}},
+		},
+	}
+}
