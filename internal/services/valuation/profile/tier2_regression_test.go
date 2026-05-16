@@ -15,6 +15,7 @@ package profile_test
 
 import (
 	"context"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,4 +89,49 @@ func TestTier2_MXL_Pin(t *testing.T) {
 	// Sanity: horizon was resolved from the profile, not zeroed out.
 	assert.Equal(t, 5, result.HorizonSelected)
 	assert.Equal(t, "revenue_multiple", result.ModelType)
+}
+
+// TestTier2_JPM_Pin_BitForBit is the cross-model JPM regression anchor for
+// VAL-2 (spec §7.1, plan Phase P3 task P3.5). Asserts that:
+//
+//  1. JPM resolves to the legacy mature_large_bank:mature profile (the
+//     bit-for-bit preservation key — DividendForecastHorizon=0 routes the
+//     DDM dispatcher to calculateLegacyGordon).
+//  2. The DDM model is selected (FIN industry prefix → DDM).
+//  3. The valuation's primary value (DCFValuePerShare — the canonical
+//     per-share intrinsic-value field on entities.ValuationResult, populated
+//     from ModelResult.IntrinsicValuePerShare regardless of which model
+//     fired) is byte-identical to the captured pre-Tier-2 golden, using
+//     math.Float64bits equality.
+//
+// Today this test skips because testhelpers.RunValuation is a
+// Bootstrap-era stub awaiting full-service wiring (tracked as a P1
+// prerequisite via T2-P0b-1 follow-up + the BuildTestService QA
+// recommendation). When RunValuation lands the pin runs unmodified and
+// becomes the load-bearing cross-model bit-for-bit anchor.
+//
+// The DDM-model-level bit-for-bit invariant (the actual canary for legacy
+// drift in this commit) is pinned by TestDDM_LegacyPath_BitForBit in
+// internal/services/valuation/models — that test runs today against
+// JPM/BAC/WFC golden fixtures and gates every commit on this branch.
+func TestTier2_JPM_Pin_BitForBit(t *testing.T) {
+	result := testhelpers.RunValuation(t, "JPM")
+	require.NotNil(t, result, "RunValuation must return a ValuationResult once wired")
+
+	assert.Equal(t, "mature_large_bank:mature", result.AssumptionProfile,
+		"JPM must resolve to the legacy mature_large_bank:mature profile (bit-for-bit anchor)")
+
+	// CalculationMethod stamps the selected model on ValuationResult (no
+	// separate ChosenModel field exists on entities.ValuationResult; the
+	// model identifier flows through CalculationMethod = "ddm" for DDM
+	// runs). Asserting on the canonical field rather than a plan
+	// pseudo-name keeps the pin compileable in midas's real entity shape.
+	assert.Equal(t, "ddm", result.CalculationMethod,
+		"JPM must route through DDM (FIN prefix → DDM)")
+
+	expected := testhelpers.LoadGoldenJPMPrimaryValue(t)
+	assert.Equal(t,
+		math.Float64bits(expected),
+		math.Float64bits(result.DCFValuePerShare),
+		"JPM DCFValuePerShare must be bit-for-bit identical to pre-Tier-2 (Float64bits equality)")
 }
