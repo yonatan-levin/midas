@@ -3475,7 +3475,24 @@ After Tier 2 ships: update `docs/refactoring/spec/assumption-profile-spec.md` §
   3. JPM replay needs `--allow-schema-drift` because `10-clean-output.json` is missing.
 - **Spec version after merge:** v0.1 (no spec changes; v0.2 deferred to full Tier 2 close)
 
-### Phase P0a — Pending dispatch
+### Phase P0a — SHIPPED 2026-05-16 (commit `d2a586e` on `tier2-p0a`)
+
+- **Files landed:** 13 files (+1404 / -83). 7 production files in `internal/services/valuation/profile/`: `profile.go` (full type system: 21 Archetype constants + Maturity/RevenueBaseMethod/TerminalMethod/DiscountMethod enums + AssumptionProfile + ResolvedProfile + SizeThresholds + IsLegacyMatureLargeBankDDM() nil-safe predicate), `facts.go` (Facts DTO with pointer-field semantics + NewFactsForTest), `trace.go` (ResolutionTrace + AssumptionProfileManifest + Source enum), `version.go` (ResolverVersion constant), `registry.go` (Registry interface + jsonRegistry + LoadFromJSON with SHA-256 config_hash + sort.SliceStable for deterministic rule ordering), `validation.go` (8-of-9 spec §4.3 invariants explicitly enforced; invariant 5 delegated to sort discipline), `resolver.go` (pure 3-stage Resolve: industry-rule match → cyclical-trough override on OI<0 → maturity bucketing → archetype pin). 5 new test files + import_boundary_test.go. Bootstrap-stub profile.go replaced with full 142-line type system.
+- **B-V-R-Q + verification verdicts:** BACKEND DONE_WITH_CONCERNS → VERIFIER VERIFIED (10/10 checks; bit-for-bit deterministic across 3 runs; race-clean on profile + models packages; testhelpers compiles) → REVIEWER APPROVE_WITH_NITS (7 LOW nits, no blockers; spec §11 acceptance 10/10) → QA PASS (4/4 resolver smoke tests; 14/14 malformed-config rejections; 309.7 ns/op Resolve perf; BACKEND's wildcard-Fallback deviation confirmed spec-faithful) → HUMAN approved → merged to master
+- **Coverage:** 91.5% on `internal/services/valuation/profile/` package (target ≥90% met)
+- **Surprises:**
+  - BACKEND deviated from plan §5.1 pseudocode in one place: wildcard-matched rules report `Source = SourceFallback` (not `SourceExplicit`). QA confirmed this matches spec §3.3 Source enum intent + §5.3 failure-mode table prescription. Plan §5.1 had a latent inconsistency; BACKEND read spec intent over text. Pinned by `TestResolve_UnknownIndustry_FallsBackWithTrace`.
+  - BACKEND made `selectFallbackProfile` deterministic by preferring `MaturityStandardGrowth` first, then a fixed-order scan over `[Mature, HighGrowth]` — stronger replay-determinism guarantee than the plan text. Map iteration in Go is non-deterministic; this avoids that hazard.
+  - `joinReasons` helper concatenates Stage 1b override + Stage 2 maturity reason with `"; "` separator. Tests only check substring containment, so future tests pinning full HumanReason format would need to follow `"<override>; <maturity_reason>"` order.
+  - Pre-existing data races in `scripts/benchmark_executor_test.go` and `internal/services/datafetcher/service_test.go` confirmed existing at Bootstrap baseline `fa66bd8` (filed as T2-BS-4); NOT caused by P0a.
+- **REVIEWER's 7 LOW nits (none blocking):** validation_test.go:184 test-name doc-comment drift; validation.go header claims "9 invariants" but invariant 5 (priority ties) handled by sort.SliceStable instead; validation.go:97-102 permits negative `compound_growth_cap` when horizon=0 (unreachable today); registry.go:159-186 asymmetric maturity scan style; commit message doesn't enumerate 4 deviations as bullets; facts.go has 4 fields (`NetIncome`, `MarketCap`, `DividendsPerShare`, `ConsecutivePositiveOIYears`) unread by P0a resolver (reserved for P1-P4); resolver.go:24-31 "no rule matched" branch is structurally unreachable post-validation (by design comment).
+- **QA's 3 PASS_WITH_NOTES observations:** (1) `thresholdsForArchetype` map iteration becomes a latent determinism risk if future P1/P3 phases set `SizeThresholds` on a subset of an archetype's maturity variants (recommend validation invariant or deterministic scan); (2) wildcard `SourceFallback` deviation noted for downstream phases to not "fix" back; (3) `SizeThresholds` field present in schema but unused by current fixtures.
+- **Operational notes for downstream phases:**
+  1. `NewFacts` constructor at P0b MUST upper-case + trim `IndustryNormalized` (resolver expects it pre-normalized; silent fall-through to wildcard otherwise).
+  2. `Registry.Resolve(Facts)` is the production entry point; `Registry.Lookup(Archetype, Maturity)` is the internal/test lookup. Don't confuse them.
+  3. `IsLegacyMatureLargeBankDDM()` is nil-safe — call sites can pass `(*ResolvedProfile)(nil)` safely. P3 will rely on this.
+- **Spec version after merge:** v0.1 (unchanged from Bootstrap; v0.2 deferred to Tier 2 close)
+
 ### Phase P0b — Pending dispatch
 ### Phase P1 (RM-3) — Pending dispatch
 ### Phase P2 (VAL-1, includes Pre-P2 growth-estimator extension) — Pending dispatch
