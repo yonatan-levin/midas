@@ -9,6 +9,7 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 
+	configfs "github.com/midas/dcf-valuation-api/config"
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
@@ -18,6 +19,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
 // Module returns the fx Option that wires a replay-mode valuation service.
@@ -151,6 +153,26 @@ func Module(bundleDir string, opts Options) fx.Option {
 		// --------------------------------------------------------------
 		fx.Provide(func() valuation.Clock {
 			return newManifestClock(opts.ManifestStartedAt)
+		}),
+
+		// --------------------------------------------------------------
+		// Tier 2 P0b: AssumptionProfile registry. Replay loads the SAME
+		// production config — embedded via configfs so the replay binary
+		// stays hermetic against cwd. The registry is hermetic by
+		// construction (no I/O after load, no time.Now()), so re-resolution
+		// against the captured Facts is deterministic. Future P1+ work may
+		// swap this for a bundle-snapshot-aware provider that short-circuits
+		// to the captured AssumptionProfileManifest's ResolvedSnapshot, but
+		// P0b keeps replay and production on the same code path —
+		// schema_drift surfaces any config change as a manifest hash
+		// mismatch.
+		// --------------------------------------------------------------
+		fx.Provide(func() (profile.Registry, error) {
+			raw, err := configfs.Read("assumption_profiles.json")
+			if err != nil {
+				return nil, err
+			}
+			return profile.LoadFromBytes(raw, "assumption_profiles.json:embed")
 		}),
 
 		// --------------------------------------------------------------
@@ -379,6 +401,7 @@ func replayValuationService(
 	logger *zap.Logger,
 	calcEmitter *calclog.Emitter,
 	clock valuation.Clock,
+	profileRegistry profile.Registry,
 ) *valuation.Service {
 	svc := valuation.NewService(
 		financialRepo,
@@ -391,6 +414,7 @@ func replayValuationService(
 		cfg,
 		logger,
 		calcEmitter,
+		profileRegistry,
 	)
 	svc.SetClock(clock)
 	// RPL-2k (R3 Stage O.9): macroGateway comes through fx.Provide which

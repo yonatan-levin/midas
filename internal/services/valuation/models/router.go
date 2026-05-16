@@ -10,6 +10,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
 // ValuationModel defines the interface for industry-specific valuation models.
@@ -52,6 +53,15 @@ type ModelInput struct {
 	// determinism is preserved (manifest-pinned clock flows through to
 	// the staleness check). When nil, consumers fall back to time.Now.
 	Now func() time.Time
+
+	// Profile is the resolved AssumptionProfile from upstream resolution
+	// (service.go::performValuation, Tier 2 P0b). Carries calibration
+	// values (horizon, caps, terminal method, payout path) for downstream
+	// model consumption. May be nil only in defensive/test paths (no
+	// registry wired); models MUST handle nil by falling through to legacy
+	// behavior — P0b ships every model with nil-safe access since the
+	// per-model wiring lands in P1/P2/P3/P4. Spec §2.3, §3.1.
+	Profile *profile.ResolvedProfile
 }
 
 // ModelResult contains the standardized output from any valuation model.
@@ -63,6 +73,16 @@ type ModelResult struct {
 	Warnings               []string  `json:"warnings,omitempty"`
 	Confidence             string    `json:"confidence"` // "high", "medium", "low"
 	Projections            []float64 `json:"projections,omitempty"`
+
+	// Tier 2 P0b additive fields. All omitempty — when zero-valued (legacy
+	// path) they are omitted from JSON, preserving byte equality with pre-
+	// Tier-2 responses on the legacy DDM bit-for-bit path. Populated by
+	// P1/P3/P4 (trailing/forward DDM blending, horizon selection, terminal
+	// multiple selection). Declared here so the schema is stable from P0b.
+	TrailingValue    float64 `json:"trailing_value,omitempty"`
+	ForwardValue     float64 `json:"forward_value,omitempty"`
+	HorizonSelected  int     `json:"horizon_selected,omitempty"`
+	TerminalMultiple float64 `json:"terminal_multiple,omitempty"`
 }
 
 // ModelRouter selects the appropriate valuation model based on industry classification

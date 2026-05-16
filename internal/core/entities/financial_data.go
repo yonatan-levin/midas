@@ -713,6 +713,50 @@ func (h *HistoricalFinancialData) GetRecentYears(years int) []*FinancialData {
 	return periods
 }
 
+// RecentYoYGrowth returns the year-over-year revenue growth between the two
+// most recent annual (FY) periods. Sorting is keyed on the period string
+// (e.g. "2024FY") via GetSortedPeriods, NOT on FilingDate, so callers that
+// have not (yet) stamped a FilingDate still get a deterministic result.
+//
+// Returns nil when:
+//   - the receiver is nil (defensive — service.go calls this on
+//     historicalData unguarded),
+//   - fewer than 2 annual periods are available, or
+//   - the prior period's revenue is zero (cannot compute growth from a zero
+//     base; this is a data-quality issue, not actual zero growth — collapsing
+//     the two would mislead the resolver).
+//
+// Used by service.go::performValuation (Tier 2 P0b) to populate
+// profile.Facts.RevenueGrowthYoY for the resolver's Stage-2 maturity
+// bucketing. Spec §5.1.
+func (h *HistoricalFinancialData) RecentYoYGrowth() *float64 {
+	if h == nil {
+		return nil
+	}
+	// GetSortedPeriods returns periods in ascending order; filter to FY
+	// entries so we compare like-for-like (a Q4 → FY transition would
+	// otherwise produce a misleading rate).
+	sorted := h.GetSortedPeriods()
+	annualKeys := make([]string, 0, len(sorted))
+	for _, key := range sorted {
+		if len(key) >= 2 && key[len(key)-2:] == "FY" {
+			annualKeys = append(annualKeys, key)
+		}
+	}
+	if len(annualKeys) < 2 {
+		return nil
+	}
+	latestKey := annualKeys[len(annualKeys)-1]
+	priorKey := annualKeys[len(annualKeys)-2]
+	latest := h.Data[latestKey]
+	prior := h.Data[priorKey]
+	if latest == nil || prior == nil || prior.Revenue == 0 {
+		return nil
+	}
+	yoy := (latest.Revenue - prior.Revenue) / prior.Revenue
+	return &yoy
+}
+
 // HasMinimumData checks if we have enough data for valuation
 func (h *HistoricalFinancialData) HasMinimumData(minYears int) bool {
 	recent := h.GetRecentYears(minYears)

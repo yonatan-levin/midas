@@ -17,6 +17,7 @@ import (
 	// Ensure sqlite drivers are registered in all build modes (including distroless containers)
 	_ "github.com/mattn/go-sqlite3"
 
+	configfs "github.com/midas/dcf-valuation-api/config"
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
@@ -36,6 +37,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/ratelimit"
 	"github.com/midas/dcf-valuation-api/internal/services/scheduler"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 	"github.com/midas/dcf-valuation-api/internal/services/watchlist"
 )
 
@@ -160,6 +162,22 @@ var ServiceModule = fx.Options(
 	// *Service. Production behavior is byte-identical to pre-R0 because
 	// NewWallClock returns a delegate over time.Now.
 	fx.Provide(valuation.NewWallClock),
+	// Tier 2 P0b — register the AssumptionProfile registry. Loads
+	// the embedded assumption_profiles.json (configfs.Read) and validates
+	// every spec §4.3 invariant; a malformed config FAILS fx.New so the
+	// service refuses to start (operator error, not user-data graceful
+	// degradation). Reading via embed.FS keeps the binary hermetic against
+	// process cwd — production, scheduler-background, and integration tests
+	// all see the same bytes the binary was built with. NewValuationService
+	// consumes this and threads it through to valuation.NewService as the
+	// 13th parameter.
+	fx.Provide(func() (profile.Registry, error) {
+		raw, err := configfs.Read("assumption_profiles.json")
+		if err != nil {
+			return nil, err
+		}
+		return profile.LoadFromBytes(raw, "assumption_profiles.json:embed")
+	}),
 	fx.Provide(NewRateLimiterService),
 
 	// Bind *valuation.Service to handlers.ValuationCalculator interface
@@ -641,6 +659,7 @@ func NewValuationService(
 	logger *zap.Logger,
 	calcEmitter *calclog.Emitter,
 	clock valuation.Clock,
+	profileRegistry profile.Registry,
 ) *valuation.Service {
 	svc := valuation.NewService(
 		financialRepo,
@@ -653,6 +672,7 @@ func NewValuationService(
 		cfg,
 		logger,
 		calcEmitter,
+		profileRegistry,
 	)
 
 	// Phase R0/R1 (D10) — consummate the Clock provider so fx.Decorate

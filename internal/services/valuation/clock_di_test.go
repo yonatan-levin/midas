@@ -80,6 +80,7 @@ func newServiceForFXDecorateTest(
 		cfg,
 		logger,
 		calcEmitter,
+		nil, // profileRegistry — Tier 2 P0b; clock-DI tests don't exercise the profile path.
 	)
 	svc.SetClock(clock)
 	return svc

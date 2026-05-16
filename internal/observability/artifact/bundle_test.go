@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
 // TestOpenBundle_DisabledReturnsNil verifies the master switch.
@@ -638,4 +639,61 @@ func TestSetTicker_SanitizesPathSeparators(t *testing.T) {
 	assert.NotContains(t, parts[1], "\\", "ticker segment must not contain backslash")
 
 	require.NoError(t, b.Close())
+}
+
+// TestBundle_SetAssumptionProfileManifest_WritesJSON pins the Tier 2 P0b bundle
+// extension: SetAssumptionProfileManifest writes 08-assumption-profile.json
+// carrying the resolved-profile + audit trail so replay tooling can re-resolve
+// (or short-circuit to the captured snapshot) deterministically. Schema version
+// is registered on the manifest so future consumers can version-gate.
+func TestBundle_SetAssumptionProfileManifest_WritesJSON(t *testing.T) {
+	root := t.TempDir()
+	cfg := artifact.Config{Enabled: true, RootPath: root}
+
+	b, err := artifact.OpenBundle(cfg, "rid-profile", "JPM", artifact.TriggerQuery)
+	require.NoError(t, err)
+	require.NotNil(t, b)
+
+	manifest := profile.AssumptionProfileManifest{
+		ProfileID:       "mature_large_bank:mature",
+		Source:          profile.SourceExplicit,
+		ResolverVersion: "1.0.0",
+		ConfigVersion:   "1.0.0",
+		ConfigHash:      "abcdef0123",
+		Trace: profile.ResolutionTrace{
+			ProfileID:       "mature_large_bank:mature",
+			Source:          profile.SourceExplicit,
+			ResolverVersion: "1.0.0",
+			ConfigVersion:   "1.0.0",
+			MatchedRuleID:   "fin_large_bank",
+		},
+	}
+	b.SetAssumptionProfileManifest(context.Background(), manifest)
+	require.NoError(t, b.Close())
+
+	// File must exist on disk with the expected profile_id payload.
+	body, err := os.ReadFile(filepath.Join(b.Root(), "08-assumption-profile.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"profile_id": "mature_large_bank:mature"`)
+	assert.Contains(t, string(body), `"matched_rule_id": "fin_large_bank"`)
+
+	// Manifest schema version must be registered so replay tooling can
+	// version-gate against schema drift.
+	mfBody, err := os.ReadFile(filepath.Join(b.Root(), "00-manifest.json"))
+	require.NoError(t, err)
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(mfBody, &mf))
+	assert.Equal(t, 1, mf.SchemaVersions["AssumptionProfileManifest"],
+		"AssumptionProfileManifest schema_version must be 1")
+}
+
+// TestBundle_SetAssumptionProfileManifest_NilSafe — the method must be a
+// no-op on a nil receiver so service.go can call it through artifact.From(ctx)
+// without nil-checking.
+func TestBundle_SetAssumptionProfileManifest_NilSafe(t *testing.T) {
+	var b *artifact.Bundle
+	// Must not panic.
+	b.SetAssumptionProfileManifest(context.Background(), profile.AssumptionProfileManifest{
+		ProfileID: "irrelevant",
+	})
 }

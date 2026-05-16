@@ -85,27 +85,39 @@ type jsonRegistry struct {
 	maturityThresholds MaturityThresholds
 }
 
-// LoadFromJSON loads the registry from assumption_profiles.json. Returns
-// an error on any of:
+// LoadFromJSON loads the registry from assumption_profiles.json on disk.
+// Returns an error on any of:
 //   - file not readable
 //   - JSON malformed
 //   - validation failure (unknown archetype, missing fallback, etc.)
 //
 // The service MUST fail startup on any of these — invalid shipped config is
 // an operator error, not user-data graceful-degradation (spec §4.4).
+//
+// Path-based loading is kept for tests + replay (which read fixtures from
+// arbitrary on-disk locations). Production wiring should prefer LoadFromBytes
+// + the configfs embed.FS so the binary is hermetic against cwd.
 func LoadFromJSON(path string) (Registry, error) {
 	rawBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
+	return LoadFromBytes(rawBytes, path)
+}
 
+// LoadFromBytes parses + validates the registry from in-memory bytes. Used
+// by production wiring with the configfs embed.FS contents so the binary
+// is hermetic against process cwd; matches the country_risk / industry_
+// multiples conventions for tests. label is included in error messages for
+// operator debuggability (e.g. "assumption_profiles.json:embed").
+func LoadFromBytes(rawBytes []byte, label string) (Registry, error) {
 	var cfg configFile
 	if err := json.Unmarshal(rawBytes, &cfg); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse %s: %w", label, err)
 	}
 
 	if err := validateConfig(&cfg); err != nil {
-		return nil, fmt.Errorf("validate %s: %w", path, err)
+		return nil, fmt.Errorf("validate %s: %w", label, err)
 	}
 
 	// Sort archetype_rules by descending priority so the resolver iterates
@@ -137,7 +149,7 @@ func LoadFromJSON(path string) (Registry, error) {
 		// validateConfig already requires hasFallback, so reaching this
 		// branch means the fallback archetype has no profile entries —
 		// a separate invariant (spec §4.3 invariant 6).
-		return nil, fmt.Errorf("validate %s: fallback rule archetype has no profile entries", path)
+		return nil, fmt.Errorf("validate %s: fallback rule archetype has no profile entries", label)
 	}
 
 	// SHA-256 of the canonicalized JSON gives a stable hash even when the

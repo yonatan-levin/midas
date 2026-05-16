@@ -2,6 +2,8 @@ package entities
 
 import (
 	"time"
+
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
 // ValuationResult represents the output of a DCF analysis
@@ -112,6 +114,35 @@ type ValuationResult struct {
 	// without a separate quote lookup. Zero when no market data was
 	// available; omitempty keeps the JSON clean in that case.
 	CurrentPrice float64 `json:"current_price,omitempty"`
+
+	// Tier 2 P0b additive fields. All omitempty — when zero-valued
+	// (legacy path / pre-P0b cached results / profile registry not wired)
+	// they are omitted from JSON, preserving byte equality with pre-Tier-2
+	// responses on the legacy DDM bit-for-bit path.
+	//
+	// AssumptionProfile is the resolved profile_id (e.g.
+	// "mature_large_bank:mature"), surfaced so API consumers can correlate
+	// the result with the calibration record that produced it. Empty when
+	// the service's profileRegistry was nil (test paths only — production
+	// always wires it).
+	AssumptionProfile string `json:"assumption_profile,omitempty"`
+
+	// ResolutionTrace is the full structured audit trail from
+	// profile.Registry.Resolve. Pointer + omitempty so unresolved (test)
+	// paths drop the field entirely; the spec §3.3 documented fields land
+	// directly on the wire because ResolutionTrace already carries JSON
+	// tags. Importing profile here introduces no cycle — profile imports
+	// nothing from entities/models (see profile/import_boundary_test.go).
+	ResolutionTrace *profile.ResolutionTrace `json:"resolution_trace,omitempty"`
+
+	// DCF diagnostics — populated by P2 (DCF archetype-aware horizon work).
+	// Declared in P0b for schema ownership so the JSON shape is stable
+	// from this commit forward; P2 wires DCFModel.Calculate to fill them.
+	DCFHorizonYears       int       `json:"dcf_horizon_years,omitempty"`
+	DCFTerminalMethod     string    `json:"dcf_terminal_method,omitempty"`
+	DCFTerminalPctOfEV    float64   `json:"dcf_terminal_pct_of_ev,omitempty"`
+	DCFPerYearPV          []float64 `json:"dcf_per_year_pv,omitempty"`
+	DCFTerminalGrowthUsed float64   `json:"dcf_terminal_growth_used,omitempty"`
 }
 
 // SanityCheck contains cross-check multiples that compare the DCF-implied valuation

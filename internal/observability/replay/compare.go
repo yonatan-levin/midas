@@ -52,6 +52,11 @@ func compareFairValueResponses(bundle, current *handlers.FairValueResponse, relT
 		{"calculation_method", bundle.CalculationMethod, current.CalculationMethod, true},
 		{"calculation_version", bundle.CalculationVersion, current.CalculationVersion, true},
 		{"currency", bundle.Currency, current.Currency, true},
+		// Tier 2 P0b additive fields. omitempty on the wire — pre-Tier-2
+		// bundles unmarshal to "" so the comparison is honest about
+		// "absent in bundle, present in current" via the StringDiff path.
+		{"assumption_profile", bundle.AssumptionProfile, current.AssumptionProfile, true},
+		{"dcf_terminal_method", bundle.DCFTerminalMethod, current.DCFTerminalMethod, true},
 	}
 	for _, f := range stringFields {
 		d.FieldsTotal++
@@ -72,6 +77,11 @@ func compareFairValueResponses(bundle, current *handlers.FairValueResponse, relT
 		{"dcf_value_per_share", bundle.DCFValuePerShare, current.DCFValuePerShare},
 		{"data_quality_score", bundle.DataQualityScore, current.DataQualityScore},
 		{"current_price", bundle.CurrentPrice, current.CurrentPrice},
+		// Tier 2 P0b additive DCF diagnostics (P2 fills these; P0b ships
+		// the schema). omitempty on the wire keeps pre-Tier-2 bundle
+		// JSON byte-equal until populated.
+		{"dcf_terminal_pct_of_ev", bundle.DCFTerminalPctOfEV, current.DCFTerminalPctOfEV},
+		{"dcf_terminal_growth_used", bundle.DCFTerminalGrowthUsed, current.DCFTerminalGrowthUsed},
 	}
 	for _, f := range floatFields {
 		d.FieldsTotal++
@@ -91,6 +101,16 @@ func compareFairValueResponses(bundle, current *handlers.FairValueResponse, relT
 			Path: "adr_ratio_applied",
 			Old:  fmt.Sprintf("%d", bundle.ADRRatioApplied),
 			New:  fmt.Sprintf("%d", current.ADRRatioApplied),
+		})
+	}
+
+	// Tier 2 P0b: DCFHorizonYears (int, exact compare — no tolerance).
+	d.FieldsTotal++
+	if bundle.DCFHorizonYears != current.DCFHorizonYears {
+		d.Strings = append(d.Strings, StringDiff{
+			Path: "dcf_horizon_years",
+			Old:  fmt.Sprintf("%d", bundle.DCFHorizonYears),
+			New:  fmt.Sprintf("%d", current.DCFHorizonYears),
 		})
 	}
 

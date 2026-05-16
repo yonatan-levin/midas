@@ -16,6 +16,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
 // ValuationCalculator abstracts the valuation service so handlers depend on
@@ -216,6 +217,23 @@ type FairValueResponse struct {
 	// consumer can compute the upside/downside discount ((dcf - price)
 	// / price) without a second quote lookup. Omitted when zero.
 	CurrentPrice float64 `json:"current_price,omitempty" example:"190.25"`
+
+	// Tier 2 P0b additive fields. All omitempty — legacy mature-large-bank
+	// DDM responses remain byte-identical (TestDDM_LegacyPath_BitForBit
+	// pins this). AssumptionProfile is the resolved profile_id so API
+	// consumers can correlate the result with the calibration record.
+	// ResolutionTrace carries the full audit trail (matched_rule_id,
+	// fallback_reason, config_hash) for replay determinism and audit. The
+	// DCF diagnostic fields are declared here for schema ownership in P0b
+	// even though P2 fills them — keeps the wire shape stable from this
+	// commit forward.
+	AssumptionProfile     string                   `json:"assumption_profile,omitempty" example:"mature_large_bank:mature"`
+	ResolutionTrace       *profile.ResolutionTrace `json:"resolution_trace,omitempty"`
+	DCFHorizonYears       int                      `json:"dcf_horizon_years,omitempty" example:"5"`
+	DCFTerminalMethod     string                   `json:"dcf_terminal_method,omitempty" example:"gordon_growth"`
+	DCFTerminalPctOfEV    float64                  `json:"dcf_terminal_pct_of_ev,omitempty"`
+	DCFPerYearPV          []float64                `json:"dcf_per_year_pv,omitempty"`
+	DCFTerminalGrowthUsed float64                  `json:"dcf_terminal_growth_used,omitempty"`
 }
 
 // BulkFairValueRequest represents the request structure for bulk fair value requests
@@ -438,6 +456,19 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		Currency:        currencyOrUSD(result.ReportingCurrency),
 		ADRRatioApplied: result.ADRRatioApplied,
 		CurrentPrice:    result.CurrentPrice,
+		// Tier 2 P0b: copy profile + DCF diagnostics. All omitempty —
+		// fields default-zero when the profileRegistry isn't wired (test
+		// paths) or until P2 populates DCF diagnostics. Legacy DDM responses
+		// stay byte-identical because the resolved profile's
+		// DividendForecastHorizon==0 keeps DDM on the legacy single-stage
+		// branch, but AssumptionProfile is still surfaced for auditability.
+		AssumptionProfile:     result.AssumptionProfile,
+		ResolutionTrace:       result.ResolutionTrace,
+		DCFHorizonYears:       result.DCFHorizonYears,
+		DCFTerminalMethod:     result.DCFTerminalMethod,
+		DCFTerminalPctOfEV:    result.DCFTerminalPctOfEV,
+		DCFPerYearPV:          result.DCFPerYearPV,
+		DCFTerminalGrowthUsed: result.DCFTerminalGrowthUsed,
 	}
 
 	// Tier-1 narrate: valuation.computed success line. Carries the headline
@@ -591,6 +622,14 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 			Currency:        currencyOrUSD(result.ReportingCurrency),
 			ADRRatioApplied: result.ADRRatioApplied,
 			CurrentPrice:    result.CurrentPrice,
+			// Tier 2 P0b: mirror single-ticker handler for response parity.
+			AssumptionProfile:     result.AssumptionProfile,
+			ResolutionTrace:       result.ResolutionTrace,
+			DCFHorizonYears:       result.DCFHorizonYears,
+			DCFTerminalMethod:     result.DCFTerminalMethod,
+			DCFTerminalPctOfEV:    result.DCFTerminalPctOfEV,
+			DCFPerYearPV:          result.DCFPerYearPV,
+			DCFTerminalGrowthUsed: result.DCFTerminalGrowthUsed,
 		}
 
 		results = append(results, response)

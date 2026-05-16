@@ -278,6 +278,18 @@ func buildFairValueResponse(ticker string, result *entities.ValuationResult) *ha
 		Currency:              currencyOrUSD(result.ReportingCurrency),
 		ADRRatioApplied:       result.ADRRatioApplied,
 		CurrentPrice:          result.CurrentPrice,
+		// Tier 2 P0b: mirror the production handler so replay diffs surface
+		// any drift in the AssumptionProfile + DCF diagnostic fields. The
+		// handler at internal/api/v1/handlers/fair_value.go copies these
+		// from the ValuationResult; replay must do the same or it would
+		// hide regressions on fields the production wire exposes.
+		AssumptionProfile:     result.AssumptionProfile,
+		ResolutionTrace:       result.ResolutionTrace,
+		DCFHorizonYears:       result.DCFHorizonYears,
+		DCFTerminalMethod:     result.DCFTerminalMethod,
+		DCFTerminalPctOfEV:    result.DCFTerminalPctOfEV,
+		DCFPerYearPV:          result.DCFPerYearPV,
+		DCFTerminalGrowthUsed: result.DCFTerminalGrowthUsed,
 	}
 	return resp
 }

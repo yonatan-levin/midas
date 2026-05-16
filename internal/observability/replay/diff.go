@@ -433,6 +433,17 @@ var goFieldToJSON = map[string]string{
 	"Currency":              "currency",
 	"ADRRatioApplied":       "adr_ratio_applied",
 	"CurrentPrice":          "current_price",
+	// Tier 2 P0b additive fields — declared on FairValueResponse with
+	// omitempty. Empty values drop on the wire so pre-Tier-2 captures stay
+	// byte-equal; populated values must diff correctly here. P2 fills the
+	// DCF diagnostic fields; P0b only declares the schema.
+	"AssumptionProfile":     "assumption_profile",
+	"ResolutionTrace":       "resolution_trace",
+	"DCFHorizonYears":       "dcf_horizon_years",
+	"DCFTerminalMethod":     "dcf_terminal_method",
+	"DCFTerminalPctOfEV":    "dcf_terminal_pct_of_ev",
+	"DCFPerYearPV":          "dcf_per_year_pv",
+	"DCFTerminalGrowthUsed": "dcf_terminal_growth_used",
 	// SanityCheck
 	"ImpliedPE":            "implied_pe",
 	"SectorMedianPE":       "sector_median_pe",
@@ -492,9 +503,10 @@ func nilOrType(p any) string {
 // guard above asserts the constant and reflection agree at package
 // load time.
 //
-// Master HEAD baseline at R3b: 23 (FairValueResponse, including the
-// 4 Graham-school fields added in commit 96759d9) + 5 (Industry) +
-// 8 (SanityCheck) = 36.
+// Tier 2 P0b: 30 (FairValueResponse, post-Graham + 7 Tier-2 additive
+// fields: AssumptionProfile, ResolutionTrace, and the 5 DCF diagnostic
+// fields declared for schema ownership) + 5 (Industry) + 8 (SanityCheck)
+// = 43.
 //
 // When a future commit extends FairValueResponse, Industry, or
 // SanityCheck:
@@ -504,8 +516,8 @@ func nilOrType(p any) string {
 //  3. Add an entry to goFieldToJSON for the new field's snake_case
 //     name (otherwise camelToSnake's best-effort conversion runs).
 func countFairValueFields() int {
-	// FairValueResponse: 23 top-level public fields (post-Graham).
+	// FairValueResponse: 30 top-level public fields (Graham + Tier 2 P0b).
 	// Industry: 5 fields.
 	// SanityCheck: 8 fields.
-	return 23 + 5 + 8
+	return 30 + 5 + 8
 }

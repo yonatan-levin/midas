@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
 // defaultPendingBytesCap is the per-bundle in-memory buffer ceiling for
@@ -632,6 +634,28 @@ func (b *Bundle) Snapshot(_ context.Context, phase, filename string, v any) {
 		data:     body,
 	}
 	b.dispatchSnapshot(job)
+}
+
+// SetAssumptionProfileManifest writes the resolved AssumptionProfile +
+// resolution trace to the bundle as 08-assumption-profile.json (Tier 2 P0b,
+// spec §3.3, §7.3). Used by service.go::performValuation to stamp profile-
+// resolution audit data into the bundle so replay tooling can either:
+//   - short-circuit to the captured ResolvedSnapshot for perfect determinism, or
+//   - re-resolve from Facts and use ConfigHash to detect drift.
+//
+// Delegates to Snapshot so the file write goes through the same worker queue
+// and error accounting as every other phase artifact. Schema version is
+// registered (AssumptionProfileManifest=1) so future readers can version-gate.
+// Idempotent: a second call overwrites the previous manifest file.
+//
+// Nil-safe: nil receiver is a no-op so callers can chain
+// `artifact.From(ctx).SetAssumptionProfileManifest(...)` without a nil check.
+func (b *Bundle) SetAssumptionProfileManifest(ctx context.Context, manifest profile.AssumptionProfileManifest) {
+	if b == nil {
+		return
+	}
+	b.Snapshot(ctx, "assumption.profile.resolved", "08-assumption-profile.json", manifest)
+	b.AddSchemaVersion("AssumptionProfileManifest", 1)
 }
 
 // SnapshotRaw enqueues raw bytes (no Marshal) under filename. Used by gateway

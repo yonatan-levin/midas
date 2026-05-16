@@ -79,7 +79,7 @@ func newFXTestService(t *testing.T, gw ports.MacroDataGateway) *Service {
 			DCFMinGrowthRate:         -0.3,
 		},
 	}
-	svc := NewService(nil, nil, nil, nil, nil, nil, &MockMetricsService{}, cfg, zap.NewNop(), newTestCalcEmitter())
+	svc := NewService(nil, nil, nil, nil, nil, nil, &MockMetricsService{}, cfg, zap.NewNop(), newTestCalcEmitter(), nil)
 	svc.SetMacroGateway(gw)
 	return svc
 }
@@ -398,7 +398,7 @@ func newADRTestService(t *testing.T, ratios map[string]int, logger *zap.Logger) 
 	if logger == nil {
 		logger = zap.NewNop()
 	}
-	svc := NewService(nil, nil, nil, nil, nil, nil, &MockMetricsService{}, cfg, logger, newTestCalcEmitter())
+	svc := NewService(nil, nil, nil, nil, nil, nil, &MockMetricsService{}, cfg, logger, newTestCalcEmitter(), nil)
 	// Override the on-disk-loaded *ADRRatios with the test fixture so tests are
 	// hermetic and don't depend on config/adr_ratios.json contents.
 	if ratios == nil {

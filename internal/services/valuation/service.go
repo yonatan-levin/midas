@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -21,6 +22,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	growthsvc "github.com/midas/dcf-valuation-api/internal/services/growth"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/models"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 	"github.com/midas/dcf-valuation-api/pkg/finance/dcf"
 	"github.com/midas/dcf-valuation-api/pkg/finance/growth"
 	"github.com/midas/dcf-valuation-api/pkg/finance/wacc"
@@ -47,6 +49,16 @@ type Service struct {
 	logger             *zap.Logger
 	calcEmitter        *calclog.Emitter // emits the 12 DCF stage traces (Phase M)
 
+	// profileRegistry resolves the Tier 2 AssumptionProfile from per-request
+	// Facts (spec §2.3, §3.1). Wired by fx in production via
+	// profile.LoadFromJSON("config/assumption_profiles.json"); nil-allowed
+	// in unit tests that don't exercise the profile path. When nil,
+	// performValuation skips resolution entirely and ValuationResult's
+	// AssumptionProfile / ResolutionTrace fields stay empty — the legacy
+	// model paths are byte-identical because no Profile is attached to
+	// ModelInput. Production fx.Provide ensures this is always non-nil.
+	profileRegistry profile.Registry
+
 	// clock is the wall-clock seam introduced by Phase R0 of the
 	// observability replay-tooling spec (D10). Production binds it to
 	// wallClock{} (which delegates to time.Now); replay binds it to a
@@ -70,6 +82,12 @@ func (s *Service) log(ctx context.Context) *zap.Logger {
 // NewService creates a new valuation service.
 // calcEmitter is injected by the DI container and gates the 12 calculation stage
 // traces (Phase M). Pass nil only in tests that do not need calc tracing.
+//
+// profileRegistry (Tier 2 P0b, 13th parameter) resolves AssumptionProfile per
+// request. Production wires it via fx.Provide(profile.LoadFromJSON(...)); tests
+// that don't exercise the profile path pass nil — performValuation guards the
+// nil case so the legacy model branches stay byte-identical (this is load-
+// bearing for TestDDM_LegacyPath_BitForBit).
 func NewService(
 	financialRepo ports.FinancialDataRepository,
 	marketRepo ports.MarketDataRepository,
@@ -81,6 +99,7 @@ func NewService(
 	cfg *config.Config,
 	logger *zap.Logger,
 	calcEmitter *calclog.Emitter,
+	profileRegistry profile.Registry,
 ) *Service {
 	// Build growth estimator from valuation config.
 	// Pass calcEmitter so EstimateGrowthRates can emit stage-5 "growth" trace.
@@ -154,6 +173,7 @@ func NewService(
 		config:             cfg,
 		logger:             logger,
 		calcEmitter:        calcEmitter,
+		profileRegistry:    profileRegistry,
 		// Default to the production wall-clock binding. Replay overrides this
 		// via SetClock after construction (D10). Existing test call sites
 		// don't need to thread anything new because the default is identical
@@ -872,6 +892,75 @@ func (s *Service) performValuation(
 		return nil, fmt.Errorf("%w: shares outstanding not available", ErrInsufficientData)
 	}
 
+	// --- Tier 2 P0b: resolve the AssumptionProfile from current request facts. ---
+	//
+	// Pure deterministic resolution from a neutral Facts DTO; replay determinism
+	// preserved (no time.Now(), no I/O). Failure modes:
+	//   - unknown industry  → conservative software_like_scaling fallback;
+	//                         trace.Source=SourceFallback surfaces the choice
+	//   - nil registry      → skip resolution entirely (test-only path); model
+	//                         consumers receive ModelInput.Profile=nil and take
+	//                         their legacy branches — byte-identical responses
+	//   - malformed config  → would have failed startup (fx.Provide bubbles up
+	//                         the LoadFromJSON error)
+	//
+	// All downstream consumers are NO-OP in P0b — the field is declared and
+	// stamped onto the bundle + response, but model code reads it in P1-P4.
+	// This is intentional: P0b only ships the plumbing so P1-P4 land cleanly.
+	var resolvedProfile *profile.ResolvedProfile
+	var resolutionTrace profile.ResolutionTrace
+	if s.profileRegistry != nil {
+		// Build Facts from in-scope entities. Pointer types distinguish "no
+		// signal" (nil) from "zero is meaningful" (non-nil pointer to zero);
+		// see profile/facts.go for the contract. A truly pre-revenue ticker
+		// (Revenue==0 AND OperatingIncome==0) gets Revenue=nil so the
+		// resolver's Stage-2 maturity bucketing falls through to the
+		// "no_revenue_signal" branch instead of misclassifying as ultra-mature.
+		var revenuePtr *float64
+		if !(latestFinancialData.Revenue == 0 && latestFinancialData.NormalizedOperatingIncome == 0) {
+			v := latestFinancialData.Revenue
+			revenuePtr = &v
+		}
+		oiVal := latestFinancialData.OperatingIncome
+		niVal := latestFinancialData.NetIncome
+		facts := profile.Facts{
+			Industry:           industryCode,
+			IndustryNormalized: strings.ToUpper(strings.TrimSpace(industryCode)),
+			Revenue:            revenuePtr,
+			OperatingIncome:    &oiVal,
+			NetIncome:          &niVal,
+			// RevenueGrowthYoY uses the FY-key-sorted helper (Tier 2 P0b
+			// entity addition) so the result is deterministic even when
+			// FilingDate isn't stamped on every period.
+			RevenueGrowthYoY: historicalData.RecentYoYGrowth(),
+		}
+		resolvedProfile, resolutionTrace = s.profileRegistry.Resolve(facts)
+
+		s.log(ctx).Debug("AssumptionProfile resolved",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("profile_id", resolutionTrace.ProfileID),
+			zap.String("source", string(resolutionTrace.Source)),
+			zap.String("matched_rule_id", resolutionTrace.MatchedRuleID),
+		)
+
+		// Tier-3 artifact bundle: stamp the resolved profile + trace so
+		// replay tooling can short-circuit to the captured snapshot for
+		// perfect determinism (spec §3.3, §7.3). Nil-safe via the bundle's
+		// own nil-receiver guard.
+		if resolvedProfile != nil {
+			snapshot := resolvedProfile.AssumptionProfile
+			artifact.From(ctx).SetAssumptionProfileManifest(ctx, profile.AssumptionProfileManifest{
+				ProfileID:        resolvedProfile.ProfileID,
+				Source:           resolutionTrace.Source,
+				ResolverVersion:  resolutionTrace.ResolverVersion,
+				ConfigVersion:    resolutionTrace.ConfigVersion,
+				ConfigHash:       resolutionTrace.ConfigHash,
+				ResolvedSnapshot: &snapshot,
+				Trace:            resolutionTrace,
+			})
+		}
+	}
+
 	// Select the appropriate valuation model based on industry and financials.
 	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace;
 	// ticker is threaded in so that trace entry carries it self-describingly (M-1a).
@@ -910,6 +999,7 @@ func (s *Service) performValuation(
 			ctx, selectedModel, historicalData, marketData, macroData,
 			growthEstimate, waccResult, latestFinancialData, latestPeriod,
 			tangibleValuePerShare, sharesOutstanding, industryCode,
+			resolvedProfile,
 		)
 		if errors.Is(altErr, errFallbackToDCF) {
 			s.log(ctx).Info("Falling back to standard DCF after alternative model failure",
@@ -927,6 +1017,14 @@ func (s *Service) performValuation(
 			// path so the API surface is identical across model selections.
 			altResult.IndustryHeuristicCode = heuristicCode
 			altResult.IndustryHeuristicName = heuristicName
+			// Tier 2 P0b: stamp the resolved profile + audit trace on the
+			// alt-model path so the response surfaces the calibration record
+			// regardless of which valuation model produced the value.
+			if resolvedProfile != nil {
+				altResult.AssumptionProfile = resolvedProfile.ProfileID
+				traceCopy := resolutionTrace
+				altResult.ResolutionTrace = &traceCopy
+			}
 			return altResult, nil
 		}
 	}
@@ -1133,6 +1231,17 @@ func (s *Service) performValuation(
 		IndustryHeuristicName: heuristicName,
 	}
 
+	// Tier 2 P0b: stamp the resolved profile + audit trace on the DCF path
+	// result. Empty / nil when profileRegistry isn't wired (test paths),
+	// preserving the omitempty drop on the JSON wire. P2 fills the DCF
+	// diagnostic fields (DCFHorizonYears, DCFTerminalMethod, ...); P0b just
+	// declares them on the schema.
+	if resolvedProfile != nil {
+		result.AssumptionProfile = resolvedProfile.ProfileID
+		traceCopy := resolutionTrace
+		result.ResolutionTrace = &traceCopy
+	}
+
 	if usingNOPATFallback {
 		result.Warnings = append(result.Warnings,
 			"FCF using NOPAT approximation (D&A/CapEx unavailable from filing). Valuation may be less accurate for capital-intensive companies.")
@@ -1240,6 +1349,11 @@ func (s *Service) performValuation(
 
 // performAlternativeValuation executes a non-DCF valuation model (DDM, FFO, Revenue Multiple)
 // and converts its result to the standard ValuationResult format.
+//
+// resolvedProfile (Tier 2 P0b) is the AssumptionProfile resolved upstream by
+// performValuation; passed through to ModelInput.Profile so DDM / FFO / Revenue
+// Multiple consume calibration values in P1/P3/P4. May be nil when the service's
+// profileRegistry isn't wired (test paths) — models MUST nil-check.
 func (s *Service) performAlternativeValuation(
 	ctx context.Context,
 	model models.ValuationModel,
@@ -1253,6 +1367,7 @@ func (s *Service) performAlternativeValuation(
 	tangibleValuePerShare float64,
 	sharesOutstanding float64,
 	industryCode string,
+	resolvedProfile *profile.ResolvedProfile,
 ) (*entities.ValuationResult, error) {
 
 	s.log(ctx).Info("Using alternative valuation model",
@@ -1278,6 +1393,10 @@ func (s *Service) performAlternativeValuation(
 		InterestBearingDebt:    latestFinancialData.InterestBearingDebt,
 		CashAndCashEquivalents: latestFinancialData.CashAndCashEquivalents,
 		Now:                    s.clock.Now,
+		// Tier 2 P0b: thread the resolved AssumptionProfile into ModelInput.
+		// P0b downstream consumers are nil-safe NO-OPs; P1/P3/P4 will read
+		// calibration values (horizon, caps, terminal method, payout path).
+		Profile: resolvedProfile,
 	}
 
 	// Execute the alternative model
