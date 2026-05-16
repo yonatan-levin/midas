@@ -1,10 +1,11 @@
 # DC-1 — Datacleaner adjusters are single-sided; collapse "valuation overlay" with "as-of restatement"
 
-**Status:** OPEN — filed 2026-05-05 during the Graham-floor metrics design pass.
+**Status:** IN PROGRESS — **Phase 0 SHIPPED 2026-05-16** (merge `1640394`); Phases 1-4 pending. Originally filed 2026-05-05 during the Graham-floor metrics design pass.
 **Severity:** Major (silently produces inconsistent balance-sheet output; surfaces only when a downstream consumer needs `Assets = Liabilities + Equity` to balance).
 **Origin:** Investigation triggered by `docs/refactoring/graham-floor-metrics-spec.md` (R2 risk discussion). Discovered while validating whether to derive `TotalLiabilities` from `TotalAssets − StockholdersEquity` for NCAV.
 **Blocks:** No production work. Graham-floor metrics ship around it via direct `us-gaap:Liabilities` XBRL preference (see `graham-floor-metrics-spec.md` §4.4).
 **Related specs:** `docs/refactoring/graham-floor-metrics-spec.md`, `docs/refactoring/industry-classification-unification-spec.md` (similar "two parallel paths" theme).
+**Phase 0 progress (2026-05-16):** Added 4 plug fields to `FinancialData` (`OtherCurrentAssets`, `OtherNonCurrentAssets`, `OtherCurrentLiabilities`, `OtherNonCurrentLiabilities`); SEC parser populates them at end of `parsePeriodData` via `computePlugs`. Empirically zero behavior change (replay-verified on AAPL + MSFT, timestamp-only drift). Property test + ticker-basket integration test + persistence round-trip pin the components-sum-to-umbrellas invariant. SQLite-side schema migration deferred to Phase 1+ via a flip-gate test. Phase 1 (`recomputeUmbrellas` shadow shim) is now unblocked. See `docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md` for design + `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-0-implementation-plan.md` for the Phase 0 plan.
 
 ---
 

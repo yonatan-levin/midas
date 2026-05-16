@@ -330,6 +330,10 @@ Configuration is externalized in JSON files under `config/datacleaner/`:
 - `industry_codes.json` - Industry classification patterns
 - `flag_conditions.json` - Risk flag evaluation rules
 
+### `FinancialData` plug fields (DC-1 Phase 0)
+
+`FinancialData` (in `internal/core/entities/financial_data.go`) carries four plug fields — `OtherCurrentAssets`, `OtherNonCurrentAssets`, `OtherCurrentLiabilities`, `OtherNonCurrentLiabilities` — populated by the SEC parser (`internal/infra/gateways/sec/plugs.go::computePlugs`) as residuals between each umbrella total and the sum of its known typed components. Negative residuals are clamped to zero with a Debug log. This is the structural foundation for the DC-1 datacleaner refactor (`docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md`). Phase 0 (the entity + parser plug fill) ships with zero downstream behavior change — **no consumer reads the plug fields yet**. Subsequent phases (1–4) use the plug fields to enforce components-sum-to-umbrellas through the cleaner pipeline (shadow-mode `recomputeUmbrellas` shim → unified `Adjuster` interface + ledger → `CleanedFinancialData` view reconstruction → consumer migration).
+
 ## Background Scheduler
 
 Optional background service (disabled by default) for automated data ingestion:

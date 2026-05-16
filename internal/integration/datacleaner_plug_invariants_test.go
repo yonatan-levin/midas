@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,11 +23,14 @@ import (
 // available ticker in the DC-1 acceptance basket. Closes the Phase 0 → Phase 1
 // gate per the spec: "Plug values match (umbrella - sum) across ticker basket."
 //
-// Fixture source: replay bundles under artifacts/tier2-baseline/2026-05-15/.
-// Each bundle's 05-fetch-sec.raw.json is the captured SEC company-facts payload;
-// running it through the production parser exercises the same code path that
-// fires on a live request, including the computePlugs call at the end of
-// parsePeriodData.
+// Fixture source: replay bundles under artifacts/tier2-baseline/<newest-date>/.
+// The test resolves the most recent ISO-dated directory under tier2-baseline/
+// at runtime (lexicographic max — ISO format sorts correctly as strings) so
+// freshly-captured baselines automatically become the source-of-truth without
+// editing the test. Each bundle's 05-fetch-sec.raw.json is the captured SEC
+// company-facts payload; running it through the production parser exercises
+// the same code path that fires on a live request, including the computePlugs
+// call at the end of parsePeriodData.
 //
 // Tickers without a captured bundle skip (t.Skipf) rather than fail — Phase 1's
 // shadow-mode work will tighten this to require all 10. The integration suite
@@ -59,11 +64,33 @@ func TestDatacleaner_PlugInvariants_TickerBasket(t *testing.T) {
 
 	parser := sec.NewParser(zap.NewNop())
 
-	// Resolve the artifacts root from the integration package's directory.
-	// _test.go binaries run with the cwd at the package dir, so the path
-	// climbs three levels up to repo root: internal/integration → repo.
-	bundleRoot, err := filepath.Abs(filepath.Join("..", "..", "artifacts", "tier2-baseline", "2026-05-15"))
-	require.NoError(t, err, "resolve bundle root")
+	// Resolve the newest baseline-date directory under tier2-baseline/ (REVIEWER
+	// L1 fix from Worktree B). ISO date directories sort lexicographically, so
+	// the max element is the freshest capture. Fails loudly if no baseline
+	// exists — Phase 1's shadow-mode work would otherwise silent-skip the entire
+	// basket and let regressions through.
+	baselineParent, err := filepath.Abs(filepath.Join("..", "..", "artifacts", "tier2-baseline"))
+	require.NoError(t, err, "resolve baseline parent")
+	matches, err := filepath.Glob(filepath.Join(baselineParent, "*"))
+	require.NoError(t, err, "glob tier2-baseline subdirs")
+	var dateDirs []string
+	for _, m := range matches {
+		if info, statErr := os.Stat(m); statErr == nil && info.IsDir() {
+			dateDirs = append(dateDirs, m)
+		}
+	}
+	require.NotEmpty(t, dateDirs, "no baseline date directories under %s — capture a baseline first", baselineParent)
+	sort.Strings(dateDirs)
+	bundleRoot := dateDirs[len(dateDirs)-1]
+	t.Logf("tier2-baseline resolved to %s (newest of %d date dirs)", filepath.Base(bundleRoot), len(dateDirs))
+
+	// passedCount tracks tickers whose subtest completed all parser-driven
+	// assertions without failure (REVIEWER L2 fix). Atomic for safety against
+	// future t.Parallel() adoption. Asserted >= 5 after the loop to catch the
+	// "all-skip silent regression" failure mode where loadSECRawForTicker
+	// silently returns false for every basket member (e.g. baseline dir moved
+	// or fixture-file naming changed).
+	var passedCount atomic.Int32
 
 	for _, ticker := range basket {
 		ticker := ticker // capture for closure
@@ -160,8 +187,24 @@ func TestDatacleaner_PlugInvariants_TickerBasket(t *testing.T) {
 					)
 				}
 			}
+
+			// REVIEWER L2 fix: count this ticker as exercised only if no
+			// assertion failed inside the subtest. Skipped tickers (early
+			// return above) and failed-assertion tickers don't increment.
+			if !t.Failed() {
+				passedCount.Add(1)
+			}
 		})
 	}
+
+	// REVIEWER L2 fix: gate against the all-skip silent regression. Current
+	// captured baselines yield 7 of 10 PASS (AAPL/MSFT/KO/F/AMD/MXL/EQIX with
+	// JNJ/TSM/BABA skipping for lack of fixtures); 5 is a deliberately
+	// conservative floor that survives one or two tickers temporarily
+	// dropping out without becoming so high it false-positives during the
+	// Phase 1 baseline refresh cycle.
+	require.GreaterOrEqual(t, passedCount.Load(), int32(5),
+		"basket coverage degraded — fewer than 5 tickers exercised the parser successfully (got %d)", passedCount.Load())
 }
 
 // loadSECRawForTicker walks the per-ticker bundle directory under bundleRoot
