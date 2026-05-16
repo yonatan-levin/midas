@@ -103,13 +103,34 @@ type FinancialData struct {
 	CurrentLiabilities float64 `json:"current_liabilities"`
 
 	// Plug fields — DC-1 Phase 0 (see docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md).
-	// Computed at the end of the SEC parser as residuals so that:
-	//   CurrentAssets    == CashAndCashEquivalents + Inventory + OtherCurrentAssets
-	//   TotalAssets      == CurrentAssets + Goodwill + OtherIntangibles + DeferredTaxAssets + OtherNonCurrentAssets
-	//   CurrentLiab      == OperatingLeaseLiabilityCurrent + OtherCurrentLiabilities
-	//   TotalLiab        == CurrentLiab + TotalDebt + OperatingLeaseLiabilityNoncurrent + OtherNonCurrentLiabilities
+	// Computed at the end of the SEC parser as residuals so the following
+	// arithmetic invariants hold by construction:
+	//
+	//   CurrentAssets       == CashAndCashEquivalents + Inventory + OtherCurrentAssets
+	//   TotalAssets         == CurrentAssets + Goodwill + OtherIntangibles +
+	//                          DeferredTaxAssets + OtherNonCurrentAssets
+	//   CurrentLiabilities  == OperatingLeaseLiabilityCurrent + OtherCurrentLiabilities
+	//   TotalLiabilities    == CurrentLiabilities + TotalDebt +
+	//                          OperatingLeaseLiabilityNoncurrent + OtherNonCurrentLiabilities
+	//
 	// All four are >= 0 by construction (negative residuals clamped with a Debug log).
-	// Phase 1+ uses these to enforce components-sum-to-umbrellas in the cleaner.
+	//
+	// IMPORTANT — today's SEC XBRL parser only populates the umbrella
+	// OperatingLeaseLiability field; the split fields
+	// OperatingLeaseLiabilityCurrent / OperatingLeaseLiabilityNoncurrent are
+	// treated as fallbacks for the umbrella, never as independent values
+	// (see parser.go:775-784). Until a future phase teaches the parser to
+	// preserve the current/noncurrent split, both lease split fields remain
+	// zero on every parsed FinancialData and the operating-lease portion of
+	// liabilities is absorbed into the OtherCurrentLiabilities /
+	// OtherNonCurrentLiabilities plugs. The math invariants above still hold.
+	//
+	// OtherNonCurrentAssets also absorbs PP&E and any other non-current
+	// asset line items not explicitly modeled on FinancialData.
+	//
+	// Phase 1+ uses these plugs to enforce components-sum-to-umbrellas in
+	// the cleaner. Phase 0 invariant: NO consumer reads these fields yet —
+	// they exist only to feed the Phase 1+ recomputeUmbrellas shim.
 	OtherCurrentAssets         float64 `json:"other_current_assets"`
 	OtherNonCurrentAssets      float64 `json:"other_non_current_assets"`
 	OtherCurrentLiabilities    float64 `json:"other_current_liabilities"`

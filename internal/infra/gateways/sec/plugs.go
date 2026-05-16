@@ -17,6 +17,30 @@ import (
 // to zero (preserving the >= 0 invariant) and emit a Debug log line so the
 // data-quality anomaly is observable without polluting Warnings.
 //
+// Decomposition by triple:
+//
+//	CurrentAssets       == CashAndCashEquivalents + Inventory + OtherCurrentAssets
+//	TotalAssets         == CurrentAssets + Goodwill + OtherIntangibles +
+//	                       DeferredTaxAssets + OtherNonCurrentAssets
+//	                       (OtherNonCurrentAssets also absorbs PP&E and any
+//	                       non-current asset line items not modeled on the entity)
+//	CurrentLiabilities  == OperatingLeaseLiabilityCurrent + OtherCurrentLiabilities
+//	TotalLiabilities    == CurrentLiabilities + TotalDebt +
+//	                       OperatingLeaseLiabilityNoncurrent + OtherNonCurrentLiabilities
+//
+// IMPORTANT — today's SEC XBRL parser only populates the umbrella
+// OperatingLeaseLiability field; the split fields
+// OperatingLeaseLiabilityCurrent / OperatingLeaseLiabilityNoncurrent are
+// treated as fallbacks for the umbrella, never as independent values
+// (see parser.go:775-784). Until a future phase teaches the parser to
+// preserve the current/noncurrent split, both lease split fields remain
+// zero on every parsed FinancialData. That means in production today
+// OtherCurrentLiabilities absorbs the ENTIRE CurrentLiabilities umbrella
+// (the lease-current term is zero) and OtherNonCurrentLiabilities absorbs
+// everything in non-current liabilities except TotalDebt. The math
+// invariants above still hold by construction; only the lease-split
+// granularity is deferred.
+//
 // computePlugs assumes fd's monetary fields are already currency-coherent —
 // i.e., extractFiscalPeriods has already collapsed the per-currency value
 // buckets via the dominant-currency resolution at parser.go:309-363. The

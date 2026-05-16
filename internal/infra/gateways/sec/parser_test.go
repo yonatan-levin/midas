@@ -1551,9 +1551,16 @@ func TestParser_ParseFinancialData_ComputesPlugs(t *testing.T) {
 				"CashAndCashEquivalentsAtCarryingValue": factGroupUSD(29_965_000_000, 2023),
 				"InventoryNet":                          factGroupUSD(6_331_000_000, 2023),
 				"LongTermDebt":                          factGroupUSD(111_088_000_000, 2023),
-				"OperatingLeaseLiabilityCurrent":        factGroupUSD(1_410_000_000, 2023),
-				"OperatingLeaseLiabilityNoncurrent":     factGroupUSD(10_550_000_000, 2023),
-				"CommonStockSharesOutstanding":          factGroupShares(15_550_061_000, 2023),
+				// Note (REVIEWER A-2): today's parser treats the lease split
+				// XBRL tags as fallbacks for the umbrella OperatingLeaseLiability
+				// — they do NOT propagate to fd.OperatingLeaseLiabilityCurrent /
+				// fd.OperatingLeaseLiabilityNoncurrent. The fixture entries below
+				// document the AAPL-shaped XBRL surface but are inert against
+				// today's entity; the test verifies plug arithmetic only.
+				// Lease-split decomposition is deferred to Phase 1+.
+				"OperatingLeaseLiabilityCurrent":    factGroupUSD(1_410_000_000, 2023),
+				"OperatingLeaseLiabilityNoncurrent": factGroupUSD(10_550_000_000, 2023),
+				"CommonStockSharesOutstanding":      factGroupShares(15_550_061_000, 2023),
 			},
 		},
 	}
