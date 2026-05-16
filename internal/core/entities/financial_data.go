@@ -102,6 +102,19 @@ type FinancialData struct {
 	CurrentAssets      float64 `json:"current_assets"`
 	CurrentLiabilities float64 `json:"current_liabilities"`
 
+	// Plug fields — DC-1 Phase 0 (see docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md).
+	// Computed at the end of the SEC parser as residuals so that:
+	//   CurrentAssets    == CashAndCashEquivalents + Inventory + OtherCurrentAssets
+	//   TotalAssets      == CurrentAssets + Goodwill + OtherIntangibles + DeferredTaxAssets + OtherNonCurrentAssets
+	//   CurrentLiab      == OperatingLeaseLiabilityCurrent + OtherCurrentLiabilities
+	//   TotalLiab        == CurrentLiab + TotalDebt + OperatingLeaseLiabilityNoncurrent + OtherNonCurrentLiabilities
+	// All four are >= 0 by construction (negative residuals clamped with a Debug log).
+	// Phase 1+ uses these to enforce components-sum-to-umbrellas in the cleaner.
+	OtherCurrentAssets         float64 `json:"other_current_assets"`
+	OtherNonCurrentAssets      float64 `json:"other_non_current_assets"`
+	OtherCurrentLiabilities    float64 `json:"other_current_liabilities"`
+	OtherNonCurrentLiabilities float64 `json:"other_non_current_liabilities"`
+
 	// TotalLiabilities is the as-reported balance-sheet line "total liabilities"
 	// (us-gaap:Liabilities / ifrs-full:Liabilities). Populated by the SEC parser
 	// when the umbrella XBRL tag is present; left at zero otherwise. Distinct
