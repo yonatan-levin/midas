@@ -37,8 +37,10 @@ Quality bar: **fintech-platform-grade accuracy**, not a personal script.
 | 3: Industry-Aware Models | COMPLETE (2026-04-09) | `7eaa488` | DDM (banks), FFO (REITs), Revenue Multiple (pre-revenue), DCF (default) |
 | 4: International + Cross-Checks | COMPLETE (2026-04-10) | `440d204` | Country risk premium, Blume beta, exit-multiple TV, sanity cross-check |
 | IFRS / FPI Support | COMPLETE (2026-04-27) | `phase-b-ifrs-fpi-support` tag | TSM, ASML, NVO, AZN, BABA, BIDU, TM, RIO, BHP, NVS, SHEL, BP produce USD per-ADR fair values via IFRS-full XBRL parsing + FRED FX conversion + configured ADR ratios. Response surfaces `currency`, `adr_ratio_applied`, and `current_price` for transparency. See `docs/refactoring/ifrs-foreign-private-issuer-support-spec.md`. |
+| Graham-Floor (Tier 1) | COMPLETE (2026-05-11) | `0324057` | Tier 1 polish — VAL-4 (Graham floor metrics), VAL-5, VAL-7, RM-1.A, RM-1.B archived. Engine at `CalculationVersion 4.1`. |
+| Tier 2: AssumptionProfile (in flight) | Bootstrap SHIPPED (2026-05-16) | `tier2-bootstrap` branch (`265b9c9`) | Unified `AssumptionProfile` backbone keyed by `(archetype × maturity)` driving DCF/DDM/FFO/RevenueMultiple calibration. Closes RM-3 + VAL-1 + VAL-2 + VAL-3 P3. Bootstrap captured pre-Tier-2 baselines (10 bundles + DDM bit-for-bit goldens). P0a (profile package skeleton) dispatches next; then P0b, then parallel P1-P4 worktrees. Will bump engine to `CalculationVersion 4.2` at Tier 2 close. See `docs/refactoring/spec/assumption-profile-spec.md` + `docs/refactoring/implementations/assumption-profile-implementation-plan.md`. |
 
-**All planned phases are complete.** The engine is at `CalculationVersion 4.0`.
+**Phases 0-4 + IFRS-FPI + Graham-Floor (Tier 1) complete.** Engine at `CalculationVersion 4.1`. **Tier 2 in flight** (Bootstrap shipped 2026-05-16).
 
 ---
 

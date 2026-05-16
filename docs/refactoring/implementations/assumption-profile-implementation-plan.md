@@ -3454,14 +3454,39 @@ After Tier 2 ships: update `docs/refactoring/spec/assumption-profile-spec.md` §
 
 ## 8. Implementation Outcome
 
-(Placeholder for post-merge fill-in.)
+(Filled in incrementally as each phase ships.)
 
+### Phase Bootstrap — SHIPPED 2026-05-16 (commit `265b9c9` on `tier2-bootstrap`)
+
+- **Files landed:** 6 DDM golden fixtures (JPM/BAC/WFC × input+output) + `testhelpers` package (4 files: testhelpers.go, fixtures.go, profile_registry.go, service.go) + `ddm_bitforbit_test.go` (load-bearing regression test) + `golden_capture_test.go` (build-tag-gated regeneration helper) + Bootstrap-stub `profile.go` (99 lines; P0a replaces) + `tier2_regression_test.go` (Skip-only skeleton) + 10 captured replay bundles + `.gitignore` negation rule for `artifacts/tier2-baseline/`
+- **B-V-R-Q verdicts:** BACKEND DONE_WITH_CONCERNS → VERIFIER VERIFIED → REVIEWER APPROVE_WITH_NITS (6 LOW nits, all tracked as follow-ups) → QA PASS_WITH_NOTES (drift-injection proved bit-for-bit is operationally load-bearing) → HUMAN approved → merged to master
+- **Coverage:** 43/43 packages green; bit-for-bit test deterministic across 5 runs + race-clean
+- **Surprises:**
+  - Production cleaner emits `DividendsPerShare=0` for FIN-prefix tickers — pre-existing bug, NOT Bootstrap-introduced. Worked around by patching JPM/BAC/WFC DPS values from public-record FY2024 data (JPM=$4.80, BAC=$1.00, WFC=$1.40). Filed as **T2-BS-1** follow-up.
+  - JPM bundle missing `10-clean-output.json` / `10-clean-trace.json` — same cleaner-side issue. Affects JPM only; downstream stages (12/13/15/17) are intact. Filed as **T2-BS-2**.
+  - Pre-existing data race in `scripts/benchmark_executor_test.go` (exists at master `0324057` independent of Bootstrap). Filed as **T2-BS-4**.
+  - Yahoo Finance crumb token captured in AAPL's `99-debug-trace.jsonl` — ephemeral session token, low impact, but should be added to capture-pipeline redaction allow-list. Filed as **T2-BS-3**.
+  - Plan pseudo-code's entity field names diverged from real codebase (`AnnualPeriods` vs `Data` map, `Price` vs `SharePrice`). `testhelpers` adapted to real shapes; public helper signatures unchanged so P1-P4 are unaffected.
+  - Baseline directory ~42MB on disk (plan estimated 50KiB). Bulk is SEC raw payloads (`05-fetch-sec.raw.json`). Kept because `--from=raw` replay mode requires them.
+- **Follow-up trackers filed:** T2-BS-1 (cleaner DPS=0 for FIN), T2-BS-2 (JPM clean-output missing), T2-BS-3 (Yahoo crumb redaction), T2-BS-4 (pre-existing benchmark_executor race), plus 6 LOW-severity REVIEWER nits (fixture-provenance README, `.gitattributes` eol=lf rule for new goldens, `periodKey` → `fmt.Sprintf`, `Now` field nil-on-unmarshal robustness, profile.go stub test coverage, `replay_duration_ms` wallclock field).
+- **Operational notes for downstream phases (P0a/P0b/Pre-P2/P1-P4):**
+  1. Replay against `tier2-baseline/` requires `--from=parsed` (raw macro snapshots not captured for this bundle vintage).
+  2. `--format=json` summary includes `replay_duration_ms` wallclock — filter when doing byte-exact comparisons.
+  3. JPM replay needs `--allow-schema-drift` because `10-clean-output.json` is missing.
+- **Spec version after merge:** v0.1 (no spec changes; v0.2 deferred to full Tier 2 close)
+
+### Phase P0a — Pending dispatch
+### Phase P0b — Pending dispatch
+### Phase P1 (RM-3) — Pending dispatch
+### Phase P2 (VAL-1, includes Pre-P2 growth-estimator extension) — Pending dispatch
+### Phase P3 (VAL-2 DDM multi-stage) — Pending dispatch
+### Phase P4 (VAL-3 P3 forward FFO) — Pending dispatch
+### Phase Closeout — Pending dispatch
+
+### Final tallies (pending Tier 2 close)
 - **Final commit count:** TBD
-- **Final LoC:** TBD
-- **Coverage achieved:** TBD
-- **Surprises:** TBD
-- **Follow-up trackers filed:** TBD
-- **Spec version after merge:** v0.2
+- **Final LoC:** TBD (Bootstrap contributed ~3,800 LoC; estimate ~3,800 more across P0a–Closeout per plan §LoC estimate)
+- **Spec version after Tier 2 close:** v0.2
 
 ---
 
