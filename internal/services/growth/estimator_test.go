@@ -235,6 +235,58 @@ func TestEstimator_NilHistorical(t *testing.T) {
 	}
 }
 
+// TestEstimator_ProducesAtLeast10Stages_WhenConfigured verifies that the
+// estimator can produce a 10+-element ProjectedGrowthRates slice when the
+// config requests a longer horizon. Required by Tier 2 P2's
+// hypergrowth_profitable archetype which sets HorizonYears=10. Spec §6.2.
+//
+// Implementation note: the estimator stages are Stage1 (constant) + Stage2
+// (linear fade) + optional Stage3 (continued fade toward terminal). With
+// Stage1=3, Stage2=4, Stage3=3 the slice length is 10. Default config
+// keeps Stage3=0 so existing behavior is byte-identical.
+func TestEstimator_ProducesAtLeast10Stages_WhenConfigured(t *testing.T) {
+	cfg := DefaultEstimatorConfig()
+	cfg.Stage3Years = 3 // extends the existing 3+4=7 to 3+4+3=10
+
+	est := NewEstimator(cfg, zap.NewNop(), nil)
+	historical := &pkggrowth.CalculationResult{
+		GrowthRate:  0.30,
+		Method:      "CAGR",
+		DataQuality: "high",
+		IsReliable:  true,
+	}
+	result := est.EstimateGrowthRates(
+		context.Background(), "TEST",
+		nil, // no analyst data
+		historical,
+		0.10, // sustainable growth
+	)
+	assert.GreaterOrEqual(t, len(result.ProjectedGrowthRates), 10,
+		"hypergrowth_profitable archetype needs at least 10 growth stages")
+
+	// Stage 3 years should continue the fade (monotonic non-increasing).
+	for i := 1; i < len(result.ProjectedGrowthRates); i++ {
+		assert.LessOrEqual(t, result.ProjectedGrowthRates[i], result.ProjectedGrowthRates[i-1]+1e-9,
+			"growth should not increase from year %d to year %d", i, i+1)
+	}
+}
+
+// TestEstimator_DefaultConfig_StillProduces7Stages pins the existing
+// behavior contract: when Stage3Years is unset (=0), the slice length
+// stays at 7. Guards against accidental default changes that would
+// drift production output.
+func TestEstimator_DefaultConfig_StillProduces7Stages(t *testing.T) {
+	cfg := DefaultEstimatorConfig()
+	assert.Equal(t, 0, cfg.Stage3Years, "default Stage3Years must be 0 (no extension)")
+
+	est := NewEstimator(cfg, zap.NewNop(), nil)
+	historical := &pkggrowth.CalculationResult{GrowthRate: 0.12}
+	result := est.EstimateGrowthRates(context.Background(), "TEST", nil, historical, 0)
+
+	assert.Equal(t, 7, len(result.ProjectedGrowthRates),
+		"default config must still produce 3+4=7 stages (backward compatibility)")
+}
+
 func TestGrowthEstimate_SummaryGrowthRate(t *testing.T) {
 	tests := []struct {
 		name     string

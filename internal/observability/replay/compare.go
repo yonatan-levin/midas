@@ -136,6 +136,33 @@ func compareFairValueResponses(bundle, current *handlers.FairValueResponse, relT
 		}
 	}
 
+	// Tier 2 P2 (closes T2-P0b-1): DCFPerYearPV slice — compare element-wise
+	// just like GrowthRates. P0b declared the field; P2 populates it. Without
+	// this walker extension, drift in the per-year explicit-period PVs would
+	// silently bypass Replay() regression detection, masking issues like
+	// growth-curve misindexing or off-by-one horizon handling. omitempty on
+	// the wire means pre-Tier-2 bundles unmarshal to a nil slice — that
+	// matches a nil current slice as length=0 here, so no false positives.
+	d.FieldsTotal++
+	if len(bundle.DCFPerYearPV) != len(current.DCFPerYearPV) {
+		d.Strings = append(d.Strings, StringDiff{
+			Path: "dcf_per_year_pv.len",
+			Old:  fmt.Sprintf("%d", len(bundle.DCFPerYearPV)),
+			New:  fmt.Sprintf("%d", len(current.DCFPerYearPV)),
+		})
+	} else {
+		for i := range bundle.DCFPerYearPV {
+			d.FieldsTotal++
+			path := fmt.Sprintf("dcf_per_year_pv[%d]", i)
+			fd := FloatDiffOf(path, bundle.DCFPerYearPV[i], current.DCFPerYearPV[i], relTol, absTol)
+			if !fd.WithinTolerance {
+				d.Floats = append(d.Floats, fd)
+			} else if fd.AbsDrift > 0 {
+				d.FloatsWithinTolerance = append(d.FloatsWithinTolerance, fd)
+			}
+		}
+	}
+
 	// Warnings slice — compare element-wise as strings.
 	d.FieldsTotal++
 	if len(bundle.Warnings) != len(current.Warnings) {

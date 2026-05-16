@@ -129,3 +129,76 @@ func TestCompareResponse_NilArgs(t *testing.T) {
 		t.Fatalf("a/nil: expected mismatch")
 	}
 }
+
+// TestCompareFairValueResponses_DCFPerYearPV_LengthMismatch verifies that
+// the hand-rolled walker (compareFairValueResponses) catches DCFPerYearPV
+// length drift. Closes T2-P0b-1 — before this test, drift in this field
+// could silently bypass Replay() regression because the walker did not
+// enumerate it.
+func TestCompareFairValueResponses_DCFPerYearPV_LengthMismatch(t *testing.T) {
+	a := &handlers.FairValueResponse{
+		Ticker:       "AAPL",
+		Currency:     "USD",
+		DCFPerYearPV: []float64{10.0, 20.0, 30.0}, // 3-year horizon
+	}
+	b := *a
+	b.DCFPerYearPV = []float64{10.0, 20.0, 30.0, 40.0} // 4-year horizon (drift)
+
+	d := compareFairValueResponses(a, &b, 1e-9, 1e-12)
+	if !d.HasMismatch() {
+		t.Fatalf("length drift in DCFPerYearPV must surface a mismatch")
+	}
+	found := false
+	for _, s := range d.Strings {
+		if s.Path == "dcf_per_year_pv.len" && s.Old == "3" && s.New == "4" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected dcf_per_year_pv.len StringDiff; got strings=%v", d.Strings)
+	}
+}
+
+// TestCompareFairValueResponses_DCFPerYearPV_ElementDrift verifies the
+// walker catches per-element drift in DCFPerYearPV. Same closure rationale
+// as the length test — per-element checks are what catches off-by-one
+// horizon indexing bugs that don't change slice length.
+func TestCompareFairValueResponses_DCFPerYearPV_ElementDrift(t *testing.T) {
+	a := &handlers.FairValueResponse{
+		Ticker:       "AAPL",
+		Currency:     "USD",
+		DCFPerYearPV: []float64{10.0, 20.0, 30.0},
+	}
+	b := *a
+	b.DCFPerYearPV = []float64{10.0, 22.0, 30.0} // year-2 PV drifted 10%
+
+	d := compareFairValueResponses(a, &b, 1e-9, 1e-12)
+	if !d.HasMismatch() {
+		t.Fatalf("element-level drift in DCFPerYearPV must surface a mismatch")
+	}
+	found := false
+	for _, fd := range d.Floats {
+		if fd.Path == "dcf_per_year_pv[1]" && !fd.WithinTolerance {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected dcf_per_year_pv[1] FloatDiff outside tolerance; got floats=%v", d.Floats)
+	}
+}
+
+// TestCompareFairValueResponses_DCFPerYearPV_BothEmpty_NoFalsePositive
+// confirms that pre-Tier-2 bundles (which marshal to nil because of
+// omitempty) versus an unpopulated current snapshot don't produce a false
+// positive — both sides have len=0 so the walker should see no drift.
+func TestCompareFairValueResponses_DCFPerYearPV_BothEmpty_NoFalsePositive(t *testing.T) {
+	a := &handlers.FairValueResponse{Ticker: "AAPL", Currency: "USD"} // DCFPerYearPV is nil
+	b := *a
+
+	d := compareFairValueResponses(a, &b, 1e-9, 1e-12)
+	for _, s := range d.Strings {
+		if s.Path == "dcf_per_year_pv.len" {
+			t.Fatalf("nil/nil DCFPerYearPV must not produce a length diff; got %v", s)
+		}
+	}
+}
