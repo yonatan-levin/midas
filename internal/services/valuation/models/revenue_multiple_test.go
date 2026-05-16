@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
 func newTestRevenueMultipleModel() *RevenueMultipleModel {
@@ -747,4 +748,269 @@ func TestLoadEVRevenueMultiples_UsesEmbed(t *testing.T) {
 	// Values from config/industry_multiples.json at the time of the sweep.
 	assert.Equal(t, 2.0, multiples["default"])
 	assert.Equal(t, 5.0, multiples["TECH"])
+}
+
+// buildMXLLikeInput assembles a ModelInput approximating MXL (negative-OI
+// cyclical-trough semi) for RM-3 forward-path testing. Synthetic but
+// representative of the trough shape: TTM revenue ~$560M, 5y revenue mean
+// ~$822M, OI ~-$50M. Mirrors the canonical fixture in
+// profile/testhelpers/fixtures.go::BuildMXLModelInput; duplicated inline
+// because testhelpers imports the models package (testhelpers → models →
+// testhelpers would cycle for tests inside `package models`).
+func buildMXLLikeInput(t *testing.T) *ModelInput {
+	t.Helper()
+	latest := &entities.FinancialData{
+		Ticker:                    "MXL",
+		Revenue:                   560_000_000,
+		OperatingIncome:           -50_000_000,
+		NormalizedOperatingIncome: -50_000_000,
+		NetIncome:                 -75_000_000,
+		InterestBearingDebt:       151_000_000,
+		CashAndCashEquivalents:    61_000_000,
+		StockholdersEquity:        300_000_000,
+		TaxRate:                   0.21,
+		FilingPeriod:              "2026FY",
+		FilingDate:                time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+		AsOf:                      time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+	}
+	// Newest-first revenue history: 2026FY=560M, 2025FY=800M, 2024FY=1200M,
+	// 2023FY=950M, 2022FY=600M. 5y mean = 822M (the cyclical-trough floor).
+	revenueHistory := []float64{560e6, 800e6, 1200e6, 950e6, 600e6}
+	data := make(map[string]*entities.FinancialData, len(revenueHistory))
+	for i, rev := range revenueHistory {
+		year := 2026 - i
+		clone := *latest
+		clone.Revenue = rev
+		clone.AsOf = time.Date(year, 12, 31, 0, 0, 0, 0, time.UTC)
+		clone.FilingDate = time.Date(year, 12, 31, 0, 0, 0, 0, time.UTC)
+		clone.FilingPeriod = fyKey(year)
+		data[fyKey(year)] = &clone
+	}
+	return &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "MXL",
+			Data:   data,
+		},
+		GrowthEstimate: &entities.GrowthEstimate{
+			ProjectedGrowthRates: []float64{0.50, 0.50, 0.41, 0.33, 0.25, 0.16, 0.08},
+			TerminalGrowthRate:   0.03,
+			Confidence:           "high",
+		},
+		Industry:               "MFG_SEMI",
+		WACC:                   0.19,
+		CostOfEquity:           0.21,
+		TaxRate:                0.21,
+		SharesOutstanding:      82_000_000,
+		InterestBearingDebt:    151_000_000,
+		CashAndCashEquivalents: 61_000_000,
+		Now:                    func() time.Time { return time.Date(2026, 5, 14, 0, 0, 0, 0, time.UTC) },
+	}
+}
+
+func fyKey(year int) string {
+	// Tiny inline formatter to avoid pulling strconv just for tests.
+	buf := []byte{0, 0, 0, 0, 'F', 'Y'}
+	buf[0] = byte('0' + (year/1000)%10)
+	buf[1] = byte('0' + (year/100)%10)
+	buf[2] = byte('0' + (year/10)%10)
+	buf[3] = byte('0' + year%10)
+	return string(buf)
+}
+
+// TestRevenueMultiple_Forward_ProjectsAtHorizon verifies the RM-3 forward
+// path: when Profile.HorizonYears > 0 and CostOfEquity > 0, the model
+// computes both trailing and forward values, surfaces HorizonSelected /
+// TerminalMultiple, and remains a positive per-share value for the MXL
+// cyclical-trough shape. Spec §6.1.
+func TestRevenueMultiple_Forward_ProjectsAtHorizon(t *testing.T) {
+	input := buildMXLLikeInput(t)
+	input.Profile = &profile.ResolvedProfile{
+		AssumptionProfile: profile.AssumptionProfile{
+			ProfileID:         "cyclical_trough:standard_growth",
+			Archetype:         profile.ArchetypeCyclicalTrough,
+			Maturity:          profile.MaturityStandardGrowth,
+			HorizonYears:      5,
+			CompoundGrowthCap: 3.0,
+			RevenueBaseMethod: profile.RevenueBaseMaxTTMOrFloor,
+			TerminalMultiple:  4.0,
+			TerminalMethod:    profile.TerminalExitMultiple,
+			DiscountMethod:    profile.DiscountCostOfEquity,
+		},
+	}
+
+	rm := NewRevenueMultipleModelWithMultiples(map[string]float64{
+		"default":  2.0,
+		"MFG_SEMI": 1.5,
+		"MFG":      1.5,
+	}, testLogger())
+	result, err := rm.Calculate(context.Background(), input)
+	require.NoError(t, err)
+
+	assert.Greater(t, result.TrailingValue, 0.0, "trailing always computed")
+	assert.Greater(t, result.ForwardValue, 0.0, "forward computed when horizon > 0")
+	assert.Equal(t, 5, result.HorizonSelected)
+	assert.InEpsilon(t, 4.0, result.TerminalMultiple, 1e-9)
+	// RM-3 forward warning summary should mention horizon + avg growth + multiple.
+	foundForwardWarn := false
+	for _, w := range result.Warnings {
+		if strings.HasPrefix(w, "RM-3 forward:") {
+			foundForwardWarn = true
+			break
+		}
+	}
+	assert.True(t, foundForwardWarn, "expected RM-3 forward warning; got %v", result.Warnings)
+}
+
+// TestRevenueMultiple_NilProfile_FallsThroughToTrailing verifies that the
+// trailing path is preserved bit-for-bit when no profile is wired (legacy
+// test call sites). The new fields stay zero so they are omitted from the
+// JSON response under omitempty.
+func TestRevenueMultiple_NilProfile_FallsThroughToTrailing(t *testing.T) {
+	input := buildMXLLikeInput(t)
+	input.Profile = nil
+
+	rm := NewRevenueMultipleModelWithMultiples(map[string]float64{
+		"default":  2.0,
+		"MFG_SEMI": 1.5,
+		"MFG":      1.5,
+	}, testLogger())
+	result, err := rm.Calculate(context.Background(), input)
+	require.NoError(t, err)
+
+	assert.Greater(t, result.TrailingValue, 0.0)
+	assert.Equal(t, 0.0, result.ForwardValue)
+	assert.Equal(t, 0, result.HorizonSelected)
+	assert.Equal(t, 0.0, result.TerminalMultiple)
+	// IntrinsicValuePerShare equals the trailing path output, so it must
+	// match TrailingValue exactly (no forward blend on the nil-profile path).
+	assert.Equal(t, result.TrailingValue, result.IntrinsicValuePerShare)
+}
+
+// TestRevenueMultiple_ProfileHorizonZero_BehavesLikeNoProfile verifies the
+// HorizonYears == 0 gate. A profile with zero horizon is the bit-for-bit
+// preservation signal: trailing-only behavior, no forward computation.
+func TestRevenueMultiple_ProfileHorizonZero_BehavesLikeNoProfile(t *testing.T) {
+	input := buildMXLLikeInput(t)
+	input.Profile = &profile.ResolvedProfile{
+		AssumptionProfile: profile.AssumptionProfile{HorizonYears: 0},
+	}
+
+	rm := NewRevenueMultipleModelWithMultiples(map[string]float64{
+		"default":  2.0,
+		"MFG_SEMI": 1.5,
+		"MFG":      1.5,
+	}, testLogger())
+	result, err := rm.Calculate(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, result.ForwardValue)
+	assert.Equal(t, 0, result.HorizonSelected)
+}
+
+// TestRevenueMultiple_Forward_InsufficientGrowthRates verifies the safety
+// gate: when ProjectedGrowthRates has fewer entries than HorizonYears, the
+// forward path is skipped (no partial projection) and trailing is preserved.
+func TestRevenueMultiple_Forward_InsufficientGrowthRates(t *testing.T) {
+	input := buildMXLLikeInput(t)
+	input.GrowthEstimate = &entities.GrowthEstimate{
+		ProjectedGrowthRates: []float64{0.10, 0.10}, // only 2 of 5 required
+		TerminalGrowthRate:   0.03,
+		Confidence:           "medium",
+	}
+	input.Profile = &profile.ResolvedProfile{
+		AssumptionProfile: profile.AssumptionProfile{
+			ProfileID:         "cyclical_trough:standard_growth",
+			Archetype:         profile.ArchetypeCyclicalTrough,
+			Maturity:          profile.MaturityStandardGrowth,
+			HorizonYears:      5,
+			CompoundGrowthCap: 3.0,
+			RevenueBaseMethod: profile.RevenueBaseRawTTM,
+			TerminalMultiple:  4.0,
+			TerminalMethod:    profile.TerminalExitMultiple,
+			DiscountMethod:    profile.DiscountCostOfEquity,
+		},
+	}
+	rm := NewRevenueMultipleModelWithMultiples(map[string]float64{
+		"default":  2.0,
+		"MFG_SEMI": 1.5,
+		"MFG":      1.5,
+	}, testLogger())
+	result, err := rm.Calculate(context.Background(), input)
+	require.NoError(t, err)
+	assert.Equal(t, 0.0, result.ForwardValue, "no partial projection when growth-rates < horizon")
+	assert.Equal(t, 0, result.HorizonSelected)
+}
+
+// TestRevenueMultiple_NormalizeRevenueBase_AllMethods covers the four
+// RevenueBaseMethod enum values exercised by the helper. Uses a stable
+// 5-period annual history so callers can pin the expected outputs.
+func TestRevenueMultiple_NormalizeRevenueBase_AllMethods(t *testing.T) {
+	// Newest-first revenue history. The helper consumes newest-first via
+	// the entity API; this fixture pins what each method should select.
+	ttm := 500.0
+	histData := map[string]*entities.FinancialData{
+		"2026FY": {Revenue: 500, FilingPeriod: "2026FY", FilingDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)},
+		"2025FY": {Revenue: 800, FilingPeriod: "2025FY", FilingDate: time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC)},
+		"2024FY": {Revenue: 1200, FilingPeriod: "2024FY", FilingDate: time.Date(2024, 12, 31, 0, 0, 0, 0, time.UTC)},
+		"2023FY": {Revenue: 1000, FilingPeriod: "2023FY", FilingDate: time.Date(2023, 12, 31, 0, 0, 0, 0, time.UTC)},
+		"2022FY": {Revenue: 600, FilingPeriod: "2022FY", FilingDate: time.Date(2022, 12, 31, 0, 0, 0, 0, time.UTC)},
+	}
+	hist := &entities.HistoricalFinancialData{Ticker: "T", Data: histData}
+
+	// 5y mean = (500+800+1200+1000+600)/5 = 820.
+	// 2y mean (newest two annuals) = (500+800)/2 = 650.
+	tests := []struct {
+		name   string
+		method profile.RevenueBaseMethod
+		want   float64
+	}{
+		{"raw_ttm", profile.RevenueBaseRawTTM, ttm},
+		{"two_year_average", profile.RevenueBaseTwoYearAverage, 650.0},
+		{"max_ttm_or_floor_picks_floor", profile.RevenueBaseMaxTTMOrFloor, 820.0},
+		{"mid_cycle_normalized", profile.RevenueBaseMidCycleNormalized, 820.0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeRevenueBase(ttm, tt.method, hist)
+			assert.InEpsilon(t, tt.want, got, 1e-9)
+		})
+	}
+
+	// Defensive branches: nil hist + empty hist should not panic, both
+	// fall back to the TTM input for methods that depend on history.
+	assert.Equal(t, ttm, normalizeRevenueBase(ttm, profile.RevenueBaseTwoYearAverage, nil))
+	emptyHist := &entities.HistoricalFinancialData{Ticker: "T", Data: map[string]*entities.FinancialData{}}
+	assert.Equal(t, ttm, normalizeRevenueBase(ttm, profile.RevenueBaseTwoYearAverage, emptyHist))
+	// mid_cycle on empty history returns 0 (the helper's "no signal" output);
+	// callers that gate on history sufficiency must do so themselves.
+	assert.Equal(t, 0.0, normalizeRevenueBase(ttm, profile.RevenueBaseMidCycleNormalized, emptyHist))
+	// max_ttm_or_floor on empty history: floor=0, ttm=500 => returns ttm.
+	assert.Equal(t, ttm, normalizeRevenueBase(ttm, profile.RevenueBaseMaxTTMOrFloor, emptyHist))
+}
+
+// TestRevenueMultiple_MeanRecentRevenue_BoundedByHistoryLength asserts that
+// when fewer than `years` annuals exist, the helper averages whatever it has
+// rather than dividing by `years` (which would understate the mean).
+func TestRevenueMultiple_MeanRecentRevenue_BoundedByHistoryLength(t *testing.T) {
+	hist := &entities.HistoricalFinancialData{
+		Ticker: "T",
+		Data: map[string]*entities.FinancialData{
+			"2026FY": {Revenue: 100, FilingPeriod: "2026FY", FilingDate: time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)},
+			"2025FY": {Revenue: 200, FilingPeriod: "2025FY", FilingDate: time.Date(2025, 12, 31, 0, 0, 0, 0, time.UTC)},
+		},
+	}
+	// Asking for 5y mean against only 2 periods: (100+200)/2 = 150.
+	got := meanRecentRevenue(hist, 5)
+	assert.InEpsilon(t, 150.0, got, 1e-9)
+
+	// nil hist returns 0 (defensive).
+	assert.Equal(t, 0.0, meanRecentRevenue(nil, 5))
+}
+
+// TestAvg_EmptyAndNonEmpty pins the small helper. Empty slice returns 0
+// (no division-by-zero); non-empty returns the arithmetic mean.
+func TestAvg_EmptyAndNonEmpty(t *testing.T) {
+	assert.Equal(t, 0.0, avg(nil))
+	assert.Equal(t, 0.0, avg([]float64{}))
+	assert.InEpsilon(t, 2.0, avg([]float64{1, 2, 3}), 1e-9)
+	assert.InEpsilon(t, 0.5, avg([]float64{0.5}), 1e-9)
 }

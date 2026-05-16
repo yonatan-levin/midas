@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
 
 	configfs "github.com/midas/dcf-valuation-api/config"
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
 // staleDataThresholdMonths defines when the consumer-side T7 staleness check
@@ -151,21 +155,173 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 			fmt.Sprintf("Company has negative operating income (%.2f); standard DCF not applicable", baseOI))
 	}
 
+	// RM-3 forward path. Gated on profile.HorizonYears > 0; nil profile or
+	// horizon == 0 falls through to trailing-only behavior so legacy call
+	// sites (pre-Tier-2 ModelInputs without Profile, fallback wildcard
+	// profiles with horizon=0) keep their existing per-share output. Spec §6.1.
+	trailingValue := valuePerShare
+	forwardValue := 0.0
+	horizonSelected := 0
+	terminalMultipleUsed := 0.0
+
+	if input.Profile != nil && input.Profile.HorizonYears > 0 {
+		p := &input.Profile.AssumptionProfile
+		var rates []float64
+		if input.GrowthEstimate != nil {
+			rates = input.GrowthEstimate.ProjectedGrowthRates
+		}
+		// Guard: only project when we have enough explicit growth-rate cells
+		// to cover the horizon AND a positive cost-of-equity to discount at.
+		// Partial coverage would silently shrink the forward base; better to
+		// emit zero (omitted via omitempty) than a half-finished projection.
+		if len(rates) >= p.HorizonYears && input.CostOfEquity > 0 {
+			revenueBase := normalizeRevenueBase(revenue, p.RevenueBaseMethod, input.HistoricalData)
+
+			// Compound revenue forward at the per-year projected rates.
+			forwardRevenue := revenueBase
+			for i := 0; i < p.HorizonYears; i++ {
+				forwardRevenue *= 1 + rates[i]
+			}
+
+			// Apply terminal multiple to the projected revenue. For RM-3
+			// "terminal" is really "horizon-year multiple of revenue" — a
+			// relative-valuation construct, not a Gordon perpetuity.
+			forwardEV := forwardRevenue * p.TerminalMultiple
+
+			// Discount at cost-of-equity (NOT WACC — relative valuation
+			// per RM-3 spec correction §6.1). Profiles that explicitly
+			// pick DiscountWACC opt out of equity-discount and use WACC.
+			discountRate := input.CostOfEquity
+			if p.DiscountMethod == profile.DiscountWACC && input.WACC > 0 {
+				discountRate = input.WACC
+			}
+			discount := math.Pow(1+discountRate, float64(p.HorizonYears))
+			if discount > 0 {
+				forwardEV /= discount
+			}
+
+			forwardEquity := forwardEV - input.InterestBearingDebt + input.CashAndCashEquivalents
+			forwardValue = forwardEquity / shares
+			if forwardValue < 0 {
+				forwardValue = 0
+			}
+
+			horizonSelected = p.HorizonYears
+			terminalMultipleUsed = p.TerminalMultiple
+
+			warnings = append(warnings,
+				fmt.Sprintf("RM-3 forward: %dy projection at avg %.1f%% growth, terminal %.1fx",
+					p.HorizonYears, avg(rates[:p.HorizonYears])*100, p.TerminalMultiple))
+		}
+	}
+
 	logctx.Or(ctx, m.logger).Info("Revenue multiple valuation completed",
 		zap.Float64("revenue", revenue),
 		zap.Float64("multiple", multiple),
 		zap.String("industry", input.Industry),
 		zap.Float64("enterprise_value", enterpriseValue),
-		zap.Float64("value_per_share", valuePerShare))
+		zap.Float64("value_per_share", valuePerShare),
+		zap.Float64("forward_value", forwardValue),
+		zap.Int("horizon_selected", horizonSelected))
 
 	return &ModelResult{
 		IntrinsicValuePerShare: valuePerShare,
+		TrailingValue:          trailingValue,
+		ForwardValue:           forwardValue,
+		HorizonSelected:        horizonSelected,
+		TerminalMultiple:       terminalMultipleUsed,
 		EnterpriseValue:        enterpriseValue,
 		EquityValue:            equityValue,
 		ModelType:              "revenue_multiple",
 		Warnings:               warnings,
 		Confidence:             "low", // Always low confidence for revenue multiples
 	}, nil
+}
+
+// normalizeRevenueBase applies the profile-specified normalization to the
+// trailing-revenue input. Per spec §3.1 RevenueBaseMethod enum:
+//   - raw_ttm: use the TTM helper output as-is (default for stable issuers).
+//   - two_year_average: avg of the two most recent annual periods. Smooths
+//     out one-time spikes for issuers with lumpy revenue recognition.
+//   - max_ttm_or_floor: max(TTM, 5y mean) — the cyclical-trough rule. When
+//     a semi or auto issuer is in a down-cycle the TTM understates the
+//     mid-cycle base; the 5y mean floors the projection at a sustainable
+//     run-rate.
+//   - mid_cycle_normalized: 5y mean directly (overrides TTM entirely). Used
+//     for archetypes where the TTM is structurally noisy.
+//
+// Nil or empty history is tolerated and returns ttm (defensive). Callers
+// remain responsible for declining to project when the history is too thin
+// for the method they chose; this helper picks the safest output given
+// what's available.
+func normalizeRevenueBase(ttm float64, method profile.RevenueBaseMethod, hist *entities.HistoricalFinancialData) float64 {
+	switch method {
+	case profile.RevenueBaseTwoYearAverage:
+		annuals := newestFirstAnnualRevenues(hist, 2)
+		if len(annuals) < 2 {
+			return ttm
+		}
+		return (annuals[0] + annuals[1]) / 2
+	case profile.RevenueBaseMaxTTMOrFloor:
+		floor := meanRecentRevenue(hist, 5)
+		if floor > ttm {
+			return floor
+		}
+		return ttm
+	case profile.RevenueBaseMidCycleNormalized:
+		return meanRecentRevenue(hist, 5)
+	default: // RevenueBaseRawTTM (and any future enum value not yet handled).
+		return ttm
+	}
+}
+
+// meanRecentRevenue returns the arithmetic mean of the most-recent up-to-N
+// annual revenue periods. Returns 0 when no annual history is available;
+// callers should treat 0 as "no signal" rather than a meaningful floor.
+// When fewer than N annuals exist, the helper averages whatever it has
+// rather than dividing by N (which would understate the mean and bias the
+// floor downward for short-history tickers).
+func meanRecentRevenue(hist *entities.HistoricalFinancialData, years int) float64 {
+	annuals := newestFirstAnnualRevenues(hist, years)
+	if len(annuals) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, r := range annuals {
+		sum += r
+	}
+	return sum / float64(len(annuals))
+}
+
+// newestFirstAnnualRevenues returns up to `n` revenue values for the most-
+// recent annual (FY) periods, newest first. Encapsulates the period-sort
+// idiom so the two consumers (normalizeRevenueBase, meanRecentRevenue) stay
+// thin. Returns an empty slice for nil or empty history.
+func newestFirstAnnualRevenues(hist *entities.HistoricalFinancialData, n int) []float64 {
+	if hist == nil || len(hist.Data) == 0 || n <= 0 {
+		return nil
+	}
+	annual := hist.GetAnnualPeriods()
+	if len(annual) == 0 {
+		return nil
+	}
+	periods := make([]string, 0, len(annual))
+	for k := range annual {
+		periods = append(periods, k)
+	}
+	// Lexicographic descending sort works for the "YYYYFY" key shape: the
+	// year prefix dominates, and the constant "FY" suffix breaks no ties.
+	sort.Sort(sort.Reverse(sort.StringSlice(periods)))
+	out := make([]float64, 0, n)
+	for i, k := range periods {
+		if i >= n {
+			break
+		}
+		if d := annual[k]; d != nil {
+			out = append(out, d.Revenue)
+		}
+	}
+	return out
 }
 
 // getMultiple returns the EV/Revenue multiple for the given industry code.
