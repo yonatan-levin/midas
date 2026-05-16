@@ -3,6 +3,9 @@ package sec
 import (
 	"testing"
 
+	"github.com/leanovate/gopter"
+	"github.com/leanovate/gopter/gen"
+	"github.com/leanovate/gopter/prop"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
@@ -123,4 +126,139 @@ func TestComputePlugs_IFRSFullFiler_TSM(t *testing.T) {
 	assert.GreaterOrEqual(t, fd.OtherNonCurrentAssets, 0.0)
 	assert.GreaterOrEqual(t, fd.OtherCurrentLiabilities, 0.0)
 	assert.GreaterOrEqual(t, fd.OtherNonCurrentLiabilities, 0.0)
+}
+
+// TestComputePlugs_Property_ComponentsSumToUmbrellas is the load-bearing
+// invariant for DC-1 Phase 0: for any FinancialData with non-negative inputs,
+// after computePlugs runs, the four (umbrella, components, plug) triples
+// must satisfy `umbrella == sum(components) + plug` within float tolerance,
+// and all four plugs must be >= 0.
+//
+// We generate inputs that respect the "umbrella >= sum(components)" precondition
+// because that's the well-formed case; the negative-residual case is covered
+// by TestComputePlugs_NegativeResidualClampedAndLogged in this file.
+//
+// Float64Range bounds are capped at 1e12 (not 1e15) so the sum of multiple
+// components stays well below 2^53 — preserving exact-integer representation
+// and bounding float64 accumulation error to a few ULPs across the chain of
+// subtractions in computePlugs. approxEqual applies a relative + absolute
+// floor tolerance to absorb whatever error remains.
+func TestComputePlugs_Property_ComponentsSumToUmbrellas(t *testing.T) {
+	params := gopter.DefaultTestParameters()
+	params.Rng.Seed(20260516)
+	params.MinSuccessfulTests = 200
+
+	properties := gopter.NewProperties(params)
+
+	properties.Property("plug invariant holds for current assets", prop.ForAll(
+		func(cash, inventory, slack float64) bool {
+			currentAssets := cash + inventory + slack
+			fd := &entities.FinancialData{
+				CIK:                    "FUZZ",
+				FilingPeriod:           "2024FY",
+				CurrentAssets:          currentAssets,
+				CashAndCashEquivalents: cash,
+				Inventory:              inventory,
+			}
+			computePlugs(fd, zap.NewNop())
+			got := fd.CashAndCashEquivalents + fd.Inventory + fd.OtherCurrentAssets
+			return fd.OtherCurrentAssets >= 0 &&
+				approxEqual(fd.CurrentAssets, got, 1e-9)
+		},
+		gen.Float64Range(0, 1e12),
+		gen.Float64Range(0, 1e12),
+		gen.Float64Range(0, 1e12),
+	))
+
+	properties.Property("plug invariant holds for non-current assets", prop.ForAll(
+		func(currentAssets, goodwill, intangibles, dta, slack float64) bool {
+			totalAssets := currentAssets + goodwill + intangibles + dta + slack
+			fd := &entities.FinancialData{
+				CIK:               "FUZZ",
+				FilingPeriod:      "2024FY",
+				TotalAssets:       totalAssets,
+				CurrentAssets:     currentAssets,
+				Goodwill:          goodwill,
+				OtherIntangibles:  intangibles,
+				DeferredTaxAssets: dta,
+			}
+			computePlugs(fd, zap.NewNop())
+			gotNCA := fd.Goodwill + fd.OtherIntangibles + fd.DeferredTaxAssets + fd.OtherNonCurrentAssets
+			return fd.OtherNonCurrentAssets >= 0 &&
+				approxEqual(fd.TotalAssets-fd.CurrentAssets, gotNCA, 1e-9)
+		},
+		gen.Float64Range(0, 1e12),
+		gen.Float64Range(0, 1e12),
+		gen.Float64Range(0, 1e12),
+		gen.Float64Range(0, 1e12),
+		gen.Float64Range(0, 1e12),
+	))
+
+	properties.Property("plug invariant holds for current liabilities", prop.ForAll(
+		func(opLeaseCurrent, slack float64) bool {
+			currentLiab := opLeaseCurrent + slack
+			fd := &entities.FinancialData{
+				CIK:                            "FUZZ",
+				FilingPeriod:                   "2024FY",
+				CurrentLiabilities:             currentLiab,
+				OperatingLeaseLiabilityCurrent: opLeaseCurrent,
+			}
+			computePlugs(fd, zap.NewNop())
+			got := fd.OperatingLeaseLiabilityCurrent + fd.OtherCurrentLiabilities
+			return fd.OtherCurrentLiabilities >= 0 &&
+				approxEqual(fd.CurrentLiabilities, got, 1e-9)
+		},
+		gen.Float64Range(0, 1e12),
+		gen.Float64Range(0, 1e12),
+	))
+
+	properties.Property("plug invariant holds for non-current liabilities", prop.ForAll(
+		func(currentLiab, totalDebt, opLeaseNoncurrent, slack float64) bool {
+			totalLiab := currentLiab + totalDebt + opLeaseNoncurrent + slack
+			fd := &entities.FinancialData{
+				CIK:                               "FUZZ",
+				FilingPeriod:                      "2024FY",
+				TotalLiabilities:                  totalLiab,
+				CurrentLiabilities:                currentLiab,
+				TotalDebt:                         totalDebt,
+				OperatingLeaseLiabilityNoncurrent: opLeaseNoncurrent,
+			}
+			computePlugs(fd, zap.NewNop())
+			gotNCL := fd.TotalDebt + fd.OperatingLeaseLiabilityNoncurrent + fd.OtherNonCurrentLiabilities
+			return fd.OtherNonCurrentLiabilities >= 0 &&
+				approxEqual(fd.TotalLiabilities-fd.CurrentLiabilities, gotNCL, 1e-9)
+		},
+		gen.Float64Range(0, 1e12),
+		gen.Float64Range(0, 1e12),
+		gen.Float64Range(0, 1e12),
+		gen.Float64Range(0, 1e12),
+	))
+
+	properties.TestingRun(t)
+}
+
+// approxEqual returns true when |a - b| <= max(absFloor, relTol * max(|a|, |b|)).
+// Used to absorb float64 accumulation error in large-value plug arithmetic.
+// The 1e-3 absolute floor catches sub-cent rounding for small-magnitude inputs;
+// the relative term scales to large-magnitude inputs (IFRS filers in TWD/CNY).
+func approxEqual(a, b, relTol float64) bool {
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	scale := a
+	if scale < 0 {
+		scale = -scale
+	}
+	if b > scale {
+		scale = b
+	}
+	if -b > scale {
+		scale = -b
+	}
+	tol := relTol * scale
+	if tol < 1e-3 {
+		tol = 1e-3
+	}
+	return diff <= tol
 }
