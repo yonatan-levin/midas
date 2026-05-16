@@ -22,9 +22,9 @@ import (
 //     other_current_liabilities, other_non_current_liabilities).
 //  2. storeWith's INSERT column list (financial_data_repository.go:56-87) does
 //     not enumerate the plug fields, so values supplied to Store are dropped.
-//  3. GetLatest / GetByPeriod / GetHistorical SELECT statements
-//     (financial_data_repository.go:142+, 202+, 278+) do not request plug
-//     columns, so reads silently return zero.
+//  3. GetLatest / GetHistorical / GetByPeriod SELECT statements
+//     (financial_data_repository.go:141+, 202+, 278+ respectively) do not
+//     request plug columns, so reads silently return zero.
 //
 // This is **HARMLESS UNDER THE PHASE 0 INVARIANT** ("no consumer reads the
 // new plug fields") — but it is a real persistence gap that Phase 1+ must
