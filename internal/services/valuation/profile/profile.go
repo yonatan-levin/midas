@@ -1,99 +1,142 @@
 // Package profile is the Tier 2 AssumptionProfile backbone keyed by
-// (Archetype × Maturity). Phase Bootstrap ships a MINIMAL skeleton so the
-// testhelpers package (also created in Phase Bootstrap) compiles. The full
-// type system, resolver, validation, and import-boundary guard land in
-// Phase P0a per the implementer plan
-// (docs/refactoring/implementations/assumption-profile-implementation-plan.md).
+// (Archetype × Maturity). The package is the deliberate boundary that
+// prevents the Go import cycle `models → profile → models`: it contains
+// NO imports of internal/services/valuation/models or internal/core/entities.
+// Translation from entities.FinancialData / MarketData / HistoricalFinancialData
+// to the neutral Facts DTO lives at the consumer site (service.go).
 //
-// Until P0a ships, callers MUST NOT depend on any field on these structs
-// beyond what is declared here. The Resolve method panics so that any
-// accidental production use surfaces during smoke tests before reaching
-// staging.
+// Phase P0a ships the full type system, JSON-backed Registry, resolver, and
+// validation. Downstream phases (P0b-P4) wire the Registry into service.go
+// and consume ResolvedProfile from ModelInput. See:
+//
+//	docs/refactoring/spec/assumption-profile-spec.md             (canonical spec)
+//	docs/refactoring/implementations/assumption-profile-implementation-plan.md
 package profile
 
-import (
-	"encoding/json"
-	"fmt"
-	"os"
+// Archetype identifies the company shape for valuation calibration purposes.
+// See spec §3.1 for the canonical 21-archetype enum.
+type Archetype string
+
+const (
+	ArchetypeMatureLargeScale       Archetype = "mature_large_scale"
+	ArchetypeMatureLargeBank        Archetype = "mature_large_bank"
+	ArchetypeGrowthBank             Archetype = "growth_bank"
+	ArchetypeInsuranceCompany       Archetype = "insurance_company"
+	ArchetypeSoftwareLikeLargeScale Archetype = "software_like_large_scale"
+	ArchetypeSoftwareLikeScaling    Archetype = "software_like_scaling"
+	ArchetypeCyclicalMidCycle       Archetype = "cyclical_mid_cycle"
+	ArchetypeCyclicalTrough         Archetype = "cyclical_trough"
+	ArchetypeHypergrowthEarly       Archetype = "hypergrowth_early"
+	ArchetypeHypergrowthProfitable  Archetype = "hypergrowth_profitable"
+	ArchetypePreRevenueBiotech      Archetype = "pre_revenue_biotech"
+	ArchetypeMaturingTechDividend   Archetype = "maturing_tech_first_dividend"
+	ArchetypeMatureDividendTech     Archetype = "mature_dividend_tech"
+	ArchetypeREITResidential        Archetype = "reit_residential"
+	ArchetypeREITCommercial         Archetype = "reit_commercial"
+	ArchetypeREITIndustrial         Archetype = "reit_industrial"
+	ArchetypeREITHealthcare         Archetype = "reit_healthcare"
+	ArchetypeREITDataCenter         Archetype = "reit_datacenter"
+	ArchetypeREITCellTower          Archetype = "reit_celltower"
+	ArchetypeREITRetail             Archetype = "reit_retail"
+	ArchetypeREITSpecialty          Archetype = "reit_specialty"
 )
 
-// ResolvedProfile is the value returned by Registry.Resolve. Phase Bootstrap
-// declares only the fields the testhelpers and bit-for-bit regression test
-// touch; P0a expands the struct to its full spec-defined shape.
+// Maturity identifies the company's life-cycle position.
+type Maturity string
+
+const (
+	MaturityMature         Maturity = "mature"
+	MaturityStandardGrowth Maturity = "standard_growth"
+	MaturityHighGrowth     Maturity = "high_growth"
+)
+
+// RevenueBaseMethod identifies how the model should normalize the revenue base.
+type RevenueBaseMethod string
+
+const (
+	RevenueBaseRawTTM             RevenueBaseMethod = "raw_ttm"
+	RevenueBaseTwoYearAverage     RevenueBaseMethod = "two_year_average"
+	RevenueBaseMaxTTMOrFloor      RevenueBaseMethod = "max_ttm_or_floor"
+	RevenueBaseMidCycleNormalized RevenueBaseMethod = "mid_cycle_normalized"
+)
+
+// TerminalMethod identifies how the model should compute terminal value.
+type TerminalMethod string
+
+const (
+	TerminalGordonGrowth TerminalMethod = "gordon_growth"
+	TerminalExitMultiple TerminalMethod = "exit_multiple"
+)
+
+// DiscountMethod identifies the discount rate to apply.
+type DiscountMethod string
+
+const (
+	DiscountWACC         DiscountMethod = "wacc"
+	DiscountCostOfEquity DiscountMethod = "cost_of_equity"
+)
+
+// AssumptionProfile is the full per-(archetype, maturity) calibration record.
+// All 14 fields are populated at JSON load time; values are validated by
+// validation.go. Downstream phases (P1-P4) consume the subset relevant to
+// each model — DCF reads horizon/terminal fields, DDM reads DPS fields, etc.
+type AssumptionProfile struct {
+	// Identity & key
+	ProfileID string    `json:"profile_id"`
+	Archetype Archetype `json:"archetype"`
+	Maturity  Maturity  `json:"maturity"`
+
+	// Used by all 4 models
+	HorizonYears      int               `json:"horizon_years"`
+	CompoundGrowthCap float64           `json:"compound_growth_cap"`
+	RevenueBaseMethod RevenueBaseMethod `json:"revenue_base_method"`
+	DiscountMethod    DiscountMethod    `json:"discount_method"`
+
+	// DCF + RM-3 terminal handling
+	TerminalMethod   TerminalMethod `json:"terminal_method"`
+	Stabilized       bool           `json:"stabilized"`
+	FadeYears        int            `json:"fade_years"`
+	TerminalMultiple float64        `json:"terminal_multiple"`
+
+	// VAL-2 DDM specifics. DividendForecastHorizon == 0 is the bit-for-bit
+	// preservation signal for the legacy mature-large-bank single-stage
+	// Gordon path; see IsLegacyMatureLargeBankDDM below.
+	DPSGrowthCap            float64   `json:"dps_growth_cap"`
+	PayoutPath              []float64 `json:"payout_path"`
+	DividendForecastHorizon int       `json:"dividend_forecast_horizon"`
+	StableDividendGrowth    float64   `json:"stable_dividend_growth"`
+
+	// Archetype-specific size thresholds override the global fallback in
+	// maturity bucketing. Why: large-cap means different things for a bank
+	// ($50B) versus a pre-revenue biotech ($2B); one global threshold
+	// misclassifies one or the other.
+	SizeThresholds *SizeThresholds `json:"size_thresholds,omitempty"`
+}
+
+// SizeThresholds carries archetype-specific revenue cutoffs used by the
+// resolver's Stage-2 maturity bucketing.
+type SizeThresholds struct {
+	LargeCapMinUSD float64 `json:"large_cap_min_usd"`
+	MidCapMinUSD   float64 `json:"mid_cap_min_usd"`
+}
+
+// ResolvedProfile is what gets stamped onto ModelInput.Profile after
+// successful resolution. Embeds the full AssumptionProfile so consumers
+// read fields directly; carries the ResolutionTrace for audit/replay.
 type ResolvedProfile struct {
-	// ProfileID is the canonical "<archetype>:<maturity>" identifier.
-	ProfileID string `json:"profile_id"`
-
-	// Archetype is the qualitative model family (e.g. "mature_large_bank",
-	// "cyclical_mid_cycle"). Owned by the spec; P0a enumerates.
-	Archetype string `json:"archetype"`
-
-	// Maturity is the secondary axis (e.g. "mature", "standard_growth").
-	Maturity string `json:"maturity"`
+	AssumptionProfile                 // embedded; consumers read fields directly
+	Trace             ResolutionTrace `json:"trace"`
 }
 
-// Registry is the abstraction P0a fleshes out with profile lookup, archetype
-// rules, and maturity classification. Phase Bootstrap exposes only the
-// minimal surface that testhelpers + downstream worktree fixtures consume.
+// IsLegacyMatureLargeBankDDM reports whether the resolved profile is the
+// legacy single-stage Gordon path. Models MUST consult this to take the
+// bit-for-bit preservation branch (spec §3.1, §8.2).
 //
-// Implementations MUST be safe for concurrent use; the production registry
-// is loaded once at fx startup and shared across the request path.
-type Registry interface {
-	// Resolve returns the profile that applies to the given resolution
-	// inputs. Phase Bootstrap's stub implementation panics — P0a wires the
-	// real lookup chain (archetype rules → maturity thresholds → profile
-	// table). Tests that exercise resolution land in P0a.
-	//
-	// The argument shape is intentionally undefined here; P0a introduces
-	// the Facts DTO and constrains this signature. Until then, callers must
-	// only pass profile IDs through fixtures, never call Resolve directly.
-	Resolve(profileID string) (*ResolvedProfile, bool)
-}
-
-// LoadFromJSON parses an assumption-profile config from the given path. The
-// Phase Bootstrap stub validates only that the file exists and is valid
-// JSON with a `config_version` key — sufficient for testhelpers to load a
-// fixture without P0a's full schema in place. P0a replaces this with full
-// schema validation + archetype-rule parsing.
-func LoadFromJSON(path string) (Registry, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("profile: read %s: %w", path, err)
-	}
-	var stub struct {
-		ConfigVersion string `json:"config_version"`
-		Profiles      map[string]struct {
-			ProfileID string `json:"profile_id"`
-			Archetype string `json:"archetype"`
-			Maturity  string `json:"maturity"`
-		} `json:"profiles"`
-	}
-	if err := json.Unmarshal(data, &stub); err != nil {
-		return nil, fmt.Errorf("profile: unmarshal %s: %w", path, err)
-	}
-	if stub.ConfigVersion == "" {
-		return nil, fmt.Errorf("profile: %s missing config_version", path)
-	}
-	reg := &bootstrapRegistry{profiles: make(map[string]*ResolvedProfile, len(stub.Profiles))}
-	for id, p := range stub.Profiles {
-		reg.profiles[id] = &ResolvedProfile{
-			ProfileID: p.ProfileID,
-			Archetype: p.Archetype,
-			Maturity:  p.Maturity,
-		}
-	}
-	return reg, nil
-}
-
-// bootstrapRegistry is the Phase Bootstrap stub Registry. It supports
-// lookup-by-ID so testhelpers can build a Registry from a JSON fixture and
-// hand it to downstream consumers (P1-P4); it deliberately does NOT
-// implement archetype/maturity routing — that ships in P0a.
-type bootstrapRegistry struct {
-	profiles map[string]*ResolvedProfile
-}
-
-func (r *bootstrapRegistry) Resolve(profileID string) (*ResolvedProfile, bool) {
-	p, ok := r.profiles[profileID]
-	return p, ok
+// Two signals must coincide: archetype=mature_large_bank AND
+// dividend_forecast_horizon=0. Either alone is insufficient — a
+// mature_large_bank with horizon>0 is the new multi-stage path; a
+// horizon-0 profile on any other archetype is undefined behavior.
+func (r *ResolvedProfile) IsLegacyMatureLargeBankDDM() bool {
+	return r != nil && r.DividendForecastHorizon == 0 &&
+		r.Archetype == ArchetypeMatureLargeBank
 }
