@@ -171,6 +171,18 @@ func TestWACC_Properties(t *testing.T) {
 }
 ```
 
+**Plug-invariant property tests (DC-1 Phase 0+).** The same `gopter` pattern pins
+the cleaner's `components-sum-to-umbrellas` invariant across randomized
+`FinancialData` inputs. See
+`internal/infra/gateways/sec/plugs_test.go::TestComputePlugs_Property_*`
+(4 properties × 200 iterations, pinned seed `20260516`, well-formed branch
+exercised by construction; clamp-fired branch covered by a separate
+`TestComputePlugs_NegativeResidualClampedAndLogged` table test and by the
+integration basket test at
+`internal/integration/datacleaner_plug_invariants_test.go`). Spec:
+`docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md`
+(Testing strategy → T1).
+
 ### 3. Mock-Based Tests (Service Layer)
 
 Using `testify/mock` for interface dependencies:
