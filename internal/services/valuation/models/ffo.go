@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"go.uber.org/zap"
@@ -279,6 +280,53 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 		warnings = append(warnings, "FFO-based value is zero due to negative FFO")
 	}
 
+	// VAL-3 P3 forward path. Gated on profile.HorizonYears > 0; nil profile
+	// or horizon == 0 leaves Trailing/Forward zero-valued so JSON-omitempty
+	// keeps the legacy response shape (spec §6.4). Discounts at
+	// cost-of-equity, NOT WACC — REIT P/FFO is an equity-side relative
+	// valuation (spec §6.4 correction). Growth comes from the engine
+	// projected-growth curve as an FFO-growth proxy (spec §6.4 Option A);
+	// when FFO growth diverges materially from revenue growth a future
+	// follow-up (spec §6.4 Option B) will key off a dedicated FFO series.
+	trailingValue := valuePerShare
+	forwardValue := 0.0
+	horizonSelected := 0
+	terminalMultipleUsed := 0.0
+
+	if input.Profile != nil && input.Profile.HorizonYears > 0 {
+		p := &input.Profile.AssumptionProfile
+		var rates []float64
+		if input.GrowthEstimate != nil {
+			rates = input.GrowthEstimate.ProjectedGrowthRates
+		}
+		if len(rates) >= p.HorizonYears && input.CostOfEquity > 0 {
+			// Project FFO/share forward using engine growth (revenue growth as
+			// FFO-growth proxy per spec §6.4 Option A).
+			forwardFFOPerShare := ffoPerShare
+			for i := 0; i < p.HorizonYears; i++ {
+				forwardFFOPerShare *= 1 + rates[i]
+			}
+
+			// Apply terminal P/FFO multiple.
+			forwardValuePreDiscount := forwardFFOPerShare * p.TerminalMultiple
+
+			// Discount at cost-of-equity (NOT WACC — VAL-3 spec correction).
+			discount := math.Pow(1+input.CostOfEquity, float64(p.HorizonYears))
+			forwardValue = forwardValuePreDiscount / discount
+
+			if forwardValue < 0 {
+				forwardValue = 0
+			}
+
+			horizonSelected = p.HorizonYears
+			terminalMultipleUsed = p.TerminalMultiple
+
+			warnings = append(warnings,
+				fmt.Sprintf("VAL-3 P3 forward FFO: %dy at avg %.1f%% growth, terminal %.1fx P/FFO",
+					p.HorizonYears, avg(rates[:p.HorizonYears])*100, p.TerminalMultiple))
+		}
+	}
+
 	equityValue := valuePerShare * shares
 	enterpriseValue := equityValue + input.InterestBearingDebt - input.CashAndCashEquivalents
 
@@ -339,6 +387,10 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 
 	return &ModelResult{
 		IntrinsicValuePerShare: valuePerShare,
+		TrailingValue:          trailingValue,
+		ForwardValue:           forwardValue,
+		HorizonSelected:        horizonSelected,
+		TerminalMultiple:       terminalMultipleUsed,
 		EnterpriseValue:        enterpriseValue,
 		EquityValue:            equityValue,
 		ModelType:              "ffo",

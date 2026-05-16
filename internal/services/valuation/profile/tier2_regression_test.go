@@ -12,6 +12,13 @@ package profile_test
 // Populated incrementally by P1-P4 worktrees. Skeleton lands in
 // Phase Bootstrap so the file exists at master HEAD before parallel
 // work dispatches.
+//
+// Tier 2 P4 (VAL-3 P3) adds EQIX + PLD pins. Captures use the synthetic
+// builders (testhelpers.BuildSyntheticDataCenterREITInput + the inline
+// PLD builder in tier2_pin_inputs_test.go) and call FFOModel.Calculate
+// directly — bypassing the resolver isolates FFO model drift from
+// resolver / profile-row drift. The plan's Closeout Z.1 task re-pins
+// against live engine output once P1-P3 all merge to master.
 
 import (
 	"context"
@@ -88,4 +95,46 @@ func TestTier2_MXL_Pin(t *testing.T) {
 	// Sanity: horizon was resolved from the profile, not zeroed out.
 	assert.Equal(t, 5, result.HorizonSelected)
 	assert.Equal(t, "revenue_multiple", result.ModelType)
+}
+
+// TestTier2_EQIX_Pin pins the FFO model's intrinsic value for the
+// synthetic data-center REIT (EQIX-ish) at the reit_datacenter:high_growth
+// profile (horizon=5, terminal=28.0).
+func TestTier2_EQIX_Pin(t *testing.T) {
+	input := buildEQIXPinInput(t)
+	ffo := models.NewFFOModel(zap.NewNop())
+	result, err := ffo.Calculate(context.Background(), input)
+	require.NoError(t, err)
+
+	assert.Equal(t, "reit_datacenter:high_growth", input.Profile.ProfileID,
+		"pin must exercise the reit_datacenter:high_growth profile shape")
+	assert.Equal(t, 5, result.HorizonSelected,
+		"horizon_selected must be 5 (profile horizon_years)")
+	assert.Equal(t, "ffo", result.ModelType,
+		"chosen_model must be ffo for the REIT path")
+	assert.InEpsilon(t, profile.ExpectedEQIXPrimaryValue, result.IntrinsicValuePerShare, 1e-9,
+		"EQIX primary value must match the captured pin")
+	assert.InEpsilon(t, profile.ExpectedEQIXForwardValue, result.ForwardValue, 1e-9,
+		"EQIX forward value must match the captured pin")
+}
+
+// TestTier2_PLD_Pin pins the FFO model's intrinsic value for the
+// synthetic industrial REIT (PLD-ish) at the
+// reit_industrial:standard_growth profile (horizon=3, terminal=22.5).
+func TestTier2_PLD_Pin(t *testing.T) {
+	input := buildPLDPinInput(t)
+	ffo := models.NewFFOModel(zap.NewNop())
+	result, err := ffo.Calculate(context.Background(), input)
+	require.NoError(t, err)
+
+	assert.Equal(t, "reit_industrial:standard_growth", input.Profile.ProfileID,
+		"pin must exercise the reit_industrial:standard_growth profile shape")
+	assert.Equal(t, 3, result.HorizonSelected,
+		"horizon_selected must be 3 (profile horizon_years)")
+	assert.Equal(t, "ffo", result.ModelType,
+		"chosen_model must be ffo for the REIT path")
+	assert.InEpsilon(t, profile.ExpectedPLDPrimaryValue, result.IntrinsicValuePerShare, 1e-9,
+		"PLD primary value must match the captured pin")
+	assert.InEpsilon(t, profile.ExpectedPLDForwardValue, result.ForwardValue, 1e-9,
+		"PLD forward value must match the captured pin")
 }

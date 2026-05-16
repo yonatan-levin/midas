@@ -5,6 +5,7 @@
 //
 //  1. Run: go test -tags pincapture -run TestCapturePins \
 //     ./internal/services/valuation/profile/... -v
+//     (or -run TestCaptureFFOPins for the P4 REIT pins)
 //  2. Copy the printed `expected<Ticker>PrimaryValue` lines into pins.go.
 //  3. Re-run the regression suite WITHOUT -tags pincapture; the pinned
 //     constants in pins.go drive TestTier2_MXL_Pin et al.
@@ -20,6 +21,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/models"
@@ -73,4 +75,38 @@ func TestCapturePins(t *testing.T) {
 	fmt.Printf("expectedMXLPrimaryValue = %.15g\n", result.IntrinsicValuePerShare)
 	fmt.Printf("expectedMXLTrailingValue = %.15g\n", result.TrailingValue)
 	fmt.Printf("expectedMXLForwardValue = %.15g\n", result.ForwardValue)
+}
+
+// TestCaptureFFOPins prints the pinned IntrinsicValuePerShare for EQIX
+// (datacenter, high_growth, horizon=5) and PLD (industrial,
+// standard_growth, horizon=3), captured via direct FFOModel.Calculate
+// against the synthetic builders in tier2_pin_inputs_test.go.
+//
+// The pin uses the synthetic inputs (not a live engine basket) because
+// the full testhelpers.RunValuation Service builder is still a stub at
+// this commit; the plan's Closeout Z.1 task will re-pin against live
+// engine output once all P1-P4 streams merge.
+//
+// Tier 2 P4 (VAL-3 P3 forward FFO).
+func TestCaptureFFOPins(t *testing.T) {
+	ctx := context.Background()
+	ffo := models.NewFFOModel(zap.NewNop())
+
+	eqixInput := buildEQIXPinInput(t)
+	eqixResult, err := ffo.Calculate(ctx, eqixInput)
+	require.NoError(t, err)
+	fmt.Printf("ExpectedEQIXPrimaryValue = %.15g\n", eqixResult.IntrinsicValuePerShare)
+	fmt.Printf("ExpectedEQIXForwardValue = %.15g\n", eqixResult.ForwardValue)
+
+	pldInput := buildPLDPinInput(t)
+	pldResult, err := ffo.Calculate(ctx, pldInput)
+	require.NoError(t, err)
+	fmt.Printf("ExpectedPLDPrimaryValue = %.15g\n", pldResult.IntrinsicValuePerShare)
+	fmt.Printf("ExpectedPLDForwardValue = %.15g\n", pldResult.ForwardValue)
+
+	// Reference the profile package symbols so a future refactor that
+	// renames either constant fails the capture build at compile time
+	// rather than producing stale pin values.
+	_ = profile.ExpectedEQIXPrimaryValue
+	_ = profile.ExpectedPLDPrimaryValue
 }
