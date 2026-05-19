@@ -35,10 +35,14 @@ import (
 // mutation pattern that needs to migrate to the Adjuster interface.
 //
 // Recording-not-asserting policy: the test does NOT assert on a specific
-// divergence count for any ticker. Known clamp-fired periods (MXL 2017FY,
-// EQIX 2013Q1) WILL emit WARN lines — that is the documented Phase 0
-// behavior that Phase 1's shadow mode is built to surface. A maximum-
-// divergence-count assertion would require pre-knowledge of every adjuster's
+// divergence count for any ticker. Known clamp-fired periods (AMD 2023FY /
+// KO 2023FY are the live carriers in the artifacts/tier2-baseline/2026-05-15/
+// date range — both ship reported_TL=0 because of a parser-side dropout
+// flagged in the shadow-analysis report; the Phase 0 closeout's historical
+// MXL 2017FY / EQIX 2013Q1 citations fall outside this baseline's date
+// range) WILL emit WARN lines — that is the documented Phase 0 behavior
+// that Phase 1's shadow mode is built to surface. A maximum-divergence-
+// count assertion would require pre-knowledge of every adjuster's
 // divergence shape, which is exactly the data Phase 1 produces.
 //
 // The single load-bearing assertion is `passedCount >= 5` (matches Phase 0's
@@ -316,13 +320,23 @@ func roundDollar(v float64) float64 {
 // writeShadowSnapshot serializes the per-ticker snapshot to JSON with
 // stable formatting (2-space indent + trailing newline) so the committed
 // files diff cleanly across runs.
+//
+// Writes to <path>.tmp first, then renames atomically to <path>. The
+// atomic-write pattern means a ctrl-C (or test-process kill) part-way
+// through serialization cannot leave a half-written snapshot on disk —
+// either the previous committed snapshot remains, or the new one is fully
+// in place. Important because the committed snapshots are the Phase 1 →
+// Phase 2 hand-off contract; a truncated file would silently break Phase 2
+// reviewer diff-review.
 func writeShadowSnapshot(t *testing.T, dir, ticker string, snap shadowSnapshot) {
 	t.Helper()
 	out, err := json.MarshalIndent(snap, "", "  ")
 	require.NoError(t, err, "%s: marshal snapshot", ticker)
 	out = append(out, '\n')
 	path := filepath.Join(dir, ticker+".json")
-	require.NoError(t, os.WriteFile(path, out, 0o644), "%s: write snapshot to %s", ticker, path)
+	tmpPath := path + ".tmp"
+	require.NoError(t, os.WriteFile(tmpPath, out, 0o644), "%s: write snapshot tmp to %s", ticker, tmpPath)
+	require.NoError(t, os.Rename(tmpPath, path), "%s: rename snapshot tmp to %s", ticker, path)
 }
 
 // relativizeForSnapshot strips the absolute prefix from a path so the

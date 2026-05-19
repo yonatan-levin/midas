@@ -202,8 +202,11 @@ func TestRecomputeUmbrellas_EmitsWarnOnDivergence(t *testing.T) {
 // TestRecomputeUmbrellas_ClampSuspectedFlag
 //
 // Plug exactly zero AND sum(components) > umbrella reproduces the Phase 0
-// clamp fingerprint (MXL 2017FY / EQIX 2013Q1). The WARN must set
-// clamp_suspected: true so Phase 2's analysis can filter these out.
+// clamp fingerprint (AMD 2023FY / KO 2023FY in the live baseline date
+// range; MXL 2017FY / EQIX 2013Q1 are historical examples cited in the
+// Phase 0 closeout but fall outside the artifacts/tier2-baseline/2026-05-15/
+// window). The WARN must set clamp_suspected: true so Phase 2's analysis
+// can filter these out.
 // ---------------------------------------------------------------------------
 func TestRecomputeUmbrellas_ClampSuspectedFlag(t *testing.T) {
 	// Synthetic clamp-fired shape: CurrentAssets umbrella = 100, but

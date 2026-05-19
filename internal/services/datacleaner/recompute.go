@@ -70,8 +70,11 @@ func recomputeUmbrellas(ctx context.Context, fd *entities.FinancialData) {
 	// computePlugs clamped the umbrella to >= 0 before computing the residual,
 	// but the recompute side here just sums components + plug + CurrentAssets;
 	// the divergence signal is what we want to surface.
-	nonCurrentAssets := fd.Goodwill + fd.OtherIntangibles + fd.DeferredTaxAssets + fd.OtherNonCurrentAssets
-	recomputedTA := nonCurrentAssets + fd.CurrentAssets
+	// PP&E is absorbed into OtherNonCurrentAssets per the parser's current
+	// decomposition (see CLAUDE.md DC-1 corollary); a future PP&E-split refactor
+	// must update this formula.
+	recomputedNCA := fd.Goodwill + fd.OtherIntangibles + fd.DeferredTaxAssets + fd.OtherNonCurrentAssets
+	recomputedTA := recomputedNCA + fd.CurrentAssets
 	emitIfDiverged(logger, fd, "TotalAssets", fd.TotalAssets, recomputedTA, fd.OtherNonCurrentAssets)
 
 	// --- CurrentLiabilities = OperatingLeaseLiabilityCurrent + OtherCurrentLiabilities ---
@@ -88,18 +91,24 @@ func recomputeUmbrellas(ctx context.Context, fd *entities.FinancialData) {
 	// capitalization of $254M therefore produces recomputedTL = reportedTL + 254M,
 	// surfacing as a divergence that Phase 2 resolves by routing B1 through an
 	// Overlay rather than into TotalDebt directly.
-	nonCurrentLiab := fd.TotalDebt + fd.OperatingLeaseLiabilityNoncurrent + fd.OtherNonCurrentLiabilities
-	recomputedTL := nonCurrentLiab + fd.CurrentLiabilities
+	recomputedNCL := fd.TotalDebt + fd.OperatingLeaseLiabilityNoncurrent + fd.OtherNonCurrentLiabilities
+	recomputedTL := recomputedNCL + fd.CurrentLiabilities
 	emitIfDiverged(logger, fd, "TotalLiabilities", fd.TotalLiabilities, recomputedTL, fd.OtherNonCurrentLiabilities)
 }
 
-// emitIfDiverged fires a single WARN log line when |recomputed - reported| > divergenceTolerance.
+// emitIfDiverged is extracted from recomputeUmbrellas for testability and to
+// make the WARN-shape contract a single source of truth.
+//
+// Fires a single WARN log line when |recomputed - reported| > divergenceTolerance.
 //
 // The clamp_suspected field is set true when recomputed > reported AND the
 // plug is exactly zero — the Phase 0 clamp fingerprint (sum(components) >
 // umbrella → plug clamped to 0 by clampPlug). Phase 2's shadow-analysis
 // tooling filters on this field to separate known Phase 0 clamp-fired periods
-// (MXL 2017FY, EQIX 2013Q1) from the genuine cleaner-mutation punch list.
+// (AMD 2023FY / KO 2023FY in the live baseline date range; MXL 2017FY /
+// EQIX 2013Q1 are referenced in the Phase 0 closeout but fall outside the
+// artifacts/tier2-baseline/2026-05-15/ window) from the genuine cleaner-
+// mutation punch list.
 //
 // All structured field names are part of the contract Phase 2's analysis
 // tooling depends on (see implementation plan §D). Do NOT rename without
@@ -107,9 +116,10 @@ func recomputeUmbrellas(ctx context.Context, fd *entities.FinancialData) {
 func emitIfDiverged(logger *zap.Logger, fd *entities.FinancialData, umbrella string, reported, recomputed, plug float64) {
 	delta := recomputed - reported
 
-	// Branchless absolute-value compare against the tolerance. We avoid math.Abs
-	// to keep this leaf function math-package-free; the tolerance is tiny and
-	// the comparison is in the hot path.
+	// Inline absolute-value to keep this leaf function math-package-free.
+	// (The body has a single branch on the sign of delta — the comparison
+	// is in the hot path; pulling in math.Abs for a one-line inline saves
+	// nothing and adds an import.)
 	absDelta := delta
 	if absDelta < 0 {
 		absDelta = -absDelta
