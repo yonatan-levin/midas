@@ -34,31 +34,31 @@ func TestClassify_VAL3P1_REITSubsectors(t *testing.T) {
 		// docs/refactoring/industry-classification-unification-spec.md). The
 		// "data center" / "data centre" / "interconnection" keywords still fire
 		// reliably for tickers without "digital" in their name.
-		{name: "Equinix → DATA_CENTER", companyName: "Equinix, Inc.", expected: "DATA_CENTER"},
-		{name: "Generic Data Center REIT → DATA_CENTER", companyName: "GreenStar Data Center Holdings", expected: "DATA_CENTER"},
+		{name: "Equinix → REIT_DATACENTER", companyName: "Equinix, Inc.", expected: "REIT_DATACENTER"},
+		{name: "Generic Data Center REIT → REIT_DATACENTER", companyName: "GreenStar Data Center Holdings", expected: "REIT_DATACENTER"},
 		// Cell tower
-		{name: "American Tower → CELLTOWER", companyName: "American Tower Corporation", expected: "CELLTOWER"},
-		{name: "Crown Castle → CELLTOWER", companyName: "Crown Castle Inc.", expected: "CELLTOWER"},
+		{name: "American Tower → REIT_CELLTOWER", companyName: "American Tower Corporation", expected: "REIT_CELLTOWER"},
+		{name: "Crown Castle → REIT_CELLTOWER", companyName: "Crown Castle Inc.", expected: "REIT_CELLTOWER"},
 		// Industrial
-		{name: "Prologis → INDUSTRIAL", companyName: "Prologis Inc.", expected: "INDUSTRIAL"},
+		{name: "Prologis → REIT_INDUSTRIAL", companyName: "Prologis Inc.", expected: "REIT_INDUSTRIAL"},
 		// Residential
-		{name: "Equity Residential → RESIDENTIAL", companyName: "Equity Residential Properties Trust", expected: "RESIDENTIAL"},
-		{name: "AvalonBay → RESIDENTIAL", companyName: "AvalonBay Communities Inc.", expected: "RESIDENTIAL"},
+		{name: "Equity Residential → REIT_RESIDENTIAL", companyName: "Equity Residential Properties Trust", expected: "REIT_RESIDENTIAL"},
+		{name: "AvalonBay → REIT_RESIDENTIAL", companyName: "AvalonBay Communities Inc.", expected: "REIT_RESIDENTIAL"},
 		// Healthcare
-		{name: "Welltower → HEALTHCARE_REIT", companyName: "Welltower Inc.", expected: "HEALTHCARE_REIT"},
+		{name: "Welltower → REIT_HEALTHCARE", companyName: "Welltower Inc.", expected: "REIT_HEALTHCARE"},
 		// Retail
-		{name: "Simon Property → RETAIL_REIT", companyName: "Simon Property Group Inc.", expected: "RETAIL_REIT"},
-		{name: "Kimco → RETAIL_REIT", companyName: "Kimco Realty Corporation", expected: "RETAIL_REIT"},
+		{name: "Simon Property → REIT_RETAIL", companyName: "Simon Property Group Inc.", expected: "REIT_RETAIL"},
+		{name: "Kimco → REIT_RETAIL", companyName: "Kimco Realty Corporation", expected: "REIT_RETAIL"},
 		// Office
-		{name: "Boston Properties → OFFICE", companyName: "Boston Properties Inc.", expected: "OFFICE"},
-		{name: "Vornado → OFFICE", companyName: "Vornado Realty Trust", expected: "OFFICE"},
+		{name: "Boston Properties → REIT_OFFICE", companyName: "Boston Properties Inc.", expected: "REIT_OFFICE"},
+		{name: "Vornado → REIT_OFFICE", companyName: "Vornado Realty Trust", expected: "REIT_OFFICE"},
 		// Specialty (VAL-7): self-storage, billboard, prison/corrections, timber.
-		// Wires the previously-inert SPECIALTY config so these tickers stop
+		// Wires the previously-inert REIT_SPECIALTY config so these tickers stop
 		// falling through to the 15x / 6% default in the FFO model.
-		{name: "Public Storage → SPECIALTY (self-storage)", companyName: "Public Storage", expected: "SPECIALTY"},
-		{name: "Lamar Advertising → SPECIALTY (billboard)", companyName: "Lamar Advertising Company", expected: "SPECIALTY"},
-		{name: "CoreCivic → SPECIALTY (prison/corrections)", companyName: "CoreCivic, Inc.", expected: "SPECIALTY"},
-		{name: "Weyerhaeuser → SPECIALTY (timber)", companyName: "Weyerhaeuser Company", expected: "SPECIALTY"},
+		{name: "Public Storage → REIT_SPECIALTY (self-storage)", companyName: "Public Storage", expected: "REIT_SPECIALTY"},
+		{name: "Lamar Advertising → REIT_SPECIALTY (billboard)", companyName: "Lamar Advertising Company", expected: "REIT_SPECIALTY"},
+		{name: "CoreCivic → REIT_SPECIALTY (prison/corrections)", companyName: "CoreCivic, Inc.", expected: "REIT_SPECIALTY"},
+		{name: "Weyerhaeuser → REIT_SPECIALTY (timber)", companyName: "Weyerhaeuser Company", expected: "REIT_SPECIALTY"},
 	}
 
 	for _, tt := range tests {

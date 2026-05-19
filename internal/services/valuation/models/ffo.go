@@ -31,12 +31,14 @@ const DefaultREITCapRate = 0.06
 // NAV cross-check: compares P/FFO value against NAV (= NOI / Cap Rate, using
 // OperatingIncome as NOI proxy). Informational only — does not override P/FFO.
 //
-// Subsector multiples (VAL-3 P1+P4): pffoMultiples and capRates carry the full
-// per-subsector tables (RESIDENTIAL, OFFICE, INDUSTRIAL, RETAIL_REIT,
-// HEALTHCARE_REIT, DATA_CENTER, CELLTOWER, SPECIALTY). The lookup happens at
-// Calculate() time using ModelInput.Industry, with longest-prefix-match against
-// the keys. Falls back to pffoMultiple / navCapRate (the "default" entries
-// snapshotted at construction) when no subsector match is found.
+// Subsector multiples (VAL-3 P1+P4, T2-P4-W1 prefix reconciliation):
+// pffoMultiples and capRates carry the full per-subsector tables
+// (REIT_RESIDENTIAL, REIT_OFFICE, REIT_INDUSTRIAL, REIT_RETAIL,
+// REIT_HEALTHCARE, REIT_DATACENTER, REIT_CELLTOWER, REIT_SPECIALTY). The
+// lookup happens at Calculate() time using ModelInput.Industry, with
+// longest-prefix-match against the keys. Falls back to pffoMultiple /
+// navCapRate (the "default" entries snapshotted at construction) when no
+// subsector match is found.
 type FFOModel struct {
 	pffoMultiple  float64            // Default P/FFO multiple (used when industry-specific lookup misses)
 	navCapRate    float64            // Default cap rate (used when industry-specific lookup misses; 0 = skip NAV)
@@ -138,8 +140,9 @@ func loadFFOConfig() (pffoMultiple, navCapRate float64) {
 // reit_cap_rates maps from the embedded industry_multiples.json. Used by the
 // subsector-aware lookup at Calculate() time. Returns nil maps on any read or
 // parse error — callers must treat nil as "subsector lookup disabled" and fall
-// back to the default values. Keys are bare subsector codes (RESIDENTIAL,
-// DATA_CENTER, RETAIL_REIT, …) per VAL-3 P1+P4.
+// back to the default values. Keys are REIT_* prefixed subsector codes
+// (REIT_RESIDENTIAL, REIT_DATACENTER, REIT_RETAIL, …) per VAL-3 P1+P4 and
+// the T2-P4-W1 prefix reconciliation.
 func loadFFOSubsectorTables() (pffoTable, capRateTable map[string]float64) {
 	data, err := configfs.Read("industry_multiples.json")
 	if err != nil {
@@ -263,9 +266,9 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 	ffoPerShare := ffo / shares
 
 	// Apply P/FFO multiple — looks up the subsector-specific value (e.g. 31×
-	// for DATA_CENTER, 25× for CELLTOWER) before falling back to the default.
-	// VAL-3 P1: REIT subsectors differ 3× in 2025-26 multiples; using the
-	// subsector key keeps the model from systematically under/over-valuing
+	// for REIT_DATACENTER, 25× for REIT_CELLTOWER) before falling back to the
+	// default. VAL-3 P1: REIT subsectors differ 3× in 2025-26 multiples; using
+	// the subsector key keeps the model from systematically under/over-valuing
 	// data center / cell tower / mall REITs.
 	pffoMultiple := m.getMultiple(input.Industry)
 	valuePerShare := ffoPerShare * pffoMultiple
