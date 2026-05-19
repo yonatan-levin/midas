@@ -1,0 +1,279 @@
+{
+  "ticker": "MXL",
+  "bundle_root": "artifacts/tier2-baseline/2026-05-15",
+  "fixture_path": "artifacts/tier2-baseline/2026-05-15/MXL/req_e411b8f7-4a3a-452a-9fb3-f404246980bc/05-fetch-sec.raw.json",
+  "periods_processed": 12,
+  "periods_with_divergence": 12,
+  "divergences": [
+    {
+      "period": "2023FY",
+      "umbrella": "TotalLiabilities",
+      "reported": 393992000,
+      "recomputed": 429367000,
+      "delta": 35375000,
+      "plug": 49488000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2023Q2",
+      "umbrella": "CurrentAssets",
+      "reported": 554491000,
+      "recomputed": 504030200,
+      "delta": -50460800,
+      "plug": 203760000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2023Q2",
+      "umbrella": "TotalAssets",
+      "reported": 731761200,
+      "recomputed": 782222000,
+      "delta": 50460800,
+      "plug": 140573000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2023Q2",
+      "umbrella": "TotalLiabilities",
+      "reported": 415433000,
+      "recomputed": 455055000,
+      "delta": 39622000,
+      "plug": 51640000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2023Q3",
+      "umbrella": "CurrentAssets",
+      "reported": 508607000,
+      "recomputed": 462630200,
+      "delta": -45976800,
+      "plug": 206637000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2023Q3",
+      "umbrella": "TotalAssets",
+      "reported": 684258867,
+      "recomputed": 730235667,
+      "delta": 45976800,
+      "plug": 134960000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2023Q3",
+      "umbrella": "TotalLiabilities",
+      "reported": 401110000,
+      "recomputed": 437876000,
+      "delta": 36766000,
+      "plug": 45981000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024FY",
+      "umbrella": "TotalLiabilities",
+      "reported": 348356000,
+      "recomputed": 374721000,
+      "delta": 26365000,
+      "plug": 43076000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024Q1",
+      "umbrella": "CurrentAssets",
+      "reported": 444679000,
+      "recomputed": 406229000,
+      "delta": -38450000,
+      "plug": 156672000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024Q1",
+      "umbrella": "TotalAssets",
+      "reported": 630294333,
+      "recomputed": 668744333,
+      "delta": 38450000,
+      "plug": 130243000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024Q1",
+      "umbrella": "TotalLiabilities",
+      "reported": 392642000,
+      "recomputed": 425706000,
+      "delta": 33064000,
+      "plug": 46259000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024Q2",
+      "umbrella": "CurrentAssets",
+      "reported": 397581000,
+      "recomputed": 359685800,
+      "delta": -37895200,
+      "plug": 117735000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024Q2",
+      "umbrella": "TotalAssets",
+      "reported": 575523133,
+      "recomputed": 613418333,
+      "delta": 37895200,
+      "plug": 121014000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024Q2",
+      "umbrella": "TotalLiabilities",
+      "reported": 355942000,
+      "recomputed": 387089000,
+      "delta": 31147000,
+      "plug": 42981000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024Q3",
+      "umbrella": "CurrentAssets",
+      "reported": 328260000,
+      "recomputed": 289834800,
+      "delta": -38425200,
+      "plug": 83721000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024Q3",
+      "umbrella": "TotalAssets",
+      "reported": 499602467,
+      "recomputed": 538027667,
+      "delta": 38425200,
+      "plug": 107872000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024Q3",
+      "umbrella": "TotalLiabilities",
+      "reported": 338431000,
+      "recomputed": 367663000,
+      "delta": 29232000,
+      "plug": 46994000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025FY",
+      "umbrella": "TotalLiabilities",
+      "reported": 344501000,
+      "recomputed": 365910000,
+      "delta": 21409000,
+      "plug": 34863000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025Q1",
+      "umbrella": "CurrentAssets",
+      "reported": 320406000,
+      "recomputed": 286004000,
+      "delta": -34402000,
+      "plug": 131628000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025Q1",
+      "umbrella": "TotalAssets",
+      "reported": 467899667,
+      "recomputed": 502301667,
+      "delta": 34402000,
+      "plug": 95355000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025Q1",
+      "umbrella": "TotalLiabilities",
+      "reported": 362106000,
+      "recomputed": 387768000,
+      "delta": 25662000,
+      "plug": 42063000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025Q2",
+      "umbrella": "CurrentAssets",
+      "reported": 330149000,
+      "recomputed": 295736600,
+      "delta": -34412400,
+      "plug": 135500000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025Q2",
+      "umbrella": "TotalAssets",
+      "reported": 474497267,
+      "recomputed": 508909667,
+      "delta": 34412400,
+      "plug": 85604000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025Q2",
+      "umbrella": "TotalLiabilities",
+      "reported": 375406000,
+      "recomputed": 399769000,
+      "delta": 24363000,
+      "plug": 38609000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025Q3",
+      "umbrella": "CurrentAssets",
+      "reported": 284132000,
+      "recomputed": 249600400,
+      "delta": -34531600,
+      "plug": 85944000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025Q3",
+      "umbrella": "TotalAssets",
+      "reported": 420302733,
+      "recomputed": 454834333,
+      "delta": 34531600,
+      "plug": 78583000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025Q3",
+      "umbrella": "TotalLiabilities",
+      "reported": 343406000,
+      "recomputed": 365107000,
+      "delta": 21701000,
+      "plug": 36394000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2026Q1",
+      "umbrella": "CurrentAssets",
+      "reported": 249450000,
+      "recomputed": 215114400,
+      "delta": -34335600,
+      "plug": 102534000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2026Q1",
+      "umbrella": "TotalAssets",
+      "reported": 387402067,
+      "recomputed": 421737667,
+      "delta": 34335600,
+      "plug": 104685000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2026Q1",
+      "umbrella": "TotalLiabilities",
+      "reported": 317076000,
+      "recomputed": 344480000,
+      "delta": 27404000,
+      "plug": 46645000,
+      "clamp_suspected": false
+    }
+  ]
+}

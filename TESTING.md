@@ -183,6 +183,20 @@ integration basket test at
 `docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md`
 (Testing strategy → T1).
 
+Phase 1 extends the same pattern to the recompute side:
+`internal/services/datacleaner/recompute_test.go::TestRecomputeUmbrellas_Property_WellFormedNoDivergence`
+(4 properties × 200 iterations, pinned seed `20260517`) asserts that for any
+well-formed `FinancialData` where the plug invariant holds, `recomputeUmbrellas`
+emits zero WARN lines. The clamp-fired and adjuster-mutated branches are
+recorded (NOT asserted) by the integration test at
+`internal/integration/datacleaner_recompute_shadow_test.go` for Phase 2's
+punch list — committed snapshots under
+`internal/integration/testdata/recompute-shadow/<TICKER>.json` are the
+Phase 1 → Phase 2 hand-off artifact. The load-bearing
+`TestRecomputeUmbrellas_NoMutation` `reflect.DeepEqual` snapshot test pins
+the "zero `fd.*` writes" invariant — any commit that breaks it must be
+reverted, not adjusted.
+
 ### 3. Mock-Based Tests (Service Layer)
 
 Using `testify/mock` for interface dependencies:

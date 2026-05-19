@@ -228,6 +228,19 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	additionalFlags := s.createRiskWarningFlags(result.CleanedData, startTime)
 	result.Flags = append(result.Flags, additionalFlags...)
 
+	// DC-1 Phase 1 shadow-mode observability: recompute each balance-sheet
+	// umbrella from sum(known_components) + plug and emit a WARN log on
+	// divergence. Pure read; does NOT mutate result.CleanedData. The WARN
+	// stream is the input to Phase 2's targeted-fix punch list (Adjuster
+	// interface refactor). Placed AFTER createRiskWarningFlags (the last
+	// pre-quality-score mutator) and BEFORE the artifact-bundle snapshot
+	// below so any captured 10-clean-output.json bundle is replayable
+	// through recomputeUmbrellas and produces the same WARN set.
+	//
+	//   docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md
+	//   docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-implementation-plan.md
+	recomputeUmbrellas(ctx, result.CleanedData)
+
 	// Calculate quality score
 	qualityScore, qualityIssues, err := s.calculateQualityScore(result.CleanedData, flags)
 	if err != nil {
