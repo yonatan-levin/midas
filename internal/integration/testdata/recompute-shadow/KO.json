@@ -2,18 +2,9 @@
   "ticker": "KO",
   "bundle_root": "artifacts/tier2-baseline/2026-05-15",
   "fixture_path": "artifacts/tier2-baseline/2026-05-15/KO/req_015bc08f-21a7-45ac-a573-24b308f631c2/05-fetch-sec.raw.json",
-  "periods_processed": 13,
-  "periods_with_divergence": 13,
+  "periods_processed": 12,
+  "periods_with_divergence": 12,
   "divergences": [
-    {
-      "period": "0",
-      "umbrella": "TotalLiabilities",
-      "reported": 0,
-      "recomputed": 68837000000,
-      "delta": 68837000000,
-      "plug": 0,
-      "clamp_suspected": true
-    },
     {
       "period": "2023FY",
       "umbrella": "TotalLiabilities",

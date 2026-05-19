@@ -2,7 +2,7 @@
   "ticker": "EQIX",
   "bundle_root": "artifacts/tier2-baseline/2026-05-15",
   "fixture_path": "artifacts/tier2-baseline/2026-05-15/EQIX/req_c1adaf3b-adb6-4384-9681-27e07c5b101f/05-fetch-sec.raw.json",
-  "periods_processed": 13,
+  "periods_processed": 12,
   "periods_with_divergence": 12,
   "divergences": [
     {

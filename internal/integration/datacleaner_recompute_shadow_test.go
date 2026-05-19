@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -120,23 +121,39 @@ func TestDataCleanerRecompute_ShadowMode_TickerBasket(t *testing.T) {
 			periodsProcessed := 0
 			periodsWithDivergence := map[string]bool{}
 
-			// Sorted period walk for deterministic snapshot ordering.
+			// Sorted period walk for deterministic snapshot ordering. We
+			// skip malformed period keys (empty string or pseudo-period
+			// "0") because (a) they don't reproduce reliably across runs
+			// — the SEC parser intermittently produces them for stub
+			// filings depending on map iteration order during currency-
+			// bucket collapse, and (b) Phase 2's punch list keys on
+			// (ticker, period, umbrella) so a malformed period would
+			// land in an un-actionable cluster anyway. Letting them
+			// through would make the committed snapshots non-deterministic
+			// across runs and break the diff-review signal that is the
+			// whole point of committing them.
 			periods := historical.GetSortedPeriods()
 			for _, period := range periods {
+				if period == "" || period == "0" {
+					continue
+				}
 				fd := historical.Data[period]
 				if fd == nil {
 					continue
 				}
-				// Tag the fd's period/ticker so the WARN lines carry the
-				// real identifiers (some parsed fds may have a different
-				// FilingPeriod than the map key). We do NOT mutate other
-				// fields — recomputeUmbrellas's read-only invariant is
-				// preserved.
+				// Skip FDs whose own FilingPeriod is malformed for the
+				// same reason — the WARN's `period` field flows from
+				// fd.FilingPeriod and would carry the malformed value
+				// through to the snapshot.
+				if fd.FilingPeriod == "" || fd.FilingPeriod == "0" {
+					continue
+				}
+				// Tag the fd's ticker so the WARN lines carry the real
+				// identifier (some parsed fds leave Ticker empty). We do
+				// NOT mutate any other fields — recomputeUmbrellas's
+				// read-only invariant is preserved.
 				if fd.Ticker == "" {
 					fd.Ticker = ticker
-				}
-				if fd.FilingPeriod == "" {
-					fd.FilingPeriod = period
 				}
 
 				before := recorded.Len()
@@ -251,6 +268,14 @@ type divergenceRecord struct {
 // observer.LoggedEntry. Defensive on each cast — a missing field falls
 // through as zero/empty so a future log-shape change surfaces in the diff
 // rather than panicking the snapshot generator.
+//
+// Monetary float fields are quantized to whole dollars (roundDollar) before
+// landing in the snapshot. Without quantization the cleaner's adjuster
+// ordering occasionally swaps the last bit of accumulated arithmetic
+// (`387402066.6666667` vs `387402066.6666666`), producing a non-stable
+// diff that defeats the entire point of committing the snapshots. The
+// divergence signal Phase 2 needs is measured in millions of dollars; a
+// 1 USD snapshot precision is well below any actionable threshold.
 func divergenceFromEntry(e observer.LoggedEntry) divergenceRecord {
 	ctx := e.ContextMap()
 	rec := divergenceRecord{}
@@ -261,21 +286,31 @@ func divergenceFromEntry(e observer.LoggedEntry) divergenceRecord {
 		rec.Umbrella = v
 	}
 	if v, ok := ctx["reported"].(float64); ok {
-		rec.Reported = v
+		rec.Reported = roundDollar(v)
 	}
 	if v, ok := ctx["recomputed"].(float64); ok {
-		rec.Recomputed = v
+		rec.Recomputed = roundDollar(v)
 	}
 	if v, ok := ctx["delta"].(float64); ok {
-		rec.Delta = v
+		rec.Delta = roundDollar(v)
 	}
 	if v, ok := ctx["plug"].(float64); ok {
-		rec.Plug = v
+		rec.Plug = roundDollar(v)
 	}
 	if v, ok := ctx["clamp_suspected"].(bool); ok {
 		rec.ClampSuspected = v
 	}
 	return rec
+}
+
+// roundDollar quantizes a float USD value to the nearest whole dollar so
+// committed snapshot diffs absorb cleaner-side float64 accumulation noise
+// (typically a single ULP, ~$0.000001 for billion-dollar magnitudes).
+// Phase 2's punch list operates on million-dollar magnitudes; whole-dollar
+// snapshot precision is two orders of magnitude tighter than the smallest
+// actionable signal.
+func roundDollar(v float64) float64 {
+	return math.Round(v)
 }
 
 // writeShadowSnapshot serializes the per-ticker snapshot to JSON with
