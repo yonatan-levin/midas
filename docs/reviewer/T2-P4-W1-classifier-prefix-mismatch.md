@@ -1,11 +1,11 @@
 # T2-P4-W1 — Classifier output vs assumption_profiles.json archetype-rule prefix mismatch
 
-**Status:** OPEN — must be resolved before Tier 2 merges to master; reconciliation strategy chosen
-**Severity:** HIGH (latent: forward path code ships but is functionally inert in production for all REIT subsectors and small-bank/insurance financials)
+**Status:** PARTIALLY RESOLVED — REIT-side fix MERGED to master 2026-05-19 (`be92a79`). Tracker stays OPEN pending Tier 2 Closeout validation of deferred acceptance rows 7-8 (live API regression on EQIX+PLD + replay regression against `artifacts/tier2-baseline/` — both require P4 merged to exercise REIT-specific archetype rules). Originally OPEN (filed 2026-05-16); reconciliation strategy chosen.
+**Severity:** HIGH (now mitigated for the REIT path; latent risk closes fully when P4 lands)
 **Filed:** 2026-05-16 by P4 REVIEWER during the parallel B-V-R-Q cycle
-**Phase context:** Tier 2 — surfaced during P4 review; same gap applies to P3
+**Phase context:** Tier 2 — surfaced during P4 review; same gap applies to P3 (see FIN-side P3 coordination note in the 2026-05-19 audit appendix)
 **Owner:** Tier 2 integration / Closeout phase
-**Chosen reconciliation:** **Option 1 — Update the classifier to emit `REIT_*` / `FIN_*` prefixed forms** (HUMAN decision 2026-05-16)
+**Chosen reconciliation:** **Option 1 — Update the classifier to emit `REIT_*` / `FIN_*` prefixed forms** (HUMAN decision 2026-05-16; REIT-side complete; FIN-side P3 coordination)
 
 ---
 

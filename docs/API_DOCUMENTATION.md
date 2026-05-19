@@ -434,7 +434,7 @@ The `industry` object exposes both classifiers the engine runs on every request:
 | Sub-field | Source | Description |
 |-----------|--------|-------------|
 | `sic_code` | SEC filing header | Raw SIC code (e.g., `3674` for semiconductors) |
-| `sic` | `IndustryClassifier.Classify` | High-level label from SIC code + company name. Top-level codes: `TECH`, `MFG`, `RETAIL`, `UTIL`, `FIN`, `HEALTH`, `ENERGY`, `RESTATE`, `TELECOM`, `TRANS`, `CONS`. Sub-industry refinements: `TECH_SAAS`, `TECH_AI`, `MFG_SEMI` (fabless / IDM semis), `HEALTH_BIOTECH`, `HEALTH_PHARMA`, `FIN_BANK`, `FIN_INSURANCE`, `FIN_IB`. REIT subsectors (when `RESTATE` parent matches): `RESIDENTIAL`, `INDUSTRIAL`, `OFFICE`, `RETAIL_REIT`, `HEALTHCARE_REIT`, `DATA_CENTER`, `CELLTOWER`, `SPECIALTY` |
+| `sic` | `IndustryClassifier.Classify` | High-level label from SIC code + company name. Top-level codes: `TECH`, `MFG`, `RETAIL`, `UTIL`, `FIN`, `HEALTH`, `ENERGY`, `RESTATE`, `TELECOM`, `TRANS`, `CONS`. Sub-industry refinements: `TECH_SAAS`, `TECH_AI`, `MFG_SEMI` (fabless / IDM semis), `HEALTH_BIOTECH`, `HEALTH_PHARMA`, `FIN_BANK`, `FIN_INSURANCE`, `FIN_IB`. REIT subsectors (when `RESTATE` parent matches; `REIT_*` prefixed per T2-P4-W1 reconciliation 2026-05-19): `REIT_RESIDENTIAL`, `REIT_INDUSTRIAL`, `REIT_OFFICE`, `REIT_RETAIL`, `REIT_HEALTHCARE`, `REIT_DATACENTER`, `REIT_CELLTOWER`, `REIT_SPECIALTY` |
 | `heuristic_code` | `IndustryClassifier.ClassifyIndustry` | GICS sector code from balance-sheet ratios: `45` (IT), `25` (Consumer Discretionary), `20` (Industrials), `35` (Health Care), `55` (Utilities), `40` (Financials), `50` (Communication Services), `60` (Real Estate), `30` (Consumer Staples), `10` (Energy) |
 | `heuristic_name` | `IndustryClassifier.ClassifyIndustry` | Human-readable GICS sector name |
 | `match` | Computed in handler | `true` when `sic` and `heuristic_code` agree per a canonical SIC→GICS mapping (sub-industries normalize to their parent or have explicit entries); `false` signals classification drift |
@@ -454,7 +454,7 @@ The `industry` object exposes both classifiers the engine runs on every request:
 | `TELECOM` | `50` |
 | `TRANS` | `20` |
 | `CONS` | `30`, `25` |
-| `RESIDENTIAL`, `INDUSTRIAL`, `OFFICE`, `RETAIL_REIT`, `HEALTHCARE_REIT`, `DATA_CENTER`, `CELLTOWER`, `SPECIALTY` | `60` (each REIT subsector has its own explicit `sicToGICS` entry — exact-match-first lookup prevents `RETAIL_REIT` falling through prefix-strip to `RETAIL → 25`) |
+| `REIT_RESIDENTIAL`, `REIT_INDUSTRIAL`, `REIT_OFFICE`, `REIT_RETAIL`, `REIT_HEALTHCARE`, `REIT_DATACENTER`, `REIT_CELLTOWER`, `REIT_SPECIALTY` | `60` (each REIT subsector has its own explicit `sicToGICS` entry — `"REIT"` is not a key in `sicToGICS`, so the parent-strip fallback is bypassed and the full-code exact-match is the only resolution path per T2-P4-W1) |
 
 Sub-industry codes for non-REIT sectors (`TECH_SAAS`, `MFG_SEMI`, `HEALTH_BIOTECH`, `FIN_BANK`, …) normalize to their parent prefix for match computation. REIT subsector codes have explicit map entries because they would otherwise prefix-strip into the wrong sector.
 
@@ -463,9 +463,9 @@ Sub-industry codes for non-REIT sectors (`TECH_SAAS`, `MFG_SEMI`, `HEALTH_BIOTEC
 - **Financials** (`sic = "FIN"`): `ClassifyIndustry` has no GICS-40 config and defaults to `20` → `match: false` for banks like JPM. Not drift — a known heuristic config gap.
 - **Owned-store retailers** (Target, Home Depot, Costco, Lowe's): the heuristic's retail predicate rejects retailers with tangibles > 70% and intangibles < 10%, so they fall through to Industrials (`heuristic_code = "20"`) → `match: false`. Tracked as a 2026-04-24 FEEDBACK-LOG entry.
 - **Missing R&D data** (AMD and similar): when the datacleaner pipeline doesn't populate `ResearchAndDevelopment`, `isTechnologyCompany` returns false and the ticker drops to `heuristic_code = "20"` Industrials. `sic = "MFG"` multi-maps to `{20, 45}`, so `match: true` **still** — but the Industrials label is misleading.
-- **REIT subsectors** (`sic ∈ {RESIDENTIAL, INDUSTRIAL, OFFICE, RETAIL_REIT, HEALTHCARE_REIT, DATA_CENTER, CELLTOWER, SPECIALTY}`): the heuristic classifies REITs from balance-sheet ratios as Industrials (`heuristic_code = "20"`) because their asset structure looks industrial-shaped to the heuristic. SIC says GICS 60 (Real Estate). `match: false` is the intentional dual-classifier disagreement signal; the FFO model still routes correctly (it consumes `sic`, not `heuristic_code`).
+- **REIT subsectors** (`sic ∈ {REIT_RESIDENTIAL, REIT_INDUSTRIAL, REIT_OFFICE, REIT_RETAIL, REIT_HEALTHCARE, REIT_DATACENTER, REIT_CELLTOWER, REIT_SPECIALTY}`): the heuristic classifies REITs from balance-sheet ratios as Industrials (`heuristic_code = "20"`) because their asset structure looks industrial-shaped to the heuristic. SIC says GICS 60 (Real Estate). `match: false` is the intentional dual-classifier disagreement signal; the FFO model still routes correctly (it consumes `sic`, not `heuristic_code`).
 - **Digital Realty Trust class** — DLR has SIC 6798 (REIT) but its company name "Digital Realty" matches the TECH parent's keyword pattern at priority 100, outranking RESTATE (priority 65). Routes to TECH not RESTATE; misses the REIT FFO model. Documented inline at `internal/services/datacleaner/industry/classifier_val3p1_reit_test.go`. Same defect class as the next item.
-- **Healthpeak / Omega / Medical Properties Trust class** (`docs/reviewer/VAL-6-...`): healthcare REIT names containing `health` / `medical` match HEALTH parent (priority 85) before RESTATE (65), so they route to the HEALTH multiples instead of `HEALTHCARE_REIT`. The HEALTHCARE_REIT subsector multiple (17.5× P/FFO) and cap rate (6.0%) are bypassed. Welltower / Ventas don't trip this (no HEALTH keyword in name).
+- **Healthpeak / Omega / Medical Properties Trust class** (`docs/reviewer/VAL-6-...`): healthcare REIT names containing `health` / `medical` match HEALTH parent (priority 85) before RESTATE (65), so they route to the HEALTH multiples instead of `REIT_HEALTHCARE`. The REIT_HEALTHCARE subsector multiple (17.5× P/FFO) and cap rate (6.0%) are bypassed. Welltower / Ventas don't trip this (no HEALTH keyword in name).
 
 The feature's purpose is drift detection. When `match: false`, consult the gaps above; it may be a known classifier limitation rather than a real disagreement. The long-term plan (tracked in `docs/refactoring/industry-classification-unification-spec.md`) is to invert classifier precedence so SIC outranks company-name keywords, then unify on SIC alone and retire the heuristic.
 
@@ -771,17 +771,17 @@ The P/FFO multiple is **subsector-keyed** — REIT subsectors trade at meaningfu
 
 | Subsector | NTM P/FFO | Cap rate (NAV cross-check) | Examples |
 |-----------|-----------|----------------------------|----------|
-| `RESIDENTIAL` | 20× | 5.0% | EQR, AVB |
-| `INDUSTRIAL` | 22.5× | 4.5% | PLD, DRE |
-| `OFFICE` | 14× | 7.5% | BXP, VNO |
-| `RETAIL_REIT` | 10× | 8.5% | SPG, KIM |
-| `HEALTHCARE_REIT` | 17.5× | 6.0% | WELL, VTR |
-| `DATA_CENTER` | 31× | 4.0% | EQIX, DLR |
-| `CELLTOWER` | 25× | 4.5% | AMT, CCI, SBAC |
-| `SPECIALTY` | 17.5× | n/a (uses default 6.0%) | (classifier matchers TBD) |
+| `REIT_RESIDENTIAL` | 20× | 5.0% | EQR, AVB |
+| `REIT_INDUSTRIAL` | 22.5× | 4.5% | PLD, DRE |
+| `REIT_OFFICE` | 14× | 7.5% | BXP, VNO |
+| `REIT_RETAIL` | 10× | 8.5% | SPG, KIM |
+| `REIT_HEALTHCARE` | 17.5× | 6.0% | WELL, VTR |
+| `REIT_DATACENTER` | 31× | 4.0% | EQIX, DLR |
+| `REIT_CELLTOWER` | 25× | 4.5% | AMT, CCI, SBAC |
+| `REIT_SPECIALTY` | 17.5× | n/a (uses default 6.0%) | (classifier matchers TBD) |
 | _default REIT_ | 15× | 6.0% | unmapped subsector falls back here |
 
-Subsector resolution is keyword-based on company name (`equinix` → `DATA_CENTER`, `american tower` → `CELLTOWER`, `prologis` → `INDUSTRIAL`, `simon property` → `RETAIL_REIT`, etc.); see `config/datacleaner/industry_codes.json`. The model emits the subsector code on `industry.sic` and warns when the P/FFO value diverges from the NAV cross-check by >2× or <0.5×:
+Subsector resolution is keyword-based on company name (`equinix` → `REIT_DATACENTER`, `american tower` → `REIT_CELLTOWER`, `prologis` → `REIT_INDUSTRIAL`, `simon property` → `REIT_RETAIL`, etc.); see `config/datacleaner/industry_codes.json`. The model emits the subsector code on `industry.sic` and warns when the P/FFO value diverges from the NAV cross-check by >2× or <0.5×:
 
 ```text
 "P/FFO value ($152.3) diverges from NAV cross-check ($32.12/share, cap rate 8.5%); ratio=4.74x"
@@ -891,7 +891,7 @@ After calculating the DCF value, Midas compares the implied multiples against se
 
 Cross-check flags are **advisory only** — they do not invalidate the valuation but are included in the `warnings` array for transparency.
 
-**REIT NAV cross-check.** When the FFO model fires, an additional NAV cross-check runs alongside the standard sanity checks. It uses the **subsector-specific cap rate** (see the FFO subsector table in §5.2) rather than a uniform 6% default — so a `RETAIL_REIT` divergence is computed against an 8.5% cap rate, while a `DATA_CENTER` divergence uses 4.0%. The warning surfaces both the NAV per share and the cap rate so consumers can recompute:
+**REIT NAV cross-check.** When the FFO model fires, an additional NAV cross-check runs alongside the standard sanity checks. It uses the **subsector-specific cap rate** (see the FFO subsector table in §5.2) rather than a uniform 6% default — so a `REIT_RETAIL` divergence is computed against an 8.5% cap rate, while a `REIT_DATACENTER` divergence uses 4.0%. The warning surfaces both the NAV per share and the cap rate so consumers can recompute:
 
 ```text
 "P/FFO value ($152.3) diverges from NAV cross-check ($32.12/share, cap rate 8.5%); ratio=4.74x"
