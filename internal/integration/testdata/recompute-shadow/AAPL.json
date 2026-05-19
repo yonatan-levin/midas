@@ -1,0 +1,36 @@
+{
+  "ticker": "AAPL",
+  "bundle_root": "artifacts/tier2-baseline/2026-05-15",
+  "fixture_path": "artifacts/tier2-baseline/2026-05-15/AAPL/req_9f018f5b-4fe7-46a4-b368-c1827b64e7d2/05-fetch-sec.raw.json",
+  "periods_processed": 12,
+  "periods_with_divergence": 3,
+  "divergences": [
+    {
+      "period": "2023FY",
+      "umbrella": "TotalLiabilities",
+      "reported": 290437000000,
+      "recomputed": 302255000000,
+      "delta": 11818000000,
+      "plug": 40026000000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2024FY",
+      "umbrella": "TotalLiabilities",
+      "reported": 308030000000,
+      "recomputed": 319564000000,
+      "delta": 11534000000,
+      "plug": 34976000000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2025FY",
+      "umbrella": "TotalLiabilities",
+      "reported": 285508000000,
+      "recomputed": 297998000000,
+      "delta": 12490000000,
+      "plug": 29199000000,
+      "clamp_suspected": false
+    }
+  ]
+}
