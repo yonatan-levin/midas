@@ -270,9 +270,19 @@ func TestRecomputeUmbrellas_Property_WellFormedNoDivergence(t *testing.T) {
 
 	properties := gopter.NewProperties(params)
 
+	// Per-property observer hoisted outside the prop.ForAll lambda so we
+	// allocate one observer.New / zap.Logger pair per property instead of one
+	// per iteration (4 × 1 instead of 4 × 200). Each iteration clears prior
+	// recorded entries via TakeAll() at the start so cross-iteration leakage
+	// cannot bias the assertion. Cosmetic / GC-pressure improvement; behavior
+	// is identical to the per-iteration form.
+
 	// Property 1: well-formed CurrentAssets emits no WARN.
+	caCore, caRecorded := observer.New(zap.WarnLevel)
+	caCtx := logctx.Inject(context.Background(), zap.New(caCore))
 	properties.Property("well-formed CurrentAssets → no divergence WARN", prop.ForAll(
 		func(cash, inventory, otherCA float64) bool {
+			caRecorded.TakeAll() // clear prior-iteration state
 			fd := &entities.FinancialData{
 				Ticker:                 "FUZZ",
 				CIK:                    "0",
@@ -282,14 +292,12 @@ func TestRecomputeUmbrellas_Property_WellFormedNoDivergence(t *testing.T) {
 				OtherCurrentAssets:     otherCA,
 				CurrentAssets:          cash + inventory + otherCA, // invariant holds
 			}
-			core, recorded := observer.New(zap.WarnLevel)
-			ctx := logctx.Inject(context.Background(), zap.New(core))
-			recomputeUmbrellas(ctx, fd)
+			recomputeUmbrellas(caCtx, fd)
 			// Filter to CurrentAssets divergence only — the other umbrellas
 			// are all zero on both sides here so they also shouldn't fire,
 			// but we only assert the property's umbrella to keep the
 			// counterexample readable on failure.
-			for _, e := range recorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All() {
+			for _, e := range caRecorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All() {
 				if e.ContextMap()["umbrella"] == "CurrentAssets" {
 					return false
 				}
@@ -302,8 +310,11 @@ func TestRecomputeUmbrellas_Property_WellFormedNoDivergence(t *testing.T) {
 	))
 
 	// Property 2: well-formed TotalAssets emits no WARN.
+	taCore, taRecorded := observer.New(zap.WarnLevel)
+	taCtx := logctx.Inject(context.Background(), zap.New(taCore))
 	properties.Property("well-formed TotalAssets → no divergence WARN", prop.ForAll(
 		func(currentAssets, goodwill, intangibles, dta, otherNCA float64) bool {
+			taRecorded.TakeAll()
 			fd := &entities.FinancialData{
 				Ticker:                "FUZZ",
 				CIK:                   "0",
@@ -315,10 +326,8 @@ func TestRecomputeUmbrellas_Property_WellFormedNoDivergence(t *testing.T) {
 				OtherNonCurrentAssets: otherNCA,
 				TotalAssets:           currentAssets + goodwill + intangibles + dta + otherNCA, // invariant holds
 			}
-			core, recorded := observer.New(zap.WarnLevel)
-			ctx := logctx.Inject(context.Background(), zap.New(core))
-			recomputeUmbrellas(ctx, fd)
-			for _, e := range recorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All() {
+			recomputeUmbrellas(taCtx, fd)
+			for _, e := range taRecorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All() {
 				if e.ContextMap()["umbrella"] == "TotalAssets" {
 					return false
 				}
@@ -333,8 +342,11 @@ func TestRecomputeUmbrellas_Property_WellFormedNoDivergence(t *testing.T) {
 	))
 
 	// Property 3: well-formed CurrentLiabilities emits no WARN.
+	clCore, clRecorded := observer.New(zap.WarnLevel)
+	clCtx := logctx.Inject(context.Background(), zap.New(clCore))
 	properties.Property("well-formed CurrentLiabilities → no divergence WARN", prop.ForAll(
 		func(opLeaseCurrent, otherCL float64) bool {
+			clRecorded.TakeAll()
 			fd := &entities.FinancialData{
 				Ticker:                         "FUZZ",
 				CIK:                            "0",
@@ -343,10 +355,8 @@ func TestRecomputeUmbrellas_Property_WellFormedNoDivergence(t *testing.T) {
 				OtherCurrentLiabilities:        otherCL,
 				CurrentLiabilities:             opLeaseCurrent + otherCL, // invariant holds
 			}
-			core, recorded := observer.New(zap.WarnLevel)
-			ctx := logctx.Inject(context.Background(), zap.New(core))
-			recomputeUmbrellas(ctx, fd)
-			for _, e := range recorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All() {
+			recomputeUmbrellas(clCtx, fd)
+			for _, e := range clRecorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All() {
 				if e.ContextMap()["umbrella"] == "CurrentLiabilities" {
 					return false
 				}
@@ -358,8 +368,11 @@ func TestRecomputeUmbrellas_Property_WellFormedNoDivergence(t *testing.T) {
 	))
 
 	// Property 4: well-formed TotalLiabilities emits no WARN.
+	tlCore, tlRecorded := observer.New(zap.WarnLevel)
+	tlCtx := logctx.Inject(context.Background(), zap.New(tlCore))
 	properties.Property("well-formed TotalLiabilities → no divergence WARN", prop.ForAll(
 		func(currentLiab, totalDebt, opLeaseNoncurrent, otherNCL float64) bool {
+			tlRecorded.TakeAll()
 			fd := &entities.FinancialData{
 				Ticker:                            "FUZZ",
 				CIK:                               "0",
@@ -370,10 +383,8 @@ func TestRecomputeUmbrellas_Property_WellFormedNoDivergence(t *testing.T) {
 				OtherNonCurrentLiabilities:        otherNCL,
 				TotalLiabilities:                  currentLiab + totalDebt + opLeaseNoncurrent + otherNCL, // invariant holds
 			}
-			core, recorded := observer.New(zap.WarnLevel)
-			ctx := logctx.Inject(context.Background(), zap.New(core))
-			recomputeUmbrellas(ctx, fd)
-			for _, e := range recorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All() {
+			recomputeUmbrellas(tlCtx, fd)
+			for _, e := range tlRecorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All() {
 				if e.ContextMap()["umbrella"] == "TotalLiabilities" {
 					return false
 				}
