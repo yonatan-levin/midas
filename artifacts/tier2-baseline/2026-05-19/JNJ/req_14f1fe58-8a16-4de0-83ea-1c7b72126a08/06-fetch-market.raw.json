@@ -1,0 +1,41 @@
+{
+  "quoteResponse": {
+    "error": null,
+    "result": [
+      {
+        "averageDailyVolume3Month": 7957608,
+        "beta": 0.263,
+        "cryptoTradeable": false,
+        "currency": "USD",
+        "customPriceAlertConfidence": "HIGH",
+        "esgPopulated": false,
+        "exchange": "NYQ",
+        "exchangeDataDelayedBy": 0,
+        "exchangeTimezoneName": "America/New_York",
+        "exchangeTimezoneShortName": "EDT",
+        "firstTradeDateMilliseconds": -252322200000,
+        "fullExchangeName": "NYSE",
+        "gmtOffSetMilliseconds": -14400000,
+        "hasPrePostMarketData": true,
+        "impliedSharesOutstanding": 2407216971,
+        "language": "en-US",
+        "market": "us_market",
+        "marketCap": 552360017920,
+        "marketState": "REGULAR",
+        "priceHint": 2,
+        "quoteSourceName": "Nasdaq Real Time Price",
+        "quoteType": "EQUITY",
+        "region": "US",
+        "regularMarketPrice": 229.46,
+        "regularMarketTime": 1779218279,
+        "regularMarketVolume": 4807494,
+        "sharesOutstanding": 2407216971,
+        "sourceInterval": 15,
+        "symbol": "JNJ",
+        "tradeable": false,
+        "triggerable": true,
+        "typeDisp": "Equity"
+      }
+    ]
+  }
+}

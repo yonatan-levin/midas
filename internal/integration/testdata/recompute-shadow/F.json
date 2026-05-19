@@ -1,7 +1,7 @@
 {
   "ticker": "F",
-  "bundle_root": "artifacts/tier2-baseline/2026-05-15",
-  "fixture_path": "artifacts/tier2-baseline/2026-05-15/F/req_fc7c8abe-33bd-42b3-b4d7-ed2dc33aaba8/05-fetch-sec.raw.json",
+  "bundle_root": "artifacts/tier2-baseline/2026-05-19",
+  "fixture_path": "artifacts/tier2-baseline/2026-05-19/F/req_08e31754-44a5-48b2-9d55-92ceee1f4fd2/05-fetch-sec.raw.json",
   "periods_processed": 12,
   "periods_with_divergence": 12,
   "divergences": [

@@ -1,0 +1,21 @@
+{
+  "projected_growth_rates": [
+    0.03793352076550158,
+    0.03793352076550158,
+    0.03793352076550158,
+    0.03793352076550158,
+    0.03793352076550158,
+    0.03793352076550158,
+    0.03793352076550158
+  ],
+  "terminal_growth_rate": 0.0244332762920062,
+  "analyst_revenue_growth_y1": 172507566270,
+  "analyst_revenue_growth_y2": 177794031810,
+  "analyst_earnings_growth_5y": 0,
+  "number_of_analysts": 9,
+  "historical_cagr": 0.0488665525840124,
+  "sustainable_growth_rate": 0.06322404398409504,
+  "source": "analyst_blend",
+  "confidence": "medium",
+  "method": "60% analyst (9 analysts) + 40% historical CAGR"
+}

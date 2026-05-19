@@ -1,0 +1,56 @@
+{
+  "ticker": "AMD",
+  "wacc": 0.1412870415443649,
+  "growth_rate": 0.2361321588808214,
+  "growth_rates": [
+    0.30111845306985563,
+    0.30111845306985563,
+    0.30111845306985563,
+    0.2568947624558845,
+    0.21267107184191336,
+    0.16844738122794226,
+    0.12422369061397112
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 21.167272727272728,
+  "dcf_value_per_share": -49.497790320483624,
+  "as_of": "2026-05-19T22:20:40Z",
+  "data_quality_score": 90,
+  "data_quality_grade": "A",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.1",
+  "warnings": [
+    "graham_floor: insufficient balance-sheet data (total_liabilities unresolved)"
+  ],
+  "sanity_check": {
+    "implied_pe": -59.05376285524077,
+    "sector_median_pe": 22,
+    "implied_ev_ebitda": -57.0862832173428,
+    "sector_median_ev_ebitda": 10,
+    "implied_pfcf": -82.16434006921325,
+    "sector_median_pfcf": 25,
+    "is_reasonable": true
+  },
+  "industry": {
+    "sic_code": "3674",
+    "sic": "MFG_SEMI",
+    "heuristic_code": "20",
+    "heuristic_name": "Industrials",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 417.21,
+  "assumption_profile": "software_like_scaling:standard_growth",
+  "resolution_trace": {
+    "profile_id": "software_like_scaling:standard_growth",
+    "source": "fallback",
+    "resolver_version": "1.0.0",
+    "config_version": "1.0.0",
+    "config_hash": "7e17b66931e242d46be5f92b1e2f3a90262864c88ef9669aa07a5a1b011dd9f4",
+    "matched_rule_id": "fallback_default",
+    "fallback_reason": "no_profile_for_resolved_key:software_like_scaling:high_growth",
+    "human_reason": "yoy_above_high_growth_threshold"
+  }
+}

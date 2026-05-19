@@ -1,0 +1,14 @@
+{
+  "implied_pe": 76.27873344889866,
+  "sector_median_pe": 18,
+  "implied_ev_ebitda": 51.93372149174188,
+  "sector_median_ev_ebitda": 13,
+  "implied_pfcf": 64.51036665670186,
+  "sector_median_pfcf": 22,
+  "is_reasonable": false,
+  "flags": [
+    "DCF-implied P/E (76.3) is \u003e2x sector median (18.0) for HEALTH_PHARMA",
+    "DCF-implied EV/EBITDA (51.9) is \u003e2x sector median (13.0) for HEALTH_PHARMA",
+    "DCF-implied P/FCF (64.5) is \u003e2x sector median (22.0) for HEALTH_PHARMA"
+  ]
+}

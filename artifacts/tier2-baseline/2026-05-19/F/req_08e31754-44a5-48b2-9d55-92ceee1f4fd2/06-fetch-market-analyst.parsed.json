@@ -1,0 +1,153 @@
+{
+  "quoteSummary": {
+    "result": [
+      {
+        "earningsTrend": {
+          "trend": [
+            {
+              "period": "0q",
+              "revenueEstimate": {
+                "avg": {
+                  "raw": 44736938890,
+                  "fmt": "44.74B"
+                },
+                "low": {
+                  "raw": 39972000000,
+                  "fmt": "39.97B"
+                },
+                "high": {
+                  "raw": 46936411130,
+                  "fmt": "46.94B"
+                },
+                "numberOfAnalysts": {
+                  "raw": 8,
+                  "fmt": "8"
+                }
+              },
+              "earningsEstimate": {
+                "avg": {
+                  "raw": 0.3328,
+                  "fmt": "0.33"
+                },
+                "numberOfAnalysts": {
+                  "raw": 14,
+                  "fmt": "14"
+                }
+              },
+              "growth": {
+                "raw": -0.1005,
+                "fmt": "-10.05%"
+              }
+            },
+            {
+              "period": "+1q",
+              "revenueEstimate": {
+                "avg": {
+                  "raw": 45609778350,
+                  "fmt": "45.61B"
+                },
+                "low": {
+                  "raw": 41979000000,
+                  "fmt": "41.98B"
+                },
+                "high": {
+                  "raw": 47985700000,
+                  "fmt": "47.99B"
+                },
+                "numberOfAnalysts": {
+                  "raw": 8,
+                  "fmt": "8"
+                }
+              },
+              "earningsEstimate": {
+                "avg": {
+                  "raw": 0.36445,
+                  "fmt": "0.36"
+                },
+                "numberOfAnalysts": {
+                  "raw": 14,
+                  "fmt": "14"
+                }
+              },
+              "growth": {
+                "raw": -0.1901,
+                "fmt": "-19.01%"
+              }
+            },
+            {
+              "period": "0y",
+              "revenueEstimate": {
+                "avg": {
+                  "raw": 172507566270,
+                  "fmt": "172.51B"
+                },
+                "low": {
+                  "raw": 162617000000,
+                  "fmt": "162.62B"
+                },
+                "high": {
+                  "raw": 179650000000,
+                  "fmt": "179.65B"
+                },
+                "numberOfAnalysts": {
+                  "raw": 9,
+                  "fmt": "9"
+                }
+              },
+              "earningsEstimate": {
+                "avg": {
+                  "raw": 1.62594,
+                  "fmt": "1.63"
+                },
+                "numberOfAnalysts": {
+                  "raw": 21,
+                  "fmt": "21"
+                }
+              },
+              "growth": {
+                "raw": 0.4917,
+                "fmt": "49.17%"
+              }
+            },
+            {
+              "period": "+1y",
+              "revenueEstimate": {
+                "avg": {
+                  "raw": 177794031810,
+                  "fmt": "177.79B"
+                },
+                "low": {
+                  "raw": 161170268160,
+                  "fmt": "161.17B"
+                },
+                "high": {
+                  "raw": 189400000000,
+                  "fmt": "189.4B"
+                },
+                "numberOfAnalysts": {
+                  "raw": 11,
+                  "fmt": "11"
+                }
+              },
+              "earningsEstimate": {
+                "avg": {
+                  "raw": 1.8279,
+                  "fmt": "1.83"
+                },
+                "numberOfAnalysts": {
+                  "raw": 22,
+                  "fmt": "22"
+                }
+              },
+              "growth": {
+                "raw": 0.1242,
+                "fmt": "12.42%"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "error": null
+  }
+}

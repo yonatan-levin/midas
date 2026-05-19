@@ -1,7 +1,7 @@
 {
   "ticker": "AMD",
-  "bundle_root": "artifacts/tier2-baseline/2026-05-15",
-  "fixture_path": "artifacts/tier2-baseline/2026-05-15/AMD/req_4e20b919-1431-4bfd-8346-b9273c9da81a/05-fetch-sec.raw.json",
+  "bundle_root": "artifacts/tier2-baseline/2026-05-19",
+  "fixture_path": "artifacts/tier2-baseline/2026-05-19/AMD/req_6bb0fc76-6740-44a7-b2e0-180a5123c398/05-fetch-sec.raw.json",
   "periods_processed": 12,
   "periods_with_divergence": 12,
   "divergences": [

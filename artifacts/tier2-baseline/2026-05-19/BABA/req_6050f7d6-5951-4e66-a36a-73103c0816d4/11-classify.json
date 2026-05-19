@@ -1,0 +1,14 @@
+{
+  "chosen_industry_code": "",
+  "heuristic_code": "20",
+  "heuristic_name": "Industrials",
+  "match": true,
+  "sic_classifier": {
+    "Sector": "NA",
+    "Industry": "NA",
+    "SubIndustry": "",
+    "ModelHint": "NA",
+    "NAICS": "",
+    "SIC": "7389"
+  }
+}

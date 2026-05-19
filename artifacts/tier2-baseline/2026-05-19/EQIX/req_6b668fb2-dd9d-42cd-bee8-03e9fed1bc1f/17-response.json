@@ -1,0 +1,50 @@
+{
+  "ticker": "EQIX",
+  "wacc": 0.07874939098716946,
+  "growth_rate": 0.058201990811061144,
+  "growth_rates": [
+    0.058201990811061206,
+    0.058201990811061206,
+    0.058201990811061206,
+    0.058201990811061206,
+    0.058201990811061206,
+    0.058201990811061206,
+    0.058201990811061206
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 354.17869478460807,
+  "dcf_value_per_share": 300.18130805149553,
+  "current_assets_per_share": 54.1493208544775,
+  "ncav_per_share": -215.05768432141156,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-05-19T22:20:43Z",
+  "data_quality_score": 100,
+  "data_quality_grade": "A",
+  "calculation_method": "ffo",
+  "calculation_version": "4.1",
+  "warnings": [
+    "P/FFO value ($300.2) diverges from NAV cross-check ($146.1/share, cap rate 4.0%); ratio=2.05x"
+  ],
+  "industry": {
+    "sic_code": "6798",
+    "sic": "REIT_DATACENTER",
+    "heuristic_code": "20",
+    "heuristic_name": "Industrials",
+    "match": false
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 1048.25,
+  "assumption_profile": "software_like_scaling:standard_growth",
+  "resolution_trace": {
+    "profile_id": "software_like_scaling:standard_growth",
+    "source": "fallback",
+    "resolver_version": "1.0.0",
+    "config_version": "1.0.0",
+    "config_hash": "7e17b66931e242d46be5f92b1e2f3a90262864c88ef9669aa07a5a1b011dd9f4",
+    "matched_rule_id": "fallback_default",
+    "fallback_reason": "wildcard_rule_matched",
+    "human_reason": "default_standard_growth"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "projected_growth_rates": [
+    0.10073099398957114,
+    0.10073099398957114,
+    0.10073099398957114,
+    0.09658479519165691,
+    0.09243859639374269,
+    0.08829239759582845,
+    0.08414619879791423
+  ],
+  "terminal_growth_rate": 0.03,
+  "analyst_revenue_growth_y1": 1132011689790,
+  "analyst_revenue_growth_y2": 1258196996330,
+  "analyst_earnings_growth_5y": 0,
+  "number_of_analysts": 46,
+  "historical_cagr": 0.11959286615546127,
+  "sustainable_growth_rate": 0.08836744055760067,
+  "source": "analyst_blend",
+  "confidence": "high",
+  "method": "80% analyst (46 analysts) + 20% historical CAGR",
+  "warnings": [
+    "Stage 1 growth (11.3%) exceeds ROIC-sustainable growth (8.8%); blending downward"
+  ]
+}

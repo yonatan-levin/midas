@@ -1,0 +1,121 @@
+{
+  "bundle_version": "1.1",
+  "request_id": "0c412116-f634-4ff8-b768-ecb096c98dc4",
+  "ticker": "AAPL",
+  "trigger": "header",
+  "started_at": "2026-05-19T19:20:32.9136759Z",
+  "finished_at": "2026-05-19T19:20:35.0500448Z",
+  "outcome": "ok",
+  "phases_recorded": [
+    {
+      "phase": "handler.entry",
+      "files": [
+        "02-handler-options.json"
+      ],
+      "bytes": 70
+    },
+    {
+      "phase": "fetch.macro",
+      "files": [
+        "07-fetch-macro.parsed.json"
+      ],
+      "bytes": 282
+    },
+    {
+      "phase": "fetch.market",
+      "files": [
+        "06-fetch-market-analyst.parsed.json",
+        "06-fetch-market-analyst.raw.json",
+        "06-fetch-market.parsed.json",
+        "06-fetch-market.raw.json"
+      ],
+      "bytes": 19565
+    },
+    {
+      "phase": "fetch.sec",
+      "files": [
+        "05-fetch-sec-submissions.parsed.json",
+        "05-fetch-sec-submissions.raw.json",
+        "05-fetch-sec.parsed.json",
+        "05-fetch-sec.raw.json"
+      ],
+      "bytes": 15382596
+    },
+    {
+      "phase": "clean.normalized",
+      "files": [
+        "10-clean-input.json",
+        "10-clean-output.json",
+        "10-clean-trace.json"
+      ],
+      "bytes": 9009
+    },
+    {
+      "phase": "growth.estimated",
+      "files": [
+        "12-growth-curve.json"
+      ],
+      "bytes": 621
+    },
+    {
+      "phase": "wacc.computed",
+      "files": [
+        "13-wacc.json"
+      ],
+      "bytes": 660
+    },
+    {
+      "phase": "classify.industry",
+      "files": [
+        "11-classify.json"
+      ],
+      "bytes": 281
+    },
+    {
+      "phase": "assumption.profile.resolved",
+      "files": [
+        "08-assumption-profile.json"
+      ],
+      "bytes": 1173
+    },
+    {
+      "phase": "model.selected",
+      "files": [
+        "14-model-selection.json"
+      ],
+      "bytes": 91
+    },
+    {
+      "phase": "crosscheck.evaluated",
+      "files": [
+        "16-crosscheck.json"
+      ],
+      "bytes": 473
+    },
+    {
+      "phase": "valuation.computed",
+      "files": [
+        "15-valuation.json"
+      ],
+      "bytes": 2829
+    },
+    {
+      "phase": "response.sent",
+      "files": [
+        "17-response.json"
+      ],
+      "bytes": 2235
+    }
+  ],
+  "redactions_applied": [],
+  "schema_versions": {
+    "AssumptionProfileManifest": 1,
+    "FairValueResponse": 1,
+    "FinancialData": 7,
+    "GrowthEstimate": 1,
+    "MacroData": 1,
+    "MarketData": 1,
+    "SECCompanyFacts": 3,
+    "ValuationResult": 2
+  }
+}

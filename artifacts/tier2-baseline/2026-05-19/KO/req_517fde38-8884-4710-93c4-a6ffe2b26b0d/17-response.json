@@ -1,0 +1,56 @@
+{
+  "ticker": "KO",
+  "wacc": 0.06685501135615655,
+  "growth_rate": 0.03045506442771395,
+  "growth_rates": [
+    0.03045506442771391,
+    0.03045506442771391,
+    0.03045506442771391,
+    0.03045506442771391,
+    0.03045506442771391,
+    0.03045506442771391,
+    0.03045506442771391
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 20.14696337505795,
+  "dcf_value_per_share": -16.148632076369235,
+  "current_assets_per_share": 7.044506258692628,
+  "ncav_per_share": -5.306212331942513,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-05-19T22:20:37Z",
+  "data_quality_score": 100,
+  "data_quality_grade": "A",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.1",
+  "sanity_check": {
+    "implied_pe": -17.753618444815718,
+    "sector_median_pe": 16,
+    "implied_ev_ebitda": -8.45191407688879,
+    "sector_median_ev_ebitda": 10,
+    "implied_pfcf": -17.762671794354127,
+    "sector_median_pfcf": 18,
+    "is_reasonable": true
+  },
+  "industry": {
+    "sic_code": "2080",
+    "sic": "MFG",
+    "heuristic_code": "20",
+    "heuristic_name": "Industrials",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 81.9,
+  "assumption_profile": "software_like_scaling:standard_growth",
+  "resolution_trace": {
+    "profile_id": "software_like_scaling:standard_growth",
+    "source": "fallback",
+    "resolver_version": "1.0.0",
+    "config_version": "1.0.0",
+    "config_hash": "7e17b66931e242d46be5f92b1e2f3a90262864c88ef9669aa07a5a1b011dd9f4",
+    "matched_rule_id": "fallback_default",
+    "fallback_reason": "wildcard_rule_matched",
+    "human_reason": "default_standard_growth"
+  }
+}

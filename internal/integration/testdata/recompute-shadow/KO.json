@@ -1,7 +1,7 @@
 {
   "ticker": "KO",
-  "bundle_root": "artifacts/tier2-baseline/2026-05-15",
-  "fixture_path": "artifacts/tier2-baseline/2026-05-15/KO/req_015bc08f-21a7-45ac-a573-24b308f631c2/05-fetch-sec.raw.json",
+  "bundle_root": "artifacts/tier2-baseline/2026-05-19",
+  "fixture_path": "artifacts/tier2-baseline/2026-05-19/KO/req_517fde38-8884-4710-93c4-a6ffe2b26b0d/05-fetch-sec.raw.json",
   "periods_processed": 12,
   "periods_with_divergence": 12,
   "divergences": [

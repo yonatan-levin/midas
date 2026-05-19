@@ -1,7 +1,7 @@
 {
   "ticker": "MXL",
-  "bundle_root": "artifacts/tier2-baseline/2026-05-15",
-  "fixture_path": "artifacts/tier2-baseline/2026-05-15/MXL/req_e411b8f7-4a3a-452a-9fb3-f404246980bc/05-fetch-sec.raw.json",
+  "bundle_root": "artifacts/tier2-baseline/2026-05-19",
+  "fixture_path": "artifacts/tier2-baseline/2026-05-19/MXL/req_10884776-8ff3-4641-8abb-af7e2ef89320/05-fetch-sec.raw.json",
   "periods_processed": 12,
   "periods_with_divergence": 12,
   "divergences": [

@@ -1,0 +1,66 @@
+{
+  "ticker": "AAPL",
+  "wacc": 0.09537645504156439,
+  "growth_rate": 0.07499038445934136,
+  "growth_rates": [
+    0.07499038445934139,
+    0.07499038445934139,
+    0.07499038445934139,
+    0.07499038445934139,
+    0.07499038445934139,
+    0.07499038445934139,
+    0.07499038445934139
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 23.447506304040513,
+  "dcf_value_per_share": 19.08849564199279,
+  "current_assets_per_share": 9.786448654011888,
+  "ncav_per_share": -8.181314615439097,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-05-19T22:20:35Z",
+  "data_quality_score": 90,
+  "data_quality_grade": "A",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.1",
+  "warnings": [
+    "DCF-implied P/E (9.5) is \u003c0.5x sector median (28.0) for TECH",
+    "DCF-implied EV/EBITDA (7.5) is \u003c0.5x sector median (18.0) for TECH",
+    "DCF-implied P/FCF (8.8) is \u003c0.5x sector median (32.0) for TECH"
+  ],
+  "sanity_check": {
+    "implied_pe": 9.503508100109517,
+    "sector_median_pe": 28,
+    "implied_ev_ebitda": 7.480905604049069,
+    "sector_median_ev_ebitda": 18,
+    "implied_pfcf": 8.815340501929919,
+    "sector_median_pfcf": 32,
+    "is_reasonable": false,
+    "flags": [
+      "DCF-implied P/E (9.5) is \u003c0.5x sector median (28.0) for TECH",
+      "DCF-implied EV/EBITDA (7.5) is \u003c0.5x sector median (18.0) for TECH",
+      "DCF-implied P/FCF (8.8) is \u003c0.5x sector median (32.0) for TECH"
+    ]
+  },
+  "industry": {
+    "sic_code": "3571",
+    "sic": "TECH",
+    "heuristic_code": "45",
+    "heuristic_name": "Information Technology",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 298.18,
+  "assumption_profile": "software_like_scaling:standard_growth",
+  "resolution_trace": {
+    "profile_id": "software_like_scaling:standard_growth",
+    "source": "fallback",
+    "resolver_version": "1.0.0",
+    "config_version": "1.0.0",
+    "config_hash": "7e17b66931e242d46be5f92b1e2f3a90262864c88ef9669aa07a5a1b011dd9f4",
+    "matched_rule_id": "fallback_default",
+    "fallback_reason": "no_profile_for_resolved_key:software_like_scaling:mature",
+    "human_reason": "large_cap_low_growth"
+  }
+}

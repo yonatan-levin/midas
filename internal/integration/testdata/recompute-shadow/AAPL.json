@@ -1,7 +1,7 @@
 {
   "ticker": "AAPL",
-  "bundle_root": "artifacts/tier2-baseline/2026-05-15",
-  "fixture_path": "artifacts/tier2-baseline/2026-05-15/AAPL/req_9f018f5b-4fe7-46a4-b368-c1827b64e7d2/05-fetch-sec.raw.json",
+  "bundle_root": "artifacts/tier2-baseline/2026-05-19",
+  "fixture_path": "artifacts/tier2-baseline/2026-05-19/AAPL/req_0c412116-f634-4ff8-b768-ecb096c98dc4/05-fetch-sec.raw.json",
   "periods_processed": 12,
   "periods_with_divergence": 3,
   "divergences": [
