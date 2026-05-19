@@ -25,18 +25,18 @@ func TestFFOModel_GetMultiple_Subsectors(t *testing.T) {
 		industry string
 		expected float64
 	}{
-		{name: "DATA_CENTER returns 31x (premium subsector)", industry: "DATA_CENTER", expected: 31.0},
-		{name: "CELLTOWER returns 25x", industry: "CELLTOWER", expected: 25.0},
-		{name: "INDUSTRIAL returns 22.5x", industry: "INDUSTRIAL", expected: 22.5},
-		{name: "RESIDENTIAL returns 20x", industry: "RESIDENTIAL", expected: 20.0},
-		{name: "HEALTHCARE_REIT returns 17.5x", industry: "HEALTHCARE_REIT", expected: 17.5},
-		{name: "SPECIALTY returns 17.5x", industry: "SPECIALTY", expected: 17.5},
-		{name: "OFFICE returns 14x (commercial discount)", industry: "OFFICE", expected: 14.0},
-		{name: "RETAIL_REIT returns 10x (mall headwinds)", industry: "RETAIL_REIT", expected: 10.0},
+		{name: "REIT_DATACENTER returns 31x (premium subsector)", industry: "REIT_DATACENTER", expected: 31.0},
+		{name: "REIT_CELLTOWER returns 25x", industry: "REIT_CELLTOWER", expected: 25.0},
+		{name: "REIT_INDUSTRIAL returns 22.5x", industry: "REIT_INDUSTRIAL", expected: 22.5},
+		{name: "REIT_RESIDENTIAL returns 20x", industry: "REIT_RESIDENTIAL", expected: 20.0},
+		{name: "REIT_HEALTHCARE returns 17.5x", industry: "REIT_HEALTHCARE", expected: 17.5},
+		{name: "REIT_SPECIALTY returns 17.5x", industry: "REIT_SPECIALTY", expected: 17.5},
+		{name: "REIT_OFFICE returns 14x (commercial discount)", industry: "REIT_OFFICE", expected: 14.0},
+		{name: "REIT_RETAIL returns 10x (mall headwinds)", industry: "REIT_RETAIL", expected: 10.0},
 		{name: "RESTATE parent (no subsector match) falls back to default 15x", industry: "RESTATE", expected: 15.0},
 		{name: "empty industry falls back to default 15x", industry: "", expected: 15.0},
 		{name: "unknown subsector falls back to default 15x", industry: "FROZEN_ASSETS", expected: 15.0},
-		{name: "case-insensitive lookup (lower-case)", industry: "data_center", expected: 31.0},
+		{name: "case-insensitive lookup (lower-case)", industry: "reit_datacenter", expected: 31.0},
 	}
 
 	for _, tt := range tests {
@@ -60,17 +60,17 @@ func TestFFOModel_GetCapRate_Subsectors(t *testing.T) {
 		industry string
 		expected float64
 	}{
-		{name: "DATA_CENTER 4.0%", industry: "DATA_CENTER", expected: 0.04},
-		{name: "CELLTOWER 4.5%", industry: "CELLTOWER", expected: 0.045},
-		{name: "INDUSTRIAL 4.5%", industry: "INDUSTRIAL", expected: 0.045},
-		{name: "RESIDENTIAL 5.0%", industry: "RESIDENTIAL", expected: 0.05},
-		{name: "HEALTHCARE_REIT 6.0%", industry: "HEALTHCARE_REIT", expected: 0.06},
-		{name: "OFFICE 7.5%", industry: "OFFICE", expected: 0.075},
-		{name: "RETAIL_REIT 8.5%", industry: "RETAIL_REIT", expected: 0.085},
-		// SPECIALTY (VAL-7): self-storage / billboard / corrections / timber blended
-		// median. Pins the new reit_cap_rates.SPECIALTY entry so the bucket no
+		{name: "REIT_DATACENTER 4.0%", industry: "REIT_DATACENTER", expected: 0.04},
+		{name: "REIT_CELLTOWER 4.5%", industry: "REIT_CELLTOWER", expected: 0.045},
+		{name: "REIT_INDUSTRIAL 4.5%", industry: "REIT_INDUSTRIAL", expected: 0.045},
+		{name: "REIT_RESIDENTIAL 5.0%", industry: "REIT_RESIDENTIAL", expected: 0.05},
+		{name: "REIT_HEALTHCARE 6.0%", industry: "REIT_HEALTHCARE", expected: 0.06},
+		{name: "REIT_OFFICE 7.5%", industry: "REIT_OFFICE", expected: 0.075},
+		{name: "REIT_RETAIL 8.5%", industry: "REIT_RETAIL", expected: 0.085},
+		// REIT_SPECIALTY (VAL-7): self-storage / billboard / corrections / timber blended
+		// median. Pins the reit_cap_rates.REIT_SPECIALTY entry so the bucket no
 		// longer falls through to the 6% default.
-		{name: "SPECIALTY 5.5%", industry: "SPECIALTY", expected: 0.055},
+		{name: "REIT_SPECIALTY 5.5%", industry: "REIT_SPECIALTY", expected: 0.055},
 		{name: "RESTATE parent falls back to default 6%", industry: "RESTATE", expected: 0.06},
 		{name: "empty industry falls back to default 6%", industry: "", expected: 0.06},
 	}
@@ -84,10 +84,10 @@ func TestFFOModel_GetCapRate_Subsectors(t *testing.T) {
 	}
 }
 
-// TestFFOModel_Calculate_DATA_CENTER_Uses31x verifies the end-to-end path:
-// when ModelInput.Industry="DATA_CENTER" the model multiplies FFO/share by
+// TestFFOModel_Calculate_REIT_DATACENTER_Uses31x verifies the end-to-end path:
+// when ModelInput.Industry="REIT_DATACENTER" the model multiplies FFO/share by
 // 31x rather than the 15x default. This is the headline VAL-3 P1 fix.
-func TestFFOModel_Calculate_DATA_CENTER_Uses31x(t *testing.T) {
+func TestFFOModel_Calculate_REIT_DATACENTER_Uses31x(t *testing.T) {
 	model := NewFFOModel(testLogger())
 	ctx := context.Background()
 
@@ -107,7 +107,7 @@ func TestFFOModel_Calculate_DATA_CENTER_Uses31x(t *testing.T) {
 				},
 			},
 		},
-		Industry:               "DATA_CENTER",
+		Industry:               "REIT_DATACENTER",
 		SharesOutstanding:      100000000,
 		InterestBearingDebt:    20000000000,
 		CashAndCashEquivalents: 1000000000,
@@ -118,14 +118,14 @@ func TestFFOModel_Calculate_DATA_CENTER_Uses31x(t *testing.T) {
 	require.NotNil(t, result)
 
 	assert.InDelta(t, 465.0, result.IntrinsicValuePerShare, 0.01,
-		"DATA_CENTER subsector must apply 31x P/FFO multiple")
+		"REIT_DATACENTER subsector must apply 31x P/FFO multiple")
 	assert.Equal(t, "ffo", result.ModelType)
 }
 
-// TestFFOModel_Calculate_CELLTOWER_Uses25x mirrors the DATA_CENTER assertion
-// for the cell-tower subsector (AMT, CCI). 25x P/FFO is the calibrated
-// 2025-26 sector median per the tracker's perplexity citations.
-func TestFFOModel_Calculate_CELLTOWER_Uses25x(t *testing.T) {
+// TestFFOModel_Calculate_REIT_CELLTOWER_Uses25x mirrors the REIT_DATACENTER
+// assertion for the cell-tower subsector (AMT, CCI). 25x P/FFO is the
+// calibrated 2025-26 sector median per the tracker's perplexity citations.
+func TestFFOModel_Calculate_REIT_CELLTOWER_Uses25x(t *testing.T) {
 	model := NewFFOModel(testLogger())
 	ctx := context.Background()
 
@@ -144,7 +144,7 @@ func TestFFOModel_Calculate_CELLTOWER_Uses25x(t *testing.T) {
 				},
 			},
 		},
-		Industry:               "CELLTOWER",
+		Industry:               "REIT_CELLTOWER",
 		SharesOutstanding:      500000000,
 		InterestBearingDebt:    40000000000,
 		CashAndCashEquivalents: 2000000000,
@@ -155,13 +155,13 @@ func TestFFOModel_Calculate_CELLTOWER_Uses25x(t *testing.T) {
 	require.NotNil(t, result)
 
 	assert.InDelta(t, 145.0, result.IntrinsicValuePerShare, 0.01,
-		"CELLTOWER subsector must apply 25x P/FFO multiple")
+		"REIT_CELLTOWER subsector must apply 25x P/FFO multiple")
 }
 
-// TestFFOModel_Calculate_RETAIL_REIT_Uses10x pins the downward subsector
+// TestFFOModel_Calculate_REIT_RETAIL_Uses10x pins the downward subsector
 // adjustment for mall REITs (SPG, KIM). 10x reflects the 2025-26 mall
 // headwinds; the prior uniform 15x systematically overpriced the bucket.
-func TestFFOModel_Calculate_RETAIL_REIT_Uses10x(t *testing.T) {
+func TestFFOModel_Calculate_REIT_RETAIL_Uses10x(t *testing.T) {
 	model := NewFFOModel(testLogger())
 	ctx := context.Background()
 
@@ -179,7 +179,7 @@ func TestFFOModel_Calculate_RETAIL_REIT_Uses10x(t *testing.T) {
 				},
 			},
 		},
-		Industry:               "RETAIL_REIT",
+		Industry:               "REIT_RETAIL",
 		SharesOutstanding:      300000000,
 		InterestBearingDebt:    25000000000,
 		CashAndCashEquivalents: 1000000000,
@@ -190,7 +190,7 @@ func TestFFOModel_Calculate_RETAIL_REIT_Uses10x(t *testing.T) {
 	require.NotNil(t, result)
 
 	assert.InDelta(t, 50.0, result.IntrinsicValuePerShare, 0.01,
-		"RETAIL_REIT subsector must apply 10x P/FFO multiple")
+		"REIT_RETAIL subsector must apply 10x P/FFO multiple")
 }
 
 // TestFFOModel_Calculate_RESTATE_FallbackToDefault verifies the no-subsector
@@ -228,13 +228,13 @@ func TestFFOModel_Calculate_RESTATE_FallbackToDefault(t *testing.T) {
 		"RESTATE parent must fall back to default 15x P/FFO when no subsector matched")
 }
 
-// TestFFOModel_Calculate_NAVCrossCheck_DATACENTER_UsesSubsectorCapRate
+// TestFFOModel_Calculate_NAVCrossCheck_REIT_DATACENTER_UsesSubsectorCapRate
 // verifies that the NAV cross-check picks the data-center cap rate (4%)
-// rather than the default 6% when ModelInput.Industry="DATA_CENTER".
+// rather than the default 6% when ModelInput.Industry="REIT_DATACENTER".
 // 6% would have produced a different ratio and a different warning state;
 // this test catches the case where the multiple is read per-subsector but
 // the cap rate isn't.
-func TestFFOModel_Calculate_NAVCrossCheck_DATACENTER_UsesSubsectorCapRate(t *testing.T) {
+func TestFFOModel_Calculate_NAVCrossCheck_REIT_DATACENTER_UsesSubsectorCapRate(t *testing.T) {
 	model := NewFFOModel(testLogger())
 	ctx := context.Background()
 
@@ -256,7 +256,7 @@ func TestFFOModel_Calculate_NAVCrossCheck_DATACENTER_UsesSubsectorCapRate(t *tes
 				},
 			},
 		},
-		Industry:               "DATA_CENTER",
+		Industry:               "REIT_DATACENTER",
 		SharesOutstanding:      100000000,
 		InterestBearingDebt:    20000000000,
 		CashAndCashEquivalents: 1000000000,
@@ -269,7 +269,7 @@ func TestFFOModel_Calculate_NAVCrossCheck_DATACENTER_UsesSubsectorCapRate(t *tes
 	// No NAV divergence warning at the subsector cap rate
 	for _, w := range result.Warnings {
 		assert.NotContains(t, w, "NAV",
-			"DATA_CENTER cap rate 4%% should keep NAV-vs-PFFO ratio inside thresholds")
+			"REIT_DATACENTER cap rate 4%% should keep NAV-vs-PFFO ratio inside thresholds")
 	}
 }
 
@@ -281,8 +281,8 @@ func TestFFOModel_NewFFOModelWithTables_NilDisablesLookup(t *testing.T) {
 	model := NewFFOModelWithTables(15.0, 0.06, nil, nil, testLogger())
 	require.NotNil(t, model)
 
-	assert.InDelta(t, 15.0, model.getMultiple("DATA_CENTER"), 0.0001,
+	assert.InDelta(t, 15.0, model.getMultiple("REIT_DATACENTER"), 0.0001,
 		"nil pffoMultiples must force fallback to default")
-	assert.InDelta(t, 0.06, model.getCapRate("DATA_CENTER"), 0.00001,
+	assert.InDelta(t, 0.06, model.getCapRate("REIT_DATACENTER"), 0.00001,
 		"nil capRates must force fallback to default")
 }

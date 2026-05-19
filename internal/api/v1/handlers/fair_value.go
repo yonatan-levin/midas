@@ -81,38 +81,40 @@ var sicToGICS = map[string]map[string]bool{
 	"CONS":    {"30": true, "25": true}, // Consumer Staples primary, Discretionary secondary
 
 	// REIT subsector codes emitted by the RESTATE Pass-2 sub-industry
-	// classifier (VAL-3 P1+P4). All map to GICS "60" (Real Estate). Listed
-	// explicitly so matchSICToGICS can resolve the full code without falling
-	// through to the parent-prefix strip — RETAIL_REIT, DATA_CENTER, etc.
-	// would otherwise normalize to "RETAIL" / "DATA" and silently drift to
-	// match=false.
-	"RESIDENTIAL":     {"60": true},
-	"OFFICE":          {"60": true},
-	"INDUSTRIAL":      {"60": true},
-	"RETAIL_REIT":     {"60": true},
-	"HEALTHCARE_REIT": {"60": true},
-	"DATA_CENTER":     {"60": true},
-	"CELLTOWER":       {"60": true},
-	"SPECIALTY":       {"60": true},
+	// classifier (VAL-3 P1+P4, T2-P4-W1 prefix reconciliation). All map to
+	// GICS "60" (Real Estate). With the REIT_* prefix convention, the
+	// parent-strip fallback in matchSICToGICS would yield "REIT" (unmapped)
+	// rather than collapsing to RETAIL/DATA/etc., so these explicit entries
+	// are what binds each subsector to GICS 60.
+	"REIT_RESIDENTIAL": {"60": true},
+	"REIT_OFFICE":      {"60": true},
+	"REIT_INDUSTRIAL":  {"60": true},
+	"REIT_RETAIL":      {"60": true},
+	"REIT_HEALTHCARE":  {"60": true},
+	"REIT_DATACENTER":  {"60": true},
+	"REIT_CELLTOWER":   {"60": true},
+	"REIT_SPECIALTY":   {"60": true},
 }
 
 // matchSICToGICS returns true when the SIC-derived label and the heuristic
 // GICS code agree per the sicToGICS table. Empty inputs are never a match.
 //
 // Lookup order:
-//  1. Full-code exact match (catches REIT subsector codes like RETAIL_REIT
-//     and DATA_CENTER that legitimately contain underscores yet map to a
-//     different GICS sector than their first-token prefix would suggest).
+//  1. Full-code exact match (catches REIT subsector codes like REIT_RETAIL
+//     and REIT_DATACENTER that share the REIT_ prefix but each map
+//     individually to GICS "60").
 //  2. Strip-at-first-underscore parent prefix, then look up again. Lets the
 //     classifier's Pass-2 sub-industry codes (TECH_SAAS, HEALTH_BIOTECH,
 //     FIN_IB, MFG_SEMI, FIN_BANK, …) inherit their parent's GICS mapping
-//     without an explicit entry per sub-industry.
+//     without an explicit entry per sub-industry. The parent-strip path is
+//     NOT used for REIT_* codes because "REIT" itself is not a key in
+//     sicToGICS — REIT subsectors rely on the full-code exact match above.
 func matchSICToGICS(sicLabel, gicsCode string) bool {
 	if sicLabel == "" || gicsCode == "" {
 		return false
 	}
-	// 1. Exact full-code match wins so REIT subsector codes resolve correctly:
-	//    RETAIL_REIT → 60 must NOT collapse to RETAIL → {25, 30}.
+	// 1. Exact full-code match wins so REIT_* subsector codes resolve to GICS 60
+	//    directly rather than relying on the parent-strip path.
 	if allowed, ok := sicToGICS[sicLabel]; ok {
 		return allowed[gicsCode]
 	}

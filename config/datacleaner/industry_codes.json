@@ -188,56 +188,56 @@
       "sub_industries": [
         {
           "name": "Data Center REIT",
-          "code": "DATA_CENTER",
+          "code": "REIT_DATACENTER",
           "matchers": {
             "keywords": ["data center", "data centre", "digital realty", "equinix", "interconnection"]
           }
         },
         {
           "name": "Cell Tower REIT",
-          "code": "CELLTOWER",
+          "code": "REIT_CELLTOWER",
           "matchers": {
             "keywords": ["cell tower", "communications tower", "american tower", "crown castle", "sba communications"]
           }
         },
         {
           "name": "Healthcare REIT",
-          "code": "HEALTHCARE_REIT",
+          "code": "REIT_HEALTHCARE",
           "matchers": {
             "keywords": ["healthcare", "medical office", "senior housing", "welltower", "ventas", "healthpeak"]
           }
         },
         {
           "name": "Retail REIT",
-          "code": "RETAIL_REIT",
+          "code": "REIT_RETAIL",
           "matchers": {
             "keywords": ["mall", "shopping center", "shopping centre", "simon property", "kimco", "regency centers"]
           }
         },
         {
           "name": "Industrial REIT",
-          "code": "INDUSTRIAL",
+          "code": "REIT_INDUSTRIAL",
           "matchers": {
             "keywords": ["industrial", "logistics", "warehouse", "prologis", "duke realty", "rexford"]
           }
         },
         {
           "name": "Residential REIT",
-          "code": "RESIDENTIAL",
+          "code": "REIT_RESIDENTIAL",
           "matchers": {
             "keywords": ["residential", "apartment", "equity residential", "avalonbay", "essex property", "mid-america apartment"]
           }
         },
         {
           "name": "Office REIT",
-          "code": "OFFICE",
+          "code": "REIT_OFFICE",
           "matchers": {
             "keywords": ["office", "boston properties", "vornado", "kilroy"]
           }
         },
         {
           "name": "Specialty REIT",
-          "code": "SPECIALTY",
+          "code": "REIT_SPECIALTY",
           "matchers": {
             "keywords": [
               "self storage", "public storage", "extra space", "cubesmart", "national storage",

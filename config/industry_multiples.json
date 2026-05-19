@@ -1,16 +1,16 @@
 {
-  "version": "1.2.0",
-  "description": "Industry-specific valuation multiples for alternative models (DDM, FFO, Revenue Multiple) and exit-multiple terminal value cross-check. Values represent sector median multiples derived from market data. v1.2.0 (VAL-3 P1+P4) recalibrates REIT subsector P/FFO multiples and cap rates to 2025-26 ranges and adds CELLTOWER + SPECIALTY buckets. REIT subsector keys remain bare (RESIDENTIAL, DATA_CENTER, ...) to align with the FFO model's longest-prefix-match lookup.",
+  "version": "1.3.0",
+  "description": "Industry-specific valuation multiples for alternative models (DDM, FFO, Revenue Multiple) and exit-multiple terminal value cross-check. Values represent sector median multiples derived from market data. v1.3.0 (T2-P4-W1) renames REIT subsector keys from bare form (RESIDENTIAL, DATA_CENTER, ...) to REIT_* prefixed form (REIT_RESIDENTIAL, REIT_DATACENTER, ...) to align with the parallel Tier 2 archetype rules in assumption_profiles.json that key on REIT_* prefixes. v1.2.0 (VAL-3 P1+P4) recalibrated REIT subsector P/FFO multiples and cap rates to 2025-26 ranges and added CELLTOWER + SPECIALTY buckets. The FFO model's longest-prefix-match lookup operates over these prefixed keys.",
   "reit_pffo_multiples": {
     "default": 15.0,
-    "RESIDENTIAL": 20.0,
-    "INDUSTRIAL": 22.5,
-    "OFFICE": 14.0,
-    "RETAIL_REIT": 10.0,
-    "HEALTHCARE_REIT": 17.5,
-    "DATA_CENTER": 31.0,
-    "CELLTOWER": 25.0,
-    "SPECIALTY": 17.5
+    "REIT_RESIDENTIAL": 20.0,
+    "REIT_INDUSTRIAL": 22.5,
+    "REIT_OFFICE": 14.0,
+    "REIT_RETAIL": 10.0,
+    "REIT_HEALTHCARE": 17.5,
+    "REIT_DATACENTER": 31.0,
+    "REIT_CELLTOWER": 25.0,
+    "REIT_SPECIALTY": 17.5
   },
   "ev_revenue_multiples": {
     "default": 2.0,
@@ -70,14 +70,14 @@
   },
   "reit_cap_rates": {
     "default": 0.06,
-    "RESIDENTIAL": 0.05,
-    "INDUSTRIAL": 0.045,
-    "OFFICE": 0.075,
-    "RETAIL_REIT": 0.085,
-    "HEALTHCARE_REIT": 0.06,
-    "DATA_CENTER": 0.04,
-    "CELLTOWER": 0.045,
-    "SPECIALTY": 0.055
+    "REIT_RESIDENTIAL": 0.05,
+    "REIT_INDUSTRIAL": 0.045,
+    "REIT_OFFICE": 0.075,
+    "REIT_RETAIL": 0.085,
+    "REIT_HEALTHCARE": 0.06,
+    "REIT_DATACENTER": 0.04,
+    "REIT_CELLTOWER": 0.045,
+    "REIT_SPECIALTY": 0.055
   },
   "sector_median_pfcf": {
     "default": 22.0,
