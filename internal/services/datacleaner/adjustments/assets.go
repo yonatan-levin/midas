@@ -25,7 +25,8 @@ func NewAssetAdjuster() *AssetAdjuster {
 // suffixes in sync with the legacy rule.ID values where possible so log
 // greps continue to work across the migration.
 const (
-	adjusterIDA1GoodwillExclusion = "A1_goodwill_exclusion"
+	adjusterIDA1GoodwillExclusion   = "A1_goodwill_exclusion"
+	adjusterIDA2IntangibleWritedown = "A2_intangible_writedown"
 )
 
 // a1GoodwillAdjuster is the per-rule adapter that lets AssetAdjuster — which
@@ -64,6 +65,44 @@ func (a *a1GoodwillAdjuster) Name() string {
 // — NOT by Apply itself. See ApplyA1Goodwill godoc for the role split.
 func (a *a1GoodwillAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
 	return a.aa.ApplyA1Goodwill(ctx, working, rule, cleaningCtx)
+}
+
+// a2IntangibleAdjuster is the Task 2.2 per-rule adapter for A2 (indefinite-
+// lived intangible writedown). Mirrors a1GoodwillAdjuster's shape — the
+// constructor wraps an existing AssetAdjuster, Apply delegates to the new
+// mutation-free ApplyA2Intangible, and the dispatcher in
+// ProcessAssetAdjustments performs the dual-write on data after Apply runs.
+//
+// Role classification (plan §3.5 / §4 row A2): Restater (component-only
+// mutation). Unlike A1 (OverlayEmitter), A2's fired LedgerEntry carries
+// Component:"OtherIntangibles", DeltaAmount:-writedown, EquityOffset:-writedown
+// and emits NO OverlaySpec — the writedown is a direct reduction of the
+// component, not an analytical overlay on top of TotalAssets.
+type a2IntangibleAdjuster struct {
+	aa *AssetAdjuster
+}
+
+// NewA2IntangibleAdjuster returns an Adjuster-shaped wrapper around
+// AssetAdjuster's A2 rule. Exported for parity with NewA1GoodwillAdjuster so
+// the cleaner orchestrator can hold the instance alongside AssetAdjuster.
+func NewA2IntangibleAdjuster(aa *AssetAdjuster) Adjuster {
+	return &a2IntangibleAdjuster{aa: aa}
+}
+
+// Compile-time assertion: a2IntangibleAdjuster MUST implement Adjuster.
+var _ Adjuster = (*a2IntangibleAdjuster)(nil)
+
+// Name implements Adjuster.
+func (a *a2IntangibleAdjuster) Name() string {
+	return adjusterIDA2IntangibleWritedown
+}
+
+// Apply implements Adjuster by delegating to AssetAdjuster.ApplyA2Intangible.
+// The dual-write contract (in-place mutation of data.OtherIntangibles /
+// data.TotalAssets) is preserved by the dispatcher in ProcessAssetAdjustments —
+// NOT by Apply itself. See ApplyA2Intangible godoc for the role split.
+func (a *a2IntangibleAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return a.aa.ApplyA2Intangible(ctx, working, rule, cleaningCtx)
 }
 
 // AdjustmentResult represents the result of applying an asset adjustment
@@ -191,6 +230,124 @@ func (aa *AssetAdjuster) ApplyA1Goodwill(ctx context.Context, working *entities.
 			Timestamp:      now,
 		})
 	}
+
+	return out, nil
+}
+
+// ApplyA2Intangible is the Adjuster-shaped (DC-1 Phase 2 PR-2 Task 2.2)
+// implementation of the A2 indefinite-lived intangible-writedown rule. Like
+// ApplyA1Goodwill, it is MUTATION-FREE — it reads `working` and returns an
+// AdjusterOutput describing the writedown's intent (Restater-shaped
+// LedgerEntry on the OtherIntangibles component) but does NOT modify
+// `working.OtherIntangibles` or `working.TotalAssets`. The dispatcher in
+// ProcessAssetAdjustments performs the dual-write mutation centrally.
+//
+// Role classification (plan §3.5 / §4 row A2): Restater. The fired LedgerEntry
+// carries Component:"OtherIntangibles", DeltaAmount:-writedownAmount,
+// EquityOffset:-writedownAmount, TaxShieldDTA:0. No OverlaySpec — the
+// writedown is a direct component reduction, not an analytical overlay.
+//
+// Q2 resolution (plan §10): TaxShieldDTA is set to 0 in Phase 2 to preserve
+// the dual-write bit-for-bit contract. Today's A2 code does not compute a
+// tax shield; populating it here would diverge from legacy outputs. Phase 3
+// revisits TaxShieldDTA when consumers actually read it.
+//
+// Skipped paths emit Fired:false LedgerEntries so observability can answer
+// "why didn't A2 fire on this ticker?" without code reading. The threshold-
+// failed path carries SkipMetrics{intangible_ratio, threshold} for dashboards.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row A2 / §7 Task 2.2 / §10 Q2
+func (aa *AssetAdjuster) ApplyA2Intangible(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	// ctx + cleaningCtx accepted for interface symmetry; A2 itself uses neither.
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path 1: no intangibles present. Emit a Fired:false LedgerEntry so
+	// "A2 was considered" is observable. No SkipMetrics — there's no ratio
+	// to chart when the numerator is zero.
+	if working.OtherIntangibles <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDA2IntangibleWritedown,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No intangible assets present to adjust",
+				SkipReason: "No intangible assets present to adjust",
+			}},
+		}, nil
+	}
+
+	originalIntangibles := working.OtherIntangibles
+	intangibleRatio := originalIntangibles / working.TotalAssets
+
+	// Skip path 2: ratio below the 2% materiality threshold. Carry the ratio
+	// + threshold as SkipMetrics so downstream dashboards can chart "how
+	// close was A2 to firing on this ticker?".
+	threshold := 0.02
+	if intangibleRatio <= threshold {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:   now,
+				AdjusterID:  adjusterIDA2IntangibleWritedown,
+				RuleID:      rule.ID,
+				Fired:       false,
+				Reasoning:   "intangible ratio below 2% threshold",
+				SkipReason:  fmt.Sprintf("Intangible ratio %.1f%% below adjustment threshold %.1f%%", intangibleRatio*100, threshold*100),
+				SkipMetrics: map[string]float64{"intangible_ratio": intangibleRatio, "threshold": threshold},
+			}},
+		}, nil
+	}
+
+	// Fired path: compute the tiered writedown amount, then emit a Restater-
+	// shaped Fired:true LedgerEntry on the OtherIntangibles component. The
+	// tier thresholds mirror the legacy ProcessIntangibleAdjustment behavior
+	// so dual-write produces bit-for-bit identical balance-sheet outputs.
+	var retentionRate float64
+	switch {
+	case originalIntangibles >= 300000: // Very high intangible amounts (>= $300k)
+		retentionRate = 1.0 / 3.0 // Keep 1/3, writedown 2/3
+	case originalIntangibles >= 200000: // High intangible amounts ($200k-$299k)
+		retentionRate = 0.3 // Keep 30%, writedown 70%
+	default: // Lower intangible amounts (< $200k)
+		retentionRate = 0.2 // Keep 20%, writedown 80%
+	}
+
+	retainedAmount := originalIntangibles * retentionRate
+	writedownAmount := originalIntangibles - retainedAmount
+	writedownRate := writedownAmount / originalIntangibles
+
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:    now,
+			AdjusterID:   adjusterIDA2IntangibleWritedown,
+			RuleID:       rule.ID,
+			Fired:        true,
+			Reasoning:    fmt.Sprintf("intangible_writedown: Applied %.0f%% writedown to indefinite-lived intangibles (%.1f%% of assets) per A2 rule", writedownRate*100, intangibleRatio*100),
+			Component:    "OtherIntangibles",
+			DeltaAmount:  -writedownAmount,
+			EquityOffset: -writedownAmount,
+			TaxShieldDTA: 0, // Q2 deferral (plan §10): A2 does not compute tax shield in Phase 2.
+		}},
+	}
+
+	// Significance flag — preserve the legacy ProcessIntangibleAdjustment
+	// behavior: every fired A2 emits exactly one flag (no further ratio gate,
+	// matching the existing code).
+	out.Flags = append(out.Flags, entities.Flag{
+		ID:             fmt.Sprintf("intangible-flag-%d", now.UnixNano()),
+		RuleID:         rule.ID,
+		Type:           "intangible_writedown",
+		Severity:       aa.getSeverityForIntangibleRatio(intangibleRatio),
+		Amount:         writedownAmount,
+		Percentage:     writedownRate * 100,
+		Description:    fmt.Sprintf("Applied %.0f%% writedown to indefinite-lived intangibles (%.1f%% of assets)", writedownRate*100, intangibleRatio*100),
+		Recommendation: "Consider conservative amortization over defined useful life",
+		Timestamp:      now,
+	})
 
 	return out, nil
 }
@@ -605,7 +762,52 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, r
 			nativelyEmittedRuleIDs[rule.ID] = true
 
 		case "intangible_adjustment":
-			result = aa.ProcessIntangibleAdjustment(data, rule)
+			// DC-1 Phase 2 PR-2 Task 2.2: route A2 through the new
+			// Adjuster-shaped ApplyA2Intangible. Mirrors the A1 wiring above
+			// — Apply is mutation-free; the dispatcher performs the dual-
+			// write AFTER Apply so the legacy *AdjustmentResult callers stay
+			// byte-identical AND the AdjusterOutput's LedgerEntries / Flags
+			// reach the cleaner orchestrator.
+			//
+			// CAPTURE originalIntangibles BEFORE Apply runs (mirrors A1's
+			// originalGoodwill capture). Apply does not mutate, so reading
+			// data.OtherIntangibles before AND after Apply yields the same
+			// value; we still capture-before for parity with A1 and to
+			// document the execution-order invariant.
+			originalIntangibles := data.OtherIntangibles
+			out, err := aa.ApplyA2Intangible(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				// Adjuster.Apply errors are not yet a defined surface in
+				// Phase 2; ApplyA2Intangible never returns one today.
+				// Falling back to the legacy path preserves the dual-write
+				// contract on hypothetical future errors.
+				result = aa.ProcessIntangibleAdjustment(data, rule)
+				break
+			}
+
+			// Translate the AdjusterOutput into the legacy *AdjustmentResult
+			// shape so the existing tangible-asset recompute + audit-trail
+			// accounting keeps working, AND perform the dual-write mutation
+			// that ApplyA2Intangible intentionally omitted.
+			result = a2AdjusterOutputToLegacyResult(out, rule, originalIntangibles)
+			if result.Applied {
+				// Dual-write: today's downstream consumers still read
+				// data.OtherIntangibles / data.TotalAssets in place. Phase 4
+				// deletes these mutations once Phase 3's
+				// CleanedFinancialData views replace direct reads. The
+				// writedown amount is the LedgerEntry DeltaAmount magnitude.
+				writedown := result.Amount
+				data.OtherIntangibles = originalIntangibles - writedown
+				data.TotalAssets -= writedown
+			}
+
+			// Record native emissions for the orchestrator. Even when the
+			// rule does not "fire" in the legacy sense (Applied=false), the
+			// AdjusterOutput carries a Fired:false LedgerEntry that is still
+			// load-bearing for "why didn't A2 fire?" observability.
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "obsolete_inventory":
 			result = aa.ProcessInventoryAdjustment(data, rule, cleaningCtx)
 		case "deferred_tax_assets":
@@ -687,6 +889,76 @@ func a1AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 	reasoning := "No goodwill present to adjust"
 	for _, entry := range out.LedgerEntries {
 		if entry.AdjusterID == adjusterIDA1GoodwillExclusion {
+			reasoning = entry.SkipReason
+			if reasoning == "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
+// a2AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
+// the legacy *AdjustmentResult expected by ProcessAssetAdjustments' existing
+// tangible-asset recompute + audit-trail accounting. Parallel to
+// a1AdjusterOutputToLegacyResult — A2 is a Restater, so the translation
+// reads the writedown amount from the LedgerEntry's DeltaAmount magnitude
+// (not from an OverlaySpec; A2 emits none).
+//
+// originalIntangibles is captured at the dispatcher BEFORE ApplyA2Intangible
+// runs and threaded in so the legacy Adjustment.Percentage field carries the
+// historical writedown rate (writedown / original) — needed for the existing
+// "Applied X.X% writedown" string formatting in TestAssetAdjuster_*
+// regression cases.
+func a2AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalIntangibles float64) *AdjustmentResult {
+	// Locate the fired LedgerEntry — A2 emits exactly one when fired and
+	// zero Restater-shaped entries when skipped (skip paths produce a
+	// Fired:false LedgerEntry only).
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID != adjusterIDA2IntangibleWritedown || !entry.Fired {
+			continue
+		}
+		// DeltaAmount is signed-negative for Restater writedowns; the legacy
+		// Adjustment.Amount is a positive magnitude.
+		writedownAmount := -entry.DeltaAmount
+		var writedownRate float64
+		if originalIntangibles > 0 {
+			writedownRate = writedownAmount / originalIntangibles
+		}
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("intangible-adj-%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.AssetQuality,
+			Type:        entities.Writedown,
+			Amount:      writedownAmount,
+			FromAccount: "IntangibleAssets",
+			ToAccount:   "IntangibleWritedown",
+			Percentage:  writedownRate * 100,
+			Reasoning:   entry.Reasoning,
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      writedownAmount,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   fmt.Sprintf("intangible_writedown: Applied %.0f writedown to indefinite-lived intangibles from asset base", writedownAmount),
+		}
+	}
+
+	// Skipped path — surface the reasoning from the Fired:false LedgerEntry
+	// for parity with the legacy "no adjustment" branches.
+	reasoning := "No intangible assets present to adjust"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDA2IntangibleWritedown {
 			reasoning = entry.SkipReason
 			if reasoning == "" {
 				reasoning = entry.Reasoning
