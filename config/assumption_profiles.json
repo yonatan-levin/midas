@@ -138,6 +138,108 @@
       "dividend_forecast_horizon": 0,
       "stable_dividend_growth": 0.03
     },
+    "mature_large_scale:mature": {
+      "profile_id": "mature_large_scale:mature",
+      "archetype": "mature_large_scale",
+      "maturity": "mature",
+      "horizon_years": 3,
+      "compound_growth_cap": 1.5,
+      "revenue_base_method": "raw_ttm",
+      "discount_method": "wacc",
+      "terminal_method": "gordon_growth",
+      "stabilized": true,
+      "fade_years": 0,
+      "terminal_multiple": 1.5,
+      "dps_growth_cap": 0,
+      "payout_path": [],
+      "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.025
+    },
+    "software_like_large_scale:mature": {
+      "profile_id": "software_like_large_scale:mature",
+      "archetype": "software_like_large_scale",
+      "maturity": "mature",
+      "horizon_years": 5,
+      "compound_growth_cap": 2.5,
+      "revenue_base_method": "raw_ttm",
+      "discount_method": "wacc",
+      "terminal_method": "gordon_growth",
+      "stabilized": true,
+      "fade_years": 1,
+      "terminal_multiple": 5.0,
+      "dps_growth_cap": 0,
+      "payout_path": [],
+      "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.025
+    },
+    "software_like_large_scale:standard_growth": {
+      "profile_id": "software_like_large_scale:standard_growth",
+      "archetype": "software_like_large_scale",
+      "maturity": "standard_growth",
+      "horizon_years": 5,
+      "compound_growth_cap": 3.0,
+      "revenue_base_method": "raw_ttm",
+      "discount_method": "wacc",
+      "terminal_method": "gordon_growth",
+      "stabilized": false,
+      "fade_years": 1,
+      "terminal_multiple": 5.0,
+      "dps_growth_cap": 0,
+      "payout_path": [],
+      "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_large_scale:high_growth": {
+      "profile_id": "software_like_large_scale:high_growth",
+      "archetype": "software_like_large_scale",
+      "maturity": "high_growth",
+      "horizon_years": 7,
+      "compound_growth_cap": 4.0,
+      "revenue_base_method": "raw_ttm",
+      "discount_method": "wacc",
+      "terminal_method": "gordon_growth",
+      "stabilized": false,
+      "fade_years": 2,
+      "terminal_multiple": 6.0,
+      "dps_growth_cap": 0,
+      "payout_path": [],
+      "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:high_growth": {
+      "profile_id": "software_like_scaling:high_growth",
+      "archetype": "software_like_scaling",
+      "maturity": "high_growth",
+      "horizon_years": 7,
+      "compound_growth_cap": 5.0,
+      "revenue_base_method": "raw_ttm",
+      "discount_method": "wacc",
+      "terminal_method": "gordon_growth",
+      "stabilized": false,
+      "fade_years": 2,
+      "terminal_multiple": 5.0,
+      "dps_growth_cap": 0,
+      "payout_path": [],
+      "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.03
+    },
+    "hypergrowth_profitable:high_growth": {
+      "profile_id": "hypergrowth_profitable:high_growth",
+      "archetype": "hypergrowth_profitable",
+      "maturity": "high_growth",
+      "horizon_years": 10,
+      "compound_growth_cap": 8.0,
+      "revenue_base_method": "raw_ttm",
+      "discount_method": "wacc",
+      "terminal_method": "gordon_growth",
+      "stabilized": false,
+      "fade_years": 3,
+      "terminal_multiple": 8.0,
+      "dps_growth_cap": 0,
+      "payout_path": [],
+      "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.035
+    },
     "growth_bank:standard_growth": {
       "profile_id": "growth_bank:standard_growth",
       "archetype": "growth_bank",
@@ -243,18 +345,18 @@
   },
   "archetype_rules": [
     {
-      "id": "insurance",
-      "priority": 75,
-      "industry_prefix": "FIN_INSURANCE",
-      "archetype": "insurance_company",
-      "notes": "Tier 2 P3 — insurance carriers route to insurance_company multi-stage DDM."
-    },
-    {
       "id": "fin_generic",
       "priority": 50,
       "industry_prefix": "FIN",
       "archetype": "mature_large_bank",
       "notes": "Generic financial issuer routes to mature_large_bank profile until P1/P3 add growth_bank/insurance_company differentiation."
+    },
+    {
+      "id": "insurance",
+      "priority": 75,
+      "industry_prefix": "FIN_INSURANCE",
+      "archetype": "insurance_company",
+      "notes": "Tier 2 P3 — insurance carriers route to insurance_company multi-stage DDM."
     },
     {
       "id": "mfg_semi",
@@ -290,6 +392,27 @@
       "industry_prefix": "ENERGY",
       "archetype": "cyclical_mid_cycle",
       "notes": "Tier 2 P1 — oil & gas. Cyclical-trough override fires when OperatingIncome < 0 (resolver Stage-3)."
+    },
+    {
+      "id": "tech_saas",
+      "priority": 95,
+      "industry_prefix": "TECH_SAAS",
+      "archetype": "software_like_scaling",
+      "notes": "Tier 2 P2 — SaaS / cloud software companies route to software_like_scaling; maturity bucket derived from revenue size + growth signals."
+    },
+    {
+      "id": "tech_generic",
+      "priority": 60,
+      "industry_prefix": "TECH",
+      "archetype": "software_like_large_scale",
+      "notes": "Tier 2 P2 — generic technology (non-SaaS, e.g., semiconductors, hardware-adjacent SW) routes to software_like_large_scale by default; cyclical_mid_cycle override is owned by P1 via MFG_SEMI."
+    },
+    {
+      "id": "retail_consumer",
+      "priority": 70,
+      "industry_prefix": "RETAIL",
+      "archetype": "mature_large_scale",
+      "notes": "Tier 2 P2 — consumer retail routes to mature_large_scale (3y horizon, stabilized). Discretionary vs. staples differentiation deferred."
     },
     {
       "id": "fallback_default",
