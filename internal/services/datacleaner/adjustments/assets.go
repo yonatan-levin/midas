@@ -25,8 +25,9 @@ func NewAssetAdjuster() *AssetAdjuster {
 // suffixes in sync with the legacy rule.ID values where possible so log
 // greps continue to work across the migration.
 const (
-	adjusterIDA1GoodwillExclusion   = "A1_goodwill_exclusion"
-	adjusterIDA2IntangibleWritedown = "A2_intangible_writedown"
+	adjusterIDA1GoodwillExclusion     = "A1_goodwill_exclusion"
+	adjusterIDA2IntangibleWritedown   = "A2_intangible_writedown"
+	adjusterIDA4DTAValuationAllowance = "A4_dta_valuation_allowance"
 )
 
 // a1GoodwillAdjuster is the per-rule adapter that lets AssetAdjuster — which
@@ -103,6 +104,49 @@ func (a *a2IntangibleAdjuster) Name() string {
 // NOT by Apply itself. See ApplyA2Intangible godoc for the role split.
 func (a *a2IntangibleAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
 	return a.aa.ApplyA2Intangible(ctx, working, rule, cleaningCtx)
+}
+
+// a4DTAValuationAllowanceAdjuster is the Task 2.3 per-rule adapter for A4
+// (deferred-tax-asset valuation allowance). Mirrors a2IntangibleAdjuster's
+// shape — the constructor wraps an existing AssetAdjuster, Apply delegates to
+// the new mutation-free ApplyA4DTAValuationAllowance, and the dispatcher in
+// ProcessAssetAdjustments performs the dual-write on data after Apply runs.
+//
+// Role classification (plan §3.5 / §4 row A4): Restater (component-only
+// mutation). Like A2, A4's fired LedgerEntry carries Component:
+// "DeferredTaxAssets", DeltaAmount:-valuationAllowance, EquityOffset:
+// -valuationAllowance and emits NO OverlaySpec — the valuation allowance is
+// a direct reduction of the DTA component, not an analytical overlay on top
+// of TotalAssets. TaxShieldDTA is intentionally zero because A4 IS the DTA
+// valuation allowance — there is no separate tax shield to compute.
+type a4DTAValuationAllowanceAdjuster struct {
+	aa *AssetAdjuster
+}
+
+// NewA4DTAValuationAllowanceAdjuster returns an Adjuster-shaped wrapper around
+// AssetAdjuster's A4 rule. Exported for parity with NewA1GoodwillAdjuster /
+// NewA2IntangibleAdjuster so the cleaner orchestrator can hold the instance
+// alongside AssetAdjuster.
+func NewA4DTAValuationAllowanceAdjuster(aa *AssetAdjuster) Adjuster {
+	return &a4DTAValuationAllowanceAdjuster{aa: aa}
+}
+
+// Compile-time assertion: a4DTAValuationAllowanceAdjuster MUST implement Adjuster.
+var _ Adjuster = (*a4DTAValuationAllowanceAdjuster)(nil)
+
+// Name implements Adjuster.
+func (a *a4DTAValuationAllowanceAdjuster) Name() string {
+	return adjusterIDA4DTAValuationAllowance
+}
+
+// Apply implements Adjuster by delegating to
+// AssetAdjuster.ApplyA4DTAValuationAllowance. The dual-write contract
+// (in-place mutation of data.DeferredTaxAssets / data.TotalAssets /
+// data.ValuationAllowance) is preserved by the dispatcher in
+// ProcessAssetAdjustments — NOT by Apply itself. See
+// ApplyA4DTAValuationAllowance godoc for the role split.
+func (a *a4DTAValuationAllowanceAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return a.aa.ApplyA4DTAValuationAllowance(ctx, working, rule, cleaningCtx)
 }
 
 // AdjustmentResult represents the result of applying an asset adjustment
@@ -348,6 +392,120 @@ func (aa *AssetAdjuster) ApplyA2Intangible(ctx context.Context, working *entitie
 		Recommendation: "Consider conservative amortization over defined useful life",
 		Timestamp:      now,
 	})
+
+	return out, nil
+}
+
+// ApplyA4DTAValuationAllowance is the Adjuster-shaped (DC-1 Phase 2 PR-2 Task
+// 2.3) implementation of the A4 deferred-tax-asset valuation-allowance rule.
+// Like ApplyA1Goodwill and ApplyA2Intangible, it is MUTATION-FREE — it reads
+// `working` and returns an AdjusterOutput describing the valuation allowance's
+// intent (Restater-shaped LedgerEntry on the DeferredTaxAssets component) but
+// does NOT modify `working.DeferredTaxAssets` / `working.TotalAssets` /
+// `working.ValuationAllowance`. The dispatcher in ProcessAssetAdjustments
+// performs the dual-write mutation centrally.
+//
+// Role classification (plan §3.5 / §4 row A4): Restater. The fired LedgerEntry
+// carries Component:"DeferredTaxAssets", DeltaAmount:-valuationAllowance,
+// EquityOffset:-valuationAllowance, TaxShieldDTA:0. No OverlaySpec — the
+// valuation allowance is a direct component reduction, not an analytical
+// overlay on top of TotalAssets.
+//
+// TaxShieldDTA=0 rationale (plan §10 parsimony): A4 IS the DTA valuation
+// allowance — the allowance reduces DTA which IS the "tax shield". There is
+// no separate tax shield to compute on top of A4 itself; populating
+// TaxShieldDTA here would double-count the same economic effect. The
+// TaxShieldDTA field is reserved for adjusters where a component writedown
+// generates a derived tax-shield asset (e.g., A2 intangible writedowns at
+// non-zero effective tax rate — deferred to Phase 3 per Q2).
+//
+// Skipped paths emit Fired:false LedgerEntries so observability can answer
+// "why didn't A4 fire on this ticker?" without code reading. The threshold-
+// failed path carries SkipMetrics{dta_ratio, threshold} for dashboards.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row A4 / §7 Task 2.3 / §10 Q2
+func (aa *AssetAdjuster) ApplyA4DTAValuationAllowance(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	// ctx + cleaningCtx accepted for interface symmetry; A4 itself uses neither.
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path 1: no DTA present. Emit a Fired:false LedgerEntry so "A4 was
+	// considered" is observable. No SkipMetrics — there's no ratio to chart
+	// when the numerator is zero.
+	if working.DeferredTaxAssets <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDA4DTAValuationAllowance,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No deferred tax assets present to adjust",
+				SkipReason: "No deferred tax assets present to adjust",
+			}},
+		}, nil
+	}
+
+	dtaRatio := working.DeferredTaxAssets / working.TotalAssets
+
+	// Skip path 2: DTA below the 5% materiality threshold. Carry the ratio +
+	// threshold as SkipMetrics so downstream dashboards can chart "how close
+	// was A4 to firing on this ticker?".
+	threshold := 0.05
+	if dtaRatio <= threshold {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:   now,
+				AdjusterID:  adjusterIDA4DTAValuationAllowance,
+				RuleID:      rule.ID,
+				Fired:       false,
+				Reasoning:   "DTA ratio below 5% threshold",
+				SkipReason:  fmt.Sprintf("DTA ratio %.1f%% below threshold %.1f%%", dtaRatio*100, threshold*100),
+				SkipMetrics: map[string]float64{"dta_ratio": dtaRatio, "threshold": threshold},
+			}},
+		}, nil
+	}
+
+	// Fired path: emit a Restater-shaped Fired:true LedgerEntry on the
+	// DeferredTaxAssets component. Legacy A4 applies a flat 50% valuation
+	// allowance per SEC guide; dual-write produces bit-for-bit identical
+	// balance-sheet outputs.
+	originalDTA := working.DeferredTaxAssets
+	valuationAllowance := originalDTA * 0.50
+
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:    now,
+			AdjusterID:   adjusterIDA4DTAValuationAllowance,
+			RuleID:       rule.ID,
+			Fired:        true,
+			Reasoning:    fmt.Sprintf("dta_valuation_allowance: Applied 50%% valuation allowance to DTA (%.1f%% of assets) per A4 rule", dtaRatio*100),
+			Component:    "DeferredTaxAssets",
+			DeltaAmount:  -valuationAllowance,
+			EquityOffset: -valuationAllowance,
+			TaxShieldDTA: 0, // A4 IS the DTA valuation allowance — no separate tax shield to compute.
+		}},
+	}
+
+	// Significance flag — preserve the legacy ProcessDeferredTaxAdjustment
+	// behavior: only flag when DTA was >=10% of assets. Severity is derived
+	// from the existing ratio-bucket helper so the flag taxonomy stays
+	// identical across the migration.
+	if dtaRatio >= 0.10 {
+		out.Flags = append(out.Flags, entities.Flag{
+			ID:             fmt.Sprintf("dta-flag-%d", now.UnixNano()),
+			RuleID:         rule.ID,
+			Type:           "dta_valuation_allowance",
+			Severity:       aa.getSeverityForDTARatio(dtaRatio),
+			Amount:         valuationAllowance,
+			Percentage:     50.0,
+			Description:    fmt.Sprintf("Applied valuation allowance to significant DTA (%.1f%% of assets)", dtaRatio*100),
+			Recommendation: "Monitor future taxable income projections for DTA realization",
+			Timestamp:      now,
+		})
+	}
 
 	return out, nil
 }
@@ -811,7 +969,55 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, r
 		case "obsolete_inventory":
 			result = aa.ProcessInventoryAdjustment(data, rule, cleaningCtx)
 		case "deferred_tax_assets":
-			result = aa.ProcessDeferredTaxAdjustment(data, rule)
+			// DC-1 Phase 2 PR-2 Task 2.3: route A4 through the new Adjuster-
+			// shaped ApplyA4DTAValuationAllowance. Mirrors A1 / A2 wiring above
+			// — Apply is mutation-free; the dispatcher performs the dual-write
+			// AFTER Apply so the legacy *AdjustmentResult callers stay
+			// byte-identical AND the AdjusterOutput's LedgerEntries / Flags
+			// reach the cleaner orchestrator.
+			//
+			// CAPTURE originalDTA BEFORE Apply runs (mirrors A1's
+			// originalGoodwill / A2's originalIntangibles capture). Apply does
+			// not mutate, so reading data.DeferredTaxAssets before AND after
+			// Apply yields the same value; we still capture-before for parity
+			// with A1/A2 and to document the execution-order invariant.
+			originalDTA := data.DeferredTaxAssets
+			out, err := aa.ApplyA4DTAValuationAllowance(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				// Adjuster.Apply errors are not yet a defined surface in
+				// Phase 2; ApplyA4DTAValuationAllowance never returns one
+				// today. Falling back to the legacy path preserves the dual-
+				// write contract on hypothetical future errors.
+				result = aa.ProcessDeferredTaxAdjustment(data, rule)
+				break
+			}
+
+			// Translate the AdjusterOutput into the legacy *AdjustmentResult
+			// shape so the existing tangible-asset recompute + audit-trail
+			// accounting keeps working, AND perform the dual-write mutation
+			// that ApplyA4DTAValuationAllowance intentionally omitted.
+			result = a4AdjusterOutputToLegacyResult(out, rule, originalDTA)
+			if result.Applied {
+				// Dual-write: today's downstream consumers still read
+				// data.DeferredTaxAssets / data.TotalAssets /
+				// data.ValuationAllowance in place. Phase 4 deletes these
+				// mutations once Phase 3's CleanedFinancialData views replace
+				// direct reads. The valuation-allowance amount is the
+				// LedgerEntry DeltaAmount magnitude (== originalDTA * 0.50).
+				valuationAllowance := result.Amount
+				adjustedDTA := originalDTA - valuationAllowance
+				data.DeferredTaxAssets = adjustedDTA
+				data.TotalAssets -= valuationAllowance
+				data.ValuationAllowance += valuationAllowance
+			}
+
+			// Record native emissions for the orchestrator. Even when the
+			// rule does not "fire" in the legacy sense (Applied=false), the
+			// AdjusterOutput carries a Fired:false LedgerEntry that is still
+			// load-bearing for "why didn't A4 fire?" observability.
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "rd_capitalization_review":
 			result = aa.ProcessRDCapitalizationReview(data, rule, cleaningCtx)
 		case "capitalized_software":
@@ -959,6 +1165,78 @@ func a2AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 	reasoning := "No intangible assets present to adjust"
 	for _, entry := range out.LedgerEntries {
 		if entry.AdjusterID == adjusterIDA2IntangibleWritedown {
+			reasoning = entry.SkipReason
+			if reasoning == "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
+// a4AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
+// the legacy *AdjustmentResult expected by ProcessAssetAdjustments' existing
+// tangible-asset recompute + audit-trail accounting. Parallel to
+// a2AdjusterOutputToLegacyResult — A4 is a Restater, so the translation reads
+// the valuation-allowance amount from the LedgerEntry's DeltaAmount magnitude
+// (not from an OverlaySpec; A4 emits none).
+//
+// originalDTA is captured at the dispatcher BEFORE
+// ApplyA4DTAValuationAllowance runs and threaded in for parity with the A2
+// translator. A4's allowance rate is a fixed 50% per SEC guide, so the legacy
+// Adjustment.Percentage field is set to a constant 50.0 (rather than derived
+// from amount/original like A2's variable rate).
+//
+// Task 2.1 code-quality reviewer flagged that by Task 2.3 the cliff for
+// extracting a `dispatchNativeAdjuster(...)` helper appears — but explicitly
+// said do NOT extract prematurely. Task 2.5 / 2.6 cleanup will revisit.
+func a4AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalDTA float64) *AdjustmentResult {
+	_ = originalDTA // reserved for future symmetry with a2 translator; A4's percentage is a constant 50.0 today.
+
+	// Locate the fired LedgerEntry — A4 emits exactly one when fired and
+	// zero Restater-shaped entries when skipped (skip paths produce a
+	// Fired:false LedgerEntry only).
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID != adjusterIDA4DTAValuationAllowance || !entry.Fired {
+			continue
+		}
+		// DeltaAmount is signed-negative for Restater writedowns; the legacy
+		// Adjustment.Amount is a positive magnitude.
+		valuationAllowance := -entry.DeltaAmount
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("dta-adj-%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.AssetQuality,
+			Type:        entities.AdjustmentTypeValuationAllowance,
+			Amount:      valuationAllowance,
+			FromAccount: "DeferredTaxAssets",
+			ToAccount:   "ValuationAllowance",
+			Percentage:  50.0, // Fixed 50% allowance per SEC guide A4 rule.
+			Reasoning:   entry.Reasoning,
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      valuationAllowance,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   fmt.Sprintf("Applied %.0f valuation allowance to DTA", valuationAllowance),
+		}
+	}
+
+	// Skipped path — surface the reasoning from the Fired:false LedgerEntry
+	// for parity with the legacy "no adjustment" branches.
+	reasoning := "No deferred tax assets present to adjust"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDA4DTAValuationAllowance {
 			reasoning = entry.SkipReason
 			if reasoning == "" {
 				reasoning = entry.Reasoning
