@@ -458,6 +458,17 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 		}
 	}
 
+	// DC-1 Phase 2 PR-1 SHIM (Task 1.4 / plan §7).
+	//
+	// Each category's Process* call STILL runs unchanged (dual-write invariant);
+	// after it returns, we mechanically translate the legacy []entities.Adjustment
+	// slice and the set of rules that were considered into LedgerEntry records
+	// appended onto data.AdjustmentLedger. The shim's three branches (assets,
+	// liabilities, earnings) are deletion order: PR-2 deletes the asset branch
+	// when A-rules implement Adjuster.Apply natively, PR-3 deletes the earnings
+	// branch, PR-4 deletes the liability branch. PR-1 ships zero adjuster code
+	// changes, so this shim is the ONLY ledger producer in PR-1.
+
 	// Apply Category A (Asset Quality) adjustments
 	if len(assetRules) > 0 {
 		assetResult := s.assetAdjuster.ProcessAssetAdjustments(data, assetRules, cleaningCtx)
@@ -466,6 +477,9 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			allFlags = append(allFlags, assetResult.Flags...)
 			totalRulesApplied += len(assetRules)
 		}
+		// Shim branch (assets) — delete in PR-2 when A-rules go native.
+		data.AdjustmentLedger = append(data.AdjustmentLedger,
+			s.shimLedgerEntriesFromLegacy(assetRules, assetResult.Adjustments)...)
 	}
 
 	// Apply Category B (Liability Completeness) adjustments
@@ -476,6 +490,9 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			allFlags = append(allFlags, liabilityResult.Flags...)
 			totalRulesApplied += len(liabilityRules)
 		}
+		// Shim branch (liabilities) — delete in PR-4 when B-rules go native.
+		data.AdjustmentLedger = append(data.AdjustmentLedger,
+			s.shimLedgerEntriesFromLegacy(liabilityRules, liabilityResult.Adjustments)...)
 	}
 
 	// Apply Category C (Earnings Normalization) adjustments
@@ -495,9 +512,83 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			allFlags = append(allFlags, earningsResult.Flags...)
 			totalRulesApplied += len(earningsRules)
 		}
+		// Shim branch (earnings) — delete in PR-3 when C-rules go native.
+		data.AdjustmentLedger = append(data.AdjustmentLedger,
+			s.shimLedgerEntriesFromLegacy(earningsRules, earningsResult.Adjustments)...)
 	}
 
 	return allAdjustments, allFlags, totalRulesApplied, nil
+}
+
+// shimLedgerEntriesFromLegacy maps the legacy []entities.Adjustment shape onto
+// the new []entities.LedgerEntry shape. It exists ONLY for the duration of
+// DC-1 Phase 2 PR-1; PR-2/PR-3/PR-4 replace each category's call site with
+// adjusters that emit LedgerEntries natively, at which point the matching
+// shim branch and this helper's caller(s) are deleted. The helper itself is
+// removed when the final category migrates (PR-4 absorbs B-rules — the last
+// caller).
+//
+// Mapping (plan §7 Task 1.4):
+//   - Each applied Adjustment → LedgerEntry{Fired:true, AdjusterID:RuleID,
+//     RuleID, Reasoning, Timestamp, Component:FromAccount,
+//     DeltaAmount:-Amount}. Writedowns and exclusions are recorded as negative
+//     deltas; lease/pension/contingent overlays that ADD to TotalDebt are also
+//     recorded as negative deltas because the dual-write Amount field is a
+//     positive magnitude in the legacy struct. PR-4 (B-rule native migration)
+//     fixes the sign convention for OverlayEmitters by populating
+//     OverlaySpec.Operation explicitly instead of using DeltaAmount.
+//   - Each rule.ID that did NOT appear as an Adjustment.RuleID in result →
+//     LedgerEntry{Fired:false, AdjusterID:rule.ID, RuleID:rule.ID,
+//     Reasoning:"shim: rule considered but did not fire", Timestamp:now}.
+//     The shim has no access to the per-rule skip reason (it's discarded
+//     inside Process*Adjustments) so a generic SkipReason is recorded. Native
+//     adjusters in PR-2/3/4 emit the real SkipReason from each Process* helper.
+func (s *service) shimLedgerEntriesFromLegacy(rules []*entities.CleaningRule, applied []entities.Adjustment) []entities.LedgerEntry {
+	if len(rules) == 0 {
+		return nil
+	}
+
+	entries := make([]entities.LedgerEntry, 0, len(applied)+len(rules))
+	firedRuleIDs := make(map[string]struct{}, len(applied))
+
+	// Pass 1: emit one Fired:true entry per applied adjustment, in the order
+	// the adjuster returned them.
+	for _, adj := range applied {
+		entries = append(entries, entities.LedgerEntry{
+			Timestamp:   adj.Timestamp,
+			AdjusterID:  adj.RuleID,
+			RuleID:      adj.RuleID,
+			Fired:       true,
+			Reasoning:   adj.Reasoning,
+			Component:   adj.FromAccount,
+			DeltaAmount: -adj.Amount,
+		})
+		firedRuleIDs[adj.RuleID] = struct{}{}
+	}
+
+	// Pass 2: for any rule that did NOT fire, emit a Fired:false entry so
+	// downstream observability can answer "why didn't this rule fire on this
+	// ticker?" without code reading. Iterates rules in input order so skip
+	// entries are deterministic.
+	now := time.Now()
+	for _, rule := range rules {
+		if rule == nil {
+			continue
+		}
+		if _, fired := firedRuleIDs[rule.ID]; fired {
+			continue
+		}
+		entries = append(entries, entities.LedgerEntry{
+			Timestamp:  now,
+			AdjusterID: rule.ID,
+			RuleID:     rule.ID,
+			Fired:      false,
+			Reasoning:  "shim: rule considered but did not fire",
+			SkipReason: "shim: rule considered but did not fire; per-rule skip metadata not surfaced in PR-1 (PR-2/3/4 native adjusters carry SkipReason)",
+		})
+	}
+
+	return entries
 }
 
 func (s *service) checkRuleApplicability(rule *entities.CleaningRule, data *entities.FinancialData) bool {
