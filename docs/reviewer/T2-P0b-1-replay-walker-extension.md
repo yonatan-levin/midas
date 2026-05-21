@@ -1,10 +1,10 @@
 # T2-P0b-1 — Replay walker `compareFairValueResponses` extension required before P2 populates `DCFPerYearPV`
 
-**Status:** OPEN — must be fixed before P2 lands `DCFPerYearPV` population, or by P2 implementer as part of P2's diff
+**Status:** RESOLVED 2026-05-21 — walker extension landed in P2 (`a19506d`, merged via `877fa76`). `compareFairValueResponses` now handles `DCFPerYearPV` (length + per-element float-tolerance) alongside the simple scalar fields P0b already covered. `ResolutionTrace` walker coverage remains a residual gap (would only surface via test-only `cmp.Diff` paths); tracker closes because the P2 acceptance criterion (drift in `DCFPerYearPV` surfaces in production `Replay()` diff output) is met.
 **Severity:** Medium (latent — fields not yet populated; becomes real when P2 ships)
 **Filed:** 2026-05-16 by P0b REVIEWER + QA gates
-**Phase context:** Tier 2 — opened during P0b code review (commit `2e48fde`), confirmed by P0b QA
-**Owner:** P2 implementer (VAL-1 DCF archetype-aware horizon + diagnostics)
+**Phase context:** Tier 2 — opened during P0b code review (commit `2e48fde`), confirmed by P0b QA. Resolved during Tier 2 P2 merge (`877fa76`).
+**Owner:** P2 implementer (VAL-1 DCF archetype-aware horizon + diagnostics) — landed
 
 ---
 

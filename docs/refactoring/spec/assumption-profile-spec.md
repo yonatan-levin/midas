@@ -1,7 +1,7 @@
 # Tier 2 — Unified `AssumptionProfile` Architecture Spec
 
-**Status:** APPROVED — ready for P0a implementation kickoff
-**Version:** v0.1 — initial spec landing 2026-05-14
+**Status:** SHIPPED — Tier 2 complete 2026-05-21 across Bootstrap + P0a + P0b + P1 + P2 + P3 + P4 + T2-P4-W1 reconciliation + Closeout docs sweep
+**Version:** v0.2 — Tier 2 close 2026-05-21 (v0.1 was initial spec landing 2026-05-14; v0.2 reflects the final post-Tier-2 state — 31 profiles + 19 rules in `config/assumption_profiles.json`, REIT_* / FIN_* classifier emission canonicalized via T2-P4-W1, JPM/BAC/WFC bit-for-bit DDM invariant preserved across all phase merges)
 **Spec author session:** Tier 2 brainstorming + gpt-5.5-pro architectural critique
 **Companion docs:**
 - `docs/refactoring/tier-2-assumption-profile-kickoff.md` (kickoff brief, scope, estimates)

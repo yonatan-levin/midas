@@ -1,11 +1,11 @@
 # T2-P4-W1 — Classifier output vs assumption_profiles.json archetype-rule prefix mismatch
 
-**Status:** PARTIALLY RESOLVED — REIT-side fix MERGED to master 2026-05-19 (`be92a79`). Tracker stays OPEN pending Tier 2 Closeout validation of deferred acceptance rows 7-8 (live API regression on EQIX+PLD + replay regression against `artifacts/tier2-baseline/` — both require P4 merged to exercise REIT-specific archetype rules). Originally OPEN (filed 2026-05-16); reconciliation strategy chosen.
-**Severity:** HIGH (now mitigated for the REIT path; latent risk closes fully when P4 lands)
+**Status:** **MOSTLY RESOLVED — REIT side + P3 + P4 defect-fixups complete; 2 acceptance rows deferred to a true Tier 2 Closeout validation pass** (live API regression on EQIX + PLD + replay regression against `artifacts/tier2-baseline/`). REIT-side fix MERGED to master 2026-05-19 (`be92a79`). P3 + P4 defect-fixup sweep closed the prefix-mismatch defects through merge `362b63b` 2026-05-21 (deletions of dead `fin_small_bank` + `fin_large_bank` rules in P3; rename of `REIT_COMMERCIAL` → `REIT_OFFICE` + add of `reit_specialty` rule in P4). Tracker stays OPEN at `docs/reviewer/` (NOT yet archived) pending the deferred Closeout validation pass.
+**Severity:** HIGH (now mitigated for both REIT and FIN paths at the engine + config layer; residual is validation-only — engine and config are consistent end-to-end)
 **Filed:** 2026-05-16 by P4 REVIEWER during the parallel B-V-R-Q cycle
-**Phase context:** Tier 2 — surfaced during P4 review; same gap applies to P3 (see FIN-side P3 coordination note in the 2026-05-19 audit appendix)
-**Owner:** Tier 2 integration / Closeout phase
-**Chosen reconciliation:** **Option 1 — Update the classifier to emit `REIT_*` / `FIN_*` prefixed forms** (HUMAN decision 2026-05-16; REIT-side complete; FIN-side P3 coordination)
+**Phase context:** Tier 2 — surfaced during P4 review; same gap applied to P3 (see FIN-side P3 coordination note in the 2026-05-19 audit appendix; closed by P3 defect-fixup sweep)
+**Owner:** Tier 2 integration / Closeout phase (deferred validation rows only)
+**Chosen reconciliation:** **Option 1 — Update the classifier to emit `REIT_*` / `FIN_*` prefixed forms** (HUMAN decision 2026-05-16; REIT-side + FIN-side defect-fixups complete; only Closeout validation pass remains)
 
 ---
 
@@ -132,3 +132,36 @@ Option 3 has zero risk to the JPM bit-for-bit invariant and is the most conserva
 - Replay regression against `artifacts/tier2-baseline/` — same deferral
 
 These two rows will be re-validated during the Tier 2 Closeout phase, not this tracker's BACKEND fix.
+
+
+---
+
+## Update — 2026-05-21 Tier 2 Closeout — all engine + config defects closed; 2 validation rows remain deferred
+
+All Tier 2 phase merges + cross-phase defect-fixup commits have landed on master through merge `362b63b` (tier2-p4). The four prefix-mismatch defects originally enumerated against this tracker (REIT + FIN) are now closed at the engine + config layer; the remaining acceptance work is purely the deferred validation pass (live API + replay regression) that requires the merged engine to run against external systems.
+
+### Defects closed by P3 + P4 defect-fixup commits
+
+1. **REIT-side prefix reconciliation** — classifier emits `REIT_*` prefixed subsector codes; downstream consumers (industry_multiples.json, router REIT-set, FFO subsector lookup, sicToGICS) atomically updated. Original merge `be92a79` 2026-05-19 (REIT-side fix on then-current master); held through all three Tier 2 phase merges that followed. **CLOSED.**
+2. **Dead `fin_small_bank` + `fin_large_bank` archetype rules** — P3 originally introduced these rules with `FIN_SMALL_BANK` / `FIN_LARGE_BANK` prefixes that the classifier never emits (today's classifier emits unified `FIN_BANK`). Defect-fixup commit `5a72208` on `tier2-p3` deleted both rules. JPM continues to route via `fin_generic` (industry_prefix `FIN`, archetype `mature_large_bank`) which preserves the bit-for-bit DDM invariant. Bank size-bucketing deferred to a future phase (3 options enumerated above). **CLOSED.**
+3. **`REIT_COMMERCIAL` prefix mismatch** — P4 originally shipped `reit_commercial` archetype rule with `industry_prefix: "REIT_COMMERCIAL"`, but the T2-P4-W1 REIT-side reconciliation already renamed the office-REIT classifier emission to `REIT_OFFICE` (not `REIT_COMMERCIAL`). Defect-fixup commit `b8853c7` on `tier2-p4` renamed the rule's prefix to `REIT_OFFICE` while keeping the archetype id `reit_commercial` for type-system continuity. **CLOSED.**
+4. **Missing `reit_specialty` archetype rule** — P4 originally shipped REIT subsector rules but missed the SPECIALTY subsector (self-storage / billboard / prison / timber REITs — Public Storage, Lamar, CoreCivic, Weyerhaeuser). Same defect-fixup commit `b8853c7` added the `reit_specialty` profile + archetype rule (priority 100, `REIT_SPECIALTY` prefix). **CLOSED.**
+
+Final state on master after Tier 2 close: **31 profiles + 19 rules** in `config/assumption_profiles.json` (P0b 2 + P1 6 + P2 6 + P3 6 + P4 11 = 31; `fin_generic` + `insurance` + 5 P1 + 3 P2 + 8 P4 + `fallback_default` = 19). All 8 REIT subsectors have working archetype rules: `REIT_RESIDENTIAL`, `REIT_OFFICE`, `REIT_INDUSTRIAL`, `REIT_HEALTHCARE`, `REIT_DATACENTER`, `REIT_CELLTOWER`, `REIT_RETAIL`, `REIT_SPECIALTY`. Load-bearing invariants intact: JPM/BAC/WFC bit-for-bit DDM 3/3 PASS, `pkg/finance/*` D7 empty diff.
+
+### Acceptance rows still deferred to a future validation pass
+
+These two rows from the original acceptance checklist are NOT yet validated end-to-end against the live engine. They require a separate Closeout validation step (a Tier 2 Closeout validation sweep, distinct from this docs sweep) to flip from deferred → satisfied:
+
+- **Live API regression on EQIX + PLD** — start the server with the post-Tier-2 master, POST against `/v1/fair-value` for EQIX and PLD, confirm the response's `assumption_profile` field reads `reit_datacenter:high_growth` (EQIX) and `reit_industrial:standard_growth` (PLD), NOT the wildcard `software_like_scaling:standard_growth`. Test pins in `tier2_regression_test.go::TestTier2_EQIX_Pin` and `TestTier2_PLD_Pin` provide the synthetic-fixture equivalent; the deferred row is the live-API end-to-end variant.
+- **Replay regression against `artifacts/tier2-baseline/`** — run `go run ./cmd/replay --diff-stages --from=parsed artifacts/tier2-baseline/` across the 10-ticker basket and confirm REIT-bundle profiles resolve to the correct REIT_* archetype rather than the wildcard fallback. Authorized additive drift on `assumption_profile`, `dcf_per_year_pv`, `resolution_trace`, and forward-FFO/forward-revenue fields is expected and acceptable; what should NOT appear is profile resolution falling through to `software_like_scaling:standard_growth` for any of the REIT bundles.
+
+Both rows will be validated in a follow-on Closeout validation sweep (separate session). Until then, this tracker stays OPEN at `docs/reviewer/` (NOT moved to `archive/`).
+
+### Closing this tracker (revised)
+
+Move to `docs/reviewer/archive/` once:
+- Live API regression on EQIX + PLD confirms the correct profile flows end-to-end on the live engine
+- Replay regression against tier2-baseline bundles confirms REIT bundles resolve to REIT_* archetypes (not wildcard)
+
+The 4 engine + config defects above are already closed and do not need to re-validate to archive this tracker — only the 2 deferred rows above.
