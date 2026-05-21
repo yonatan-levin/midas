@@ -136,6 +136,38 @@ type FinancialData struct {
 	OtherCurrentLiabilities    float64 `json:"other_current_liabilities"`
 	OtherNonCurrentLiabilities float64 `json:"other_non_current_liabilities"`
 
+	// AdjustmentLedger captures the chronological sequence of adjuster decisions
+	// (fired + skipped) applied to this FinancialData instance during cleaning.
+	// DC-1 Phase 2 — see
+	// docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md.
+	//
+	// Phase 2 invariant: the ledger is POPULATED but NO downstream consumer reads
+	// it yet. Phase 3 introduces the CleanedFinancialData.Restated() accessor
+	// that consumes ledger entries to reconstruct equity offsets and tax shields.
+	//
+	// Ordering: entries are appended in adjuster execution order (asset →
+	// liability → earnings, mirroring service.go::applyActiveAdjustments). Within
+	// each adjuster, entries follow rule order from the rules engine. The
+	// ordering IS the contract — Phase 3's view reconstruction depends on
+	// chronological replay.
+	//
+	// Mutation: only applyActiveAdjustments appends to this slice; no adjuster
+	// reads or writes it directly. JSON omitempty preserves the existing
+	// serialization shape for callers that don't care.
+	AdjustmentLedger AdjustmentLedger `json:"adjustment_ledger,omitempty"`
+
+	// Overlays captures declarative overlay specifications emitted by
+	// OverlayEmitter-role adjusters (A1 goodwill, B1 operating leases, B2
+	// pension underfunding, B3 contingent liabilities). DC-1 Phase 2.
+	//
+	// Phase 2 invariant: POPULATED but INERT. No consumer applies these
+	// overlays; Phase 3's InvestedCapital() accessor will. Phase 2 still routes
+	// B1/B2/B3 amounts into data.TotalDebt directly (dual-write) so today's
+	// WACC and EV-to-equity bridge math is bit-for-bit unchanged.
+	//
+	// Ordering matches AdjustmentLedger.
+	Overlays []OverlaySpec `json:"overlays,omitempty"`
+
 	// TotalLiabilities is the as-reported balance-sheet line "total liabilities"
 	// (us-gaap:Liabilities / ifrs-full:Liabilities). Populated by the SEC parser
 	// when the umbrella XBRL tag is present; left at zero otherwise. Distinct
