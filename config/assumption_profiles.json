@@ -243,20 +243,6 @@
   },
   "archetype_rules": [
     {
-      "id": "fin_large_bank",
-      "priority": 100,
-      "industry_prefix": "FIN_LARGE_BANK",
-      "archetype": "mature_large_bank",
-      "notes": "Tier 2 P0b — JPM bit-for-bit anchor (horizon=0 → legacy single-stage Gordon DDM)."
-    },
-    {
-      "id": "fin_small_bank",
-      "priority": 75,
-      "industry_prefix": "FIN_SMALL_BANK",
-      "archetype": "growth_bank",
-      "notes": "Tier 2 P3 — small/mid-cap banks route to growth_bank multi-stage DDM. NOTE: classifier currently emits FIN_BANK (no large/small split); this rule is DEAD until P3-followup classifier coordination per T2-P4-W1 tracker FIN-side audit."
-    },
-    {
       "id": "insurance",
       "priority": 75,
       "industry_prefix": "FIN_INSURANCE",
