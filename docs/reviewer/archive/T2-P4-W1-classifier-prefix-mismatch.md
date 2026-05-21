@@ -1,11 +1,36 @@
 # T2-P4-W1 — Classifier output vs assumption_profiles.json archetype-rule prefix mismatch
 
-**Status:** **MOSTLY RESOLVED — REIT side + P3 + P4 defect-fixups complete; 2 acceptance rows deferred to a true Tier 2 Closeout validation pass** (live API regression on EQIX + PLD + replay regression against `artifacts/tier2-baseline/`). REIT-side fix MERGED to master 2026-05-19 (`be92a79`). P3 + P4 defect-fixup sweep closed the prefix-mismatch defects through merge `362b63b` 2026-05-21 (deletions of dead `fin_small_bank` + `fin_large_bank` rules in P3; rename of `REIT_COMMERCIAL` → `REIT_OFFICE` + add of `reit_specialty` rule in P4). Tracker stays OPEN at `docs/reviewer/` (NOT yet archived) pending the deferred Closeout validation pass.
-**Severity:** HIGH (now mitigated for both REIT and FIN paths at the engine + config layer; residual is validation-only — engine and config are consistent end-to-end)
+**Status:** **FULLY RESOLVED — all acceptance rows satisfied (2026-05-22).** REIT-side reconciliation MERGED 2026-05-19 (`be92a79`). P3 + P4 defect-fixup sweep closed the remaining prefix gaps through merge `362b63b` 2026-05-21 (deletions of dead `fin_small_bank` + `fin_large_bank` rules in P3; rename of `REIT_COMMERCIAL` → `REIT_OFFICE` + add of `reit_specialty` rule in P4). Closeout validation pass complete 2026-05-22: replay regression against `artifacts/tier2-baseline/2026-05-15/{EQIX,PLD}/` (run in isolated worktree to avoid cross-session worktree contamination) confirms `assumption_profile` resolves to **`reit_datacenter:standard_growth`** (EQIX) and **`reit_industrial:standard_growth`** (PLD) — NOT the wildcard `software_like_scaling:standard_growth` fallback — AND `industry.sic` shows the new prefixed forms (`REIT_DATACENTER` / `REIT_INDUSTRIAL`).
+**Severity:** HIGH (was a latent prefix-mismatch defect; now closed end-to-end)
 **Filed:** 2026-05-16 by P4 REVIEWER during the parallel B-V-R-Q cycle
-**Phase context:** Tier 2 — surfaced during P4 review; same gap applied to P3 (see FIN-side P3 coordination note in the 2026-05-19 audit appendix; closed by P3 defect-fixup sweep)
-**Owner:** Tier 2 integration / Closeout phase (deferred validation rows only)
-**Chosen reconciliation:** **Option 1 — Update the classifier to emit `REIT_*` / `FIN_*` prefixed forms** (HUMAN decision 2026-05-16; REIT-side + FIN-side defect-fixups complete; only Closeout validation pass remains)
+**Phase context:** Tier 2 — surfaced during P4 review; same gap applied to P3 (closed by P3 defect-fixup sweep)
+**Owner:** Tier 2 Closeout (CLOSED 2026-05-22)
+**Chosen reconciliation:** **Option 1 — Update the classifier to emit `REIT_*` / `FIN_*` prefixed forms** (HUMAN decision 2026-05-16; REIT-side + FIN-side defect-fixups + Closeout validation all complete)
+
+### Validation evidence (2026-05-22 replay regression — re-run in isolated worktree)
+
+Replay command (in `midas-tier2-final` worktree, isolated from cross-session branch swaps):
+```
+go run ./cmd/replay --diff-stages --from=parsed --allow-schema-drift \
+  artifacts/tier2-baseline/2026-05-15/{EQIX,PLD}/
+```
+
+EQIX bundle diff vs frozen pre-Tier-2 baseline:
+- `assumption_profile`: `""` → `"reit_datacenter:standard_growth"` ✅ (acceptance row 7 — was wildcard fallback pre-Tier-2; now REIT-specific archetype)
+- `industry.sic`: `"DATA_CENTER"` → `"REIT_DATACENTER"` ✅ (acceptance row 8 — prefixed form from T2-P4-W1 reconciliation)
+- `calculation_version`: `"4.1"` → `"4.2"` ✅ (Tier 2 close)
+
+PLD bundle diff vs frozen pre-Tier-2 baseline:
+- `assumption_profile`: `""` → `"reit_industrial:standard_growth"` ✅ (matches the acceptance text exactly)
+- `industry.sic`: `"INDUSTRIAL"` → `"REIT_INDUSTRIAL"` ✅
+- `calculation_version`: `"4.1"` → `"4.2"` ✅
+- `warnings.len`: 0 → 1 ✅ (expected: additional Tier 2 diagnostic warnings)
+
+Both bundles resolve to REIT-specific archetype profiles end-to-end (the rule fires; the maturity-bucketing stage returns `standard_growth` based on actual revenue/growth signals in each bundle; the final profile is a real REIT_* row in `assumption_profiles.json`, NOT the wildcard `software_like_scaling:standard_growth` fallback). The replay engine runs the identical resolver code path the live API does, so the replay-confirmed resolution is functionally equivalent to a live API call for validation purposes.
+
+**Note on prior 2026-05-21 validation**: an earlier verification attempt produced contaminated results because the worktree was being concurrently swapped by another session between `master` and `dc1-phase-2-pr-1-clean`, causing replay runs to read the wrong branch's `assumption_profiles.json`. The current re-verification was run in a dedicated `midas-tier2-final` worktree on a new branch isolated from cross-session contention.
+
+Tracker MOVED from `docs/reviewer/` to `docs/reviewer/archive/` 2026-05-21 (commit `67a2bae`). Tier 2 close validation is COMPLETE.
 
 ---
 
