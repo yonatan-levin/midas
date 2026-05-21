@@ -50,11 +50,38 @@ func (m *DDMModel) ModelType() string {
 	return "ddm"
 }
 
-// Calculate performs a DDM valuation.
+// Calculate is the Tier 2 P3 dispatcher. Routes legacy mature-large-bank
+// (or nil-profile / horizon-0) requests to the verbatim-preserved
+// single-stage Gordon path; routes multi-stage dividend profiles to
+// calculateMultiStage. Spec §6.3, §7.1.
+//
+// Path discipline (CRITICAL): calculateLegacyGordon's body is BYTE-IDENTICAL
+// to the pre-Tier-2 Calculate body (master HEAD 0324057). Verified at commit
+// time via `diff git show 0324057:.../ddm.go HEAD:.../ddm.go`. Any reordering
+// or extraction in that path will trip TestDDM_LegacyPath_BitForBit
+// (JPM/BAC/WFC Float64bits equality).
+func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResult, error) {
+	// Defensive: nil input is allowed through so the legacy path can return
+	// its canonical "model input is required" error (preserves pre-Tier-2
+	// error surface).
+	if input != nil && input.Profile.IsLegacyMatureLargeBankDDM() {
+		return m.calculateLegacyGordon(ctx, input)
+	}
+	if input == nil || input.Profile == nil || input.Profile.DividendForecastHorizon == 0 {
+		return m.calculateLegacyGordon(ctx, input)
+	}
+	return m.calculateMultiStage(ctx, input)
+}
+
+// calculateLegacyGordon is the verbatim pre-Tier-2 DDM body. DO NOT MODIFY
+// — every statement, comment, and whitespace character must match the
+// master HEAD 0324057 Calculate body. The lift from Calculate to this
+// sibling is a rename + cut+paste; nothing else. Bit-for-bit pinned via
+// TestDDM_LegacyPath_BitForBit. Spec §7.1.
 //
 // Uses the Gordon Growth Model for a single-stage DDM.
 // Falls back to P/E based approach if DPS is not available but the company is a dividend payer.
-func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResult, error) {
+func (m *DDMModel) calculateLegacyGordon(ctx context.Context, input *ModelInput) (*ModelResult, error) {
 	if input == nil {
 		return nil, fmt.Errorf("ddm: model input is required")
 	}
@@ -253,4 +280,105 @@ func (m *DDMModel) estimateDividendGrowth(input *ModelInput) float64 {
 	}
 
 	return 0.03 // 3% default
+}
+
+// calculateMultiStage is the Tier 2 P3 multi-stage DDM path for non-mature
+// dividend payers (profile.DividendForecastHorizon > 0). Discount cash
+// flows over the explicit dividend-forecast horizon at cost of equity,
+// applying the profile's per-year DPS growth cap and rising payout-path
+// multiplier. Tail value is a Gordon perpetuity at StableDividendGrowth.
+// Spec §6.3.
+//
+// Dispatcher guarantees Profile + DividendForecastHorizon > 0 here, but
+// the engine-growth slice + cost-of-equity preconditions can still
+// invalidate the math at runtime and are surfaced as errors.
+func (m *DDMModel) calculateMultiStage(ctx context.Context, input *ModelInput) (*ModelResult, error) {
+	latest, _ := input.HistoricalData.GetLatestPeriod()
+	if latest == nil {
+		return nil, fmt.Errorf("ddm_multistage: no financial data")
+	}
+	dps := latest.DividendsPerShare
+	if dps <= 0 {
+		return nil, fmt.Errorf("ddm_multistage: company does not pay dividends")
+	}
+	costOfEquity := input.CostOfEquity
+	if costOfEquity <= 0 {
+		return nil, fmt.Errorf("ddm_multistage: cost of equity must be positive")
+	}
+
+	p := &input.Profile.AssumptionProfile
+	horizon := p.DividendForecastHorizon
+
+	// Engine growth curve must cover at least the explicit horizon; otherwise
+	// the forecast would have to extrapolate beyond the engine's confidence
+	// window and the result is no longer faithful to the profile.
+	if input.GrowthEstimate == nil {
+		return nil, fmt.Errorf("ddm_multistage: growth estimate is required")
+	}
+	growthRates := input.GrowthEstimate.ProjectedGrowthRates
+	if len(growthRates) < horizon {
+		return nil, fmt.Errorf("ddm_multistage: growth horizon %d shorter than profile %d",
+			len(growthRates), horizon)
+	}
+
+	// Explicit period: project DPS forward using the engine growth curve,
+	// optionally amplified by a rising payout ratio. Each year is then
+	// discounted at cost of equity (cumulative discount factor `discount`).
+	explicitPV := 0.0
+	projectedDPS := dps
+	discount := 1.0
+	for i := 0; i < horizon; i++ {
+		g := growthRates[i]
+		// Cap the per-year DPS growth (only when the profile sets a positive
+		// cap — zero means uncapped, which is consistent with the JSON
+		// schema's omitempty semantics for profiles that don't care).
+		if p.DPSGrowthCap > 0 && g > p.DPSGrowthCap {
+			g = p.DPSGrowthCap
+		}
+		projectedDPS *= 1 + g
+		// Rising payout path: scale year i's projected DPS by payout[i]/payout[i-1].
+		// The first projected year keeps the trailing payout (no ratio to apply),
+		// matching the plan's `i > 0` guard.
+		if i > 0 && i < len(p.PayoutPath) && p.PayoutPath[i-1] > 0 {
+			payoutMultiplier := p.PayoutPath[i] / p.PayoutPath[i-1]
+			projectedDPS *= payoutMultiplier
+		}
+		discount *= 1 + costOfEquity
+		explicitPV += projectedDPS / discount
+	}
+
+	// Terminal: Gordon perpetuity at the profile's stable dividend growth.
+	// Reuses the legacy Gordon denominator floor (ddmDenominatorEpsilon)
+	// so the multi-stage tail handles CoE≈g degeneracy the same way the
+	// legacy path does.
+	terminalGrowth := p.StableDividendGrowth
+	denominator := costOfEquity - terminalGrowth
+	if denominator <= ddmDenominatorEpsilon {
+		denominator = ddmDenominatorEpsilon
+	}
+	terminalDPS := projectedDPS * (1 + terminalGrowth)
+	terminalValue := terminalDPS / denominator
+	terminalPV := terminalValue / discount
+
+	valuePerShare := explicitPV + terminalPV
+	equityValue := valuePerShare * input.SharesOutstanding
+	enterpriseValue := equityValue + input.InterestBearingDebt - input.CashAndCashEquivalents
+
+	logctx.Or(ctx, m.logger).Info("DDM multi-stage valuation completed",
+		zap.Float64("dps", dps),
+		zap.Int("horizon", horizon),
+		zap.Float64("cost_of_equity", costOfEquity),
+		zap.Float64("stable_growth", terminalGrowth),
+		zap.Float64("value_per_share", valuePerShare))
+
+	return &ModelResult{
+		IntrinsicValuePerShare: valuePerShare,
+		EnterpriseValue:        enterpriseValue,
+		EquityValue:            equityValue,
+		ModelType:              "ddm",
+		Confidence:             "medium",
+		HorizonSelected:        horizon,
+		Warnings: []string{fmt.Sprintf("DDM multi-stage: %dy explicit + Gordon terminal (g=%.1f%%)",
+			horizon, terminalGrowth*100)},
+	}, nil
 }
