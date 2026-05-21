@@ -3,8 +3,24 @@
 **Phase:** Phase 2, PR-2 of 4 — Asset adjusters migrated to the `Adjuster` interface (Tasks 2.1–2.7)
 **Status:** READY TO START
 **Estimated effort:** ~1 agent shift (see [feedback-ai-agent-time-estimates](../../../.claude/projects/.../memory/feedback_ai_agent_time_estimates.md) — translate human-day estimates to agent-hour pacing)
-**Branch base:** `dc1-phase-2-pr-1-clean` at `9d8321c` (PR-1 follow-up commit). **DO NOT branch from master.** PR-2/3/4 are stacked on `dc1-phase-2-pr-1-clean` per the user's PR-strategy choice (no master merge until all 4 PRs land).
+**Branch base:** `dc1-phase-2-pr-1-clean` (PR-1 final tip, currently `62004fb` post-handoff-commit). **DO NOT branch from master.** PR-2/3/4 are stacked on `dc1-phase-2-pr-1-clean` per the user's PR-strategy choice (no master merge until all 4 PRs land).
 **Master state (FYI only — do NOT integrate yet):** `67a2bae` (Tier 2 closeout). Master has advanced 7 commits beyond PR-1's base `987ec31`; this is independent work and is irrelevant until the final 4-PR stack merge.
+
+**Worktree workflow (REQUIRED — per user's 2026-05-22 directive [[feedback-worktree-first-workflow]]):**
+The main `midas/` directory MUST stay on `master`. PR-2 work happens in a sibling worktree at `../midas-dc1-phase-2-pr-2/`. Set it up before any code work:
+
+```
+# From the main midas/ directory (which is now on master)
+git worktree add ../midas-dc1-phase-2-pr-2 -b dc1-phase-2-pr-2 dc1-phase-2-pr-1-clean
+cd ../midas-dc1-phase-2-pr-2
+```
+
+All PR-2 commands run inside that sibling directory. The PR-1 branch is also checked out as a worktree at `../midas-dc1-phase-2-pr-1/` (created when PR-1 finished). Confirm before EVERY `git commit`:
+- `pwd` should end with `midas-dc1-phase-2-pr-2`
+- `git rev-parse --abbrev-ref HEAD` should print `dc1-phase-2-pr-2`
+- `git worktree list` should show three entries: main midas at master, midas-dc1-phase-2-pr-1 at dc1-phase-2-pr-1-clean, midas-dc1-phase-2-pr-2 at dc1-phase-2-pr-2.
+
+Worktrees are git's real isolation primitive (each has its own HEAD file and index), so parallel sessions and Bash branch-switch friction — the two failure modes that hit PR-1 — cannot recur as long as each branch stays in its own worktree.
 
 ---
 
@@ -110,9 +126,9 @@ PR-2 also ships **the Phase 2 first-populating SchemaVersion bump** (`CurrentSch
 
 ## Gotchas from PR-1 (lessons the next agent will trip over otherwise)
 
-1. **Bash branch-switch friction.** The sandboxed Bash tool sometimes resets HEAD to `master` after a command body completes (visible in the previous BACKEND's handoff under "Issues / Blockers" section 3, and observed during PR-1 orchestration). **Mitigation:** before EVERY `git commit`, run `git rev-parse --abbrev-ref HEAD` and confirm it prints the expected branch. If it prints `master` or anything else, run `git checkout dc1-phase-2-pr-1-clean` (or the active PR-2 branch) BEFORE committing.
+1. **Bash branch-switch friction — SOLVED by worktrees.** During PR-1 (when work happened inside the main `midas/` worktree), HEAD silently reset to master across Bash invocations because all tooling sees one shared `.git/HEAD`. With the worktree workflow now mandatory, each branch has its own HEAD file and this cannot happen. **Still verify:** before EVERY `git commit`, run `pwd` (should end with the expected worktree directory) AND `git rev-parse --abbrev-ref HEAD`. If anything looks off, STOP — you're in the wrong worktree.
 
-2. **Parallel-session contamination is real.** During PR-1, a parallel agent session ran `git merge tier2-p2` and `git merge tier2-p3` on the in-flight `dc1-phase-2-pr-1` branch, requiring a cherry-pick recovery onto a clean branch. **Mitigation:** if you observe unexpected commits on your branch (commits you didn't author appearing in `git log`), STOP IMMEDIATELY and hand back to HUMAN. Do not "work around" the contamination by continuing on the polluted branch.
+2. **Parallel-session contamination — SOLVED by worktrees.** During PR-1, a sibling session ran `git merge tier2-p2` and `git merge tier2-p3` from inside the main `midas/` directory, landing those merges on the active `dc1-phase-2-pr-1` branch (because all sessions in `midas/` share `.git/HEAD`). Per-PR worktrees eliminate this entirely — sibling sessions in `midas-tier2-p3/` and `midas/` cannot interfere with `midas-dc1-phase-2-pr-2/`'s HEAD. **Still verify:** if you observe unexpected commits on your branch in `git log` that you didn't author, STOP IMMEDIATELY and hand back to HUMAN.
 
 3. **Lint-diagnostic noise is mostly false positives.** Pre-existing `unused parameter` warnings on `applyActiveAdjustments(ctx, ...)` are intentional — the `ctx` is threaded through for PR-2+ adjuster migrations (they take `ctx` in `Adjuster.Apply`). Do NOT "fix" by removing the parameter. Other noise: `interface{}→any` modernization, `if N>len{}` → `max()`, "unused write" on table-driven test fixture fields. Ignore unless they hide a real bug.
 
