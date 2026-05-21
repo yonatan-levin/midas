@@ -1,6 +1,6 @@
 # DC-1 — Datacleaner adjusters are single-sided; collapse "valuation overlay" with "as-of restatement"
 
-**Status:** IN PROGRESS — **Phase 0 SHIPPED 2026-05-16** (merge `1640394`); **Phase 1 SHIPPED 2026-05-19**; Phases 2-4 pending. Originally filed 2026-05-05 during the Graham-floor metrics design pass.
+**Status:** IN PROGRESS — **Phase 0 SHIPPED 2026-05-16** (merge `1640394`); **Phase 1 SHIPPED 2026-05-19**; **Phase 2 PR-1 SHIPPED 2026-05-21** (branch `dc1-phase-2-pr-1-clean` — pending merge); Phase 2 PR-2/3/4 + Phases 3-4 pending. Originally filed 2026-05-05 during the Graham-floor metrics design pass.
 **Severity:** Major (silently produces inconsistent balance-sheet output; surfaces only when a downstream consumer needs `Assets = Liabilities + Equity` to balance).
 **Origin:** Investigation triggered by `docs/refactoring/graham-floor-metrics-spec.md` (R2 risk discussion). Discovered while validating whether to derive `TotalLiabilities` from `TotalAssets − StockholdersEquity` for NCAV.
 **Blocks:** No production work. Graham-floor metrics ship around it via direct `us-gaap:Liabilities` XBRL preference (see `graham-floor-metrics-spec.md` §4.4).
@@ -17,6 +17,18 @@
 - **Shadow-analysis report** — `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md` — filed post-merge. The Phase 1 → Phase 2 gate input. Enumerates 142 divergence records across 7 basket tickers into 7 distinct clusters with explicit Phase 2 dispositions. **Phase 2 gate verdict: SATISFIED.** Surfaces a parser-side prerequisite (AMD + KO `TotalLiabilities = 0` dropout, 24 records) for Phase 2's regression-validation basket — filed as `docs/reviewer/T2-BS-3-parser-totalliabilities-zero-amd-ko.md` for independent tracking.
 - **Basket coverage refreshed (2026-05-19)** — `artifacts/tier2-baseline/2026-05-19/` captured with all 10 basket tickers (AAPL, AMD, BABA, EQIX, F, JNJ, KO, MSFT, MXL, TSM); shadow integration test runs across full 10/10 (was 7/10 on the 2026-05-15 baseline). Closes the JNJ/TSM/BABA absence flagged in the shadow-analysis report §7. The 7 pre-existing snapshot files updated for `bundle_root`/`fixture_path` metadata only; divergence records byte-stable. 3 new snapshots (JNJ.json: 23 divergences across 12 periods; TSM.json: 2 divergences across 2 periods; BABA.json: 3 divergences across 3 periods) expand Phase 2's punch-list signal.
 - **➡️ Phase 2 implementer handoff filed** — `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-handoff.md` — READY TO START. Covers scope (Adjuster interface + LedgerEntry + refactor of 8+ adjusters; no view reconstruction), the T2-BS-3 disposition decision gate, the 7-cluster punch list from Phase 1's shadow analysis, snapshot files as the regression signal, and a starting prompt. Estimated 2-3 weeks (Layer 2 of the spec, materially larger than Phase 1's shadow-mode shim).
+
+**Phase 2 PR-1 progress (2026-05-21):** Skeleton landed on branch `dc1-phase-2-pr-1-clean` (pending VERIFIER → REVIEWER → QA → HUMAN merge). PR-1 introduces:
+1. `Adjuster` interface and `AdjusterOutput` struct at `internal/services/datacleaner/adjustments/adjuster.go` — unified contract for every cleaner-side adjuster; Restater / OverlayEmitter / Hybrid roles emerge from output shape, not interface multiplication.
+2. `LedgerEntry`, `OverlaySpec`, `AdjustmentLedger`, `AmountSemantics`, `AIProvenance` entities at `internal/core/entities/adjustment_ledger.go`. `LedgerEntry.SourceReliability` is the T2-BS-3 carve-out hook.
+3. `AdjustmentLedger []LedgerEntry` and `Overlays []OverlaySpec` fields appended to `entities.FinancialData` (positioned after the Phase 0 plug fields).
+4. Orchestrator scaffolding shim at `service.go::applyActiveAdjustments` — mechanically maps the legacy `entities.Adjustment` shape to `LedgerEntry` records after each `Process*Adjustments` call. Three contiguous shim branches (assets / liabilities / earnings) are deletion order: PR-2 deletes assets, PR-3 deletes earnings, PR-4 deletes liabilities, as each category's adjusters implement `Adjuster.Apply` natively.
+5. `TestOrchestrator_LedgerOrdering` property test at `internal/services/datacleaner/ledger_invariants_test.go` pinning the asset → liability → earnings partition (deviates from plan's `adjustments/` location due to import-cycle; intent preserved by using the real datacleaner service).
+6. `recomputeUmbrellas` WARN line additively renders `recent_adjusters []string` field (last 5 AdjusterIDs from `fd.AdjustmentLedger`) per Q1 resolution 2026-05-21. The load-bearing `TestRecomputeUmbrellas_NoMutation` invariant is preserved.
+
+PR-1 invariant: **opt-in observability only — no production consumer reads the ledger or overlays yet** (matches Phase 0 plug-field discipline). The existing dual-write mutations (`data.TotalAssets -= X`, `data.TotalDebt += Y`, etc.) remain unchanged; downstream DCF / WACC / Graham / EV-bridge outputs are bit-for-bit unchanged. `TestDDM_LegacyPath_BitForBit` stays GREEN. Subsequent PRs (2 → 3 → 4) migrate one adjuster category at a time atop this skeleton.
+
+Plan: `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md` (4-PR strategy with Q1 SHIP / Q3 INCLUDE / Q4 ACCEPT resolutions baked in).
 
 ---
 
