@@ -594,10 +594,11 @@ BACKEND executes tasks top-to-bottom. Each task is 1-4 hrs of focused work with 
 - **Acceptance signal:** Ledger entries from A-rules are sourced from `AdjusterOutput`, not the shim. Same count, same content.
 
 **PR-2 acceptance criteria:**
-- All Task 2.1-2.6 acceptance signals green
+- All Task 2.1-2.7 acceptance signals green (2.7 added per Q3 resolution; produces tracker, not code)
 - `TestDDM_LegacyPath_BitForBit` GREEN
 - AAPL/MSFT replay shows zero numeric drift; `10-clean-output.json` carries A-rule entries in `adjustment_ledger`
 - `internal/integration/testdata/recompute-shadow/<TICKER>.json` snapshots UNCHANGED (dual-write preserves divergence pattern). REVIEWER confirms snapshot diffs are EMPTY in this PR.
+- **SchemaVersion bump (per QA risk-surface 2026-05-22):** `CurrentSchemaVersions["FinancialData"]` MUST be incremented from 7 to 8 in the same PR that flips dual-write ON for any adjuster category. Atomic with the first populating commit. Artifact baselines at `artifacts/tier2-baseline/*/` MUST be refreshed in the same PR so that replay-tool output cleanly separates "structural schema drift" from "valuation math regression" — otherwise the replay diff becomes useless as a regression detector. The bump fires ONCE total (whichever of PR-2/3/4 lands first); PR-3 and PR-4 inherit `SchemaVersion=8`.
 
 ### PR-3 — Earnings adjusters migrated (~1 agent shift, ~9 commits — one per C-rule)
 

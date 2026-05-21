@@ -539,7 +539,9 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 //     OverlaySpec.Operation explicitly instead of using DeltaAmount.
 //   - Each rule.ID that did NOT appear as an Adjustment.RuleID in result →
 //     LedgerEntry{Fired:false, AdjusterID:rule.ID, RuleID:rule.ID,
-//     Reasoning:"shim: rule considered but did not fire", Timestamp:now}.
+//     Reasoning:"shim: skipped rule", SkipReason:"shim: per-rule skip
+//     metadata not surfaced in PR-1 …", Timestamp:now}. Reasoning is a
+//     short greppable summary; SkipReason carries the dual-write context.
 //     The shim has no access to the per-rule skip reason (it's discarded
 //     inside Process*Adjustments) so a generic SkipReason is recorded. Native
 //     adjusters in PR-2/3/4 emit the real SkipReason from each Process* helper.
@@ -553,6 +555,7 @@ func (s *service) shimLedgerEntriesFromLegacy(rules []*entities.CleaningRule, ap
 
 	// Pass 1: emit one Fired:true entry per applied adjustment, in the order
 	// the adjuster returned them.
+	// TODO(PR-4): liability-overlay adjusters (B1/B2/B3) emit OverlaySpec{Operation:"add"} natively; their shim DeltaAmount sign is opposite the actual TotalDebt change (documented dual-write artifact — see godoc + plan §7 Task 1.4).
 	for _, adj := range applied {
 		entries = append(entries, entities.LedgerEntry{
 			Timestamp:   adj.Timestamp,
@@ -578,13 +581,18 @@ func (s *service) shimLedgerEntriesFromLegacy(rules []*entities.CleaningRule, ap
 		if _, fired := firedRuleIDs[rule.ID]; fired {
 			continue
 		}
+		// Reasoning is a short, greppable summary; SkipReason carries the
+		// specific dual-write context. Both remain non-empty (the
+		// TestLedgerEntry_FiredFalse_NoMonetaryDeltas contract requires
+		// SkipReason non-empty; the LedgerEntry godoc keeps Reasoning
+		// non-empty for fired AND skipped entries for symmetry).
 		entries = append(entries, entities.LedgerEntry{
 			Timestamp:  now,
 			AdjusterID: rule.ID,
 			RuleID:     rule.ID,
 			Fired:      false,
-			Reasoning:  "shim: rule considered but did not fire",
-			SkipReason: "shim: rule considered but did not fire; per-rule skip metadata not surfaced in PR-1 (PR-2/3/4 native adjusters carry SkipReason)",
+			Reasoning:  "shim: skipped rule",
+			SkipReason: "shim: per-rule skip metadata not surfaced in PR-1 (PR-2/3/4 native adjusters carry SkipReason)",
 		})
 	}
 
