@@ -15,11 +15,17 @@ import (
 
 // EstimatorConfig holds configurable parameters for growth estimation.
 type EstimatorConfig struct {
-	MaxGrowthRate       float64 // Upper bound for any single-year growth rate
-	MinGrowthRate       float64 // Lower bound for any single-year growth rate
-	FadeTargetRate      float64 // Rate to fade toward in Stage 2 (default 0.08 = 8%)
-	Stage1Years         int     // Number of years in high-growth stage (default 3)
-	Stage2Years         int     // Number of years in fade stage (default 4)
+	MaxGrowthRate  float64 // Upper bound for any single-year growth rate
+	MinGrowthRate  float64 // Lower bound for any single-year growth rate
+	FadeTargetRate float64 // Rate to fade toward in Stage 2 (default 0.08 = 8%)
+	Stage1Years    int     // Number of years in high-growth stage (default 3)
+	Stage2Years    int     // Number of years in fade stage (default 4)
+	// Stage3Years extends the fade curve from Stage 2's exit rate down toward
+	// the terminal floor over Stage3Years additional years. Default 0 keeps
+	// the legacy 7-year horizon (Stage1+Stage2) byte-identical. Tier 2 Pre-P2
+	// bumps it to 3 in callers that need a 10-year horizon (e.g.,
+	// hypergrowth_profitable archetype's DCF). Spec §6.2.
+	Stage3Years         int
 	TerminalGrowthMax   float64 // Maximum terminal growth rate (default 0.03)
 	TerminalGrowthFloor float64 // Minimum terminal growth rate (default 0.02)
 	DefaultPayoutRatio  float64 // Assumed payout ratio for ROIC sustainability (default 0.3 = 30%)
@@ -33,6 +39,7 @@ func DefaultEstimatorConfig() EstimatorConfig {
 		FadeTargetRate:      0.08,
 		Stage1Years:         3,
 		Stage2Years:         4,
+		Stage3Years:         0, // Tier 2 Pre-P2: callers opt into long-horizon by setting > 0
 		TerminalGrowthMax:   0.03,
 		TerminalGrowthFloor: 0.02,
 		DefaultPayoutRatio:  0.3,
@@ -102,7 +109,7 @@ func (e *Estimator) EstimateGrowthRates(
 	stage1Rate = pkggrowth.CapGrowthRateWithBounds(stage1Rate, e.config.MinGrowthRate, e.config.MaxGrowthRate)
 
 	// Build per-year growth rates using three-stage model
-	totalYears := e.config.Stage1Years + e.config.Stage2Years
+	totalYears := e.config.Stage1Years + e.config.Stage2Years + e.config.Stage3Years
 	rates := make([]float64, totalYears)
 
 	// Stage 1: constant high-growth rate
@@ -122,6 +129,33 @@ func (e *Estimator) EstimateGrowthRates(
 		t := float64(i+1) / float64(e.config.Stage2Years+1)
 		rates[yearIdx] = fadeStart + t*(fadeEnd-fadeStart)
 		rates[yearIdx] = pkggrowth.CapGrowthRateWithBounds(rates[yearIdx], e.config.MinGrowthRate, e.config.MaxGrowthRate)
+	}
+
+	// Stage 3 (Tier 2 Pre-P2): optional long-horizon extension. Linearly fades
+	// from Stage 2's exit value toward the terminal-growth floor over
+	// Stage3Years additional years. Default Stage3Years=0 keeps backward
+	// compatibility — when 0, totalYears stays at Stage1+Stage2 and this loop
+	// is a no-op. Required by P2's hypergrowth_profitable archetype
+	// (horizon_years=10). Spec §6.2.
+	if e.config.Stage3Years > 0 {
+		// Start at the last Stage 2 value (or stage1Rate if Stage2Years==0).
+		s3Start := fadeEnd
+		if e.config.Stage2Years > 0 {
+			s3Start = rates[e.config.Stage1Years+e.config.Stage2Years-1]
+		}
+		// Fade toward the terminal-growth floor — capped at s3Start so a
+		// degenerate config with floor > s3Start doesn't fade UP, preserving
+		// the spec invariant that projected growth never accelerates.
+		s3End := math.Min(e.config.TerminalGrowthFloor, s3Start)
+		for i := 0; i < e.config.Stage3Years; i++ {
+			yearIdx := e.config.Stage1Years + e.config.Stage2Years + i
+			if yearIdx >= totalYears {
+				break
+			}
+			t := float64(i+1) / float64(e.config.Stage3Years+1)
+			rates[yearIdx] = s3Start + t*(s3End-s3Start)
+			rates[yearIdx] = pkggrowth.CapGrowthRateWithBounds(rates[yearIdx], e.config.MinGrowthRate, e.config.MaxGrowthRate)
+		}
 	}
 
 	estimate.ProjectedGrowthRates = rates

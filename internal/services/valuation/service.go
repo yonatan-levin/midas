@@ -1041,15 +1041,53 @@ func (s *Service) performValuation(
 	// Calculate net working capital change from historical data if available
 	nwcChange := s.calculateNetWorkingCapitalChange(historicalData, latestFinancialData)
 
-	// Perform DCF calculation with multi-stage growth rates
+	// Perform DCF calculation with multi-stage growth rates.
+	//
+	// Tier 2 VAL-1 (P2): horizon and terminal method are driven by the
+	// resolved AssumptionProfile when available. When the profile registry
+	// isn't wired (test paths) or HorizonYears==0 (legacy mature_large_bank
+	// signal), we fall back to the pre-P2 behavior — horizon equals the
+	// growth-estimate slice length. This preserves bit-for-bit responses
+	// for tickers that don't yet route through the profile system.
+	// Spec §6.2.
 	projectionYears := len(growthEstimate.ProjectedGrowthRates)
 	if projectionYears == 0 {
 		projectionYears = 5 // fallback
 	}
+	terminalMethodLabel := "gordon_growth" // default; may be overridden by profile or exit-multiple wiring below
+	if resolvedProfile != nil && resolvedProfile.HorizonYears > 0 {
+		profileHorizon := resolvedProfile.HorizonYears
+		// Guardrail: cap horizon by the number of growth rates we actually
+		// produced. The growth estimator's Stage3Years config controls the
+		// upper bound; if a profile requests more years than the estimator
+		// can deliver, we clamp + warn rather than feed zero-rates into the
+		// DCF. This keeps the contract "horizon ≤ len(growth_rates)" intact.
+		if profileHorizon > projectionYears {
+			s.log(ctx).Warn("Profile horizon exceeds available growth rates; clamping",
+				zap.String("ticker", historicalData.Ticker),
+				zap.String("profile_id", resolvedProfile.ProfileID),
+				zap.Int("profile_horizon", profileHorizon),
+				zap.Int("available_growth_rates", projectionYears))
+			profileHorizon = projectionYears
+		}
+		projectionYears = profileHorizon
+		if resolvedProfile.TerminalMethod != "" {
+			terminalMethodLabel = string(resolvedProfile.TerminalMethod)
+		}
+	}
+
+	// Truncate the growth-rate slice fed into the DCF to match the
+	// chosen horizon. dcf.CalculateDCF treats GrowthRates[i] as the rate
+	// for year i+1, so mismatched lengths would drift the projection.
+	growthRatesForDCF := growthEstimate.ProjectedGrowthRates
+	if len(growthRatesForDCF) > projectionYears {
+		growthRatesForDCF = growthRatesForDCF[:projectionYears]
+	}
+
 	dcfInputs := dcf.Inputs{
 		BaseOperatingIncome: baseOI,
 		GrowthRate:          growthEstimate.SummaryGrowthRate(), // backward-compatible summary
-		GrowthRates:         growthEstimate.ProjectedGrowthRates,
+		GrowthRates:         growthRatesForDCF,
 		TerminalGrowthRate:  terminalGrowthRate,
 		WACC:                waccResult.WACC,
 		ProjectionYears:     projectionYears,
@@ -1233,13 +1271,47 @@ func (s *Service) performValuation(
 
 	// Tier 2 P0b: stamp the resolved profile + audit trace on the DCF path
 	// result. Empty / nil when profileRegistry isn't wired (test paths),
-	// preserving the omitempty drop on the JSON wire. P2 fills the DCF
-	// diagnostic fields (DCFHorizonYears, DCFTerminalMethod, ...); P0b just
-	// declares them on the schema.
+	// preserving the omitempty drop on the JSON wire.
 	if resolvedProfile != nil {
 		result.AssumptionProfile = resolvedProfile.ProfileID
 		traceCopy := resolutionTrace
 		result.ResolutionTrace = &traceCopy
+	}
+
+	// Tier 2 P2 (VAL-1): stamp the 5 DCF diagnostic fields so the response
+	// exposes the explicit-period vs. terminal-value composition and the
+	// horizon/terminal choices the engine made. All five fields are
+	// omitempty on the JSON wire so legacy callers see no breaking change.
+	//
+	// DCFPerYearPV: per-year PresentValue from dcfResult.Projections. The
+	// slice length always equals DCFHorizonYears by construction (see the
+	// truncation above). This is the field that the replay walker
+	// (compare.go) extends to cover — T2-P0b-1.
+	perYearPV := make([]float64, len(dcfResult.Projections))
+	for i, p := range dcfResult.Projections {
+		perYearPV[i] = p.PresentValue
+	}
+	result.DCFHorizonYears = projectionYears
+	result.DCFTerminalMethod = terminalMethodLabel
+	if dcfResult.EnterpriseValue > 0 {
+		// Guard against div-by-zero on pathological inputs (degenerate WACC
+		// or negative EV). The field is omitempty so a 0 disappears from
+		// the response automatically.
+		result.DCFTerminalPctOfEV = dcfResult.TerminalValue / dcfResult.EnterpriseValue
+	}
+	result.DCFPerYearPV = perYearPV
+	result.DCFTerminalGrowthUsed = terminalGrowthRate
+
+	// Tier 2 P2: terminal-dominance sanity warning. When the discounted
+	// terminal value exceeds 80% of total EV, the model is implicitly
+	// extrapolating cash flows far beyond the explicit forecast window —
+	// a sign the horizon is too short or terminal growth too generous.
+	// Operators should treat this as a yellow flag, not a hard error.
+	// Spec §6.2.
+	if result.DCFTerminalPctOfEV > 0.80 {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("terminal_dominance: terminal_pv is %.1f%% of enterprise_value (>80%% threshold; consider longer horizon or lower terminal growth)",
+				result.DCFTerminalPctOfEV*100))
 	}
 
 	if usingNOPATFallback {
