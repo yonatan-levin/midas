@@ -1,6 +1,7 @@
 package adjustments
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -16,6 +17,53 @@ type AssetAdjuster struct {
 // NewAssetAdjuster creates a new asset adjuster instance
 func NewAssetAdjuster() *AssetAdjuster {
 	return &AssetAdjuster{}
+}
+
+// AdjusterID constants identify each Category A adjuster on LedgerEntry /
+// OverlaySpec records. They MUST be stable across builds — Phase 3's view
+// reconstruction joins on these IDs. Keep the trailing "_<descriptor>"
+// suffixes in sync with the legacy rule.ID values where possible so log
+// greps continue to work across the migration.
+const (
+	adjusterIDA1GoodwillExclusion = "A1_goodwill_exclusion"
+)
+
+// a1GoodwillAdjuster is the per-rule adapter that lets AssetAdjuster — which
+// hosts multiple Category A rules — satisfy the single-Apply Adjuster
+// interface. Each A-rule gets its own adapter struct in Phase 2; once every
+// A-rule has migrated (Task 2.6), service.go::applyActiveAdjustments will
+// dispatch through the adapters and the shim's asset branch will be deleted.
+//
+// Phase 2 Task 2.1 keeps the adapter package-private and reuses the existing
+// AssetAdjuster instance — no extra construction state. The compile-time
+// assertion below pins the interface contract so a future signature drift
+// fails to build instead of silently breaking the orchestrator.
+type a1GoodwillAdjuster struct {
+	aa *AssetAdjuster
+}
+
+// NewA1GoodwillAdjuster returns an Adjuster-shaped wrapper around
+// AssetAdjuster's A1 rule. Exported so the cleaner orchestrator can hold the
+// instance alongside the legacy AssetAdjuster.
+func NewA1GoodwillAdjuster(aa *AssetAdjuster) Adjuster {
+	return &a1GoodwillAdjuster{aa: aa}
+}
+
+// Compile-time assertion: a1GoodwillAdjuster MUST implement Adjuster.
+// If either signature drifts, the package fails to build.
+var _ Adjuster = (*a1GoodwillAdjuster)(nil)
+
+// Name implements Adjuster.
+func (a *a1GoodwillAdjuster) Name() string {
+	return adjusterIDA1GoodwillExclusion
+}
+
+// Apply implements Adjuster by delegating to AssetAdjuster.ApplyA1Goodwill.
+// The dual-write contract (in-place mutation of data.Goodwill /
+// data.TotalAssets) is preserved by the dispatcher in ProcessAssetAdjustments
+// — NOT by Apply itself. See ApplyA1Goodwill godoc for the role split.
+func (a *a1GoodwillAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return a.aa.ApplyA1Goodwill(ctx, working, rule, cleaningCtx)
 }
 
 // AdjustmentResult represents the result of applying an asset adjustment
@@ -34,7 +82,132 @@ type TangibleAssetsResult struct {
 	AuditTrail             string                `json:"audit_trail"`
 }
 
+// ApplyA1Goodwill is the Adjuster-shaped (DC-1 Phase 2) implementation of
+// the A1 goodwill-exclusion rule. It produces an AdjusterOutput describing
+// what the rule would do — LedgerEntries (audit trail), Overlays (declarative
+// "subtract goodwill from TotalAssets" record), and Flags (significance
+// triggers) — but does NOT mutate `working`. The dual-write mutation
+// (working.Goodwill = 0, working.TotalAssets -= originalGoodwill) is
+// performed by ProcessAssetAdjustments' dispatcher so the legacy
+// *AdjustmentResult callers stay byte-identical.
+//
+// Role classification (plan §3.5): A1 is an OverlayEmitter. The fired
+// LedgerEntry intentionally carries NO Component / DeltaAmount / EquityOffset
+// — the declarative amount lives on OverlaySpec, the LedgerEntry exists for
+// ordering / audit / "did A1 fire?" diagnostics. Phase 3's InvestedCapital()
+// view will read the OverlaySpec to exclude goodwill; Phase 4 will delete
+// the dispatcher-side mutation once that consumer is wired.
+//
+// Skipped paths emit Fired=false LedgerEntries with SkipReason (and
+// SkipMetrics for the threshold-failed case) so observability can answer
+// "why didn't A1 fire on this ticker?" without code reading.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.2 / §3.3 / §3.5 / §7 Task 2.1
+func (aa *AssetAdjuster) ApplyA1Goodwill(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	// ctx + cleaningCtx are accepted for interface symmetry with future
+	// industry-aware adjusters; A1 itself uses neither today.
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path 1: no goodwill present. Emit a Fired:false LedgerEntry so
+	// "A1 was considered" is observable.
+	if working.Goodwill <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDA1GoodwillExclusion,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No goodwill present to adjust",
+				SkipReason: "No goodwill present to adjust",
+			}},
+		}, nil
+	}
+
+	goodwillRatio := working.Goodwill / working.TotalAssets
+
+	// Skip path 2: goodwill below the 5% materiality threshold. Carry the
+	// ratio + threshold as SkipMetrics so downstream dashboards can chart
+	// "how close was A1 to firing on this ticker?".
+	threshold := 0.05
+	if goodwillRatio <= threshold {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:   now,
+				AdjusterID:  adjusterIDA1GoodwillExclusion,
+				RuleID:      rule.ID,
+				Fired:       false,
+				Reasoning:   "goodwill ratio below 5% threshold",
+				SkipReason:  fmt.Sprintf("Goodwill ratio %.1f%% below threshold %.1f%%", goodwillRatio*100, threshold*100),
+				SkipMetrics: map[string]float64{"goodwill_ratio": goodwillRatio, "threshold": threshold},
+			}},
+		}, nil
+	}
+
+	// Fired path: emit the declarative OverlaySpec + a Fired:true LedgerEntry
+	// + (when ratio >= 10%) a significance Flag. The OverlaySpec carries the
+	// amount; the LedgerEntry deliberately leaves Component / DeltaAmount /
+	// EquityOffset unset because A1's role is OverlayEmitter (plan §3.5).
+	originalGoodwill := working.Goodwill
+
+	overlay := entities.OverlaySpec{
+		OverlayID:       adjusterIDA1GoodwillExclusion,
+		RuleID:          rule.ID,
+		Field:           "TotalAssets",
+		Operation:       "subtract",
+		Amount:          originalGoodwill,
+		AmountSemantics: entities.AmountIncremental,
+		Reasoning:       fmt.Sprintf("goodwill_exclusion: Excluded %.0f goodwill (%.1f%% of assets) per A1 rule", originalGoodwill, goodwillRatio*100),
+	}
+
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:  now,
+			AdjusterID: adjusterIDA1GoodwillExclusion,
+			RuleID:     rule.ID,
+			Fired:      true,
+			Reasoning:  "A1 goodwill exclusion overlay emitted",
+		}},
+		Overlays: []entities.OverlaySpec{overlay},
+	}
+
+	// Significance flag — preserve the legacy ProcessGoodwillAdjustment
+	// behavior: only flag when goodwill is >= 10% of assets. Severity is
+	// derived from the existing ratio-bucket helper so the flag taxonomy
+	// stays identical across the migration.
+	if goodwillRatio >= 0.10 {
+		out.Flags = append(out.Flags, entities.Flag{
+			ID:             fmt.Sprintf("goodwill-flag-%d", now.UnixNano()),
+			RuleID:         rule.ID,
+			Type:           "goodwill_exclusion",
+			Severity:       aa.getSeverityForGoodwillRatio(goodwillRatio),
+			Amount:         originalGoodwill,
+			Percentage:     goodwillRatio * 100,
+			Description:    fmt.Sprintf("Excluded significant goodwill (%.1f%% of assets)", goodwillRatio*100),
+			Recommendation: "Monitor for potential acquisition integration issues and impairment risks",
+			Timestamp:      now,
+		})
+	}
+
+	return out, nil
+}
+
 // ProcessGoodwillAdjustment implements A1 rule: Goodwill exclusion from invested capital
+//
+// DEPRECATED for direct invocation by the orchestrator (DC-1 Phase 2 PR-2 Task
+// 2.1) — ProcessAssetAdjustments now routes goodwill_exclusion through
+// ApplyA1Goodwill and performs the dual-write mutation centrally so the
+// AdjusterOutput's LedgerEntries / Overlays / Flags reach the cleaner
+// orchestrator alongside the legacy *AdjustmentResult. This method remains
+// for backward compatibility with the existing
+// TestAssetAdjuster_ProcessGoodwillAdjustment test cases and any external
+// caller that still expects the legacy *AdjustmentResult shape.
+//
+// Tasks 2.2-2.5 follow the same migration pattern for A2 / A4 / A5 / flag-
+// only reviews; Task 2.6 deletes the shim's asset branch in service.go.
 func (aa *AssetAdjuster) ProcessGoodwillAdjustment(data *entities.FinancialData, rule *entities.CleaningRule) *AdjustmentResult {
 	if data.Goodwill <= 0 {
 		return &AdjustmentResult{
@@ -351,11 +524,36 @@ func (aa *AssetAdjuster) ProcessDeferredTaxAdjustment(data *entities.FinancialDa
 
 // ProcessAssetAdjustments orchestrates all Category A asset adjustments
 // This replaces the passive CalculateNetTangibleAssets approach
-func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, rules []*entities.CleaningRule, context *entities.CleaningContext) *AssetAdjustmentResult {
+//
+// DC-1 Phase 2 PR-2 Task 2.1 (incremental Adjuster-interface migration):
+// rules whose AdjusterID appears in result.NativelyEmittedRuleIDs have
+// produced LedgerEntries / Overlays / Flags via their Adjuster.Apply path.
+// The cleaner orchestrator (service.go::applyActiveAdjustments) reads those
+// fields and appends them to data.AdjustmentLedger / data.Overlays
+// directly, then instructs the shim to SKIP those rules so the same rule
+// is not double-counted. Tasks 2.2-2.5 add more rules to the
+// NativelyEmittedRuleIDs set; Task 2.6 deletes the shim's asset branch
+// entirely.
+func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *AssetAdjustmentResult {
 	var allAdjustments []entities.Adjustment
 	var allFlags []entities.Flag
 	var totalAdjustment float64
 	originalTangibleAssets := data.TangibleAssets
+
+	// Phase 2 PR-2 native emissions — collected here in rule-iteration
+	// order so the orchestrator can append them to data.AdjustmentLedger in
+	// position. The set NativelyEmittedRuleIDs tells the shim which legacy
+	// emissions to skip to avoid double counting.
+	var nativeLedger []entities.LedgerEntry
+	var nativeOverlays []entities.OverlaySpec
+	nativelyEmittedRuleIDs := make(map[string]bool, len(rules))
+
+	// Apply.ctx is nil here because ProcessAssetAdjustments does not yet
+	// thread ctx through its public signature. ApplyA1Goodwill treats nil
+	// ctx as safe (it only uses ctx for future industry-aware logic).
+	// TODO(PR-2 follow-up / PR-3): thread context.Context through
+	// ProcessAssetAdjustments to align with the Adjuster.Apply signature.
+	var applyCtx context.Context
 
 	// Process each Category A rule
 	for _, rule := range rules {
@@ -367,17 +565,55 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, r
 
 		switch rule.ID {
 		case "goodwill_exclusion":
-			result = aa.ProcessGoodwillAdjustment(data, rule)
+			// DC-1 Phase 2 PR-2 Task 2.1: route A1 through the new
+			// Adjuster-shaped ApplyA1Goodwill. ApplyA1Goodwill does NOT
+			// mutate data — we perform the dual-write mutation here so
+			// the legacy *AdjustmentResult callers stay byte-identical
+			// AND the AdjusterOutput's LedgerEntries / Overlays / Flags
+			// reach the cleaner orchestrator.
+			out, err := aa.ApplyA1Goodwill(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				// Adjuster.Apply errors are not yet a defined surface in
+				// Phase 2; today's ApplyA1Goodwill never returns one.
+				// Falling back to the legacy path on hypothetical future
+				// errors preserves the dual-write contract.
+				result = aa.ProcessGoodwillAdjustment(data, rule)
+				break
+			}
+
+			// Translate the AdjusterOutput into the legacy *AdjustmentResult
+			// shape so the existing tangible-asset recompute + audit-trail
+			// accounting keeps working, AND perform the dual-write
+			// mutation that ApplyA1Goodwill intentionally omitted.
+			result = a1AdjusterOutputToLegacyResult(out, rule)
+			if result.Applied {
+				// Dual-write: today's downstream consumers still read
+				// data.Goodwill / data.TotalAssets in place. Phase 4
+				// deletes these mutations once Phase 3's
+				// CleanedFinancialData views replace direct reads.
+				originalGoodwill := data.Goodwill
+				data.Goodwill = 0.0
+				data.TotalAssets -= originalGoodwill
+			}
+
+			// Record native emissions for the orchestrator. Even when the
+			// rule does not "fire" in the legacy sense (Applied=false),
+			// the AdjusterOutput carries a Fired:false LedgerEntry that
+			// is still load-bearing for "why didn't A1 fire?" observability.
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
+
 		case "intangible_adjustment":
 			result = aa.ProcessIntangibleAdjustment(data, rule)
 		case "obsolete_inventory":
-			result = aa.ProcessInventoryAdjustment(data, rule, context)
+			result = aa.ProcessInventoryAdjustment(data, rule, cleaningCtx)
 		case "deferred_tax_assets":
 			result = aa.ProcessDeferredTaxAdjustment(data, rule)
 		case "rd_capitalization_review":
-			result = aa.ProcessRDCapitalizationReview(data, rule, context)
+			result = aa.ProcessRDCapitalizationReview(data, rule, cleaningCtx)
 		case "capitalized_software":
-			result = aa.ProcessCapitalizedSoftwareReview(data, rule, context)
+			result = aa.ProcessCapitalizedSoftwareReview(data, rule, cleaningCtx)
 		default:
 			continue // Skip unknown rules
 		}
@@ -405,6 +641,65 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, r
 		Adjustments:            allAdjustments,
 		Flags:                  allFlags,
 		AuditTrail:             auditTrail,
+		NativeLedgerEntries:    nativeLedger,
+		NativeOverlays:         nativeOverlays,
+		NativelyEmittedRuleIDs: nativelyEmittedRuleIDs,
+	}
+}
+
+// a1AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
+// the legacy *AdjustmentResult expected by ProcessAssetAdjustments' existing
+// tangible-asset recompute + audit-trail accounting. Lives in assets.go (not
+// adjuster.go) because the translation is A1-specific — the legacy
+// Adjustment record carries the OverlaySpec's Amount and the
+// "goodwill_exclusion: …" Reasoning string, both of which are A1-flavored.
+// Tasks 2.2-2.5 introduce per-rule translators of the same shape.
+func a1AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule) *AdjustmentResult {
+	// Locate the firing OverlaySpec — A1 emits exactly one when fired and
+	// zero when skipped (skip paths produce a Fired:false LedgerEntry only).
+	for _, overlay := range out.Overlays {
+		if overlay.OverlayID != adjusterIDA1GoodwillExclusion {
+			continue
+		}
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("goodwill-adj-%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.AssetQuality,
+			Type:        entities.Exclude,
+			Amount:      overlay.Amount,
+			FromAccount: "Goodwill",
+			ToAccount:   "", // Excluded completely
+			Reasoning:   overlay.Reasoning,
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      overlay.Amount,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   fmt.Sprintf("goodwill_exclusion: Excluded %.0f goodwill from asset base", overlay.Amount),
+		}
+	}
+
+	// Skipped path — surface the reasoning from the Fired:false LedgerEntry
+	// for parity with the legacy "no adjustment" branches.
+	reasoning := "No goodwill present to adjust"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDA1GoodwillExclusion {
+			reasoning = entry.SkipReason
+			if reasoning == "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
 	}
 }
 
@@ -508,14 +803,33 @@ func (aa *AssetAdjuster) ProcessCapitalizedSoftwareReview(data *entities.Financi
 	}
 }
 
-// AssetAdjustmentResult represents the result of applying asset adjustments
+// AssetAdjustmentResult represents the result of applying asset adjustments.
+//
+// DC-1 Phase 2 PR-2 Task 2.1 added the three Native* fields below to carry
+// AdjusterOutput state from rules that have migrated to the Adjuster
+// interface (today: A1 goodwill_exclusion only). The cleaner orchestrator
+// reads NativeLedgerEntries / NativeOverlays / NativelyEmittedRuleIDs to:
+//   - append the native LedgerEntries to data.AdjustmentLedger BEFORE the
+//     PR-1 shim runs, preserving asset-category ordering;
+//   - append the native Overlays to data.Overlays;
+//   - instruct the shim to SKIP any rule whose ID appears in
+//     NativelyEmittedRuleIDs so the same rule is not double-counted.
+//
+// Tasks 2.2-2.5 widen NativelyEmittedRuleIDs as more A-rules migrate; Task
+// 2.6 deletes the shim asset branch entirely. The Native* fields are not
+// serialized (json:"-") because they live on entity types whose JSON tags
+// already pin a public contract — exposing them under AssetAdjustmentResult
+// would create a second source of truth.
 type AssetAdjustmentResult struct {
-	Applied                bool                  `json:"applied"`
-	TotalAssetAdjustment   float64               `json:"total_asset_adjustment"`
-	AdjustedTangibleAssets float64               `json:"adjusted_tangible_assets"`
-	Adjustments            []entities.Adjustment `json:"adjustments"`
-	Flags                  []entities.Flag       `json:"flags"`
-	AuditTrail             string                `json:"audit_trail"`
+	Applied                bool                   `json:"applied"`
+	TotalAssetAdjustment   float64                `json:"total_asset_adjustment"`
+	AdjustedTangibleAssets float64                `json:"adjusted_tangible_assets"`
+	Adjustments            []entities.Adjustment  `json:"adjustments"`
+	Flags                  []entities.Flag        `json:"flags"`
+	AuditTrail             string                 `json:"audit_trail"`
+	NativeLedgerEntries    []entities.LedgerEntry `json:"-"`
+	NativeOverlays         []entities.OverlaySpec `json:"-"`
+	NativelyEmittedRuleIDs map[string]bool        `json:"-"`
 }
 
 // recalculateTangibleAssets recalculates tangible assets after adjustments

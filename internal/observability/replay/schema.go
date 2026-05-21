@@ -31,7 +31,15 @@ import (
 // If a future producer stamps a new entity, append it here in the same
 // commit.
 var CurrentSchemaVersions = map[string]int{
-	"FinancialData":     7,
+	// DC-1 Phase 2 PR-2 Task 2.1 bumped FinancialData 7 → 8 atomically with
+	// the first PR that POPULATES AdjustmentLedger / Overlays from a native
+	// adjuster (A1 goodwill_exclusion). Per feedback_schema_version_atomic_bump
+	// (MEMORY): the bump lands in the FIRST populating PR, not the introducing
+	// PR — PR-1 introduced the omitempty fields without populating them, so
+	// PR-2 is where replay-drift signaling becomes diagnostic. Re-capturing
+	// tier2-baseline bundles after this bump is deferred to a follow-up commit
+	// that has live API access.
+	"FinancialData":     8,
 	"GrowthEstimate":    1,
 	"ValuationResult":   2,
 	"FairValueResponse": 1,

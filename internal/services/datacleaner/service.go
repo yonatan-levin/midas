@@ -295,7 +295,11 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	if b := artifact.From(ctx); b != nil {
 		b.Snapshot(ctx, "clean.normalized", "10-clean-output.json", result.CleanedData)
 		b.Snapshot(ctx, "clean.normalized", "10-clean-trace.json", result)
-		b.AddSchemaVersion("FinancialData", 7)
+		// DC-1 Phase 2 PR-2 Task 2.1: FinancialData schema bumped 7 → 8 in the
+		// first PR that POPULATES AdjustmentLedger / Overlays from a native
+		// adjuster (A1 goodwill_exclusion). Replay drift output stays
+		// diagnostic until tier2-baseline bundles are refreshed.
+		b.AddSchemaVersion("FinancialData", 8)
 
 		// Phase 2.B — auto-on-quality-flag trigger. Count flags at or above
 		// the bundle's configured severity threshold and report the count
@@ -477,9 +481,24 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			allFlags = append(allFlags, assetResult.Flags...)
 			totalRulesApplied += len(assetRules)
 		}
-		// Shim branch (assets) — delete in PR-2 when A-rules go native.
+
+		// DC-1 Phase 2 PR-2 Task 2.1: drain native Adjuster output first so
+		// migrated rules' LedgerEntries / Overlays land in rule-iteration
+		// order BEFORE the shim emits anything. The shim is then told to
+		// skip rules whose IDs appear in NativelyEmittedRuleIDs so a single
+		// rule never appears twice in the ledger.
+		if len(assetResult.NativeLedgerEntries) > 0 {
+			data.AdjustmentLedger = append(data.AdjustmentLedger, assetResult.NativeLedgerEntries...)
+		}
+		if len(assetResult.NativeOverlays) > 0 {
+			data.Overlays = append(data.Overlays, assetResult.NativeOverlays...)
+		}
+
+		// Shim branch (assets) — delete in Task 2.6 once every A-rule has
+		// migrated. While the migration is in progress the shim emits
+		// entries ONLY for rules that have not yet gone native.
 		data.AdjustmentLedger = append(data.AdjustmentLedger,
-			s.shimLedgerEntriesFromLegacy(assetRules, assetResult.Adjustments)...)
+			s.shimLedgerEntriesFromLegacyExcluding(assetRules, assetResult.Adjustments, assetResult.NativelyEmittedRuleIDs)...)
 	}
 
 	// Apply Category B (Liability Completeness) adjustments
@@ -546,6 +565,25 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 //     inside Process*Adjustments) so a generic SkipReason is recorded. Native
 //     adjusters in PR-2/3/4 emit the real SkipReason from each Process* helper.
 func (s *service) shimLedgerEntriesFromLegacy(rules []*entities.CleaningRule, applied []entities.Adjustment) []entities.LedgerEntry {
+	return s.shimLedgerEntriesFromLegacyExcluding(rules, applied, nil)
+}
+
+// shimLedgerEntriesFromLegacyExcluding is the DC-1 Phase 2 PR-2 Task 2.1
+// variant of the shim that respects an exclusion set: rule IDs in
+// nativelyEmittedRuleIDs are SKIPPED from both Pass 1 (fired) and Pass 2
+// (skipped) shim emission so the cleaner orchestrator can drain the rule's
+// native AdjusterOutput first without producing a duplicate shim entry.
+//
+// During Task 2.1 only goodwill_exclusion populates nativelyEmittedRuleIDs;
+// Tasks 2.2-2.5 widen the set as more A-rules migrate; Task 2.6 deletes the
+// asset call site entirely and reverts to shimLedgerEntriesFromLegacy for
+// the remaining liability + earnings branches. When the LAST category
+// migrates, the shim — and both helpers — are removed.
+//
+// A nil exclusion set is treated as the empty set, so the helper's
+// behavior is bit-for-bit identical to shimLedgerEntriesFromLegacy for the
+// liability + earnings call sites.
+func (s *service) shimLedgerEntriesFromLegacyExcluding(rules []*entities.CleaningRule, applied []entities.Adjustment, nativelyEmittedRuleIDs map[string]bool) []entities.LedgerEntry {
 	if len(rules) == 0 {
 		return nil
 	}
@@ -554,9 +592,15 @@ func (s *service) shimLedgerEntriesFromLegacy(rules []*entities.CleaningRule, ap
 	firedRuleIDs := make(map[string]struct{}, len(applied))
 
 	// Pass 1: emit one Fired:true entry per applied adjustment, in the order
-	// the adjuster returned them.
+	// the adjuster returned them. Skip any rule whose native Adjuster.Apply
+	// path already produced a LedgerEntry — see godoc.
 	// TODO(PR-4): liability-overlay adjusters (B1/B2/B3) emit OverlaySpec{Operation:"add"} natively; their shim DeltaAmount sign is opposite the actual TotalDebt change (documented dual-write artifact — see godoc + plan §7 Task 1.4).
 	for _, adj := range applied {
+		if nativelyEmittedRuleIDs[adj.RuleID] {
+			// Native emission already covered this rule; do not double-count.
+			firedRuleIDs[adj.RuleID] = struct{}{}
+			continue
+		}
 		entries = append(entries, entities.LedgerEntry{
 			Timestamp:   adj.Timestamp,
 			AdjusterID:  adj.RuleID,
@@ -569,16 +613,21 @@ func (s *service) shimLedgerEntriesFromLegacy(rules []*entities.CleaningRule, ap
 		firedRuleIDs[adj.RuleID] = struct{}{}
 	}
 
-	// Pass 2: for any rule that did NOT fire, emit a Fired:false entry so
-	// downstream observability can answer "why didn't this rule fire on this
-	// ticker?" without code reading. Iterates rules in input order so skip
-	// entries are deterministic.
+	// Pass 2: for any rule that did NOT fire (and was not natively emitted),
+	// emit a Fired:false entry so downstream observability can answer "why
+	// didn't this rule fire on this ticker?" without code reading. Iterates
+	// rules in input order so skip entries are deterministic.
 	now := time.Now()
 	for _, rule := range rules {
 		if rule == nil {
 			continue
 		}
 		if _, fired := firedRuleIDs[rule.ID]; fired {
+			continue
+		}
+		if nativelyEmittedRuleIDs[rule.ID] {
+			// Native skip path already produced a Fired:false LedgerEntry
+			// with rule-specific SkipReason + SkipMetrics.
 			continue
 		}
 		// Reasoning is a short, greppable summary; SkipReason carries the
