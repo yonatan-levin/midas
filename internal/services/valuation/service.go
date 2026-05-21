@@ -1257,7 +1257,7 @@ func (s *Service) performValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     "multi_stage_dcf",
-		CalculationVersion:    "4.1",
+		CalculationVersion:    "4.2",
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -1526,7 +1526,7 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     modelResult.ModelType,
-		CalculationVersion:    "4.1",
+		CalculationVersion:    "4.2",
 		Warnings:              modelResult.Warnings,
 	}
 
