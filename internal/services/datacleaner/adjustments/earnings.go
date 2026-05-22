@@ -25,6 +25,7 @@ func NewEarningsAdjuster() *EarningsAdjuster {
 // across the migration. Mirrors the assets.go convention shipped in PR-2.
 const (
 	adjusterIDC1RestructuringCharges = "C1_restructuring_charges"
+	adjusterIDC2AssetSaleGains       = "C2_asset_sale_gains"
 )
 
 // EarningsAdjustmentResult represents the result of applying Category C
@@ -271,6 +272,168 @@ func c1AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 	}
 }
 
+// c2AssetSaleGainsAdjuster is the per-rule adapter that wraps EarningsAdjuster's
+// C2 rule into the single-Apply Adjuster interface. Mirrors c1RestructuringAdjuster.
+type c2AssetSaleGainsAdjuster struct {
+	ea *EarningsAdjuster
+}
+
+// NewC2AssetSaleGainsAdjuster returns an Adjuster-shaped wrapper around
+// EarningsAdjuster's C2 rule.
+func NewC2AssetSaleGainsAdjuster(ea *EarningsAdjuster) Adjuster {
+	return &c2AssetSaleGainsAdjuster{ea: ea}
+}
+
+var _ Adjuster = (*c2AssetSaleGainsAdjuster)(nil)
+
+func (c *c2AssetSaleGainsAdjuster) Name() string {
+	return adjusterIDC2AssetSaleGains
+}
+
+// Apply delegates to EarningsAdjuster.ApplyC2AssetSaleGains. The dual-write
+// contract (in-place subtraction from data.NormalizedOperatingIncome) is
+// preserved by the dispatcher — NOT by Apply itself.
+func (c *c2AssetSaleGainsAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return c.ea.ApplyC2AssetSaleGains(ctx, working, rule, cleaningCtx)
+}
+
+// ApplyC2AssetSaleGains is the Adjuster-shaped (DC-1 Phase 2 PR-3 Task 3.2)
+// implementation of the C2 asset-sale-gains subtraction rule. Like
+// ApplyC1Restructuring, it is MUTATION-FREE — it reads `working` and returns
+// an AdjusterOutput describing the subtraction's intent (Restater-shaped
+// LedgerEntry on the NormalizedOperatingIncome component) but does NOT modify
+// `working.NormalizedOperatingIncome`. The dispatcher in
+// ProcessEarningsAdjustments performs the dual-write mutation centrally.
+//
+// Role classification (plan §3.5 / §4 row C2): Restater. The fired LedgerEntry
+// carries Component:"NormalizedOperatingIncome", DeltaAmount:-AssetSaleGains
+// (NEGATIVE — C2 subtracts non-core gains from operating income, the opposite
+// sign of C1's add-back), EquityOffset:-AssetSaleGains, TaxShieldDTA:0. No
+// OverlaySpec — gain subtraction is a direct component restate, not an
+// analytical overlay.
+//
+// Q2 resolution (plan §10): TaxShieldDTA stays 0 in Phase 2 — legacy C2 does
+// not compute tax shield.
+//
+// Skip paths: only one skip path on the legacy code — no asset-sale gains
+// present. Emits SkipReason without SkipMetrics (no ratio to chart when the
+// numerator is zero).
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row C2 / §7 Task 3.2 / §10 Q2
+func (ea *EarningsAdjuster) ApplyC2AssetSaleGains(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	// ctx + cleaningCtx accepted for interface symmetry; C2 itself uses neither.
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path: no asset-sale gains to subtract. Mirrors the legacy
+	// ProcessAssetSaleGainsAdjustment guard.
+	if working.AssetSaleGains <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDC2AssetSaleGains,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No asset sale gains to adjust",
+				SkipReason: "No asset sale gains to adjust",
+			}},
+		}, nil
+	}
+
+	gains := working.AssetSaleGains
+	// Legacy code re-derives Revenue ratio inline for the Adjustment.Percentage
+	// field on the fired branch. We replay the same formatting on the
+	// LedgerEntry Reasoning for byte-identical legacy parity.
+	var revenueRatio float64
+	if working.Revenue > 0 {
+		revenueRatio = gains / working.Revenue
+	}
+	_ = revenueRatio // captured for symmetry; the legacy reasoning string does not include the ratio.
+
+	return AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:    now,
+			AdjusterID:   adjusterIDC2AssetSaleGains,
+			RuleID:       rule.ID,
+			Fired:        true,
+			Reasoning:    fmt.Sprintf("Asset sale gains adjustment: Excluded $%.1fM from normalized operating income", gains/1000000),
+			Component:    "NormalizedOperatingIncome",
+			DeltaAmount:  -gains,
+			EquityOffset: -gains,
+			TaxShieldDTA: 0, // Q2 deferral (plan §10): C2 does not compute tax shield in Phase 2.
+		}},
+	}, nil
+}
+
+// c2AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
+// the legacy *AdjustmentResult expected by ProcessEarningsAdjustments. C2 is a
+// Restater with NEGATIVE DeltaAmount (subtraction). The legacy
+// Adjustment.Amount is a positive magnitude, so the translator flips sign.
+//
+// originalGains is captured at the dispatcher BEFORE ApplyC2AssetSaleGains
+// runs and threaded in so the legacy Adjustment.Percentage field can be
+// derived from the original revenue ratio when needed. Today's legacy code
+// formats it inline; the translator preserves the existing
+// (gains/revenue)*100 formula.
+func c2AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalGains float64, originalRevenue float64) *AdjustmentResult {
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID != adjusterIDC2AssetSaleGains || !entry.Fired {
+			continue
+		}
+		// DeltaAmount is signed-negative for C2; the legacy Adjustment.Amount
+		// is a positive magnitude.
+		gains := -entry.DeltaAmount
+		_ = originalGains // reserved for symmetry; the legacy magnitude comes from the LedgerEntry.
+		var percentage float64
+		if originalRevenue > 0 {
+			percentage = (gains / originalRevenue) * 100
+		}
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("asset_gains_%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.EarningsNormalization,
+			Type:        entities.Exclude,
+			Amount:      gains,
+			FromAccount: "AssetSaleGains",
+			ToAccount:   "NormalizedOperatingIncome",
+			Percentage:  percentage,
+			Reasoning:   fmt.Sprintf("Excluded asset sale gains of $%.1fM from operating income", gains/1000000),
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      gains,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   entry.Reasoning,
+		}
+	}
+
+	// Skipped path — surface the reasoning from the Fired:false LedgerEntry.
+	reasoning := "No asset sale gains to adjust"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDC2AssetSaleGains {
+			if entry.SkipReason != "" {
+				reasoning = entry.SkipReason
+			} else if entry.Reasoning != "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
 // ProcessEarningsAdjustments applies all Category C earnings normalization rules.
 //
 // DC-1 Phase 2 PR-3 Task 3.1 (incremental Adjuster-interface migration):
@@ -356,7 +519,28 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialD
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
 		case "asset_sale_gains":
-			result = ea.ProcessAssetSaleGainsAdjustment(data, rule)
+			// DC-1 Phase 2 PR-3 Task 3.2: route C2 through the new Adjuster-
+			// shaped ApplyC2AssetSaleGains. Mirrors the C1 wiring above —
+			// Apply is mutation-free; the dispatcher performs the dual-write
+			// (subtraction, not add-back) AFTER Apply.
+			originalGains := data.AssetSaleGains
+			originalRevenue := data.Revenue
+			out, err := ea.ApplyC2AssetSaleGains(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				result = ea.ProcessAssetSaleGainsAdjustment(data, rule)
+				break
+			}
+
+			result = c2AdjusterOutputToLegacyResult(out, rule, originalGains, originalRevenue)
+			if result.Applied {
+				// Dual-write: subtraction, NOT add-back. Legacy code:
+				// data.NormalizedOperatingIncome -= data.AssetSaleGains
+				data.NormalizedOperatingIncome -= result.Amount
+			}
+
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "litigation_settlements":
 			result = ea.ProcessLitigationSettlementsAdjustment(data, rule)
 		case "stock_compensation":
