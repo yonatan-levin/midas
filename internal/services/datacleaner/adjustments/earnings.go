@@ -28,6 +28,7 @@ const (
 	adjusterIDC2AssetSaleGains        = "C2_asset_sale_gains"
 	adjusterIDC3LitigationSettlements = "C3_litigation_settlements"
 	adjusterIDC5DerivativeGainsLosses = "C5_derivative_gains_losses"
+	adjusterIDC6CapitalizedInterest   = "C6_capitalized_interest"
 )
 
 // EarningsAdjustmentResult represents the result of applying Category C
@@ -755,6 +756,165 @@ func c5AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 	}
 }
 
+// c6CapitalizedInterestAdjuster is the per-rule adapter that wraps
+// EarningsAdjuster's C6 rule into the single-Apply Adjuster interface.
+type c6CapitalizedInterestAdjuster struct {
+	ea *EarningsAdjuster
+}
+
+// NewC6CapitalizedInterestAdjuster returns an Adjuster-shaped wrapper.
+func NewC6CapitalizedInterestAdjuster(ea *EarningsAdjuster) Adjuster {
+	return &c6CapitalizedInterestAdjuster{ea: ea}
+}
+
+var _ Adjuster = (*c6CapitalizedInterestAdjuster)(nil)
+
+func (c *c6CapitalizedInterestAdjuster) Name() string {
+	return adjusterIDC6CapitalizedInterest
+}
+
+func (c *c6CapitalizedInterestAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return c.ea.ApplyC6CapitalizedInterest(ctx, working, rule, cleaningCtx)
+}
+
+// ApplyC6CapitalizedInterest is the Adjuster-shaped (DC-1 Phase 2 PR-3
+// Task 3.6) implementation of the C6 capitalized-interest reclassification
+// rule. Like the other C-rules, it is MUTATION-FREE; the dispatcher in
+// ProcessEarningsAdjustments performs the dual-write
+// `data.InterestExpense += data.CapitalizedInterest` AFTER Apply.
+//
+// Role classification (plan §3.5 / §4 row C6): Restater, but with a
+// LOAD-BEARING SPECIAL CASE — EquityOffset = 0. Reason: C6 is a
+// reclassification BETWEEN income-statement line items (operating expense →
+// interest expense), NOT a real economic event. The dollars do not flow to
+// retained earnings; they shift between lines on the same statement.
+// Phase 3's Restated() accessor MUST NOT add C6's DeltaAmount to retained
+// earnings; the EquityOffset field is the load-bearing carrier of "does
+// this flow through equity?" — and for C6 the answer is NO.
+//
+// The fired LedgerEntry carries:
+//   - Component:"InterestExpense" (NOT NormalizedOperatingIncome — DIFFERENT
+//     field! C6 targets the interest-expense line specifically).
+//   - DeltaAmount: +CapitalizedInterest (POSITIVE — capitalized interest is
+//     added BACK to interest expense to undo the PP&E capitalization).
+//   - EquityOffset: 0 (LOAD-BEARING special case; see godoc above).
+//   - TaxShieldDTA: 0 (Q2 deferral).
+//
+// Skip path: CapitalizedInterest <= 0 — no capitalization to reclassify.
+// The legacy guard uses `<= 0` (not `== 0`) because capitalized interest
+// is non-negative by accounting convention; a negative value would
+// indicate a data-quality bug, and the legacy code treats it as "skip".
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row C6 / §7 Task 3.6 / §10 Q2
+func (ea *EarningsAdjuster) ApplyC6CapitalizedInterest(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path: no capitalized interest to reclassify. Mirrors the legacy
+	// ProcessCapitalizedInterestAdjustment guard (`<= 0`).
+	if working.CapitalizedInterest <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDC6CapitalizedInterest,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No capitalized interest to adjust",
+				SkipReason: "No capitalized interest to adjust",
+			}},
+		}, nil
+	}
+
+	capInterest := working.CapitalizedInterest
+
+	// Fired path. Legacy code:
+	//   data.InterestExpense += data.CapitalizedInterest
+	// The Restated() accessor MUST NOT add this DeltaAmount to retained
+	// earnings — EquityOffset = 0 is the load-bearing carrier of that fact.
+	return AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:    now,
+			AdjusterID:   adjusterIDC6CapitalizedInterest,
+			RuleID:       rule.ID,
+			Fired:        true,
+			Reasoning:    fmt.Sprintf("Capitalized interest adjustment: Reclassified $%.1fM from PP&E to interest expense", capInterest/1000000),
+			Component:    "InterestExpense", // DIFFERENT from NormalizedOperatingIncome — C6 targets interest expense.
+			DeltaAmount:  capInterest,       // POSITIVE — add back to interest expense.
+			EquityOffset: 0,                 // LOAD-BEARING: reclassification between IS lines, NOT an equity-flowing event.
+			TaxShieldDTA: 0,                 // Q2 deferral (plan §10).
+		}},
+	}, nil
+}
+
+// c6AdjusterOutputToLegacyResult translates the AdjusterOutput shape into the
+// legacy *AdjustmentResult expected by ProcessEarningsAdjustments. C6's
+// legacy Adjustment.Amount equals CapitalizedInterest (positive); the
+// translator reads it off DeltaAmount.
+//
+// originalCapitalizedInterest is captured at the dispatcher for symmetry
+// with C2/C3/C5 — the translator can also re-derive it from DeltaAmount
+// since the dispatcher's dual-write runs AFTER. Kept threaded for symmetry.
+//
+// originalRevenue is threaded for Adjustment.Percentage computation
+// (mirrors legacy line :1217: `(data.CapitalizedInterest / data.Revenue) * 100`).
+// We guard with `if originalRevenue > 0` matching the C3/C5 precedent.
+func c6AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalCapitalizedInterest float64, originalRevenue float64) *AdjustmentResult {
+	_ = originalCapitalizedInterest // captured for dispatcher-side symmetry; magnitude comes from the LedgerEntry.
+
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID != adjusterIDC6CapitalizedInterest || !entry.Fired {
+			continue
+		}
+		capInterest := entry.DeltaAmount // positive by construction (skip path catches <=0).
+		var percentage float64
+		if originalRevenue > 0 {
+			percentage = (capInterest / originalRevenue) * 100
+		}
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("cap_interest_%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.EarningsNormalization,
+			Type:        entities.Reclassify, // Note: Reclassify (not Exclude) — C6 is a between-line move.
+			Amount:      capInterest,
+			FromAccount: "CapitalizedInterest",
+			ToAccount:   "InterestExpense",
+			Percentage:  percentage,
+			Reasoning:   fmt.Sprintf("Reclassified capitalized interest of $%.1fM to interest expense", capInterest/1000000),
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      capInterest,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   entry.Reasoning,
+		}
+	}
+
+	reasoning := "No capitalized interest to adjust"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDC6CapitalizedInterest {
+			if entry.SkipReason != "" {
+				reasoning = entry.SkipReason
+			} else if entry.Reasoning != "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
 // ProcessEarningsAdjustments applies all Category C earnings normalization rules.
 //
 // DC-1 Phase 2 PR-3 Task 3.1 (incremental Adjuster-interface migration):
@@ -929,7 +1089,36 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialD
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
 		case "capitalized_interest":
-			result = ea.ProcessCapitalizedInterestAdjustment(data, rule)
+			// DC-1 Phase 2 PR-3 Task 3.6: route C6 through ApplyC6CapitalizedInterest.
+			// Mirrors the C1/C2/C3/C5 wiring — Apply is mutation-free; the
+			// dispatcher performs the dual-write AFTER Apply.
+			//
+			// LOAD-BEARING SPECIAL CASE: C6's LedgerEntry has EquityOffset = 0
+			// because capitalized interest is a reclassification BETWEEN
+			// income-statement lines (operating expense → interest expense),
+			// NOT an equity-flowing event. Phase 3's Restated() accessor must
+			// NOT add C6's DeltaAmount to retained earnings.
+			//
+			// Dual-write targets `data.InterestExpense` (NOT
+			// NormalizedOperatingIncome — different field!).
+			originalCapitalizedInterest := data.CapitalizedInterest
+			originalRevenue := data.Revenue
+			out, err := ea.ApplyC6CapitalizedInterest(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				result = ea.ProcessCapitalizedInterestAdjustment(data, rule)
+				break
+			}
+
+			result = c6AdjusterOutputToLegacyResult(out, rule, originalCapitalizedInterest, originalRevenue)
+			if result.Applied {
+				// Dual-write: legacy code:
+				//   data.InterestExpense += data.CapitalizedInterest
+				data.InterestExpense += result.Amount
+			}
+
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "working_capital_window_dressing":
 			result = ea.ProcessWorkingCapitalAdjustment(data, rule, cleaningCtx)
 		default:
