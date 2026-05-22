@@ -213,8 +213,17 @@ assertion confirming `Apply` does not mutate `working`. The four role flavors
 template — see `a1_goodwill_adjuster_test.go`, `a2_intangible_adjuster_test.go`,
 `a4_dta_valuation_allowance_adjuster_test.go`, `a5_inventory_writedown_adjuster_test.go`,
 and `a_flag_only_reviews_adjuster_test.go` for the canonical patterns. PR-3
-(earnings C1-C7) and PR-4 (liabilities B1/B2/B3) extend this template to the
-remaining categories.
+(earnings C1-C7) extends this template to the earnings adjusters at
+`c1_restructuring_adjuster_test.go`, `c2_asset_sale_gains_adjuster_test.go`,
+`c3_litigation_settlements_adjuster_test.go`, `c4_stock_compensation_adjuster_test.go`,
+`c5_derivative_gains_losses_adjuster_test.go`, `c6_capitalized_interest_adjuster_test.go`,
+and `c7_working_capital_adjuster_test.go`. C6's `EquityOffset=0` is pinned by
+a dedicated subtest in `c6_capitalized_interest_adjuster_test.go` with an
+explicit failure message naming "Phase 3 Restated() must NOT add C6 DeltaAmount
+to retained earnings" — this is the load-bearing carrier of the
+capitalized-interest reclassification semantics and must not regress when
+Phase 3 ships the `Restated()` accessor. PR-4 (liabilities B1/B2/B3) extends
+this template to the remaining category.
 
 **FlagEmitter test convention (DC-1 Phase 2 PR-2 Task 2.5).** Flag-only reviews
 (R&D capitalization, capitalized software) emit `Fired:false` LedgerEntries on
