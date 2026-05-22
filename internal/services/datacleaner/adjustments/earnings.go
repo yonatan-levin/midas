@@ -24,8 +24,9 @@ func NewEarningsAdjuster() *EarningsAdjuster {
 // the legacy rule.ID values where possible so log greps continue to work
 // across the migration. Mirrors the assets.go convention shipped in PR-2.
 const (
-	adjusterIDC1RestructuringCharges = "C1_restructuring_charges"
-	adjusterIDC2AssetSaleGains       = "C2_asset_sale_gains"
+	adjusterIDC1RestructuringCharges  = "C1_restructuring_charges"
+	adjusterIDC2AssetSaleGains        = "C2_asset_sale_gains"
+	adjusterIDC3LitigationSettlements = "C3_litigation_settlements"
 )
 
 // EarningsAdjustmentResult represents the result of applying Category C
@@ -434,6 +435,162 @@ func c2AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 	}
 }
 
+// c3LitigationSettlementsAdjuster is the per-rule adapter that wraps
+// EarningsAdjuster's C3 rule into the single-Apply Adjuster interface.
+type c3LitigationSettlementsAdjuster struct {
+	ea *EarningsAdjuster
+}
+
+// NewC3LitigationSettlementsAdjuster returns an Adjuster-shaped wrapper.
+func NewC3LitigationSettlementsAdjuster(ea *EarningsAdjuster) Adjuster {
+	return &c3LitigationSettlementsAdjuster{ea: ea}
+}
+
+var _ Adjuster = (*c3LitigationSettlementsAdjuster)(nil)
+
+func (c *c3LitigationSettlementsAdjuster) Name() string {
+	return adjusterIDC3LitigationSettlements
+}
+
+func (c *c3LitigationSettlementsAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return c.ea.ApplyC3Litigation(ctx, working, rule, cleaningCtx)
+}
+
+// ApplyC3Litigation is the Adjuster-shaped (DC-1 Phase 2 PR-3 Task 3.3)
+// implementation of the C3 litigation-settlements add-back rule. Mirrors
+// ApplyC1Restructuring: it is MUTATION-FREE, the dispatcher performs the
+// dual-write `data.NormalizedOperatingIncome += LitigationSettlements`
+// AFTER Apply.
+//
+// Role classification (plan §3.5 / §4 row C3): Restater. The fired LedgerEntry
+// carries Component:"NormalizedOperatingIncome",
+// DeltaAmount:+LitigationSettlements (POSITIVE — add-back, same sign as C1),
+// EquityOffset:+LitigationSettlements, TaxShieldDTA:0. No OverlaySpec.
+//
+// Skip paths: no-litigation (no SkipMetrics) + below-threshold (1% of revenue
+// default; carries SkipMetrics{litigation_ratio, threshold}).
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row C3 / §7 Task 3.3 / §10 Q2
+func (ea *EarningsAdjuster) ApplyC3Litigation(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path 1: no litigation settlements present.
+	if working.LitigationSettlements <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDC3LitigationSettlements,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No litigation settlements to adjust",
+				SkipReason: "No litigation settlements to adjust",
+			}},
+		}, nil
+	}
+
+	// C3 legacy code divides by working.Revenue without a Revenue<=0 guard.
+	// To preserve byte-identical legacy behavior, replay the same arithmetic
+	// here. (Reviewer note: a Revenue=0 ticker with positive
+	// LitigationSettlements would have produced +Inf ratio in the legacy
+	// code too — this is a pre-existing data-quality concern, not a
+	// regression introduced by the migration.)
+	settlements := working.LitigationSettlements
+	litigationRatio := settlements / working.Revenue
+	threshold := 0.01 // Default 1% materiality threshold (legacy parity).
+	if rule.Threshold != nil && rule.Threshold.PercentageOfRevenue != nil {
+		threshold = *rule.Threshold.PercentageOfRevenue
+	}
+
+	// Skip path 2: ratio below materiality threshold.
+	if litigationRatio < threshold {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:   now,
+				AdjusterID:  adjusterIDC3LitigationSettlements,
+				RuleID:      rule.ID,
+				Fired:       false,
+				Reasoning:   fmt.Sprintf("Litigation settlements below materiality threshold (%.1f%% < %.1f%%)", litigationRatio*100, threshold*100),
+				SkipReason:  fmt.Sprintf("Litigation settlements below materiality threshold (%.1f%% < %.1f%%)", litigationRatio*100, threshold*100),
+				SkipMetrics: map[string]float64{"litigation_ratio": litigationRatio, "threshold": threshold},
+			}},
+		}, nil
+	}
+
+	// Fired path: add-back. Legacy code:
+	//   data.NormalizedOperatingIncome += data.LitigationSettlements
+	return AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:    now,
+			AdjusterID:   adjusterIDC3LitigationSettlements,
+			RuleID:       rule.ID,
+			Fired:        true,
+			Reasoning:    fmt.Sprintf("Litigation settlements adjustment: Excluded $%.1fM (%.1f%% of revenue) from normalized operating income", settlements/1000000, litigationRatio*100),
+			Component:    "NormalizedOperatingIncome",
+			DeltaAmount:  settlements,
+			EquityOffset: settlements,
+			TaxShieldDTA: 0, // Q2 deferral (plan §10).
+		}},
+	}, nil
+}
+
+// c3AdjusterOutputToLegacyResult translates the AdjusterOutput shape into the
+// legacy *AdjustmentResult expected by ProcessEarningsAdjustments.
+func c3AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalRevenue float64) *AdjustmentResult {
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID != adjusterIDC3LitigationSettlements || !entry.Fired {
+			continue
+		}
+		settlements := entry.DeltaAmount
+		var percentage float64
+		if originalRevenue > 0 {
+			percentage = (settlements / originalRevenue) * 100
+		}
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("litigation_%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.EarningsNormalization,
+			Type:        entities.Exclude,
+			Amount:      settlements,
+			FromAccount: "LitigationSettlements",
+			ToAccount:   "NormalizedOperatingIncome",
+			Percentage:  percentage,
+			Reasoning:   fmt.Sprintf("Excluded litigation settlements of $%.1fM (%.1f%% of revenue)", settlements/1000000, percentage),
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      settlements,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   entry.Reasoning,
+		}
+	}
+
+	reasoning := "No litigation settlements to adjust"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDC3LitigationSettlements {
+			if entry.SkipReason != "" {
+				reasoning = entry.SkipReason
+			} else if entry.Reasoning != "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
 // ProcessEarningsAdjustments applies all Category C earnings normalization rules.
 //
 // DC-1 Phase 2 PR-3 Task 3.1 (incremental Adjuster-interface migration):
@@ -542,7 +699,25 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialD
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
 		case "litigation_settlements":
-			result = ea.ProcessLitigationSettlementsAdjustment(data, rule)
+			// DC-1 Phase 2 PR-3 Task 3.3: route C3 through ApplyC3Litigation.
+			// Mirrors C1 wiring (POSITIVE add-back).
+			originalRevenue := data.Revenue
+			out, err := ea.ApplyC3Litigation(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				result = ea.ProcessLitigationSettlementsAdjustment(data, rule)
+				break
+			}
+
+			result = c3AdjusterOutputToLegacyResult(out, rule, originalRevenue)
+			if result.Applied {
+				// Dual-write: legacy code adds LitigationSettlements to
+				// NormalizedOperatingIncome.
+				data.NormalizedOperatingIncome += result.Amount
+			}
+
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "stock_compensation":
 			result = ea.ProcessStockCompensationAdjustment(data, rule)
 		case "derivative_gains_losses":
