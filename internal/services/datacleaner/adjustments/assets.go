@@ -29,6 +29,15 @@ const (
 	adjusterIDA2IntangibleWritedown   = "A2_intangible_writedown"
 	adjusterIDA4DTAValuationAllowance = "A4_dta_valuation_allowance"
 	adjusterIDA5InventoryWritedown    = "A5_inventory_writedown"
+
+	// Flag-only review AdjusterIDs (DC-1 Phase 2 PR-2 Task 2.5). These two
+	// reviews never mutate the balance sheet — their LedgerEntries stay
+	// Fired:false at all times. The populated Flags slice on the
+	// AdjusterOutput IS the firing signal (when the review's threshold trips).
+	// Phase 3's Restated() accessor must treat Fired:false entries that carry
+	// non-empty Flags as informational only — no equity/asset mutation.
+	adjusterIDARDCapitalizationReview    = "A-RD_capitalization_review"
+	adjusterIDACapitalizedSoftwareReview = "A-capitalized_software_review"
 )
 
 // a1GoodwillAdjuster is the per-rule adapter that lets AssetAdjuster — which
@@ -191,6 +200,82 @@ func (a *a5InventoryWritedownAdjuster) Name() string {
 // ApplyA5InventoryWritedown godoc for the role split.
 func (a *a5InventoryWritedownAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
 	return a.aa.ApplyA5InventoryWritedown(ctx, working, rule, cleaningCtx)
+}
+
+// aRDCapitalizationReviewAdjuster is the Task 2.5 per-rule adapter for the
+// flag-only R&D-capitalization review. Mirrors a1-a5 adapter shape — the
+// constructor wraps an existing AssetAdjuster, Apply delegates to the new
+// mutation-free ApplyARDCapitalizationReview, and the dispatcher in
+// ProcessAssetAdjustments drains the AdjusterOutput's LedgerEntries / Flags
+// without performing any dual-write (these reviews never mutate the balance
+// sheet).
+//
+// Role classification (plan §3.5 / §7 Task 2.5): FlagEmitter. Every emitted
+// LedgerEntry has Fired:false because no balance-sheet adjustment happens —
+// the populated AdjusterOutput.Flags slice IS the review's firing signal when
+// the R&D/Revenue ratio crosses the 10% review threshold. Skip paths emit the
+// same Fired:false shape with empty Flags + a SkipReason / SkipMetrics
+// describing why the review was not actionable.
+type aRDCapitalizationReviewAdjuster struct {
+	aa *AssetAdjuster
+}
+
+// NewARDCapitalizationReviewAdjuster returns an Adjuster-shaped wrapper around
+// AssetAdjuster's R&D-capitalization review. Exported for parity with the
+// prior A1-A5 constructors so the cleaner orchestrator can hold the instance
+// alongside AssetAdjuster.
+func NewARDCapitalizationReviewAdjuster(aa *AssetAdjuster) Adjuster {
+	return &aRDCapitalizationReviewAdjuster{aa: aa}
+}
+
+// Compile-time assertion: aRDCapitalizationReviewAdjuster MUST implement
+// Adjuster. If either signature drifts the package fails to build.
+var _ Adjuster = (*aRDCapitalizationReviewAdjuster)(nil)
+
+// Name implements Adjuster.
+func (a *aRDCapitalizationReviewAdjuster) Name() string {
+	return adjusterIDARDCapitalizationReview
+}
+
+// Apply implements Adjuster by delegating to
+// AssetAdjuster.ApplyARDCapitalizationReview. No dual-write happens because
+// this review never mutates the balance sheet — see
+// ApplyARDCapitalizationReview godoc for the FlagEmitter convention.
+func (a *aRDCapitalizationReviewAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return a.aa.ApplyARDCapitalizationReview(ctx, working, rule, cleaningCtx)
+}
+
+// aCapitalizedSoftwareReviewAdjuster is the Task 2.5 per-rule adapter for the
+// flag-only capitalized-software review. Mirrors aRDCapitalizationReviewAdjuster's
+// shape — same FlagEmitter convention, same Fired:false-with-Flags firing
+// signal. The two reviews are independent because they evaluate distinct
+// underlying ratios (R&D/Revenue vs. OtherIntangibles/Revenue) against
+// different thresholds (10% vs. 1.5%).
+type aCapitalizedSoftwareReviewAdjuster struct {
+	aa *AssetAdjuster
+}
+
+// NewACapitalizedSoftwareReviewAdjuster returns an Adjuster-shaped wrapper
+// around AssetAdjuster's capitalized-software review.
+func NewACapitalizedSoftwareReviewAdjuster(aa *AssetAdjuster) Adjuster {
+	return &aCapitalizedSoftwareReviewAdjuster{aa: aa}
+}
+
+// Compile-time assertion: aCapitalizedSoftwareReviewAdjuster MUST implement
+// Adjuster. If either signature drifts the package fails to build.
+var _ Adjuster = (*aCapitalizedSoftwareReviewAdjuster)(nil)
+
+// Name implements Adjuster.
+func (a *aCapitalizedSoftwareReviewAdjuster) Name() string {
+	return adjusterIDACapitalizedSoftwareReview
+}
+
+// Apply implements Adjuster by delegating to
+// AssetAdjuster.ApplyACapitalizedSoftwareReview. No dual-write happens because
+// this review never mutates the balance sheet — see
+// ApplyACapitalizedSoftwareReview godoc for the FlagEmitter convention.
+func (a *aCapitalizedSoftwareReviewAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return a.aa.ApplyACapitalizedSoftwareReview(ctx, working, rule, cleaningCtx)
 }
 
 // AdjustmentResult represents the result of applying an asset adjustment
@@ -685,6 +770,224 @@ func (aa *AssetAdjuster) ApplyA5InventoryWritedown(ctx context.Context, working 
 		Percentage:     writedownRate * 100,
 		Description:    fmt.Sprintf("Applied inventory writedown (%.1f%% of total inventory)", writedownRate*100),
 		Recommendation: "Implement inventory liquidation procedures and improve turnover",
+		Timestamp:      now,
+	})
+
+	return out, nil
+}
+
+// ApplyARDCapitalizationReview is the Adjuster-shaped (DC-1 Phase 2 PR-2 Task
+// 2.5) implementation of the R&D-capitalization review. Like the prior A1/A2/
+// A4/A5 Apply methods, it is MUTATION-FREE. Unlike them, it NEVER mutates the
+// balance sheet on any path — the legacy ProcessRDCapitalizationReview also
+// returns Applied:false in all three branches (no R&D / below threshold /
+// review fires).
+//
+// Role classification (plan §3.5 / §7 Task 2.5): FlagEmitter. Every emitted
+// LedgerEntry carries Fired:false because no balance-sheet adjustment happens.
+// The populated AdjusterOutput.Flags slice IS the firing signal when the R&D/
+// Revenue ratio crosses the 10% review threshold. Phase 3's Restated()
+// accessor MUST treat Fired:false entries with non-empty Flags as
+// informational only — no equity/asset mutation.
+//
+// LedgerEntry shape across the three branches:
+//   - No R&D (ResearchAndDevelopment <= 0): Fired:false, SkipReason:
+//     "No R&D expenses present to review", no SkipMetrics, Flags empty.
+//   - Below review threshold (rdRatio < 0.10): Fired:false, SkipReason
+//     citing the ratio + threshold, SkipMetrics:{rd_ratio, threshold},
+//     Flags empty.
+//   - Review fires (rdRatio >= 0.10): Fired:false, SkipReason:
+//     "flag-only review; no balance-sheet adjustment",
+//     SkipMetrics:{rd_ratio, threshold, rd_amount}, Reasoning carrying the
+//     legacy "rd_capitalization_review: R&D expenses X (Y.Y% of revenue)
+//     flagged for review" string, AdjusterOutput.Flags carrying exactly one
+//     Critical-severity entities.Flag of Type "rd_capitalization_review".
+//     Component / DeltaAmount / EquityOffset / TaxShieldDTA all zero.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §7 Task 2.5
+func (aa *AssetAdjuster) ApplyARDCapitalizationReview(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	// ctx + cleaningCtx accepted for interface symmetry; this review uses neither today.
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path 1: no R&D present. Emit a Fired:false LedgerEntry so "the
+	// R&D capitalization review was considered" is observable. No SkipMetrics —
+	// there is no ratio to chart when the numerator is zero.
+	if working.ResearchAndDevelopment <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDARDCapitalizationReview,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No R&D expenses present to review",
+				SkipReason: "No R&D expenses present to review",
+			}},
+		}, nil
+	}
+
+	rdRatio := working.ResearchAndDevelopment / working.Revenue
+	threshold := 0.10 // 10% of revenue threshold (legacy parity).
+
+	// Skip path 2: ratio below the 10% review threshold. Carry the ratio +
+	// threshold as SkipMetrics so downstream dashboards can chart "how close
+	// was this ticker to triggering the review?".
+	if rdRatio < threshold {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:   now,
+				AdjusterID:  adjusterIDARDCapitalizationReview,
+				RuleID:      rule.ID,
+				Fired:       false,
+				Reasoning:   "R&D ratio below review threshold",
+				SkipReason:  fmt.Sprintf("R&D ratio %.1f%% below review threshold %.1f%%", rdRatio*100, threshold*100),
+				SkipMetrics: map[string]float64{"rd_ratio": rdRatio, "threshold": threshold},
+			}},
+		}, nil
+	}
+
+	// Review fires: still Fired:false because no balance-sheet adjustment
+	// happens — only the AdjusterOutput.Flags slice carries the firing
+	// signal. SkipReason names the FlagEmitter convention so the LedgerEntry
+	// is self-describing in log greps.
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:  now,
+			AdjusterID: adjusterIDARDCapitalizationReview,
+			RuleID:     rule.ID,
+			Fired:      false,
+			Reasoning:  fmt.Sprintf("rd_capitalization_review: R&D expenses %.0f (%.1f%% of revenue) flagged for review", working.ResearchAndDevelopment, rdRatio*100),
+			SkipReason: "flag-only review; no balance-sheet adjustment",
+			SkipMetrics: map[string]float64{
+				"rd_ratio":  rdRatio,
+				"threshold": threshold,
+				"rd_amount": working.ResearchAndDevelopment,
+			},
+		}},
+	}
+
+	// Significance flag — preserve the legacy ProcessRDCapitalizationReview
+	// behavior: every triggered review emits exactly one Critical-severity flag.
+	out.Flags = append(out.Flags, entities.Flag{
+		ID:             fmt.Sprintf("rd-flag-%d", now.UnixNano()),
+		RuleID:         rule.ID,
+		Type:           "rd_capitalization_review",
+		Severity:       entities.FlagSeverityCritical,
+		Amount:         working.ResearchAndDevelopment,
+		Percentage:     rdRatio * 100,
+		Description:    fmt.Sprintf("High R&D spending (%.1f%% of revenue) may include inappropriate capitalization", rdRatio*100),
+		Recommendation: "Review R&D capitalization policies and ensure compliance with GAAP expense recognition",
+		Timestamp:      now,
+	})
+
+	return out, nil
+}
+
+// ApplyACapitalizedSoftwareReview is the Adjuster-shaped (DC-1 Phase 2 PR-2
+// Task 2.5) implementation of the capitalized-software review. Mirrors
+// ApplyARDCapitalizationReview in shape — MUTATION-FREE on every branch, and
+// FlagEmitter-role (Fired:false LedgerEntries; Flags slice carries the firing
+// signal).
+//
+// Two distinct ratio bases vs. ApplyARDCapitalizationReview:
+//   - Numerator: OtherIntangibles (not R&D), as a proxy for capitalized
+//     software since today's parser does not isolate the software-specific
+//     XBRL tags from the broader intangibles umbrella.
+//   - Threshold: 1.5% of revenue (vs. 10% for R&D), reflecting the smaller
+//     materiality bar for capitalized-software disclosure scrutiny.
+//
+// LedgerEntry shape across the three branches:
+//   - No intangibles (OtherIntangibles <= 0): Fired:false, SkipReason:
+//     "No intangible assets present that might include capitalized software",
+//     no SkipMetrics, Flags empty.
+//   - Below review threshold (intangibleRatio < 0.015): Fired:false,
+//     SkipReason citing the ratio + threshold, SkipMetrics:{intangible_ratio,
+//     threshold}, Flags empty.
+//   - Review fires (intangibleRatio >= 0.015): Fired:false, SkipReason:
+//     "flag-only review; no balance-sheet adjustment", SkipMetrics:
+//     {intangible_ratio, threshold, intangible_amount}, Reasoning carrying
+//     the legacy "capitalized_software: ..." string, AdjusterOutput.Flags
+//     carrying exactly one Warning-severity entities.Flag of Type
+//     "capitalized_software". Component / DeltaAmount / EquityOffset /
+//     TaxShieldDTA all zero.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §7 Task 2.5
+func (aa *AssetAdjuster) ApplyACapitalizedSoftwareReview(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	// ctx + cleaningCtx accepted for interface symmetry; this review uses neither today.
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path 1: no intangibles present. Emit a Fired:false LedgerEntry so
+	// "the capitalized-software review was considered" is observable. No
+	// SkipMetrics — there is no ratio to chart when the numerator is zero.
+	if working.OtherIntangibles <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDACapitalizedSoftwareReview,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No intangible assets present that might include capitalized software",
+				SkipReason: "No intangible assets present that might include capitalized software",
+			}},
+		}, nil
+	}
+
+	intangibleRatio := working.OtherIntangibles / working.Revenue
+	threshold := 0.015 // 1.5% of revenue threshold (legacy parity).
+
+	// Skip path 2: ratio below the 1.5% review threshold. Carry the ratio +
+	// threshold as SkipMetrics so downstream dashboards can chart "how close
+	// was this ticker to triggering the software review?".
+	if intangibleRatio < threshold {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:   now,
+				AdjusterID:  adjusterIDACapitalizedSoftwareReview,
+				RuleID:      rule.ID,
+				Fired:       false,
+				Reasoning:   "Intangible ratio below software review threshold",
+				SkipReason:  fmt.Sprintf("Intangible ratio %.1f%% below software review threshold %.1f%%", intangibleRatio*100, threshold*100),
+				SkipMetrics: map[string]float64{"intangible_ratio": intangibleRatio, "threshold": threshold},
+			}},
+		}, nil
+	}
+
+	// Review fires: Fired:false (no balance-sheet adjustment), Flags carries
+	// the firing signal. SkipReason names the FlagEmitter convention.
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:  now,
+			AdjusterID: adjusterIDACapitalizedSoftwareReview,
+			RuleID:     rule.ID,
+			Fired:      false,
+			Reasoning:  fmt.Sprintf("capitalized_software: Intangibles %.0f (%.1f%% of revenue) flagged for software review", working.OtherIntangibles, intangibleRatio*100),
+			SkipReason: "flag-only review; no balance-sheet adjustment",
+			SkipMetrics: map[string]float64{
+				"intangible_ratio":  intangibleRatio,
+				"threshold":         threshold,
+				"intangible_amount": working.OtherIntangibles,
+			},
+		}},
+	}
+
+	// Significance flag — preserve the legacy ProcessCapitalizedSoftwareReview
+	// behavior: every triggered review emits exactly one Warning-severity flag.
+	out.Flags = append(out.Flags, entities.Flag{
+		ID:             fmt.Sprintf("software-flag-%d", now.UnixNano()),
+		RuleID:         rule.ID,
+		Type:           "capitalized_software",
+		Severity:       entities.Warning,
+		Amount:         working.OtherIntangibles,
+		Percentage:     intangibleRatio * 100,
+		Description:    fmt.Sprintf("Significant intangibles (%.1f%% of revenue) may include inappropriately capitalized software", intangibleRatio*100),
+		Recommendation: "Review software development cost capitalization and consider expensing",
 		Timestamp:      now,
 	})
 
@@ -1247,9 +1550,48 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, r
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
 		case "rd_capitalization_review":
-			result = aa.ProcessRDCapitalizationReview(data, rule, cleaningCtx)
+			// DC-1 Phase 2 PR-2 Task 2.5: route the R&D-capitalization review
+			// through the new Adjuster-shaped ApplyARDCapitalizationReview.
+			// Mirrors A1/A2/A4/A5 wiring above — Apply is mutation-free; the
+			// dispatcher drains the AdjusterOutput's LedgerEntries / Flags into
+			// the native* slices so the cleaner orchestrator picks them up
+			// alongside the legacy *AdjustmentResult. NO dual-write here:
+			// this review never mutates the balance sheet on any path (see
+			// ApplyARDCapitalizationReview godoc for the FlagEmitter convention).
+			out, err := aa.ApplyARDCapitalizationReview(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				// Adjuster.Apply errors are not yet a defined surface in
+				// Phase 2; ApplyARDCapitalizationReview never returns one
+				// today. Falling back to the legacy path preserves behavior.
+				result = aa.ProcessRDCapitalizationReview(data, rule, cleaningCtx)
+				break
+			}
+
+			result = aRDAdjusterOutputToLegacyResult(out, rule)
+
+			// Record native emissions for the orchestrator. Both the fired
+			// path (Flags non-empty) and skip paths (Flags empty) emit a
+			// Fired:false LedgerEntry that is load-bearing for "did the
+			// cleaner consider R&D capitalization for this ticker?".
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "capitalized_software":
-			result = aa.ProcessCapitalizedSoftwareReview(data, rule, cleaningCtx)
+			// DC-1 Phase 2 PR-2 Task 2.5: route the capitalized-software
+			// review through ApplyACapitalizedSoftwareReview. Same dispatcher
+			// shape as the R&D review above — FlagEmitter convention, NO
+			// dual-write since this review never mutates the balance sheet.
+			out, err := aa.ApplyACapitalizedSoftwareReview(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				result = aa.ProcessCapitalizedSoftwareReview(data, rule, cleaningCtx)
+				break
+			}
+
+			result = aCapSoftwareAdjusterOutputToLegacyResult(out, rule)
+
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		default:
 			continue // Skip unknown rules
 		}
@@ -1550,6 +1892,78 @@ func a5AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 		Applied:     false,
 		Adjustments: []entities.Adjustment{},
 		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
+// aRDAdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
+// the legacy *AdjustmentResult expected by ProcessAssetAdjustments' existing
+// tangible-asset recompute + audit-trail accounting. Parallel to a1/a2/a4/a5
+// translators but with a critical shape difference: the R&D-capitalization
+// review NEVER mutates the balance sheet, so the legacy result ALWAYS returns
+// Applied:false — even when the review fires its flag (the legacy
+// ProcessRDCapitalizationReview did the same; Applied:false but Flags
+// non-empty).
+//
+// Reasoning is surfaced from the LedgerEntry's Reasoning field when populated
+// (fired path carries the "rd_capitalization_review: R&D expenses X (Y.Y%
+// of revenue) flagged for review" string the legacy code emitted), falling
+// back to SkipReason on skip paths.
+func aRDAdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule) *AdjustmentResult {
+	_ = rule // unused — the legacy result carries no rule-specific fields.
+
+	reasoning := ""
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID != adjusterIDARDCapitalizationReview {
+			continue
+		}
+		// Fired-path entries carry the legacy "flagged for review" string in
+		// Reasoning; skip-path entries leave Reasoning short and SkipReason
+		// descriptive. Either way, surface the most-informative string.
+		if entry.Reasoning != "" {
+			reasoning = entry.Reasoning
+		}
+		if reasoning == "" {
+			reasoning = entry.SkipReason
+		}
+		break
+	}
+
+	return &AdjustmentResult{
+		Amount:      0.0,                     // Flag-only — no balance-sheet adjustment magnitude.
+		Applied:     false,                   // Always false — legacy parity (no mutation occurred).
+		Adjustments: []entities.Adjustment{}, // No entities.Adjustment record — review only.
+		Flags:       out.Flags,               // Populated only when the review fired its flag.
+		Reasoning:   reasoning,
+	}
+}
+
+// aCapSoftwareAdjusterOutputToLegacyResult mirrors aRDAdjusterOutputToLegacyResult
+// for the capitalized-software review. Same FlagEmitter contract: Applied:false
+// on every path; Flags populated only when the review's 1.5% intangible/revenue
+// threshold trips.
+func aCapSoftwareAdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule) *AdjustmentResult {
+	_ = rule
+
+	reasoning := ""
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID != adjusterIDACapitalizedSoftwareReview {
+			continue
+		}
+		if entry.Reasoning != "" {
+			reasoning = entry.Reasoning
+		}
+		if reasoning == "" {
+			reasoning = entry.SkipReason
+		}
+		break
+	}
+
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       out.Flags,
 		Reasoning:   reasoning,
 	}
 }
