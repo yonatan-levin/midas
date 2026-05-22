@@ -27,6 +27,7 @@ const (
 	adjusterIDC1RestructuringCharges  = "C1_restructuring_charges"
 	adjusterIDC2AssetSaleGains        = "C2_asset_sale_gains"
 	adjusterIDC3LitigationSettlements = "C3_litigation_settlements"
+	adjusterIDC5DerivativeGainsLosses = "C5_derivative_gains_losses"
 )
 
 // EarningsAdjustmentResult represents the result of applying Category C
@@ -591,6 +592,169 @@ func c3AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 	}
 }
 
+// c5DerivativeGainsLossesAdjuster is the per-rule adapter that wraps
+// EarningsAdjuster's C5 rule into the single-Apply Adjuster interface.
+type c5DerivativeGainsLossesAdjuster struct {
+	ea *EarningsAdjuster
+}
+
+// NewC5DerivativeGainsLossesAdjuster returns an Adjuster-shaped wrapper.
+func NewC5DerivativeGainsLossesAdjuster(ea *EarningsAdjuster) Adjuster {
+	return &c5DerivativeGainsLossesAdjuster{ea: ea}
+}
+
+var _ Adjuster = (*c5DerivativeGainsLossesAdjuster)(nil)
+
+func (c *c5DerivativeGainsLossesAdjuster) Name() string {
+	return adjusterIDC5DerivativeGainsLosses
+}
+
+func (c *c5DerivativeGainsLossesAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return c.ea.ApplyC5DerivativeGainsLosses(ctx, working, rule, cleaningCtx)
+}
+
+// ApplyC5DerivativeGainsLosses is the Adjuster-shaped (DC-1 Phase 2 PR-3
+// Task 3.5) implementation of the C5 derivative-mark normalization rule. Like
+// the other C-rules, it is MUTATION-FREE; the dispatcher in
+// ProcessEarningsAdjustments performs the dual-write
+// `data.NormalizedOperatingIncome -= rawAmount` AFTER Apply.
+//
+// Role classification (plan §3.5 / §4 row C5): Restater. Branch-divergent
+// sign convention (load-bearing — read carefully):
+//
+//   - GAIN branch (working.DerivativeGainsLosses > 0): legacy subtracts the
+//     positive gain from operating income. LedgerEntry DeltaAmount = -rawAmount
+//     = NEGATIVE.
+//   - LOSS branch (working.DerivativeGainsLosses < 0): legacy ALSO subtracts
+//     (subtracting a negative = add-back). LedgerEntry DeltaAmount = -rawAmount
+//     = POSITIVE.
+//
+// Net effect per fire: ONE mutation, ONE LedgerEntry. The legacy code at
+// earnings.go:313 and :316 has two lines that LOOK duplicated but live in two
+// branches; `adjustmentAmount` already carries the correct sign through both
+// branches. We mirror that with `rawAmount := working.DerivativeGainsLosses`
+// (signed) and DeltaAmount = -rawAmount.
+//
+// `reportingAmount` is the absolute magnitude (legacy line :317 flips sign on
+// the loss branch); the legacy *AdjustmentResult Amount field uses this
+// positive magnitude. The LedgerEntry preserves the SIGNED DeltaAmount because
+// Phase 3's Restated() accessor will treat sign as load-bearing.
+//
+// Skip path: DerivativeGainsLosses == 0 — no mark to normalize.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row C5 / §7 Task 3.5 / §10 Q2
+func (ea *EarningsAdjuster) ApplyC5DerivativeGainsLosses(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path: no derivative gains/losses to normalize. Legacy code uses
+	// `== 0` (not `<= 0`) here because C5 handles both signs of mark.
+	if working.DerivativeGainsLosses == 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDC5DerivativeGainsLosses,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No derivative gains/losses to adjust",
+				SkipReason: "No derivative gains/losses to adjust",
+			}},
+		}, nil
+	}
+
+	rawAmount := working.DerivativeGainsLosses // signed: + for gain, - for loss
+	// reportingAmount mirrors legacy line :317 — positive magnitude for the
+	// *AdjustmentResult.Amount field. The signed delta lives on the LedgerEntry.
+	reportingAmount := rawAmount
+	if reportingAmount < 0 {
+		reportingAmount = -reportingAmount
+	}
+
+	return AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:  now,
+			AdjusterID: adjusterIDC5DerivativeGainsLosses,
+			RuleID:     rule.ID,
+			Fired:      true,
+			Reasoning:  fmt.Sprintf("Derivative gains/losses adjustment: Excluded $%.1fM from normalized operating income", reportingAmount/1000000),
+			Component:  "NormalizedOperatingIncome",
+			// DeltaAmount = -rawAmount: signed delta the dispatcher applies as
+			// data.NormalizedOperatingIncome += DeltaAmount equivalently to the
+			// legacy `data.NormalizedOperatingIncome -= rawAmount`.
+			DeltaAmount:  -rawAmount,
+			EquityOffset: -rawAmount,
+			TaxShieldDTA: 0, // Q2 deferral (plan §10).
+		}},
+	}, nil
+}
+
+// c5AdjusterOutputToLegacyResult translates the AdjusterOutput shape into the
+// legacy *AdjustmentResult expected by ProcessEarningsAdjustments. C5's legacy
+// Adjustment.Amount uses the absolute-magnitude reporting amount, NOT the
+// signed delta — so the translator takes `abs(DeltaAmount)`.
+//
+// originalRevenue is captured at the dispatcher to derive
+// Adjustment.Percentage (reportingAmount/revenue * 100, mirroring legacy
+// line :328 formatting).
+func c5AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalRevenue float64) *AdjustmentResult {
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID != adjusterIDC5DerivativeGainsLosses || !entry.Fired {
+			continue
+		}
+		// abs(DeltaAmount) — branch-agnostic reporting magnitude.
+		reportingAmount := entry.DeltaAmount
+		if reportingAmount < 0 {
+			reportingAmount = -reportingAmount
+		}
+		var percentage float64
+		if originalRevenue > 0 {
+			percentage = (reportingAmount / originalRevenue) * 100
+		}
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("derivative_%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.EarningsNormalization,
+			Type:        entities.Exclude,
+			Amount:      reportingAmount,
+			FromAccount: "DerivativeGainsLosses",
+			ToAccount:   "NormalizedOperatingIncome",
+			Percentage:  percentage,
+			Reasoning:   fmt.Sprintf("Excluded derivative gains/losses of $%.1fM from operating income", reportingAmount/1000000),
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      reportingAmount,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   entry.Reasoning,
+		}
+	}
+
+	reasoning := "No derivative gains/losses to adjust"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDC5DerivativeGainsLosses {
+			if entry.SkipReason != "" {
+				reasoning = entry.SkipReason
+			} else if entry.Reasoning != "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
 // ProcessEarningsAdjustments applies all Category C earnings normalization rules.
 //
 // DC-1 Phase 2 PR-3 Task 3.1 (incremental Adjuster-interface migration):
@@ -721,7 +885,49 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialD
 		case "stock_compensation":
 			result = ea.ProcessStockCompensationAdjustment(data, rule)
 		case "derivative_gains_losses":
-			result = ea.ProcessDerivativeGainsLossesAdjustment(data, rule)
+			// DC-1 Phase 2 PR-3 Task 3.5: route C5 through ApplyC5DerivativeGainsLosses.
+			// Mirrors the C1/C2/C3 wiring above — Apply is mutation-free; the
+			// dispatcher performs the dual-write AFTER Apply.
+			//
+			// Branch-divergent sign convention (load-bearing): the LedgerEntry
+			// DeltaAmount is signed (negative on the gain branch, positive on
+			// the loss branch), so the dual-write uses
+			// `NormalizedOperatingIncome += DeltaAmount` (mirroring legacy
+			// `NormalizedOperatingIncome -= rawAmount`).
+			//
+			// The legacy *AdjustmentResult.Amount uses the absolute magnitude
+			// (positive in both branches). We replay that contract by passing
+			// `result.Amount` to a `+=` mutation only after the translator
+			// has flipped sign on the loss branch... but that breaks parity.
+			// Instead we mutate by reading the SIGNED DeltaAmount off the
+			// native LedgerEntry directly.
+			originalRevenue := data.Revenue
+			out, err := ea.ApplyC5DerivativeGainsLosses(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				result = ea.ProcessDerivativeGainsLossesAdjustment(data, rule)
+				break
+			}
+
+			result = c5AdjusterOutputToLegacyResult(out, rule, originalRevenue)
+			if result.Applied {
+				// Dual-write: read the SIGNED DeltaAmount off the native
+				// LedgerEntry (the translator absolute-magnitudes for legacy
+				// Amount field — sign is lost there). Locating the fired
+				// entry: there is exactly ONE per fire (load-bearing — see
+				// ApplyC5DerivativeGainsLosses godoc).
+				for _, entry := range out.LedgerEntries {
+					if entry.AdjusterID == adjusterIDC5DerivativeGainsLosses && entry.Fired {
+						// Legacy: data.NormalizedOperatingIncome -= rawAmount
+						// Equivalent:                              += -rawAmount = += DeltaAmount.
+						data.NormalizedOperatingIncome += entry.DeltaAmount
+						break
+					}
+				}
+			}
+
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "capitalized_interest":
 			result = ea.ProcessCapitalizedInterestAdjustment(data, rule)
 		case "working_capital_window_dressing":
