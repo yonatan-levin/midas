@@ -28,6 +28,7 @@ const (
 	adjusterIDA1GoodwillExclusion     = "A1_goodwill_exclusion"
 	adjusterIDA2IntangibleWritedown   = "A2_intangible_writedown"
 	adjusterIDA4DTAValuationAllowance = "A4_dta_valuation_allowance"
+	adjusterIDA5InventoryWritedown    = "A5_inventory_writedown"
 )
 
 // a1GoodwillAdjuster is the per-rule adapter that lets AssetAdjuster — which
@@ -147,6 +148,49 @@ func (a *a4DTAValuationAllowanceAdjuster) Name() string {
 // ApplyA4DTAValuationAllowance godoc for the role split.
 func (a *a4DTAValuationAllowanceAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
 	return a.aa.ApplyA4DTAValuationAllowance(ctx, working, rule, cleaningCtx)
+}
+
+// a5InventoryWritedownAdjuster is the Task 2.4 per-rule adapter for A5
+// (obsolete-inventory writedown). Mirrors a2IntangibleAdjuster's shape — the
+// constructor wraps an existing AssetAdjuster, Apply delegates to the new
+// mutation-free ApplyA5InventoryWritedown, and the dispatcher in
+// ProcessAssetAdjustments performs the dual-write on data after Apply runs.
+//
+// Role classification (plan §3.5 / §4 row A5): Restater + TaxShieldDTA. A5 is
+// the FIRST PR-2 adjuster to populate LedgerEntry.TaxShieldDTA — the 40%
+// inventory writedown generates a derived deferred-tax-asset shield equal to
+// writedownAmount * working.EffectiveTaxRate (when the rate is > 0). This
+// distinguishes A5 from A1/A2/A4, all of which leave TaxShieldDTA at zero for
+// distinct reasons (A1 is OverlayEmitter; A2 defers TaxShieldDTA to Phase 3
+// per Q2; A4 IS the DTA reduction itself). See ApplyA5InventoryWritedown
+// godoc for the full TaxShieldDTA rationale.
+type a5InventoryWritedownAdjuster struct {
+	aa *AssetAdjuster
+}
+
+// NewA5InventoryWritedownAdjuster returns an Adjuster-shaped wrapper around
+// AssetAdjuster's A5 rule. Exported for parity with the prior A1/A2/A4
+// constructors so the cleaner orchestrator can hold the instance alongside
+// AssetAdjuster.
+func NewA5InventoryWritedownAdjuster(aa *AssetAdjuster) Adjuster {
+	return &a5InventoryWritedownAdjuster{aa: aa}
+}
+
+// Compile-time assertion: a5InventoryWritedownAdjuster MUST implement Adjuster.
+var _ Adjuster = (*a5InventoryWritedownAdjuster)(nil)
+
+// Name implements Adjuster.
+func (a *a5InventoryWritedownAdjuster) Name() string {
+	return adjusterIDA5InventoryWritedown
+}
+
+// Apply implements Adjuster by delegating to
+// AssetAdjuster.ApplyA5InventoryWritedown. The dual-write contract (in-place
+// mutation of data.Inventory / data.TotalAssets) is preserved by the dispatcher
+// in ProcessAssetAdjustments — NOT by Apply itself. See
+// ApplyA5InventoryWritedown godoc for the role split.
+func (a *a5InventoryWritedownAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return a.aa.ApplyA5InventoryWritedown(ctx, working, rule, cleaningCtx)
 }
 
 // AdjustmentResult represents the result of applying an asset adjustment
@@ -506,6 +550,143 @@ func (aa *AssetAdjuster) ApplyA4DTAValuationAllowance(ctx context.Context, worki
 			Timestamp:      now,
 		})
 	}
+
+	return out, nil
+}
+
+// ApplyA5InventoryWritedown is the Adjuster-shaped (DC-1 Phase 2 PR-2 Task 2.4)
+// implementation of the A5 obsolete-inventory writedown rule. Like the prior
+// A1/A2/A4 Apply methods, it is MUTATION-FREE — it reads `working` and returns
+// an AdjusterOutput describing the writedown's intent (Restater-shaped
+// LedgerEntry on the Inventory component, plus TaxShieldDTA when the
+// effective tax rate is positive) but does NOT modify `working.Inventory` /
+// `working.TotalAssets`. The dispatcher in ProcessAssetAdjustments performs
+// the dual-write mutation centrally.
+//
+// Role classification (plan §3.5 / §4 row A5): Restater + TaxShieldDTA. The
+// fired LedgerEntry carries Component:"Inventory",
+// DeltaAmount:-writedownAmount, EquityOffset:-writedownAmount, and
+// TaxShieldDTA:writedownAmount * working.EffectiveTaxRate (when the tax rate
+// is > 0; else 0). No OverlaySpec — the writedown is a direct component
+// reduction, not an analytical overlay on top of TotalAssets.
+//
+// TaxShieldDTA rationale (plan §4 row A5 + §7 Task 2.4): an inventory
+// writedown of $X at an effective tax rate of T produces a derived
+// deferred-tax-asset shield of $X*T because the writedown is deductible for
+// tax purposes once realized. This makes A5 the FIRST PR-2 adjuster to
+// populate TaxShieldDTA — A1 is OverlayEmitter (leaves all monetary fields
+// on OverlaySpec), A2 defers TaxShieldDTA to Phase 3 per Q2 to preserve the
+// bit-for-bit dual-write contract, and A4 IS the DTA reduction itself so
+// computing a separate shield would double-count.
+//
+// Two-condition firing logic (mirrors legacy ProcessInventoryAdjustment):
+// A5 fires when EITHER (a) detectInventoryObsolescence returns true
+// (low turnover OR ratio > 1.5× industry threshold) OR (b)
+// inventoryRatio > industry threshold. Industry thresholds come from
+// getInventoryThresholdForIndustry (default 25% / retail 40% / tech 5%, etc.).
+//
+// Skipped paths emit Fired:false LedgerEntries so observability can answer
+// "why didn't A5 fire on this ticker?" without code reading. The
+// threshold-failed path carries SkipMetrics{inventory_ratio, threshold,
+// inventory_turnover, is_obsolete} for dashboards.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row A5 / §7 Task 2.4
+func (aa *AssetAdjuster) ApplyA5InventoryWritedown(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	// ctx accepted for interface symmetry; A5 uses cleaningCtx for industry-
+	// specific threshold + obsolescence detection but not ctx today.
+	_ = ctx
+
+	now := time.Now()
+
+	// Skip path 1: no inventory present. Emit a Fired:false LedgerEntry so
+	// "A5 was considered" is observable. No SkipMetrics — there's no ratio
+	// to chart when the numerator is zero.
+	if working.Inventory <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDA5InventoryWritedown,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No inventory present to adjust",
+				SkipReason: "No inventory present to adjust",
+			}},
+		}, nil
+	}
+
+	inventoryRatio := working.Inventory / working.TotalAssets
+	threshold := aa.getInventoryThresholdForIndustry(cleaningCtx.IndustryCode)
+	isObsolete := aa.detectInventoryObsolescence(working, cleaningCtx)
+
+	// Skip path 2: neither obsolescence triggered nor ratio above threshold.
+	// Carry the diagnostic metrics so dashboards can chart "how close was A5
+	// to firing on this ticker?". is_obsolete is encoded as 0.0/1.0 because
+	// SkipMetrics is a float64 map.
+	if !isObsolete && inventoryRatio <= threshold {
+		isObsoleteMetric := 0.0
+		if isObsolete {
+			isObsoleteMetric = 1.0
+		}
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDA5InventoryWritedown,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  fmt.Sprintf("Inventory ratio %.1f%% within threshold %.1f%% and no obsolescence indicators", inventoryRatio*100, threshold*100),
+				SkipReason: fmt.Sprintf("Inventory ratio %.1f%% within threshold %.1f%%", inventoryRatio*100, threshold*100),
+				SkipMetrics: map[string]float64{
+					"inventory_ratio":    inventoryRatio,
+					"threshold":          threshold,
+					"inventory_turnover": working.InventoryTurnover,
+					"is_obsolete":        isObsoleteMetric,
+				},
+			}},
+		}, nil
+	}
+
+	// Fired path: apply a flat 40% haircut to the inventory umbrella per SEC
+	// guide. Dual-write produces bit-for-bit identical balance-sheet outputs.
+	writedownRate := 0.40
+	writedownAmount := working.Inventory * writedownRate
+
+	// TaxShieldDTA formula: only populate when EffectiveTaxRate > 0. Negative
+	// or zero rates produce no shield — staying at the zero value matches the
+	// LedgerEntry's omitempty serialization on the skip path.
+	var taxShieldDTA float64
+	if working.EffectiveTaxRate > 0 {
+		taxShieldDTA = writedownAmount * working.EffectiveTaxRate
+	}
+
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:    now,
+			AdjusterID:   adjusterIDA5InventoryWritedown,
+			RuleID:       rule.ID,
+			Fired:        true,
+			Reasoning:    fmt.Sprintf("inventory_writedown: Applied %.0f%% writedown to obsolete inventory per A5 rule", writedownRate*100),
+			Component:    "Inventory",
+			DeltaAmount:  -writedownAmount,
+			EquityOffset: -writedownAmount,
+			TaxShieldDTA: taxShieldDTA,
+		}},
+	}
+
+	// Significance flag — preserve the legacy ProcessInventoryAdjustment
+	// behavior: every fired A5 emits exactly one FlagSeverityHigh flag
+	// (no further ratio gate, matching the existing code).
+	out.Flags = append(out.Flags, entities.Flag{
+		ID:             fmt.Sprintf("inventory-flag-%d", now.UnixNano()),
+		RuleID:         rule.ID,
+		Type:           "dead_inventory",
+		Severity:       entities.FlagSeverityHigh,
+		Amount:         writedownAmount,
+		Percentage:     writedownRate * 100,
+		Description:    fmt.Sprintf("Applied inventory writedown (%.1f%% of total inventory)", writedownRate*100),
+		Recommendation: "Implement inventory liquidation procedures and improve turnover",
+		Timestamp:      now,
+	})
 
 	return out, nil
 }
@@ -967,7 +1148,54 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, r
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
 		case "obsolete_inventory":
-			result = aa.ProcessInventoryAdjustment(data, rule, cleaningCtx)
+			// DC-1 Phase 2 PR-2 Task 2.4: route A5 through the new Adjuster-
+			// shaped ApplyA5InventoryWritedown. Mirrors A1/A2/A4 wiring above —
+			// Apply is mutation-free; the dispatcher performs the dual-write
+			// AFTER Apply so the legacy *AdjustmentResult callers stay
+			// byte-identical AND the AdjusterOutput's LedgerEntries / Flags
+			// reach the cleaner orchestrator.
+			//
+			// CAPTURE originalInventory BEFORE Apply runs (mirrors A1's
+			// originalGoodwill / A2's originalIntangibles / A4's originalDTA
+			// captures). Apply does not mutate, so reading data.Inventory
+			// before AND after Apply yields the same value; we still
+			// capture-before for parity with A1/A2/A4 and to document the
+			// execution-order invariant.
+			originalInventory := data.Inventory
+			out, err := aa.ApplyA5InventoryWritedown(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				// Adjuster.Apply errors are not yet a defined surface in
+				// Phase 2; ApplyA5InventoryWritedown never returns one today.
+				// Falling back to the legacy path preserves the dual-write
+				// contract on hypothetical future errors.
+				result = aa.ProcessInventoryAdjustment(data, rule, cleaningCtx)
+				break
+			}
+
+			// Translate the AdjusterOutput into the legacy *AdjustmentResult
+			// shape so the existing tangible-asset recompute + audit-trail
+			// accounting keeps working, AND perform the dual-write mutation
+			// that ApplyA5InventoryWritedown intentionally omitted.
+			result = a5AdjusterOutputToLegacyResult(out, rule, originalInventory)
+			if result.Applied {
+				// Dual-write: today's downstream consumers still read
+				// data.Inventory / data.TotalAssets in place. Phase 4
+				// deletes these mutations once Phase 3's
+				// CleanedFinancialData views replace direct reads. The
+				// writedown amount is the LedgerEntry DeltaAmount magnitude
+				// (== originalInventory * 0.40).
+				writedown := result.Amount
+				data.Inventory = originalInventory - writedown
+				data.TotalAssets -= writedown
+			}
+
+			// Record native emissions for the orchestrator. Even when the
+			// rule does not "fire" in the legacy sense (Applied=false), the
+			// AdjusterOutput carries a Fired:false LedgerEntry that is still
+			// load-bearing for "why didn't A5 fire?" observability.
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "deferred_tax_assets":
 			// DC-1 Phase 2 PR-2 Task 2.3: route A4 through the new Adjuster-
 			// shaped ApplyA4DTAValuationAllowance. Mirrors A1 / A2 wiring above
@@ -1237,6 +1465,79 @@ func a4AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 	reasoning := "No deferred tax assets present to adjust"
 	for _, entry := range out.LedgerEntries {
 		if entry.AdjusterID == adjusterIDA4DTAValuationAllowance {
+			reasoning = entry.SkipReason
+			if reasoning == "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
+// a5AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
+// the legacy *AdjustmentResult expected by ProcessAssetAdjustments' existing
+// tangible-asset recompute + audit-trail accounting. Parallel to
+// a2AdjusterOutputToLegacyResult / a4AdjusterOutputToLegacyResult — A5 is a
+// Restater, so the translation reads the writedown amount from the
+// LedgerEntry's DeltaAmount magnitude (not from an OverlaySpec; A5 emits none).
+//
+// originalInventory is captured at the dispatcher BEFORE
+// ApplyA5InventoryWritedown runs and threaded in for parity with the
+// a2/a4 translators. A5's writedown rate is a fixed 40% per SEC guide, so the
+// legacy Adjustment.Percentage field is set to a constant 40.0 (rather than
+// derived from amount/original like A2's variable tiered rate).
+//
+// Task 2.1 code-quality reviewer flagged that by Task 2.3 the cliff for
+// extracting a `dispatchNativeAdjuster(...)` helper appears — but explicitly
+// said do NOT extract prematurely. Task 2.5 / 2.6 cleanup will revisit once
+// all asset adjusters have migrated.
+func a5AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalInventory float64) *AdjustmentResult {
+	_ = originalInventory // reserved for future symmetry with a2 translator; A5's percentage is a constant 40.0 today.
+
+	// Locate the fired LedgerEntry — A5 emits exactly one when fired and
+	// zero Restater-shaped entries when skipped (skip paths produce a
+	// Fired:false LedgerEntry only).
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID != adjusterIDA5InventoryWritedown || !entry.Fired {
+			continue
+		}
+		// DeltaAmount is signed-negative for Restater writedowns; the legacy
+		// Adjustment.Amount is a positive magnitude.
+		writedownAmount := -entry.DeltaAmount
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("inventory-adj-%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.AssetQuality,
+			Type:        entities.Writedown,
+			Amount:      writedownAmount,
+			FromAccount: "Inventory",
+			ToAccount:   "InventoryWritedown",
+			Percentage:  40.0, // Fixed 40% haircut per SEC guide A5 rule.
+			Reasoning:   entry.Reasoning,
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      writedownAmount,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   fmt.Sprintf("inventory_writedown: Applied %.0f writedown to obsolete inventory", writedownAmount),
+		}
+	}
+
+	// Skipped path — surface the reasoning from the Fired:false LedgerEntry
+	// for parity with the legacy "no adjustment" branches.
+	reasoning := "No inventory present to adjust"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDA5InventoryWritedown {
 			reasoning = entry.SkipReason
 			if reasoning == "" {
 				reasoning = entry.Reasoning
