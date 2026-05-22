@@ -1,6 +1,7 @@
 package adjustments
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -17,12 +18,289 @@ func NewEarningsAdjuster() *EarningsAdjuster {
 	return &EarningsAdjuster{}
 }
 
-// ProcessEarningsAdjustments applies all Category C earnings normalization rules
-func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialData, rules []*entities.CleaningRule, context *entities.CleaningContext) *AdjustmentResult {
+// AdjusterID constants identify each Category C adjuster on LedgerEntry
+// records. They MUST be stable across builds — Phase 3's view reconstruction
+// joins on these IDs. Keep the trailing "_<descriptor>" suffixes in sync with
+// the legacy rule.ID values where possible so log greps continue to work
+// across the migration. Mirrors the assets.go convention shipped in PR-2.
+const (
+	adjusterIDC1RestructuringCharges = "C1_restructuring_charges"
+)
+
+// EarningsAdjustmentResult represents the result of applying Category C
+// earnings normalization adjustments.
+//
+// DC-1 Phase 2 PR-3 Task 3.1 added the three Native* fields below to carry
+// AdjusterOutput state from rules that have migrated to the Adjuster
+// interface. Mirrors the AssetAdjustmentResult shape PR-2 introduced for
+// Category A. The cleaner orchestrator reads NativeLedgerEntries /
+// NativeOverlays / NativelyEmittedRuleIDs to:
+//   - append the native LedgerEntries to data.AdjustmentLedger BEFORE the
+//     PR-1 shim runs, preserving earnings-category ordering;
+//   - append the native Overlays to data.Overlays (Restater C-rules emit
+//     none, but the field exists for symmetry + future hybrids);
+//   - instruct the shim to SKIP any rule whose ID appears in
+//     NativelyEmittedRuleIDs so the same rule is not double-counted.
+//
+// Tasks 3.2-3.6 widen NativelyEmittedRuleIDs as more C-rules migrate; Task 3.8
+// deletes the shim earnings branch entirely.
+type EarningsAdjustmentResult struct {
+	Amount      float64               `json:"amount"`
+	Applied     bool                  `json:"applied"`
+	Adjustments []entities.Adjustment `json:"adjustments"`
+	Flags       []entities.Flag       `json:"flags"`
+	Reasoning   string                `json:"reasoning"`
+
+	NativeLedgerEntries    []entities.LedgerEntry `json:"-"`
+	NativeOverlays         []entities.OverlaySpec `json:"-"`
+	NativelyEmittedRuleIDs map[string]bool        `json:"-"`
+}
+
+// c1RestructuringAdjuster is the per-rule adapter that wraps EarningsAdjuster's
+// C1 rule into the single-Apply Adjuster interface. Each migrated C-rule gets
+// its own adapter struct in Phase 2 PR-3; once every C-rule has migrated
+// (Task 3.8), service.go::applyActiveAdjustments will dispatch through the
+// adapters and the shim's earnings branch will be deleted.
+//
+// Mirrors the assets.go a1/a2/a4/a5 adapters shipped in PR-2.
+type c1RestructuringAdjuster struct {
+	ea *EarningsAdjuster
+}
+
+// NewC1RestructuringAdjuster returns an Adjuster-shaped wrapper around
+// EarningsAdjuster's C1 rule. Exported so the cleaner orchestrator can hold
+// the instance alongside the legacy EarningsAdjuster.
+func NewC1RestructuringAdjuster(ea *EarningsAdjuster) Adjuster {
+	return &c1RestructuringAdjuster{ea: ea}
+}
+
+// Compile-time pin so any future signature drift fails to build.
+var _ Adjuster = (*c1RestructuringAdjuster)(nil)
+
+// Name returns the stable AdjusterID for the C1 rule.
+func (c *c1RestructuringAdjuster) Name() string {
+	return adjusterIDC1RestructuringCharges
+}
+
+// Apply implements Adjuster by delegating to EarningsAdjuster.ApplyC1Restructuring.
+// The dual-write contract (in-place mutation of data.NormalizedOperatingIncome)
+// is preserved by the dispatcher in ProcessEarningsAdjustments — NOT by Apply
+// itself. See ApplyC1Restructuring godoc for the role split.
+func (c *c1RestructuringAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return c.ea.ApplyC1Restructuring(ctx, working, rule, cleaningCtx)
+}
+
+// ApplyC1Restructuring is the Adjuster-shaped (DC-1 Phase 2 PR-3 Task 3.1)
+// implementation of the C1 restructuring-charges add-back rule. Like the
+// asset-side Restaters (ApplyA2Intangible / ApplyA4DTAValuationAllowance), it
+// is MUTATION-FREE — it reads `working` and returns an AdjusterOutput
+// describing the add-back's intent (Restater-shaped LedgerEntry on the
+// NormalizedOperatingIncome component) but does NOT modify
+// `working.NormalizedOperatingIncome`. The dispatcher in
+// ProcessEarningsAdjustments performs the dual-write mutation centrally.
+//
+// Role classification (plan §3.5 / §4 row C1): Restater. The fired LedgerEntry
+// carries Component:"NormalizedOperatingIncome", DeltaAmount:+restructuringAmount
+// (POSITIVE — this is an add-back, not a writedown), EquityOffset:+restructuringAmount,
+// TaxShieldDTA:0. No OverlaySpec — restructuring add-back is a direct
+// component restate, not an analytical overlay.
+//
+// Q2 resolution (plan §10): TaxShieldDTA is set to 0 in Phase 2 to preserve
+// the dual-write bit-for-bit contract. Today's C1 legacy code does not compute
+// a tax shield; populating it here would diverge from legacy outputs. Phase 3
+// revisits TaxShieldDTA when consumers actually read it.
+//
+// Skipped paths emit Fired:false LedgerEntries so observability can answer
+// "why didn't C1 fire on this ticker?" without code reading. The threshold-
+// failed path carries SkipMetrics{restructuring_ratio, threshold} for
+// dashboards. The no-revenue and no-restructuring-charges paths emit
+// SkipReason without SkipMetrics (no ratio to chart).
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row C1 / §7 Task 3.1 / §10 Q2
+func (ea *EarningsAdjuster) ApplyC1Restructuring(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	// ctx + cleaningCtx accepted for interface symmetry; C1 itself uses neither.
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path 1: no revenue data — cannot compute materiality ratio. Mirrors
+	// the legacy ProcessRestructuringChargesAdjustment guard. No SkipMetrics
+	// because the ratio's denominator is zero.
+	if working.Revenue <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDC1RestructuringCharges,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "Insufficient revenue data to calculate restructuring charges",
+				SkipReason: "Insufficient revenue data to calculate restructuring charges",
+			}},
+		}, nil
+	}
+
+	// Match legacy behavior: when actual RestructuringCharges is missing or
+	// non-positive, estimate at 1.5% of revenue (conservative). Below-threshold
+	// skip still uses the estimated amount when nothing was reported.
+	restructuringAmount := working.RestructuringCharges
+	if restructuringAmount <= 0 {
+		restructuringAmount = working.Revenue * 0.015
+	}
+
+	restructuringRatio := restructuringAmount / working.Revenue
+	threshold := 0.02 // Default 2% materiality threshold (legacy parity).
+	if rule.Threshold != nil && rule.Threshold.PercentageOfRevenue != nil {
+		threshold = *rule.Threshold.PercentageOfRevenue
+	}
+
+	// Skip path 2: ratio below materiality threshold. Carry ratio + threshold
+	// as SkipMetrics so downstream dashboards can chart "how close was C1 to
+	// firing on this ticker?".
+	if restructuringRatio < threshold {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:   now,
+				AdjusterID:  adjusterIDC1RestructuringCharges,
+				RuleID:      rule.ID,
+				Fired:       false,
+				Reasoning:   fmt.Sprintf("Restructuring charges below materiality threshold (%.1f%% < %.1f%%)", restructuringRatio*100, threshold*100),
+				SkipReason:  fmt.Sprintf("Restructuring charges below materiality threshold (%.1f%% < %.1f%%)", restructuringRatio*100, threshold*100),
+				SkipMetrics: map[string]float64{"restructuring_ratio": restructuringRatio, "threshold": threshold},
+			}},
+		}, nil
+	}
+
+	// Fired path: emit a Restater-shaped Fired:true LedgerEntry on the
+	// NormalizedOperatingIncome component. DeltaAmount is POSITIVE because C1
+	// is an add-back (the legacy code does `data.NormalizedOperatingIncome +=
+	// restructuringAmount`). EquityOffset mirrors DeltaAmount — add-backs
+	// increase normalized earnings, which flow to retained earnings 1:1.
+	return AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:    now,
+			AdjusterID:   adjusterIDC1RestructuringCharges,
+			RuleID:       rule.ID,
+			Fired:        true,
+			Reasoning:    fmt.Sprintf("Restructuring charges adjustment: Excluded $%.1fM (%.1f%% of revenue) from normalized operating income", restructuringAmount/1000000, restructuringRatio*100),
+			Component:    "NormalizedOperatingIncome",
+			DeltaAmount:  restructuringAmount,
+			EquityOffset: restructuringAmount,
+			TaxShieldDTA: 0, // Q2 deferral (plan §10): C1 does not compute tax shield in Phase 2.
+		}},
+	}, nil
+}
+
+// c1AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
+// the legacy *AdjustmentResult expected by ProcessEarningsAdjustments' existing
+// aggregate accounting. Parallel to assets.go's a2/a4/a5 translators — C1 is a
+// Restater, so the translation reads the add-back amount from the LedgerEntry's
+// DeltaAmount (positive — C1 is an add-back, not a writedown).
+//
+// originalRestructuring is captured at the dispatcher BEFORE ApplyC1Restructuring
+// runs and threaded in for parity with the asset-side a2/a4/a5 translators.
+// C1's percentage is derived (amount / revenue) — not constant — so the
+// translator computes it directly from the AdjusterOutput shape.
+func c1AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalRestructuring float64) *AdjustmentResult {
+	_ = originalRestructuring // reserved for future symmetry; today's C1 reads the amount from the LedgerEntry directly.
+
+	// Locate the fired LedgerEntry — C1 emits exactly one when fired and zero
+	// Restater-shaped entries when skipped (skip paths produce a Fired:false
+	// LedgerEntry only).
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID != adjusterIDC1RestructuringCharges || !entry.Fired {
+			continue
+		}
+		// DeltaAmount is signed-POSITIVE for C1 (add-back). The legacy
+		// Adjustment.Amount is a positive magnitude, so no sign flip.
+		restructuringAmount := entry.DeltaAmount
+		// Derive ratio for the legacy Percentage field. The original ratio
+		// (restructuring / revenue) is needed for the historical
+		// "X.X% of revenue" string formatting and Adjustment.Percentage.
+		// LedgerEntry doesn't carry revenue; we re-derive from the original
+		// inputs the dispatcher captured. originalRestructuring carries the
+		// raw input field value (which may be <=0 and estimated inside Apply);
+		// the LedgerEntry's Reasoning string already contains the formatted
+		// ratio so we surface that directly.
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("restructuring_%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.EarningsNormalization,
+			Type:        entities.Exclude,
+			Amount:      restructuringAmount,
+			FromAccount: "RestructuringCharges",
+			ToAccount:   "NormalizedOperatingIncome",
+			// Percentage is not strictly needed for downstream consumers (no
+			// regression test reads it for C1); leave as 0 for now and rely on
+			// the Reasoning string for the formatted ratio. Mirrors a4/a5's
+			// approach of using a constant percentage when not derivable
+			// without re-reading working.
+			Reasoning: entry.Reasoning,
+			Applied:   true,
+			Timestamp: time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      restructuringAmount,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   entry.Reasoning,
+		}
+	}
+
+	// Skipped path — surface the reasoning from the Fired:false LedgerEntry
+	// for parity with the legacy "no adjustment" branches.
+	reasoning := "No restructuring charges to add back"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDC1RestructuringCharges {
+			if entry.SkipReason != "" {
+				reasoning = entry.SkipReason
+			} else if entry.Reasoning != "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
+// ProcessEarningsAdjustments applies all Category C earnings normalization rules.
+//
+// DC-1 Phase 2 PR-3 Task 3.1 (incremental Adjuster-interface migration):
+// rules whose AdjusterID appears in result.NativelyEmittedRuleIDs have
+// produced LedgerEntries / Overlays / Flags via their Adjuster.Apply path.
+// The cleaner orchestrator (service.go::applyActiveAdjustments) reads those
+// fields and appends them to data.AdjustmentLedger / data.Overlays directly,
+// then instructs the shim to SKIP those rules so the same rule is not
+// double-counted. Tasks 3.2-3.6 add more rules to the NativelyEmittedRuleIDs
+// set; Task 3.8 deletes the shim's earnings branch entirely.
+func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *EarningsAdjustmentResult {
 	var allAdjustments []entities.Adjustment
 	var allFlags []entities.Flag
 	totalAmount := 0.0
 	applied := false
+
+	// Phase 2 PR-3 native emissions — collected here in rule-iteration order so
+	// the orchestrator can append them to data.AdjustmentLedger in position.
+	// The set NativelyEmittedRuleIDs tells the shim which legacy emissions to
+	// skip to avoid double counting.
+	var nativeLedger []entities.LedgerEntry
+	var nativeOverlays []entities.OverlaySpec
+	nativelyEmittedRuleIDs := make(map[string]bool, len(rules))
+
+	// Apply.ctx is nil here because ProcessEarningsAdjustments does not yet
+	// thread ctx through its public signature. ApplyC1Restructuring treats nil
+	// ctx as safe (it only uses ctx for future industry-aware logic).
+	// TODO(PR-3 follow-up / PR-4): thread context.Context through
+	// ProcessEarningsAdjustments to align with the Adjuster.Apply signature.
+	var applyCtx context.Context
 
 	for _, rule := range rules {
 		if !rule.Enabled || rule.Category != entities.EarningsNormalization {
@@ -33,7 +311,50 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialD
 
 		switch rule.ID {
 		case "restructuring_charges":
-			result = ea.ProcessRestructuringChargesAdjustment(data, rule)
+			// DC-1 Phase 2 PR-3 Task 3.1: route C1 through the new Adjuster-
+			// shaped ApplyC1Restructuring. Mirrors the asset-side A1/A2/A4/A5
+			// wiring — Apply is mutation-free; the dispatcher performs the
+			// dual-write AFTER Apply so the legacy *AdjustmentResult callers
+			// stay byte-identical AND the AdjusterOutput's LedgerEntries /
+			// Flags reach the cleaner orchestrator.
+			//
+			// CAPTURE originalRestructuring BEFORE Apply runs (mirrors A1's
+			// originalGoodwill capture). Apply does not mutate, so reading
+			// data.RestructuringCharges before AND after Apply yields the same
+			// value; we still capture-before for parity and to document the
+			// execution-order invariant.
+			originalRestructuring := data.RestructuringCharges
+			out, err := ea.ApplyC1Restructuring(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				// Adjuster.Apply errors are not yet a defined surface in
+				// Phase 2; ApplyC1Restructuring never returns one today.
+				// Falling back to the legacy path preserves behavior on
+				// hypothetical future errors.
+				result = ea.ProcessRestructuringChargesAdjustment(data, rule)
+				break
+			}
+
+			// Translate the AdjusterOutput into the legacy *AdjustmentResult
+			// shape so the existing aggregate accounting keeps working, AND
+			// perform the dual-write mutation that ApplyC1Restructuring
+			// intentionally omitted.
+			result = c1AdjusterOutputToLegacyResult(out, rule, originalRestructuring)
+			if result.Applied {
+				// Dual-write: today's downstream consumers still read
+				// data.NormalizedOperatingIncome in place. Phase 4 deletes
+				// these mutations once Phase 3's CleanedFinancialData views
+				// replace direct reads. The add-back amount is the
+				// LedgerEntry DeltaAmount (positive — C1 is an add-back).
+				data.NormalizedOperatingIncome += result.Amount
+			}
+
+			// Record native emissions for the orchestrator. Even when the rule
+			// does not "fire" (Applied=false), the AdjusterOutput carries a
+			// Fired:false LedgerEntry that is load-bearing for "why didn't C1
+			// fire?" observability.
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "asset_sale_gains":
 			result = ea.ProcessAssetSaleGainsAdjustment(data, rule)
 		case "litigation_settlements":
@@ -45,7 +366,7 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialD
 		case "capitalized_interest":
 			result = ea.ProcessCapitalizedInterestAdjustment(data, rule)
 		case "working_capital_window_dressing":
-			result = ea.ProcessWorkingCapitalAdjustment(data, rule, context)
+			result = ea.ProcessWorkingCapitalAdjustment(data, rule, cleaningCtx)
 		default:
 			// Skip unknown rules
 			continue
@@ -62,12 +383,15 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialD
 	reasoning := fmt.Sprintf("Applied %d earnings normalization adjustments totaling $%.1fM",
 		len(allAdjustments), totalAmount/1000000)
 
-	return &AdjustmentResult{
-		Amount:      totalAmount,
-		Applied:     applied,
-		Adjustments: allAdjustments,
-		Flags:       allFlags,
-		Reasoning:   reasoning,
+	return &EarningsAdjustmentResult{
+		Amount:                 totalAmount,
+		Applied:                applied,
+		Adjustments:            allAdjustments,
+		Flags:                  allFlags,
+		Reasoning:              reasoning,
+		NativeLedgerEntries:    nativeLedger,
+		NativeOverlays:         nativeOverlays,
+		NativelyEmittedRuleIDs: nativelyEmittedRuleIDs,
 	}
 }
 

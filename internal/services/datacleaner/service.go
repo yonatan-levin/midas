@@ -535,9 +535,24 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			allFlags = append(allFlags, earningsResult.Flags...)
 			totalRulesApplied += len(earningsRules)
 		}
-		// Shim branch (earnings) — delete in PR-3 when C-rules go native.
+
+		// DC-1 Phase 2 PR-3 Task 3.1: drain native Adjuster output so migrated
+		// C-rules' LedgerEntries / Overlays land in rule-iteration order on
+		// data.AdjustmentLedger / data.Overlays. Mirrors the asset drain
+		// shipped in PR-2 Task 2.1.
+		if len(earningsResult.NativeLedgerEntries) > 0 {
+			data.AdjustmentLedger = append(data.AdjustmentLedger, earningsResult.NativeLedgerEntries...)
+		}
+		if len(earningsResult.NativeOverlays) > 0 {
+			data.Overlays = append(data.Overlays, earningsResult.NativeOverlays...)
+		}
+
+		// Shim branch (earnings) — delete in PR-3 Task 3.8 when all C-rules are
+		// native. During Tasks 3.1-3.7 the shim continues to emit LedgerEntries
+		// for the non-migrated C-rules; the exclusion set keeps migrated rules
+		// from being double-counted.
 		data.AdjustmentLedger = append(data.AdjustmentLedger,
-			s.shimLedgerEntriesFromLegacy(earningsRules, earningsResult.Adjustments)...)
+			s.shimLedgerEntriesFromLegacyExcluding(earningsRules, earningsResult.Adjustments, earningsResult.NativelyEmittedRuleIDs)...)
 	}
 
 	return allAdjustments, allFlags, totalRulesApplied, nil
