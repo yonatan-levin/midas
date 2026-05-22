@@ -482,11 +482,9 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			totalRulesApplied += len(assetRules)
 		}
 
-		// DC-1 Phase 2 PR-2 Task 2.1: drain native Adjuster output first so
+		// DC-1 Phase 2 PR-2 Task 2.1: drain native Adjuster output so
 		// migrated rules' LedgerEntries / Overlays land in rule-iteration
-		// order BEFORE the shim emits anything. The shim is then told to
-		// skip rules whose IDs appear in NativelyEmittedRuleIDs so a single
-		// rule never appears twice in the ledger.
+		// order on data.AdjustmentLedger / data.Overlays.
 		if len(assetResult.NativeLedgerEntries) > 0 {
 			data.AdjustmentLedger = append(data.AdjustmentLedger, assetResult.NativeLedgerEntries...)
 		}
@@ -494,11 +492,17 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			data.Overlays = append(data.Overlays, assetResult.NativeOverlays...)
 		}
 
-		// Shim branch (assets) — delete in Task 2.6 once every A-rule has
-		// migrated. While the migration is in progress the shim emits
-		// entries ONLY for rules that have not yet gone native.
-		data.AdjustmentLedger = append(data.AdjustmentLedger,
-			s.shimLedgerEntriesFromLegacyExcluding(assetRules, assetResult.Adjustments, assetResult.NativelyEmittedRuleIDs)...)
+		// DC-1 Phase 2 PR-2 Task 2.6: asset-side shim deleted — all A-rules
+		// (A1 goodwill_exclusion, A2 intangible_adjustment, A4
+		// deferred_tax_assets, A5 obsolete_inventory, plus the two
+		// FlagEmitter reviews rd_capitalization_review and
+		// capitalized_software) emit LedgerEntries natively via the
+		// dispatcher in ProcessAssetAdjustments, drained at the
+		// NativeLedgerEntries / NativeOverlays appends immediately above.
+		// PR-3 will delete the earnings shim branch; PR-4 will delete the
+		// liability shim branch and the shimLedgerEntriesFromLegacy /
+		// shimLedgerEntriesFromLegacyExcluding helpers themselves (this PR
+		// keeps both helpers because liability + earnings still call them).
 	}
 
 	// Apply Category B (Liability Completeness) adjustments
