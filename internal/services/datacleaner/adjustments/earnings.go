@@ -30,6 +30,7 @@ const (
 	adjusterIDC4StockCompensation     = "C4_stock_compensation"
 	adjusterIDC5DerivativeGainsLosses = "C5_derivative_gains_losses"
 	adjusterIDC6CapitalizedInterest   = "C6_capitalized_interest"
+	adjusterIDC7WorkingCapital        = "C7_working_capital"
 )
 
 // EarningsAdjustmentResult represents the result of applying Category C
@@ -1108,6 +1109,201 @@ func c4AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 	}
 }
 
+// c7WorkingCapitalAdjuster is the per-rule adapter that wraps EarningsAdjuster's
+// C7 rule into the single-Apply Adjuster interface. Like C4, C7 is a
+// FlagEmitter — see ApplyC7WorkingCapital godoc.
+type c7WorkingCapitalAdjuster struct {
+	ea *EarningsAdjuster
+}
+
+// NewC7WorkingCapitalAdjuster returns an Adjuster-shaped wrapper.
+func NewC7WorkingCapitalAdjuster(ea *EarningsAdjuster) Adjuster {
+	return &c7WorkingCapitalAdjuster{ea: ea}
+}
+
+var _ Adjuster = (*c7WorkingCapitalAdjuster)(nil)
+
+func (c *c7WorkingCapitalAdjuster) Name() string {
+	return adjusterIDC7WorkingCapital
+}
+
+func (c *c7WorkingCapitalAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return c.ea.ApplyC7WorkingCapital(ctx, working, rule, cleaningCtx)
+}
+
+// ApplyC7WorkingCapital is the Adjuster-shaped (DC-1 Phase 2 PR-3 Task 3.7)
+// implementation of the C7 working-capital window-dressing review.
+//
+// Role classification (plan §3.5 / §4 row C7): FlagEmitter — unambiguous. The
+// legacy ProcessWorkingCapitalAdjustment (~earnings.go:1467) emits ONLY an
+// entities.Flag (no entities.Adjustment, no balance-sheet mutation). The
+// legacy result returns Applied:true with an EMPTY Adjustments slice and a
+// populated Flags slice.
+//
+// FlagEmitter convention reminder: every LedgerEntry stays Fired:false; the
+// populated AdjusterOutput.Flags slice IS the firing signal. Component /
+// DeltaAmount / EquityOffset / TaxShieldDTA are all zero.
+//
+// LedgerEntry shape across the three branches:
+//   - No WC adjustment (WorkingCapitalAdjustment == 0): Fired:false,
+//     SkipReason "No working capital adjustments detected", no SkipMetrics,
+//     Flags empty.
+//   - Below review threshold (wcRatio < 15% default; rule-configurable):
+//     Fired:false, SkipReason citing ratio + threshold,
+//     SkipMetrics:{wc_ratio, threshold, wc_amount}, Flags empty.
+//   - Fired (wcRatio >= threshold): Fired:false, SkipReason
+//     "flag-only review; no balance-sheet adjustment",
+//     SkipMetrics:{wc_ratio, threshold, wc_amount}, Reasoning carrying the
+//     legacy "Working capital window dressing: ..." string,
+//     AdjusterOutput.Flags carrying exactly one Flag of Type
+//     "earnings_quality".
+//
+// Legacy guard nuance: C7 uses `== 0` (NOT `<= 0`) because WorkingCapital
+// Adjustment can be legitimately negative (signed delta vs. prior period).
+// The ratio (wcAdj / Revenue) can therefore be negative; the legacy
+// `wcRatio < threshold` comparison treats negative ratios as "below
+// threshold" which is the same Skip behavior. We mirror that exactly.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row C7 / §7 Task 3.7 / §10 Q2
+func (ea *EarningsAdjuster) ApplyC7WorkingCapital(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path 1: no working-capital adjustment to review.
+	if working.WorkingCapitalAdjustment == 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDC7WorkingCapital,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No working capital adjustments detected",
+				SkipReason: "No working capital adjustments detected",
+			}},
+		}, nil
+	}
+
+	wcAmount := working.WorkingCapitalAdjustment
+	// Legacy code at line 1480 divides by Revenue without a guard. To
+	// preserve byte-identical legacy parity we mirror that arithmetic; a
+	// Revenue<=0 ticker with non-zero WC adjustment would have produced
+	// +Inf or -Inf in the legacy code too (pre-existing data-quality
+	// concern, NOT a regression introduced by the migration).
+	wcRatio := wcAmount / working.Revenue
+	threshold := 0.15 // Default 15% materiality threshold (legacy parity).
+	if rule.Threshold != nil && rule.Threshold.PercentageOfRevenue != nil {
+		threshold = *rule.Threshold.PercentageOfRevenue
+	}
+
+	// Skip path 2: ratio below materiality threshold. The legacy comparison
+	// is unsigned (`wcRatio < threshold`), which treats negative ratios as
+	// "below threshold" — mirrored here.
+	if wcRatio < threshold {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDC7WorkingCapital,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  fmt.Sprintf("Working capital adjustment below materiality threshold (%.1f%% < %.1f%%)", wcRatio*100, threshold*100),
+				SkipReason: fmt.Sprintf("Working capital adjustment below materiality threshold (%.1f%% < %.1f%%)", wcRatio*100, threshold*100),
+				SkipMetrics: map[string]float64{
+					"wc_ratio":  wcRatio,
+					"threshold": threshold,
+					"wc_amount": wcAmount,
+				},
+			}},
+		}, nil
+	}
+
+	// Fired path: window-dressing flag. No balance-sheet mutation — FlagEmitter
+	// convention.
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:  now,
+			AdjusterID: adjusterIDC7WorkingCapital,
+			RuleID:     rule.ID,
+			Fired:      false,
+			Reasoning:  fmt.Sprintf("Working capital window dressing: Flagged $%.1fM (%.1f%% of revenue) unusual movement", wcAmount/1000000, wcRatio*100),
+			SkipReason: "flag-only review; no balance-sheet adjustment",
+			SkipMetrics: map[string]float64{
+				"wc_ratio":  wcRatio,
+				"threshold": threshold,
+				"wc_amount": wcAmount,
+			},
+		}},
+	}
+
+	// Window-dressing flag — mirror the legacy ProcessWorkingCapitalAdjustment
+	// emission bit-for-bit (Type, Severity, Amount, Percentage, Description,
+	// Recommendation).
+	out.Flags = append(out.Flags, entities.Flag{
+		ID:             fmt.Sprintf("wc_dressing_%d", now.UnixNano()),
+		RuleID:         rule.ID,
+		Type:           "earnings_quality",
+		Severity:       rule.Severity,
+		Amount:         wcAmount,
+		Percentage:     wcRatio * 100,
+		Description:    "Unusual working capital movements may indicate window dressing",
+		Recommendation: "Review quarter-end receivables and payables patterns",
+		Timestamp:      now,
+	})
+
+	return out, nil
+}
+
+// c7AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
+// the legacy *AdjustmentResult expected by ProcessEarningsAdjustments.
+//
+// C7's legacy ProcessWorkingCapitalAdjustment returns:
+//   - Fired path: Applied:true, Adjustments:EMPTY slice (no entities.Adjustment
+//     record at all — distinct from C4 which DOES emit one), Flags:populated.
+//   - Skip path: Applied:false, Adjustments:empty, Flags:empty.
+//
+// The translator preserves Applied:true on the fired path so the outer
+// dispatcher's `if result.Applied` guard surfaces the Flag through allFlags.
+func c7AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule) *AdjustmentResult {
+	_ = rule // unused — the legacy result carries no rule-specific fields beyond what's already on the Flag.
+
+	var entry entities.LedgerEntry
+	for _, e := range out.LedgerEntries {
+		if e.AdjusterID == adjusterIDC7WorkingCapital {
+			entry = e
+			break
+		}
+	}
+
+	// Fired path detection: populated Flags is the firing signal.
+	if len(out.Flags) > 0 {
+		wcAmount := entry.SkipMetrics["wc_amount"]
+		return &AdjustmentResult{
+			Amount:      wcAmount,
+			Applied:     true,                    // Legacy parity: Applied:true on fire.
+			Adjustments: []entities.Adjustment{}, // EMPTY — C7 legacy emits NO entities.Adjustment record.
+			Flags:       out.Flags,
+			Reasoning:   entry.Reasoning,
+		}
+	}
+
+	// Skipped path — surface the reasoning from the Fired:false LedgerEntry.
+	reasoning := "No working capital adjustments detected"
+	if entry.SkipReason != "" {
+		reasoning = entry.SkipReason
+	} else if entry.Reasoning != "" {
+		reasoning = entry.Reasoning
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
 // ProcessEarningsAdjustments applies all Category C earnings normalization rules.
 //
 // DC-1 Phase 2 PR-3 Task 3.1 (incremental Adjuster-interface migration):
@@ -1333,7 +1529,24 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialD
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
 		case "working_capital_window_dressing":
-			result = ea.ProcessWorkingCapitalAdjustment(data, rule, cleaningCtx)
+			// DC-1 Phase 2 PR-3 Task 3.7: route C7 through the new Adjuster-
+			// shaped ApplyC7WorkingCapital. Like C4, C7 is a FlagEmitter
+			// (window-dressing flag only — no balance-sheet mutation). The
+			// legacy Applied:true with EMPTY Adjustments on fire is preserved
+			// by the translator so the outer `if result.Applied` guard
+			// continues to surface the Flag through allFlags.
+			out, err := ea.ApplyC7WorkingCapital(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				result = ea.ProcessWorkingCapitalAdjustment(data, rule, cleaningCtx)
+				break
+			}
+
+			result = c7AdjusterOutputToLegacyResult(out, rule)
+			// NO dual-write: FlagEmitter convention — no balance-sheet mutation.
+
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		default:
 			// Skip unknown rules
 			continue
