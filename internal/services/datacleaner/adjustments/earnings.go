@@ -27,6 +27,7 @@ const (
 	adjusterIDC1RestructuringCharges  = "C1_restructuring_charges"
 	adjusterIDC2AssetSaleGains        = "C2_asset_sale_gains"
 	adjusterIDC3LitigationSettlements = "C3_litigation_settlements"
+	adjusterIDC4StockCompensation     = "C4_stock_compensation"
 	adjusterIDC5DerivativeGainsLosses = "C5_derivative_gains_losses"
 	adjusterIDC6CapitalizedInterest   = "C6_capitalized_interest"
 )
@@ -915,6 +916,198 @@ func c6AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 	}
 }
 
+// c4StockCompensationAdjuster is the per-rule adapter that wraps EarningsAdjuster's
+// C4 rule into the single-Apply Adjuster interface. C4 follows the FlagEmitter
+// convention (NOT Restater) — see ApplyC4StockCompensation godoc for the
+// PLAN-VS-CODE DISAGREEMENT explanation.
+type c4StockCompensationAdjuster struct {
+	ea *EarningsAdjuster
+}
+
+// NewC4StockCompensationAdjuster returns an Adjuster-shaped wrapper.
+func NewC4StockCompensationAdjuster(ea *EarningsAdjuster) Adjuster {
+	return &c4StockCompensationAdjuster{ea: ea}
+}
+
+var _ Adjuster = (*c4StockCompensationAdjuster)(nil)
+
+func (c *c4StockCompensationAdjuster) Name() string {
+	return adjusterIDC4StockCompensation
+}
+
+func (c *c4StockCompensationAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return c.ea.ApplyC4StockCompensation(ctx, working, rule, cleaningCtx)
+}
+
+// ApplyC4StockCompensation is the Adjuster-shaped (DC-1 Phase 2 PR-3 Task 3.4)
+// implementation of the C4 stock-based-compensation rule.
+//
+// PLAN-VS-CODE DISAGREEMENT (load-bearing — read carefully):
+// The PR-3 implementation plan §7 Task 3.1-3.7 row described C4 as "same pattern
+// as C1" (i.e. Restater). The actual legacy code at
+// ProcessStockCompensationAdjustment (~line 1322) does NOT mutate the balance
+// sheet — no `data.NormalizedOperatingIncome += X` or `-= X` happens. The
+// legacy code emits an entities.Adjustment{Type:Reclassify} and a dilution
+// entities.Flag, but the dual-write step is absent. Therefore C4 is a
+// FlagEmitter (per PR-2 Task 2.5's convention), NOT a Restater. This deviation
+// from the plan was pre-flagged in the PR-3 handoff doc's TL;DR.
+//
+// FlagEmitter convention reminder: every LedgerEntry stays Fired:false because
+// no balance-sheet adjustment occurred. The populated AdjusterOutput.Flags
+// slice IS the firing signal when the rule "fires" (in the legacy
+// Applied:true sense). Component / DeltaAmount / EquityOffset / TaxShieldDTA
+// are all zero.
+//
+// LedgerEntry shape across the three branches:
+//   - No SBC (StockBasedCompensation <= 0): Fired:false, SkipReason
+//     "No stock-based compensation to adjust", no SkipMetrics, Flags empty.
+//   - Fired (any positive SBC — legacy code has NO threshold gate): Fired:false,
+//     SkipReason "flag-only review; no balance-sheet adjustment",
+//     SkipMetrics:{sbc_amount, sbc_ratio} (ratio undefined when Revenue<=0;
+//     surfaced as 0 in that case), Reasoning carrying the legacy
+//     "Stock-based compensation adjustment: ..." string, AdjusterOutput.Flags
+//     carrying exactly one dilution flag of Type "earnings_quality".
+//
+// Skip-vs-fire decision matches legacy exactly: the only legacy guard is
+// `StockBasedCompensation <= 0`. There is no materiality threshold — every
+// positive SBC fires the dilution flag.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row C4 / §7 Task 3.4 / §10 Q2 / TL;DR "plan-vs-code disagreement"
+func (ea *EarningsAdjuster) ApplyC4StockCompensation(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+
+	// Skip path: no stock-based compensation to review. Mirrors the legacy
+	// ProcessStockCompensationAdjustment guard.
+	if working.StockBasedCompensation <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDC4StockCompensation,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No stock-based compensation to adjust",
+				SkipReason: "No stock-based compensation to adjust",
+			}},
+		}, nil
+	}
+
+	sbcAmount := working.StockBasedCompensation
+	// sbcRatio is captured for SkipMetrics + the legacy Percentage / reasoning
+	// formatting. Legacy code at lines 1343/1357/1364 divides by working.Revenue
+	// without a Revenue<=0 guard (a Revenue<=0 ticker with positive SBC would
+	// have produced +Inf in the legacy code too — pre-existing data-quality
+	// concern, not a regression introduced by this migration).
+	var sbcRatio float64
+	if working.Revenue > 0 {
+		sbcRatio = sbcAmount / working.Revenue
+	}
+
+	// Fired path: no balance-sheet mutation — FlagEmitter convention. The
+	// AdjusterOutput.Flags slice carries the dilution flag (matching the
+	// legacy entities.Flag emission).
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:  now,
+			AdjusterID: adjusterIDC4StockCompensation,
+			RuleID:     rule.ID,
+			Fired:      false,
+			Reasoning:  fmt.Sprintf("Stock-based compensation adjustment: Reclassified $%.1fM (%.1f%% of revenue) for dilution analysis", sbcAmount/1000000, sbcRatio*100),
+			SkipReason: "flag-only review; no balance-sheet adjustment",
+			SkipMetrics: map[string]float64{
+				"sbc_amount": sbcAmount,
+				"sbc_ratio":  sbcRatio,
+			},
+		}},
+	}
+
+	// Dilution flag — mirror the legacy ProcessStockCompensationAdjustment
+	// emission bit-for-bit (Type, Severity, Amount, Percentage, Description,
+	// Recommendation).
+	out.Flags = append(out.Flags, entities.Flag{
+		ID:             fmt.Sprintf("stock_dilution_%d", now.UnixNano()),
+		RuleID:         rule.ID,
+		Type:           "earnings_quality",
+		Severity:       rule.Severity,
+		Amount:         sbcAmount,
+		Percentage:     sbcRatio * 100,
+		Description:    "High stock-based compensation may indicate dilution risk",
+		Recommendation: "Consider dilution impact in per-share calculations",
+		Timestamp:      now,
+	})
+
+	return out, nil
+}
+
+// c4AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
+// the legacy *AdjustmentResult expected by ProcessEarningsAdjustments. Like the
+// asset-side aRD/aCapSoftware translators, C4 is a FlagEmitter — but UNLIKE
+// the asset-side reviews which return Applied:false on every path, the legacy
+// ProcessStockCompensationAdjustment returns Applied:true on the fired path
+// (with a non-empty Adjustments slice carrying an entities.Adjustment{
+// Type:Reclassify} record). The translator preserves that exact shape so the
+// outer dispatcher's `if result.Applied` guard continues to surface the Flag
+// through allFlags.
+func c4AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalRevenue float64) *AdjustmentResult {
+	// Locate the LedgerEntry — there is exactly one (fired or skipped).
+	var entry entities.LedgerEntry
+	for _, e := range out.LedgerEntries {
+		if e.AdjusterID == adjusterIDC4StockCompensation {
+			entry = e
+			break
+		}
+	}
+
+	// Fired path detection: the Flags slice is the firing signal (FlagEmitter
+	// convention). Mirrors the SkipMetrics["sbc_amount"] >0 check or — more
+	// directly — len(out.Flags) > 0.
+	if len(out.Flags) > 0 {
+		sbcAmount := entry.SkipMetrics["sbc_amount"]
+		var percentage float64
+		if originalRevenue > 0 {
+			percentage = (sbcAmount / originalRevenue) * 100
+		}
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("stock_comp_%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.EarningsNormalization,
+			Type:        entities.Reclassify,
+			Amount:      sbcAmount,
+			FromAccount: "StockBasedCompensation",
+			ToAccount:   "OperatingExpenses",
+			Percentage:  percentage,
+			Reasoning:   fmt.Sprintf("Reclassified stock-based compensation of $%.1fM for dilution analysis", sbcAmount/1000000),
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      sbcAmount,
+			Applied:     true, // Legacy parity: Applied:true on fire (NOT Applied:false like asset-side FlagEmitters).
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   entry.Reasoning,
+		}
+	}
+
+	// Skipped path — surface the SkipReason from the Fired:false LedgerEntry.
+	reasoning := "No stock-based compensation to adjust"
+	if entry.SkipReason != "" {
+		reasoning = entry.SkipReason
+	} else if entry.Reasoning != "" {
+		reasoning = entry.Reasoning
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
 // ProcessEarningsAdjustments applies all Category C earnings normalization rules.
 //
 // DC-1 Phase 2 PR-3 Task 3.1 (incremental Adjuster-interface migration):
@@ -1043,7 +1236,27 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialD
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
 		case "stock_compensation":
-			result = ea.ProcessStockCompensationAdjustment(data, rule)
+			// DC-1 Phase 2 PR-3 Task 3.4: route C4 through the new Adjuster-
+			// shaped ApplyC4StockCompensation. UNLIKE C1/C2/C3/C5/C6 (Restater
+			// roles), C4 is a FlagEmitter — Apply does NOT mutate the balance
+			// sheet on any path, and there is no dual-write step here. The
+			// legacy result.Applied:true on the fired path is preserved by the
+			// translator so the outer `if result.Applied` guard continues to
+			// surface the dilution Flag through allFlags. See
+			// ApplyC4StockCompensation godoc for the plan-vs-code disagreement.
+			originalRevenue := data.Revenue
+			out, err := ea.ApplyC4StockCompensation(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				result = ea.ProcessStockCompensationAdjustment(data, rule)
+				break
+			}
+
+			result = c4AdjusterOutputToLegacyResult(out, rule, originalRevenue)
+			// NO dual-write: FlagEmitter convention — no balance-sheet mutation.
+
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "derivative_gains_losses":
 			// DC-1 Phase 2 PR-3 Task 3.5: route C5 through ApplyC5DerivativeGainsLosses.
 			// Mirrors the C1/C2/C3 wiring above — Apply is mutation-free; the
