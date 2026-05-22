@@ -16,7 +16,7 @@
       "status": "errored",
       "ticker": "TSM",
       "fields_total": 0,
-      "fields_changed": 0,
+      "fields_changed": -1,
       "schema_drift": false,
       "git_drift": false,
       "duration_ms": 14,
