@@ -1,6 +1,6 @@
 # SCHED-1 — `TestSchedulerService_ErrorHandling` race: goroutine logs after `*testing.T` scope
 
-**Status:** OPEN — filed 2026-05-16 by QA gate of Worktree B of DC-1 Phase 0 (master `4612f77`).
+**Status:** RESOLVED 2026-05-22 on branch `fix/sched-1-test-cleanup-race` (Option 1 — test-side drain + new `Service.Stop()` method). Validation: `go test -count=100 ./internal/services/scheduler/` green; `go test ./...` green. Awaiting human merge. Original filing: 2026-05-16 by QA gate of Worktree B of DC-1 Phase 0 (master `4612f77`).
 **Severity:** MINOR (test-only; production `scheduler.Service.Start` works correctly under normal operation).
 **Origin:** QA discovered while running `go test -count=1 ./...` as the load-bearing zero-regression check for DC-1 Phase 0. The scheduler package panics partway through the suite; running `go test ./internal/services/scheduler/` in isolation PASSES.
 **Not caused by DC-1.** This is a pre-existing race in the scheduler test cleanup ordering. Filed here so the project keeps a record once the symptom surfaces again.
@@ -69,7 +69,28 @@ Option (1) is the lowest-blast-radius fix and matches Go testing idiom (tests ow
 
 ## Acceptance for closing
 
-- [ ] Reproduction script in a CI job (`go test -count=N ./...` for some N high enough to surface the race deterministically).
-- [ ] Fix lands per one of the three options above.
-- [ ] Repro script becomes green across 100 sequential runs.
-- [ ] CLAUDE.md "Common Gotchas" or `agents/rules/` updated if the fix changes scheduler test conventions.
+- [ ] Reproduction script in a CI job (`go test -count=N ./...` for some N high enough to surface the race deterministically). [DEFERRED — not in fix scope; CI authors to add a `-count=100` scheduler job when convenient.]
+- [x] Fix lands per one of the three options above. — Option 1 (test-side drain). Branch `fix/sched-1-test-cleanup-race`.
+- [x] Repro script becomes green across 100 sequential runs. — `go test -count=100 ./internal/services/scheduler/` → `ok 96.518s`.
+- [x] CLAUDE.md "Common Gotchas" or `agents/rules/` updated if the fix changes scheduler test conventions. — New "Common Gotchas" bullet covering the `t.Cleanup(func() { cancel(); svc.Stop() })` pattern + the `Stop()` method contract.
+
+## Resolution details (2026-05-22)
+
+**Root cause:** `scheduler.Service.Start(ctx)` launched a supervisor goroutine that captured `s.logger` (a `*zaptest.Logger` bound to the test's `*testing.T`). When the test returned after `<-ctx.Done()`, the supervisor goroutine had usually exited cleanly — BUT a `runOnce` child goroutine launched late could still be sleeping inside `time.Sleep(m.runDuration)` (mockJob.Run). When it woke up, it called `s.logger.Warn("scheduled job failed", ...)` at `scheduler.go:74`. By then the parent test had returned and `zaptest` panicked. The race surfaced specifically in `TestSchedulerService_ErrorHandling` because it has `shouldError=true`, forcing the high-severity Warn log path (Debug is often suppressed). The full-suite ordering matters because Go's testing harness schedules tests sequentially within a package and across packages, so timing slack varies — running in isolation almost always finished the goroutine drain in time.
+
+**Fix:** Option 1 from the spec — test-side drain. Implemented as:
+
+1. `internal/services/scheduler/scheduler.go` — added internal `done chan struct{}` + `sync.WaitGroup` (jobsWG) tracking in-flight job goroutines. `Start()` is now idempotent under `sync.Once`. The supervisor goroutine's defer chain is: `defer close(s.done); defer s.jobsWG.Wait(); defer ticker.Stop()` — so `done` is closed only AFTER every child job goroutine completes. New public method `Stop()` blocks on `<-s.done` (no-op if Start was disabled / never called). `Stop()` does NOT cancel the context — the caller owns ctx cancellation.
+
+2. `internal/services/scheduler/scheduler_test.go` + `internal/integration/scheduler_integration_test.go` — every `scheduler.Start(ctx)` call site registers `t.Cleanup(func() { cancel(); svc.Stop() })` before `Start()` runs. This pins the supervisor's lifetime to the test scope.
+
+3. Production callers (`internal/di/container.go::NewSchedulerService`) are unchanged — the fx lifecycle cancels the root context at process shutdown, and the existing for-loop's `<-ctx.Done()` arm handles that. No `OnStop` hook needed (fire-and-forget supervisor exit at process termination is fine).
+
+**Files touched:** `internal/services/scheduler/scheduler.go`, `internal/services/scheduler/scheduler_test.go`, `internal/integration/scheduler_integration_test.go`, `CLAUDE.md`, `docs/reviewer/scheduler-test-cleanup-race.md`.
+
+**Validation:**
+- `go test -count=100 ./internal/services/scheduler/` → `ok 96.518s`.
+- `go test -race -count=10 ./internal/services/scheduler/` → green; race detector clean.
+- `go test -count=1 ./...` → all packages green (previously panicked partway through).
+- `go build ./...` → clean.
+- `go vet ./internal/services/scheduler/ ./internal/integration/ ./internal/di/` → clean.
