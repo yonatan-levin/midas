@@ -817,6 +817,182 @@ func TestEvaluateBundle_FromRaw_MacroMissPropagatesHint(t *testing.T) {
 	}
 }
 
+// TestRun_ExitCode_IsFormatIndependent pins the RPL-5 contract: the
+// process exit code must be a pure function of the per-bundle outcomes,
+// NOT of the chosen --format. Pre-RPL-5 the same FAIL'd bundle produced
+// exit 0 under --format=text and exit 1 under --format=json (a CI-script
+// blind spot: text-mode regressions silently masked).
+//
+// Strategy: install a stub evaluateBundleFn that returns a deterministic
+// per-bundle Result (Pass / Fail / Errored). Run() the binary twice
+// against the same seeded bundle tree — once with --format=text, once
+// with --format=json. Assert the exit codes match for every outcome.
+//
+// The test pins exit codes per spec §7:
+//   - StatusPass → 0
+//   - StatusFail → 1
+//   - StatusErrored → 2
+func TestRun_ExitCode_IsFormatIndependent(t *testing.T) {
+	cases := []struct {
+		name       string
+		stubStatus replay.Status
+		wantCode   int
+	}{
+		{"pass_yields_0", replay.StatusPass, 0},
+		{"fail_yields_1", replay.StatusFail, 1},
+		{"errored_yields_2", replay.StatusErrored, 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			cpManifest(t, "happy", filepath.Join(root, "AAPL", "req_x"))
+
+			original := evaluateBundleFn
+			t.Cleanup(func() { evaluateBundleFn = original })
+			evaluateBundleFn = func(bundleDir string, f *flags) replay.Result {
+				return replay.Result{
+					Bundle: bundleDir,
+					Status: c.stubStatus,
+					Error:  "stub error",
+				}
+			}
+
+			var textOut, textErr bytes.Buffer
+			textCode := Run([]string{"--format=text", root}, &textOut, &textErr)
+
+			var jsonOut, jsonErr bytes.Buffer
+			jsonCode := Run([]string{"--format=json", root}, &jsonOut, &jsonErr)
+
+			if textCode != jsonCode {
+				t.Fatalf("exit-code asymmetry: text=%d json=%d (want %d for both)\ntext stdout:\n%s\ntext stderr:\n%s\njson stdout:\n%s\njson stderr:\n%s",
+					textCode, jsonCode, c.wantCode,
+					textOut.String(), textErr.String(),
+					jsonOut.String(), jsonErr.String())
+			}
+			if textCode != c.wantCode {
+				t.Fatalf("exit code = %d, want %d (text mode)", textCode, c.wantCode)
+			}
+		})
+	}
+}
+
+// TestRun_ExitCode_MixedResults_FormatIndependent pins the contract for
+// the realistic multi-bundle batch case: a tree with one PASS, one FAIL,
+// and one ERRORED bundle should exit 2 (errored wins) regardless of
+// format. The pre-RPL-5 symptom — text=0 / json=1 on a FAIL bundle —
+// would manifest most often in CI batches where a tree of bundles
+// produces a mix; this test exercises that surface directly.
+func TestRun_ExitCode_MixedResults_FormatIndependent(t *testing.T) {
+	root := t.TempDir()
+	cpManifest(t, "happy", filepath.Join(root, "AAPL", "req_a"))
+	cpManifest(t, "happy", filepath.Join(root, "MSFT", "req_b"))
+	cpManifest(t, "happy", filepath.Join(root, "GOOG", "req_c"))
+
+	original := evaluateBundleFn
+	t.Cleanup(func() { evaluateBundleFn = original })
+	// Map bundleDir → outcome by path-suffix so the stub is deterministic
+	// regardless of dispatch order.
+	evaluateBundleFn = func(bundleDir string, f *flags) replay.Result {
+		switch {
+		case strings.Contains(bundleDir, "AAPL"):
+			return replay.Result{Bundle: bundleDir, Status: replay.StatusPass}
+		case strings.Contains(bundleDir, "MSFT"):
+			return replay.Result{Bundle: bundleDir, Status: replay.StatusFail}
+		default:
+			return replay.Result{Bundle: bundleDir, Status: replay.StatusErrored, Error: "stub"}
+		}
+	}
+
+	var textOut, textErr bytes.Buffer
+	textCode := Run([]string{"--format=text", root}, &textOut, &textErr)
+
+	var jsonOut, jsonErr bytes.Buffer
+	jsonCode := Run([]string{"--format=json", root}, &jsonOut, &jsonErr)
+
+	// Errored > 0 wins per spec §7 — both modes must return 2.
+	if textCode != 2 || jsonCode != 2 {
+		t.Fatalf("mixed-tree exit codes: text=%d json=%d, want 2 for both\ntext stdout:\n%s\ntext stderr:\n%s\njson stdout:\n%s",
+			textCode, jsonCode, textOut.String(), textErr.String(), jsonOut.String())
+	}
+}
+
+// TestRun_ExitCode_PassFailOnly_FormatIndependent pins a tree of PASS +
+// FAIL (no ERRORED) yields exit 1 regardless of format. Without ERRORED
+// in the mix, exit code derives from Summary.Failed alone — this is the
+// most CI-script-relevant variant: a watchlist regression scenario.
+func TestRun_ExitCode_PassFailOnly_FormatIndependent(t *testing.T) {
+	root := t.TempDir()
+	cpManifest(t, "happy", filepath.Join(root, "AAPL", "req_a"))
+	cpManifest(t, "happy", filepath.Join(root, "MSFT", "req_b"))
+
+	original := evaluateBundleFn
+	t.Cleanup(func() { evaluateBundleFn = original })
+	evaluateBundleFn = func(bundleDir string, f *flags) replay.Result {
+		if strings.Contains(bundleDir, "AAPL") {
+			return replay.Result{Bundle: bundleDir, Status: replay.StatusPass}
+		}
+		return replay.Result{Bundle: bundleDir, Status: replay.StatusFail}
+	}
+
+	var textOut, textErr bytes.Buffer
+	textCode := Run([]string{"--format=text", root}, &textOut, &textErr)
+
+	var jsonOut, jsonErr bytes.Buffer
+	jsonCode := Run([]string{"--format=json", root}, &jsonOut, &jsonErr)
+
+	if textCode != 1 || jsonCode != 1 {
+		t.Fatalf("pass+fail tree exit codes: text=%d json=%d, want 1 for both\ntext stdout:\n%s\njson stdout:\n%s",
+			textCode, jsonCode, textOut.String(), jsonOut.String())
+	}
+}
+
+// TestRun_ExitCode_IsFormatIndependent_Quiet pins the same contract under
+// --quiet. Quiet mode previously took a different render branch (a
+// shallow-copied Report with empty Results), making it the most likely
+// site for an exit-code regression — pinning it directly forces any
+// future refactor to keep the policy centralized.
+func TestRun_ExitCode_IsFormatIndependent_Quiet(t *testing.T) {
+	cases := []struct {
+		name       string
+		stubStatus replay.Status
+		wantCode   int
+	}{
+		{"pass_yields_0", replay.StatusPass, 0},
+		{"fail_yields_1", replay.StatusFail, 1},
+		{"errored_yields_2", replay.StatusErrored, 2},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			cpManifest(t, "happy", filepath.Join(root, "AAPL", "req_x"))
+
+			original := evaluateBundleFn
+			t.Cleanup(func() { evaluateBundleFn = original })
+			evaluateBundleFn = func(bundleDir string, f *flags) replay.Result {
+				return replay.Result{
+					Bundle: bundleDir,
+					Status: c.stubStatus,
+					Error:  "stub error",
+				}
+			}
+
+			var textOut, textErr bytes.Buffer
+			textCode := Run([]string{"--quiet", "--format=text", root}, &textOut, &textErr)
+
+			var jsonOut, jsonErr bytes.Buffer
+			jsonCode := Run([]string{"--quiet", "--format=json", root}, &jsonOut, &jsonErr)
+
+			if textCode != jsonCode {
+				t.Fatalf("exit-code asymmetry under --quiet: text=%d json=%d (want %d for both)",
+					textCode, jsonCode, c.wantCode)
+			}
+			if textCode != c.wantCode {
+				t.Fatalf("exit code = %d, want %d", textCode, c.wantCode)
+			}
+		})
+	}
+}
+
 // TestEvaluateBundleWithRecover_PanicConvertedToErroredResult exercises
 // the defer-recover at the worker-goroutine boundary in
 // evaluateBundleWithRecover. Production: a panic in any layer outside

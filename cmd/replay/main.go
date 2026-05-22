@@ -447,6 +447,17 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 	report.Summary.WalkDurationMs = walkDuration.Milliseconds()
 	report.Summary.ReplayDurationMs = replayDuration.Milliseconds()
 
+	// RPL-5 contract: compute the process exit code ONCE, from the
+	// already-computed Summary, BEFORE any rendering. Format choice
+	// (--format=text vs --format=json) MUST NOT change the exit code.
+	// Capturing the code up-front pins the contract structurally —
+	// even if a future RenderText / RenderJSON refactor accidentally
+	// mutated Summary, the captured `exitCode` would be unaffected,
+	// guaranteeing format-independence regardless of render-path
+	// behavior. The format-independence pin lives in
+	// cmd/replay/main_test.go::TestRun_ExitCode_IsFormatIndependent.
+	exitCode := report.ExitCode()
+
 	// Render to the configured destination.
 	out, closeFn, err := openOutput(f.out, stdout)
 	if err != nil {
@@ -485,7 +496,12 @@ func Run(argv []string, stdout, stderr io.Writer) int {
 		writeSchemaDriftDiagnostic(stderr, report.Results)
 	}
 
-	return report.ExitCode()
+	// RPL-5: return the exit code captured BEFORE rendering. The line is
+	// load-bearing for the format-independence contract — if a future
+	// commit re-derives the exit code from `report.ExitCode()` AFTER
+	// rendering, restore the pre-render capture or every render-path
+	// mutation becomes an exit-code regression vector.
+	return exitCode
 }
 
 // writeSchemaDriftDiagnostic emits a focused, stderr-bound diagnostic for
