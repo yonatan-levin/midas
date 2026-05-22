@@ -197,6 +197,34 @@ Phase 1 → Phase 2 hand-off artifact. The load-bearing
 the "zero `fd.*` writes" invariant — any commit that breaks it must be
 reverted, not adjusted.
 
+**Per-rule adapter test pattern (DC-1 Phase 2 PR-2+).** Every native
+`Adjuster` implementation ships a dedicated test file at
+`internal/services/datacleaner/adjustments/a<rule>_<name>_adjuster_test.go`
+pinning the AdjusterOutput shape across the rule's branches. The conventional
+test structure has four parts: (1) `TestA<X><Rule>Adjuster_Adjuster_Interface_Contract`
+with subtests for every fired and skipped branch (asserting LedgerEntry
+Component / DeltaAmount / EquityOffset / TaxShieldDTA / SkipReason / SkipMetrics
+shape per role); (2) `TestAssetAdjuster_ProcessAssetAdjustments_NativeA<X>Emission`
+exercising the dispatcher fired path + verifying the dual-write mutation +
+`NativeLedgerEntries` / `NativelyEmittedRuleIDs` population; (3) a corresponding
+`NativeA<X>SkipPath` test pinning the dispatcher skip behavior; (4) a `*-mutation-free*`
+assertion confirming `Apply` does not mutate `working`. The four role flavors
+(OverlayEmitter / Restater / Restater+TaxShieldDTA / FlagEmitter) all use this
+template — see `a1_goodwill_adjuster_test.go`, `a2_intangible_adjuster_test.go`,
+`a4_dta_valuation_allowance_adjuster_test.go`, `a5_inventory_writedown_adjuster_test.go`,
+and `a_flag_only_reviews_adjuster_test.go` for the canonical patterns. PR-3
+(earnings C1-C7) and PR-4 (liabilities B1/B2/B3) extend this template to the
+remaining categories.
+
+**FlagEmitter test convention (DC-1 Phase 2 PR-2 Task 2.5).** Flag-only reviews
+(R&D capitalization, capitalized software) emit `Fired:false` LedgerEntries on
+EVERY path including the "review fired its flag" path — `SkipReason="flag-only
+review; no balance-sheet adjustment"` + populated `AdjusterOutput.Flags` slice
+IS the firing signal. The convention is pinned by subtests that assert
+`Fired:false` AND `len(out.Flags) > 0` on the fired path, distinguishing this
+shape from both the standard skip path (Fired:false + Flags empty) and the
+Restater fired path (Fired:true + Component/DeltaAmount populated).
+
 ### 3. Mock-Based Tests (Service Layer)
 
 Using `testify/mock` for interface dependencies:
