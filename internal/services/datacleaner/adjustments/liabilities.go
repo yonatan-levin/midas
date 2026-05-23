@@ -50,7 +50,18 @@ func (la *LiabilityAdjuster) WithAI(enabled bool) *LiabilityAdjuster {
 const (
 	adjusterIDB1OperatingLeaseCapitalization = "B1_operating_lease_capitalization"
 	adjusterIDB2PensionUnderfunding          = "B2_pension_underfunding"
+	adjusterIDB3ContingentLiability          = "B3_contingent_liability"
 )
+
+// b3AIModelName is the canonical ModelName string stamped on B3's
+// AIProvenance when the AI footnote-analysis path fires. It mirrors the
+// "ai_model_used" metadata legacy code emits at
+// analyzeContingentLiabilityWithAI (line ~1237: "footnote_analysis") so
+// downstream log greps continue to work across the migration. The legacy
+// TODO at that site (read actual model from config) carries through here —
+// today's LiabilityAdjuster does not receive AIServiceConfig, so the
+// hardcoded literal is the only stable identifier available in Phase 2.
+const b3AIModelName = "footnote_analysis"
 
 // LiabilityAdjustmentResult represents the result of applying liability adjustments.
 //
@@ -159,6 +170,61 @@ func (b *b2PensionUnderfundingAdjuster) Name() string {
 // itself. See ApplyB2PensionUnderfunding godoc for the role split.
 func (b *b2PensionUnderfundingAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
 	return b.la.ApplyB2PensionUnderfunding(ctx, working, rule, cleaningCtx)
+}
+
+// b3ContingentLiabilityAdjuster is the per-rule adapter that lets
+// LiabilityAdjuster — which hosts multiple Category B rules — satisfy the
+// single-Apply Adjuster interface for the B3 rule. Mirrors B1/B2 adapters:
+// the adapter holds a pointer to the existing LiabilityAdjuster and Apply
+// delegates to the new mutation-free ApplyB3Contingent method.
+//
+// Role classification (plan §3.5 / §4 row B3): OverlayEmitter. The fired
+// LedgerEntry carries NO Component / DeltaAmount / EquityOffset — the
+// declarative amount lives on the OverlaySpec.
+//
+// Critical accuracy correction (spec §"B3 routing correction" lines 181-189):
+// the OverlaySpec.Field is "DebtLikeClaims" (NOT "TotalDebt") — this records
+// the Phase 4 routing intent. In Phase 2 the dispatcher's dual-write at
+// liabilities.go:87-88 STILL mutates data.TotalDebt; Phase 4 flips
+// consumers to read Overlays[Field:"DebtLikeClaims"] and the dual-write
+// mutation gets deleted. The mismatch is intentional and documented.
+//
+// AIProvenance is populated best-effort when the AI footnote-analysis path
+// fires (la.aiEnabled && la.aiService != nil): ModelName / Confidence /
+// Probability / ExtractedSpan / Timestamp are stamped from the AI
+// response. PromptHash + SourceDocHash stay empty string with a Phase 3
+// TODO per Q4 resolution (plan §10). Rule-based / AI-disabled / AI-failed
+// paths emit AIProvenance:nil — only AI-derived amounts carry provenance.
+type b3ContingentLiabilityAdjuster struct {
+	la *LiabilityAdjuster
+}
+
+// NewB3ContingentLiabilityAdjuster returns an Adjuster-shaped wrapper around
+// LiabilityAdjuster's B3 rule. Exported for parity with
+// NewB1OperatingLeaseCapitalizationAdjuster / NewB2PensionUnderfundingAdjuster
+// so the cleaner orchestrator can hold the instance alongside the legacy
+// LiabilityAdjuster.
+func NewB3ContingentLiabilityAdjuster(la *LiabilityAdjuster) Adjuster {
+	return &b3ContingentLiabilityAdjuster{la: la}
+}
+
+// Compile-time assertion: b3ContingentLiabilityAdjuster MUST implement
+// Adjuster. If either signature drifts, the package fails to build.
+var _ Adjuster = (*b3ContingentLiabilityAdjuster)(nil)
+
+// Name implements Adjuster.
+func (b *b3ContingentLiabilityAdjuster) Name() string {
+	return adjusterIDB3ContingentLiability
+}
+
+// Apply implements Adjuster by delegating to
+// LiabilityAdjuster.ApplyB3Contingent. The dual-write contract (in-place
+// mutation of data.TotalDebt / data.InterestBearingDebt) is preserved by
+// the dispatcher in ProcessLiabilityAdjustments — NOT by Apply itself.
+// See ApplyB3Contingent godoc for the role split AND the
+// Field:"DebtLikeClaims" / dual-write-against-TotalDebt mismatch.
+func (b *b3ContingentLiabilityAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return b.la.ApplyB3Contingent(ctx, working, rule, cleaningCtx)
 }
 
 // ProcessLiabilityAdjustments orchestrates all Category B liability adjustments
@@ -274,7 +340,43 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
 		case "contingent_liabilities":
-			result = la.ProcessContingentLiabilityAdjustment(data, rule, cleaningCtx)
+			// DC-1 Phase 2 PR-4 Task 4.3: route B3 through the new
+			// Adjuster-shaped ApplyB3Contingent. Mirrors B1/B2 wiring —
+			// Apply is mutation-free; the dispatcher performs the dual-
+			// write AFTER Apply so the legacy *AdjustmentResult callers
+			// stay byte-identical AND the AdjusterOutput's
+			// LedgerEntries / Overlays / Flags reach the cleaner
+			// orchestrator. Unlike B1/B2, the emitted OverlaySpec's
+			// Field is "DebtLikeClaims" (Phase 4 routing intent), but
+			// the dispatcher's dual-write still mutates data.TotalDebt
+			// per spec §"B3 routing correction" lines 181-189.
+			out, err := la.ApplyB3Contingent(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				// Adjuster.Apply errors are not yet a defined surface in
+				// Phase 2; today's ApplyB3Contingent surfaces no errors
+				// even when the AI service fails (the AI failure is
+				// absorbed by the legacy fallback path inside Process*).
+				// Falling back to the legacy path on hypothetical future
+				// errors preserves the dual-write contract.
+				result = la.ProcessContingentLiabilityAdjustment(data, rule, cleaningCtx)
+				break
+			}
+
+			// Translate the AdjusterOutput into the legacy
+			// *AdjustmentResult shape so the dispatcher's existing
+			// dual-write + audit-trail accounting keeps working. The
+			// dual-write at the bottom of the loop performs the actual
+			// data.TotalDebt mutation.
+			result = b3AdjusterOutputToLegacyResult(out, rule)
+
+			// Record native emissions for the orchestrator. Even when
+			// the rule does not "fire" in the legacy sense
+			// (Applied=false), the AdjusterOutput carries a Fired:false
+			// LedgerEntry that is still load-bearing for "why didn't B3
+			// fire?" observability.
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		default:
 			continue // Skip unknown rules
 		}
@@ -827,6 +929,311 @@ func b2AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 	}
 }
 
+// ApplyB3Contingent is the Adjuster-shaped (DC-1 Phase 2 PR-4 Task 4.3)
+// implementation of the B3 contingent-liability rule. Mirrors
+// ApplyB1OperatingLeases / ApplyB2PensionUnderfunding's structure — produces
+// an AdjusterOutput describing what the rule would do (LedgerEntry audit
+// trail + OverlaySpec on DebtLikeClaims + significance Flag) but does NOT
+// mutate `working`. The dual-write mutation (data.TotalDebt +=
+// weightedAmount, data.InterestBearingDebt += weightedAmount) is performed
+// by ProcessLiabilityAdjustments' dispatcher so the legacy
+// *AdjustmentResult callers stay byte-identical.
+//
+// Role classification (plan §3.5 / §4 row B3): OverlayEmitter. The fired
+// LedgerEntry intentionally carries NO Component / DeltaAmount /
+// EquityOffset — the declarative amount lives on OverlaySpec.
+//
+// CRITICAL FIELD-vs-MUTATION MISMATCH (spec §"B3 routing correction"
+// lines 181-189): the OverlaySpec.Field is "DebtLikeClaims" (NOT
+// "TotalDebt") because Phase 4 will flip downstream consumers to read
+// Overlays[Field:"DebtLikeClaims"] for the WACC accuracy correction. In
+// Phase 2 the dispatcher's dual-write at liabilities.go:87-88 STILL
+// mutates data.TotalDebt — Phase 4 deletes that mutation. The mismatch
+// is intentional and documented; do NOT "fix" it by aligning Field to
+// "TotalDebt".
+//
+// AIProvenance best-effort capture (Q4 resolution per plan §10): when
+// la.aiEnabled && la.aiService != nil AND the AI call succeeds, ModelName /
+// Confidence / Probability / ExtractedSpan / Timestamp are populated on
+// the OverlaySpec. PromptHash + SourceDocHash stay empty string with a
+// TODO Phase 3 marker — today's ai.AnalyzeFootnote does not return prompt
+// or source-doc hashes; Phase 3 adds the hashing alongside view-
+// reconstruction work where the hashes are actually consumed for replay
+// determinism. Rule-based / AI-disabled / AI-failed paths set
+// OverlaySpec.AIProvenance = nil (only AI-derived overlays carry
+// provenance).
+//
+// Context propagation: this is the FIRST Apply method in PR-2/PR-3/PR-4
+// that genuinely uses `ctx` — the AI path threads it down to
+// ai.AnalyzeFootnote(ctx, ...) via the analyzeContingentLiabilityWithAI
+// helper. The helper still calls context.Background() today; PR-4 Task
+// 4.3 widens its signature to accept ctx and uses it (Phase 3 may further
+// thread the cleaner's root ctx if useful).
+//
+// Implementation strategy: delegates to ProcessContingentLiabilityAdjustment
+// for the aggregation + probability-weighting math (including the AI vs.
+// rule-based decision branch) and translates the returned
+// *AdjustmentResult into the AdjusterOutput shape. To capture the AI
+// response fields needed for AIProvenance — which the legacy method
+// discards into a metadata map — Apply also performs a parallel AI call
+// when conditions are met, then merges the response into the OverlaySpec.
+// This duplicates ONE AI call per fired B3 invocation in the migration
+// window; Phase 3 collapses the duplication when the legacy method is
+// deleted.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"B3 routing correction"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row B3 / §7 Task 4.3 / §10 Q4
+func (la *LiabilityAdjuster) ApplyB3Contingent(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	now := time.Now()
+
+	// Delegate to the legacy method for the actual probability-weighting
+	// math (including AI-vs-conservative decision logic). This preserves
+	// the existing flag taxonomy + reasoning strings bit-for-bit, which is
+	// load-bearing for downstream consumers that grep on the
+	// "contingent_liabilities:" / "contingent_liability_exposure" prefixes.
+	legacy := la.ProcessContingentLiabilityAdjustment(working, rule, cleaningCtx)
+
+	// Skip path: no contingent-liability data disclosed (or all sources
+	// zero). Emit a single Fired:false LedgerEntry so observability can
+	// answer "why didn't B3 fire on this ticker?".
+	if legacy == nil || !legacy.Applied {
+		skipReason := "No contingent liabilities disclosed to assess"
+		reasoning := skipReason
+		if legacy != nil && legacy.Reasoning != "" {
+			skipReason = legacy.Reasoning
+			reasoning = legacy.Reasoning
+		}
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDB3ContingentLiability,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  reasoning,
+				SkipReason: skipReason,
+			}},
+		}, nil
+	}
+
+	// AI provenance capture (best-effort) — when AI fired during legacy
+	// processing, run a parallel AnalyzeFootnote call here so we can
+	// stamp ModelName / Confidence / Probability / ExtractedSpan /
+	// Timestamp on the OverlaySpec. We deliberately re-invoke (rather
+	// than restructuring ProcessContingentLiabilityAdjustment to return
+	// the response) because Phase 3 will delete the legacy method
+	// entirely; restructuring it now adds migration churn for code that
+	// is going to be replaced. The duplication only fires when AI is
+	// enabled — disabled-AI tenants pay zero extra cost.
+	//
+	// On AI failure here, we silently fall through to AIProvenance:nil —
+	// the legacy method already absorbed AI failures into a conservative
+	// rule-based amount (which has no AI provenance), so dropping
+	// provenance on this branch matches the semantic invariant "only AI-
+	// derived amounts carry provenance".
+	var aiProvenance *entities.AIProvenance
+	if la.aiEnabled && la.aiService != nil && (cleaningCtx.FootnoteText != "" || (working.ContingentLiabilities+working.EnvironmentalLiabilities+working.LitigationLiabilities) > 0) {
+		aiProv, aiErr := la.captureB3AIProvenance(ctx, working, cleaningCtx, now)
+		if aiErr == nil && aiProv != nil {
+			aiProvenance = aiProv
+		}
+		// Silent fallthrough on AI error — the legacy path already used
+		// the conservative 40% fallback for its amount; provenance is
+		// nil because the recorded amount is not AI-derived.
+	}
+
+	// Fired path: emit a declarative OverlaySpec on DebtLikeClaims + a
+	// Fired:true audit LedgerEntry (no Component / DeltaAmount per
+	// OverlayEmitter role) + any flags the legacy path generated.
+	// legacy.Amount carries the probability-weighted contingent amount.
+	overlay := entities.OverlaySpec{
+		OverlayID: adjusterIDB3ContingentLiability,
+		RuleID:    rule.ID,
+		// Phase 4 routing intent — spec §"B3 routing correction" lines
+		// 181-189. Phase 2 dispatcher's dual-write still mutates
+		// data.TotalDebt; Phase 4 flips consumers to read this overlay
+		// via InvestedCapital.DebtLikeClaims and deletes the dual-write.
+		Field:           "DebtLikeClaims",
+		Operation:       "add",
+		Amount:          legacy.Amount,
+		AmountSemantics: entities.AmountIncremental,
+		// Preserve the legacy "contingent_liabilities:" prefix on the
+		// overlay so existing log greps keep working.
+		// firstAdjustmentReasoning pulls it from
+		// legacy.Adjustments[0].Reasoning.
+		Reasoning:    firstAdjustmentReasoning(legacy),
+		AIProvenance: aiProvenance, // nil when AI did not produce the amount
+	}
+
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:  now,
+			AdjusterID: adjusterIDB3ContingentLiability,
+			RuleID:     rule.ID,
+			Fired:      true,
+			// Greppable summary; the load-bearing detail lives on the
+			// OverlaySpec.Reasoning. Component / DeltaAmount intentionally
+			// unset (OverlayEmitter role per plan §3.5).
+			Reasoning: "B3 contingent-liability overlay emitted",
+		}},
+		Overlays: []entities.OverlaySpec{overlay},
+		Flags:    legacy.Flags,
+	}
+
+	return out, nil
+}
+
+// captureB3AIProvenance runs a focused AnalyzeFootnote call to extract the
+// AIProvenance fields that the legacy ProcessContingentLiabilityAdjustment
+// path discards. Returns nil + nil when AI succeeds but produces no usable
+// provenance signal; returns nil + err on AI service errors so the caller
+// can choose to silently fall through.
+//
+// PromptHash + SourceDocHash are deliberately left empty per Q4 (plan §10):
+// today's ai.AnalyzeFootnote does not expose prompt or source-document
+// hashes, and Phase 2 accepted empty hashes with a Phase 3 TODO.
+//
+// Nil-ctx tolerance: the legacy `analyzeContingentLiabilityWithAI` uses
+// `context.Background()` because the dispatcher's `applyCtx` is `nil`
+// today (its public signature does not accept a ctx — see PR-4 TODO at
+// liabilities.go:204). To preserve the legacy AI-call invariant and
+// avoid nil-deref panics inside MockAIService.AnalyzeFootnote (which
+// calls ctx.Err()), promote nil ctx to context.Background() here too.
+// Phase 3's planned ctx threading collapses this branch.
+func (la *LiabilityAdjuster) captureB3AIProvenance(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext, timestamp time.Time) (*entities.AIProvenance, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Build the request shape used by the legacy AI helper — same fields
+	// so the AI service receives identical context across both call sites
+	// during the migration window. Phase 3 deletes the legacy call site
+	// and this helper becomes the only invocation.
+	footnoteText := cleaningCtx.FootnoteText
+	if footnoteText == "" {
+		footnoteText = fmt.Sprintf("Company disclosed contingent liabilities of $%.0f related to litigation and other potential exposures.",
+			data.ContingentLiabilities+data.EnvironmentalLiabilities+data.LitigationLiabilities)
+	}
+
+	request := &ai.FootnoteAnalysisRequest{
+		Ticker:           data.Ticker,
+		FilingType:       data.FilingPeriod,
+		FootnoteText:     footnoteText,
+		AnalysisType:     ai.ContingentLiabilityAnalysis,
+		PriorityLevel:    ai.PriorityNormal,
+		RequestTimestamp: timestamp,
+		Context: map[string]interface{}{
+			"industry_code":           cleaningCtx.IndustryCode,
+			"total_contingent_amount": data.ContingentLiabilities + data.EnvironmentalLiabilities + data.LitigationLiabilities,
+			"revenue":                 data.Revenue,
+		},
+	}
+
+	response, err := la.aiService.AnalyzeFootnote(ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("AI provenance capture failed: %w", err)
+	}
+	if response == nil {
+		return nil, fmt.Errorf("AI service returned nil response")
+	}
+	if response.Error != "" {
+		return nil, fmt.Errorf("AI service returned error: %s", response.Error)
+	}
+
+	// Pull the ContingentLiabilityEstimate so we can stamp Probability +
+	// ExtractedSpan. Handle both the direct-struct form (mock service) and
+	// the map form (HTTP service) — mirrors the legacy helper's branching.
+	var probability float64
+	var extractedSpan string
+	if extractedData, ok := response.ExtractedData["contingent_liability_estimate"]; ok {
+		switch est := extractedData.(type) {
+		case ai.ContingentLiabilityEstimate:
+			probability = est.ProbabilityPercent / 100.0
+			if len(est.SupportingEvidence) > 0 {
+				extractedSpan = est.SupportingEvidence[0]
+			}
+		case map[string]interface{}:
+			if prob, ok := est["probability_percent"].(float64); ok {
+				probability = prob / 100.0
+			}
+			if spans, ok := est["supporting_evidence"].([]interface{}); ok && len(spans) > 0 {
+				if s, ok := spans[0].(string); ok {
+					extractedSpan = s
+				}
+			}
+		}
+	}
+
+	return &entities.AIProvenance{
+		ModelName:     b3AIModelName,
+		PromptHash:    "", // TODO Phase 3: compute SHA-256 of prompt template (Q4 per plan §10)
+		SourceDocHash: "", // TODO Phase 3: compute SHA-256 of footnote text (Q4 per plan §10)
+		ExtractedSpan: extractedSpan,
+		Probability:   probability,
+		Confidence:    response.Confidence,
+		Timestamp:     timestamp,
+	}, nil
+}
+
+// b3AdjusterOutputToLegacyResult translates the new AdjusterOutput shape
+// into the legacy *AdjustmentResult expected by ProcessLiabilityAdjustments'
+// existing audit-trail accounting. Mirrors b1AdjusterOutputToLegacyResult /
+// b2AdjusterOutputToLegacyResult — B3 is an OverlayEmitter, so the
+// translation reads the contingent amount from the OverlaySpec.Amount (not
+// from a LedgerEntry DeltaAmount; B3 emits none on the LedgerEntry per
+// the OverlayEmitter convention).
+//
+// Note: the emitted legacy Adjustment uses entities.ProbabilityWeighted (the
+// canonical B3 type per ProcessContingentLiabilityAdjustment), NOT
+// entities.TreatAsDebt — preserves the legacy taxonomy that downstream
+// callers (`Adjustment.Type` switches in service.go, etc.) depend on.
+func b3AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule) *AdjustmentResult {
+	// Locate the firing OverlaySpec — B3 emits exactly one when fired and
+	// zero when skipped (skip paths produce a Fired:false LedgerEntry only).
+	for _, overlay := range out.Overlays {
+		if overlay.OverlayID != adjusterIDB3ContingentLiability {
+			continue
+		}
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("contingent-adj-%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.LiabilityCompleteness,
+			Type:        entities.ProbabilityWeighted,
+			Amount:      overlay.Amount,
+			FromAccount: "ContingentLiabilities",
+			ToAccount:   "EstimatedLiabilities",
+			Reasoning:   overlay.Reasoning,
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      overlay.Amount,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   fmt.Sprintf("Applied probability-weighted adjustment of %.0f for contingent liabilities", overlay.Amount),
+		}
+	}
+
+	// Skipped path — surface the SkipReason from the Fired:false LedgerEntry
+	// for parity with the legacy "no adjustment" branches.
+	reasoning := "No contingent liabilities disclosed to assess"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDB3ContingentLiability {
+			reasoning = entry.SkipReason
+			if reasoning == "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
+	}
+}
+
 // ProcessPensionAdjustment implements B2 rule: Under-funded pension obligations as debt
 func (la *LiabilityAdjuster) ProcessPensionAdjustment(data *entities.FinancialData, rule *entities.CleaningRule, context *entities.CleaningContext) *AdjustmentResult {
 	// Calculate pension underfunding
@@ -903,7 +1310,14 @@ func (la *LiabilityAdjuster) ProcessPensionAdjustment(data *entities.FinancialDa
 }
 
 // ProcessContingentLiabilityAdjustment implements B3 rule: Contingent liability estimation
-func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities.FinancialData, rule *entities.CleaningRule, context *entities.CleaningContext) *AdjustmentResult {
+//
+// DC-1 Phase 2 PR-4 Task 4.3: the parameter previously named `context` was
+// renamed to `cleaningCtx` to unshadow the `context` package identifier.
+// The function body uses the standard Go `context.Context` type via the
+// `analyzeContingentLiabilityWithAI` helper; without the rename, the
+// package identifier would be inaccessible inside this function (and
+// inside any future ctx-aware refactor of the helper).
+func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) *AdjustmentResult {
 	// Aggregate all contingent liability sources
 	totalContingentLiability := data.ContingentLiabilities +
 		data.EnvironmentalLiabilities +
@@ -923,9 +1337,9 @@ func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities
 	var probabilityWeight float64
 	var reasoningPrefix string
 
-	if la.aiEnabled && la.aiService != nil && (context.FootnoteText != "" || totalContingentLiability > 0) {
+	if la.aiEnabled && la.aiService != nil && (cleaningCtx.FootnoteText != "" || totalContingentLiability > 0) {
 		// Attempt AI-powered analysis of footnotes
-		aiProbability, aiMetadata, err := la.analyzeContingentLiabilityWithAI(data, context)
+		aiProbability, aiMetadata, err := la.analyzeContingentLiabilityWithAI(data, cleaningCtx)
 		if err != nil {
 			// AI failed - use baseline conservative probability (40%) independent of industry
 			probabilityWeight = 0.40
@@ -935,16 +1349,16 @@ func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities
 			probabilityWeight = aiProbability
 			reasoningPrefix = "AI analysis of footnotes"
 			// Store AI metadata in the cleaning context for propagation to result
-			if context.AIMetadata == nil {
-				context.AIMetadata = make(map[string]string)
+			if cleaningCtx.AIMetadata == nil {
+				cleaningCtx.AIMetadata = make(map[string]string)
 			}
 			for k, v := range aiMetadata {
-				context.AIMetadata[k] = v
+				cleaningCtx.AIMetadata[k] = v
 			}
 		}
 	} else {
 		// AI disabled or no footnotes - use conservative approach
-		probabilityWeight = la.getContingentLiabilityProbability(context.IndustryCode, totalContingentLiability)
+		probabilityWeight = la.getContingentLiabilityProbability(cleaningCtx.IndustryCode, totalContingentLiability)
 		reasoningPrefix = "Conservative"
 	}
 
@@ -971,10 +1385,10 @@ func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities
 
 	// Generate flags for material contingent exposures based on original ratio
 	var flags []entities.Flag
-	threshold := la.getContingentLiabilityThreshold(context.IndustryCode)
+	threshold := la.getContingentLiabilityThreshold(cleaningCtx.IndustryCode)
 
 	if originalRatio >= threshold {
-		severity := la.getSeverityForContingentRatio(originalRatio, context.IndustryCode)
+		severity := la.getSeverityForContingentRatio(originalRatio, cleaningCtx.IndustryCode)
 
 		flag := entities.Flag{
 			ID:             fmt.Sprintf("contingent-flag-%d", time.Now().UnixNano()),
@@ -984,7 +1398,7 @@ func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(data *entities
 			Amount:         weightedAmount,
 			Percentage:     originalRatio * 100,
 			Description:    fmt.Sprintf("Material contingent liability exposure (%.1f%% of revenue) with %.0f%% probability weighting", originalRatio*100, probabilityWeight*100),
-			Recommendation: la.getContingentLiabilityRecommendation(context.IndustryCode),
+			Recommendation: la.getContingentLiabilityRecommendation(cleaningCtx.IndustryCode),
 			Timestamp:      time.Now(),
 		}
 		flags = append(flags, flag)
