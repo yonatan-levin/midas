@@ -137,7 +137,7 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 - **Suggested resolution:** Extract to a `testhelpers` helper like `PatchFilingDatesFromAsOf(input *models.ModelInput)` (loops over `input.HistoricalData.Data` setting `FilingDate = AsOf` when zero). Update the three call sites to use the helper.
 - **Priority:** Opportunistic (low blast radius, closes a small duplication)
 
-### 12. CONVERGENT — Replay walker (T2-P0b-1) closed by P2; `ResolutionTrace` gap remains
+### 12. CONVERGENT — Replay walker (T2-P0b-1) closed by P2; `ResolutionTrace` gap remains [RESOLVED 2026-05-23]
 
 - **Severity:** NIT / scope-tracking
 - **Surfacing gate:** P2 BACKEND + P3 VERIFIER
@@ -145,6 +145,15 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 - **Why not fixed at merge:** P2's replay walker work closed the DCFPerYearPV portion; the `ResolutionTrace` walker addition is a separate scope.
 - **Suggested resolution:** If the `ResolutionTrace` walker gap is still material after Tier 2 Closeout, file a separate tracker (T2-CL-Wx) rather than re-using T2-P0b-1. Confirm scope first — may be obsolete now that profile-driven resolution flows are merged across P2/P3/P4.
 - **Priority:** Opportunistic (verify scope first; file separately if still needed)
+
+**Resolution (2026-05-23, branch `feat/t2-p4-w2-item12-replay-walker-resolution-trace`):** Scope confirmed real — the hand-rolled `compareFairValueResponses` in `internal/observability/replay/compare.go` (the walker `Replay()` actually invokes at `replay.go:147` for drift detection) did NOT walk `ResolutionTrace`. The reflection-based `CompareResponse` in `diff.go` auto-discovers it via go-cmp but is not on the Replay() orchestration path. Extension landed:
+
+- `compare.go` — added `compareResolutionTrace(bundle, current *profile.ResolutionTrace, d *ResultDiff)` mirroring the `compareIndustry` pattern: nil-vs-nil no-op, nil-vs-non-nil single sentinel `StringDiff` at path `resolution_trace`, populated-vs-populated walks 8 scalar fields (`profile_id`, `source`, `resolver_version`, `config_version`, `config_hash`, `matched_rule_id`, `fallback_reason`, `human_reason`) + `missing_facts` slice (length-mismatch sentinel + per-index walk, mirroring `Warnings` / `SanityCheck.Flags`).
+- `diff.go::goFieldToJSON` — added 9 `ProfileID`/`Source`/`ResolverVersion`/`ConfigVersion`/`ConfigHash`/`MatchedRuleID`/`FallbackReason`/`MissingFacts`/`HumanReason` → snake_case mappings so a future migration of `Replay()` to `CompareResponse` produces the same dotted paths the hand-rolled walker emits.
+- `compare_response_test.go` — added 5 new top-level test functions covering the full nil-aware matrix: `BothNil_NoFalsePositive`, `NilVsPopulated` (sentinel path + no per-field noise assertion), `PopulatedVsPopulated_NoDrift`, `PerFieldDrift` (8-row table-driven across every scalar field), `MissingFactsDrift` (length + element). 14 sub-tests total, all PASS.
+- `countFairValueFields` unchanged — `init()` reflection guard counts `reflect.NumField` of `FairValueResponse` top-level only; `ResolutionTrace` is a single field at that level (was already counted in the existing 30).
+
+Validation: `go test ./internal/observability/replay/...` PASS; `go test ./...` PASS across all packages.
 
 ---
 
@@ -158,6 +167,6 @@ Move to `docs/reviewer/archive/` once:
 - Item 6 (GAP — per-archetype DDM pins) lands once `testhelpers.RunValuation` ships
 - Item 7 (DEFERRED — `ArchetypeREITCommercial` rename) is either executed OR explicitly deferred to a named Tier 3 phase
 - Item 8 (MINOR — FFO loader coverage) has a regression test added OR is explicitly waived (package-level gate continues to pass)
-- Item 12 (replay `ResolutionTrace` walker) scope is confirmed and either resolved or refiled
+- ~~Item 12 (replay `ResolutionTrace` walker) scope is confirmed and either resolved or refiled~~ [RESOLVED 2026-05-23 — see item 12]
 
 This tracker SHOULD close before Tier 3 begins. None of its items are blockers for Tier 2 ship; all are quality-of-life improvements that compound if left unaddressed.

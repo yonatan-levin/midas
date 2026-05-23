@@ -6,6 +6,7 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
 // compareFairValueResponses walks two FairValueResponse values field by
@@ -193,6 +194,9 @@ func compareFairValueResponses(bundle, current *handlers.FairValueResponse, relT
 	// Industry nested struct.
 	compareIndustry(bundle.Industry, current.Industry, d)
 
+	// ResolutionTrace nested struct (Tier 2 — closes T2-P4-W2 item 12).
+	compareResolutionTrace(bundle.ResolutionTrace, current.ResolutionTrace, d)
+
 	return d
 }
 
@@ -299,6 +303,78 @@ func compareIndustry(bundle, current *handlers.Industry, d *ResultDiff) {
 			Old:  fmt.Sprintf("%t", bundle.Match),
 			New:  fmt.Sprintf("%t", current.Match),
 		})
+	}
+}
+
+// compareResolutionTrace recurses into the optional ResolutionTrace
+// struct (declared on FairValueResponse with omitempty) and appends any
+// per-field diffs to d. Closes T2-P4-W2 item 12 — without this walker
+// extension, drift in any field of the resolved assumption-profile audit
+// trail (profile_id, source, matched_rule_id, fallback_reason,
+// config_hash, …) would silently bypass Replay() regression detection.
+//
+// Pre-Tier-2 bundles unmarshal ResolutionTrace to nil (the field was added
+// in Tier 2 P0b with omitempty); nil-vs-nil is the no-op exit. nil-vs-
+// non-nil produces a single sentinel StringDiff at path "resolution_trace"
+// so the renderer surfaces the schema gap without flooding the diff with
+// per-field "" -> "<value>" noise. Populated-vs-populated walks the
+// per-field projection below.
+func compareResolutionTrace(bundle, current *profile.ResolutionTrace, d *ResultDiff) {
+	if bundle == nil && current == nil {
+		return
+	}
+	d.FieldsTotal++
+	if bundle == nil || current == nil {
+		d.Strings = append(d.Strings, StringDiff{
+			Path: "resolution_trace",
+			Old:  stringOrNilStruct(bundle),
+			New:  stringOrNilStruct(current),
+		})
+		return
+	}
+	// All scalar fields are strings (Source is a typed-string enum). The
+	// per-field walk mirrors compareIndustry's pattern. Field ordering
+	// follows the struct definition in profile/trace.go.
+	pairs := []struct {
+		path string
+		bv   string
+		cv   string
+	}{
+		{"resolution_trace.profile_id", bundle.ProfileID, current.ProfileID},
+		{"resolution_trace.source", string(bundle.Source), string(current.Source)},
+		{"resolution_trace.resolver_version", bundle.ResolverVersion, current.ResolverVersion},
+		{"resolution_trace.config_version", bundle.ConfigVersion, current.ConfigVersion},
+		{"resolution_trace.config_hash", bundle.ConfigHash, current.ConfigHash},
+		{"resolution_trace.matched_rule_id", bundle.MatchedRuleID, current.MatchedRuleID},
+		{"resolution_trace.fallback_reason", bundle.FallbackReason, current.FallbackReason},
+		{"resolution_trace.human_reason", bundle.HumanReason, current.HumanReason},
+	}
+	for _, f := range pairs {
+		d.FieldsTotal++
+		if f.bv != f.cv {
+			d.Strings = append(d.Strings, StringDiff{Path: f.path, Old: f.bv, New: f.cv})
+		}
+	}
+	// MissingFacts slice — compare element-wise after asserting equal
+	// length, mirroring how SanityCheck.Flags / Warnings are walked.
+	d.FieldsTotal++
+	if len(bundle.MissingFacts) != len(current.MissingFacts) {
+		d.Strings = append(d.Strings, StringDiff{
+			Path: "resolution_trace.missing_facts.len",
+			Old:  fmt.Sprintf("%d", len(bundle.MissingFacts)),
+			New:  fmt.Sprintf("%d", len(current.MissingFacts)),
+		})
+	} else {
+		for i := range bundle.MissingFacts {
+			d.FieldsTotal++
+			if bundle.MissingFacts[i] != current.MissingFacts[i] {
+				d.Strings = append(d.Strings, StringDiff{
+					Path: fmt.Sprintf("resolution_trace.missing_facts[%d]", i),
+					Old:  bundle.MissingFacts[i],
+					New:  current.MissingFacts[i],
+				})
+			}
+		}
 	}
 }
 
