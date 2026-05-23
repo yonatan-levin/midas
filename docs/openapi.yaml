@@ -265,6 +265,70 @@ components:
             Stage 1 (years 1-3) = high-growth rate from analyst/historical blend;
             Stage 2 (years 4-7) = linear fade toward terminal rate.
           example: [0.05, 0.048, 0.046, 0.044, 0.042, 0.038, 0.034]
+        dcf_horizon_years:
+          type: integer
+          example: 5
+          description: |
+            Number of explicit DCF projection years the engine used before
+            handing off to the terminal-value calculation. Resolved from the
+            ticker's archetype profile (VAL-1 Phase 2 — Tier 2 P2): mature
+            large-cap = 3, standard growth = 5, high-growth profitable = 7,
+            hyper-growth = 10. Always equals `len(dcf_per_year_pv)`. Omitted
+            when zero (non-DCF model fired — e.g. DDM / FFO / Revenue
+            Multiple), since those models do not project explicit yearly cash
+            flows.
+        dcf_terminal_method:
+          type: string
+          enum: [gordon_growth, exit_multiple]
+          example: "gordon_growth"
+          description: |
+            How the engine computed the terminal value. `gordon_growth` =
+            Gordon perpetual-growth formula on year-N FCF with the clamped
+            terminal growth rate (the only method today). `exit_multiple` =
+            year-N revenue × mature-sector EV/Revenue multiple, reserved for
+            future archetype profiles where Gordon stability is implausible
+            at the explicit-horizon boundary (VAL-1 Phase 4). Omitted on
+            non-DCF model paths.
+        dcf_terminal_pct_of_ev:
+          type: number
+          format: float
+          example: 0.62
+          description: |
+            Ratio of discounted terminal value to total enterprise value
+            (`terminal_pv / enterprise_value`). Damodaran's healthy band is
+            roughly 0.60-0.80; values above 0.80 indicate the model is
+            implicitly "betting on the terminal year" rather than the
+            explicit forecast. When this exceeds 0.80 the engine appends a
+            `terminal_dominance` warning to `warnings` so operators can flag
+            for review. Omitted when zero (non-DCF model or degenerate
+            enterprise_value).
+        dcf_per_year_pv:
+          type: array
+          items:
+            type: number
+            format: float
+          example: [12.4, 11.8, 11.1, 10.3, 9.5]
+          description: |
+            Present value of each explicit projection year's free cash flow,
+            in the same currency and per-share basis as `dcf_value_per_share`.
+            Length always equals `dcf_horizon_years`. Chart-friendly — a
+            consumer can render the explicit-period waterfall directly from
+            this array and overlay it against `dcf_terminal_pct_of_ev` to
+            visualize the explicit-vs-terminal composition of the valuation.
+            Omitted on non-DCF model paths.
+        dcf_terminal_growth_used:
+          type: number
+          format: float
+          example: 0.025
+          description: |
+            The terminal growth rate that actually fed into the Gordon
+            formula after the WACC-spread guardrail clamped it. The engine
+            requires `terminal_growth <= WACC - 2%` to keep the Gordon
+            denominator stable; when the requested terminal rate (typically
+            3% default or profile-driven) would violate that spread, this
+            field reports the clamped value so consumers can detect when
+            their WACC was tight enough to suppress the input. Omitted on
+            non-DCF model paths.
         growth_source:
           type: string
           enum: [analyst_blend, historical_only, default]
