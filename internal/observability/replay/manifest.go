@@ -25,9 +25,18 @@ const ManifestFileName = "00-manifest.json"
 // (05-fetch-sec-submissions.*, 06-fetch-market-analyst.*). Pre-1.1 bundles
 // are still accepted; missing files trigger backward-compat fallbacks in
 // the replay-side bundle gateways.
+//
+// 1.2 added 00-config.json carrying the resolved Valuation + Macro config
+// subset (RPL-9 capture side). Replay-side consumption is a follow-up;
+// today the replay binary still uses its hand-mirrored production
+// defaults (RPL-10 stopgap), so pre-1.2 bundles and 1.2 bundles look
+// identical to current replay behaviour. The version is accepted here so
+// 1.2 bundles aren't rejected once the capture side ships ahead of the
+// consumer.
 var SupportedBundleVersions = map[string]bool{
 	"1.0": true,
 	"1.1": true,
+	"1.2": true,
 }
 
 // ReadManifest opens 00-manifest.json under bundleDir, parses it, and

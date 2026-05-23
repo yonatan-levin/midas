@@ -187,6 +187,35 @@ func (s *Server) setupMiddleware() {
 			},
 			GitSHA:       s.config.GitCommit,
 			BuildVersion: s.config.Version,
+			// RPL-9 (capture side): stamp the resolved valuation + macro
+			// config subset into every bundle as `00-config.json`. Closes
+			// the bug class where replay-side hardcoded defaults silently
+			// diverged from production viper defaults (cycles 1+2+3 of the
+			// replay-fidelity debug). Captured here — at the boot-time
+			// trace middleware construction site — because viper has
+			// already resolved env vars + YAML overlays at this point, so
+			// what we mirror into the bundle is the EXACT effective config
+			// the request-path code will read. Subset chosen per the
+			// tracker (RPL-9): algorithmically load-bearing fields only;
+			// runtime knobs (cache TTLs, server timeouts) are excluded
+			// because they don't affect valuation math.
+			ConfigSnapshot: artifact.ConfigSnapshot{
+				Valuation: artifact.ValuationConfigSnapshot{
+					DefaultMarketRiskPremium: s.config.Valuation.DefaultMarketRiskPremium,
+					DefaultTerminalGrowthCap: s.config.Valuation.DefaultTerminalGrowthCap,
+					DefaultTaxRate:           s.config.Valuation.DefaultTaxRate,
+					MinDataPointsForGrowth:   s.config.Valuation.MinDataPointsForGrowth,
+					DCFProjectionYears:       s.config.Valuation.DCFProjectionYears,
+					DCFMaxGrowthRate:         s.config.Valuation.DCFMaxGrowthRate,
+					DCFMinGrowthRate:         s.config.Valuation.DCFMinGrowthRate,
+					DCFIterationTolerance:    s.config.Valuation.DCFIterationTolerance,
+					DCFMaxIterations:         s.config.Valuation.DCFMaxIterations,
+				},
+				Macro: artifact.MacroConfigSnapshot{
+					ManualRiskFreeRate:      s.config.Macro.ManualRiskFreeRate,
+					ManualMarketRiskPremium: s.config.Macro.ManualMarketRiskPremium,
+				},
+			},
 		},
 	))
 

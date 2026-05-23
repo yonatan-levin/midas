@@ -22,7 +22,15 @@ import (
 //     classification and analyst-blend growth. Pre-1.1 bundles still
 //     replay; the missing files trigger backward-compat fallbacks in the
 //     replay-side bundle gateways.
-const ManifestVersion = "1.1"
+//   - 1.2 — adds 00-config.json carrying the resolved Valuation + Macro
+//     config subset under which the request ran (RPL-9 capture side).
+//     Closes the bug class where replay-side hardcoded defaults silently
+//     diverged from production viper defaults (cycles 1+2+3 of the
+//     replay-fidelity debug). Pre-1.2 bundles still replay — the missing
+//     `00-config.json` triggers the replay-side fallback to the
+//     hand-mirrored production defaults in `replay/module.go::replayConfig()`
+//     (RPL-10 stopgap retires only once the replay-side consumer lands).
+const ManifestVersion = "1.2"
 
 // Manifest is the bundle's self-describing index. Written to
 // 00-manifest.json at the root of every bundle directory.
