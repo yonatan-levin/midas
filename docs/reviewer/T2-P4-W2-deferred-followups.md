@@ -29,7 +29,7 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
   - (b) Gate the warning behind `resolvedProfile != nil` to honor the plan as written.
 - **Priority:** Opportunistic (doc reconciliation only)
 
-### 2. NIT — `itoaP2` shim could be `strconv.Itoa` — **RESOLVED 2026-05-23 (commit `<TBD>`)**
+### 2. NIT — `itoaP2` shim could be `strconv.Itoa` — **RESOLVED 2026-05-23 (commit `106c960`)**
 
 - **Severity:** NIT
 - **Surfacing gate:** P2 REVIEWER
@@ -104,7 +104,7 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 - **Suggested resolution:** Add a malformed-row regression test in `internal/services/valuation/models/ffo_test.go` (e.g., subsector row with non-numeric multiple, missing key, empty subsector string) to cover the error branches of `loadFFOSubsectorTables` and `lookupSubsectorValue`.
 - **Priority:** Opportunistic (gate passed; nice-to-have for resilience)
 
-### 9. NIT — Long notes field on `reit_commercial` — **RESOLVED 2026-05-23 (commit `<TBD>`)**
+### 9. NIT — Long notes field on `reit_commercial` — **RESOLVED 2026-05-23 (commit `106c960`)**
 
 - **Severity:** NIT
 - **Surfacing gate:** P4 REVIEWER (NIT-1 alternative)
@@ -114,7 +114,7 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 - **Resolution:** Shortened the `reit_commercial` rule's `notes` to a pointer referencing item #7 of this tracker; thesis (office headwinds, low terminal multiple) retained. `go test ./internal/services/valuation/profile/...` green.
 - **Priority:** Opportunistic (after item #7 resolves, this self-closes)
 
-### 10. NIT — `reit_specialty` notes-style inconsistency — **RESOLVED 2026-05-23 (commit `<TBD>`)**
+### 10. NIT — `reit_specialty` notes-style inconsistency — **RESOLVED 2026-05-23 (commit `106c960`)**
 
 - **Severity:** NIT
 - **Surfacing gate:** P4 REVIEWER (NIT-2)
