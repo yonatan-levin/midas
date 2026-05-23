@@ -28,25 +28,6 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile/testhelpers"
 )
 
-// stampHistoricalFilingDates back-fills FilingDate on every fixture
-// period from AsOf so HistoricalFinancialData.GetLatestPeriod picks the
-// newest row by date. The shared synthetic builders deliberately set
-// only AsOf (mirroring real entity construction); the FFO model keys
-// "latest" off FilingDate, so the pin tests stamp this themselves.
-func stampHistoricalFilingDates(input *models.ModelInput) {
-	if input == nil || input.HistoricalData == nil {
-		return
-	}
-	for _, period := range input.HistoricalData.Data {
-		if period == nil {
-			continue
-		}
-		if period.FilingDate.IsZero() {
-			period.FilingDate = period.AsOf
-		}
-	}
-}
-
 // buildEQIXPinInput returns the synthetic data-center REIT input + the
 // reit_datacenter:high_growth profile pinned via direct construction
 // (not via the resolver — pin tests deliberately bypass the resolver to
@@ -54,7 +35,11 @@ func stampHistoricalFilingDates(input *models.ModelInput) {
 func buildEQIXPinInput(t *testing.T) *models.ModelInput {
 	t.Helper()
 	input := testhelpers.BuildSyntheticDataCenterREITInput(t)
-	stampHistoricalFilingDates(input)
+	// Back-fill FilingDate from AsOf via the shared helper so
+	// FFOModel.GetLatestPeriod picks the newest row by date. The shared
+	// synthetic builders deliberately set only AsOf (mirroring real entity
+	// construction); the FFO model keys "latest" off FilingDate.
+	testhelpers.PatchFilingDatesFromAsOf(input)
 	input.Profile = &profile.ResolvedProfile{
 		AssumptionProfile: profile.AssumptionProfile{
 			ProfileID:         "reit_datacenter:high_growth",

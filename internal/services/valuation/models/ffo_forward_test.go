@@ -20,25 +20,6 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile/testhelpers"
 )
 
-// stampFilingDates back-fills FilingDate on every period of the fixture's
-// HistoricalFinancialData using AsOf so FFOModel.GetLatestPeriod can pick
-// the newest row. The shared synthetic builders deliberately only stamp
-// AsOf (mirroring real entity construction). The testhelpers package
-// is treated as read-only by P4 — patch here instead.
-func stampFilingDates(input *models.ModelInput) {
-	if input == nil || input.HistoricalData == nil {
-		return
-	}
-	for _, period := range input.HistoricalData.Data {
-		if period == nil {
-			continue
-		}
-		if period.FilingDate.IsZero() {
-			period.FilingDate = period.AsOf
-		}
-	}
-}
-
 // TestFFO_Forward_DataCenterREIT_PopulatesForwardLeg verifies the additive
 // forward path: with a 5-year horizon at high growth rates and a 28x
 // terminal P/FFO multiple, ForwardValue is populated alongside TrailingValue.
@@ -58,7 +39,7 @@ func stampFilingDates(input *models.ModelInput) {
 // *populated* (non-zero, distinct from trailing, horizon honored).
 func TestFFO_Forward_DataCenterREIT_PopulatesForwardLeg(t *testing.T) {
 	input := testhelpers.BuildSyntheticDataCenterREITInput(t)
-	stampFilingDates(input)
+	testhelpers.PatchFilingDatesFromAsOf(input)
 	input.Profile = &profile.ResolvedProfile{
 		AssumptionProfile: profile.AssumptionProfile{
 			ProfileID:        "reit_datacenter:high_growth",
@@ -87,7 +68,7 @@ func TestFFO_Forward_DataCenterREIT_PopulatesForwardLeg(t *testing.T) {
 // response identical to pre-Tier-2 shape.
 func TestFFO_NilProfile_FallsThroughToTrailing(t *testing.T) {
 	input := testhelpers.BuildSyntheticDataCenterREITInput(t)
-	stampFilingDates(input)
+	testhelpers.PatchFilingDatesFromAsOf(input)
 	input.Profile = nil
 
 	ffo := models.NewFFOModel(zap.NewNop())
@@ -105,7 +86,7 @@ func TestFFO_NilProfile_FallsThroughToTrailing(t *testing.T) {
 // path. Without this, the legacy bit-for-bit guarantee would degrade.
 func TestFFO_ProfileHorizonZero_BehavesLikeNoProfile(t *testing.T) {
 	input := testhelpers.BuildSyntheticDataCenterREITInput(t)
-	stampFilingDates(input)
+	testhelpers.PatchFilingDatesFromAsOf(input)
 	input.Profile = &profile.ResolvedProfile{
 		AssumptionProfile: profile.AssumptionProfile{HorizonYears: 0},
 	}
