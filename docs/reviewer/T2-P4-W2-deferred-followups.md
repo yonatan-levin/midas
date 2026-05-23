@@ -66,13 +66,14 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 - **Suggested resolution:** Add a 10th load-time invariant in `validation.go`: for any rule with `dividend_forecast_horizon > 0` and a non-empty `payout_path`, assert `len(PayoutPath) == DividendForecastHorizon`. Spec §4.4 already covers the fail-loud philosophy.
 - **Priority:** Before Tier 3 (small surface, high consistency value)
 
-### 5. CONCERN — Multi-stage DDM path missing ROE/payout/P/BV diagnostics parity
+### 5. CONCERN — Multi-stage DDM path missing ROE/payout/P/BV diagnostics parity — **RESOLVED 2026-05-23 (branch `refactor/t2-p4-w2-item5-ddm-diagnostics-parity`)**
 
 - **Severity:** CONCERN
 - **Surfacing gate:** P3 REVIEWER (N3 finding)
 - **Location:** Multi-stage DDM branch in `internal/services/valuation/models/ddm.go` (emits fixed `Confidence: "medium"` + single warning string); contrast with legacy path which adjusts confidence based on warning count and runs ROE / payout / P/BV diagnostics.
 - **Why not fixed at merge:** Not a regression — the multi-stage path is a separate model branch. But the asymmetry is worth normalizing before Tier 3 adds further model variants.
 - **Suggested resolution:** Lift the diagnostics emitter (ROE / payout / P/BV) into a shared helper invoked by both DDM branches; replace fixed `Confidence: "medium"` with a warning-count-adjusted scoring identical to the legacy path.
+- **Resolution:** Chose the **shared helper** strategy (tracker-recommended). Extracted the ROE / payout-ratio / P/BV cross-check + warning-count-adjusted confidence ladder out of `calculateLegacyGordon` into a new method `runDividendDiagnostics(ctx, latest, input, dps, dividendGrowth, costOfEquity, valuePerShare, initialWarnings) ([]string, string)` on `*DDMModel`. The legacy path now invokes the helper with `initialWarnings=nil` and is byte-identical at its three load-bearing floats (`IntrinsicValuePerShare`, `EquityValue`, `EnterpriseValue`) plus `ModelType`, `Confidence`, and `Warnings` slice — `TestDDM_LegacyPath_BitForBit` (JPM/BAC/WFC × Float64bits) passes pre- and post-refactor. The multi-stage path now seeds the helper with its "DDM multi-stage: …" preamble warning so the diagnostics layer over the preamble; the dividend-growth input to the P/BV cross-check is the profile's terminal Gordon growth rate (the rate anchoring the perpetuity tail). New tests in `internal/services/valuation/models/ddm_multistage_test.go` pin: (a) ROE diagnostic now emits when ROE data is available, (b) payout diagnostic emits in a degenerate-payout scenario (DPS ≈ EPS), (c) P/BV cross-check fires when implied vs ROE-justified diverges, (d) confidence ladders from "medium" (preamble-only) to "low" (preamble + ≥1 diagnostic) — the multi-stage path can never naturally produce "high" because the preamble warning occupies the zero-warning slot. Validation: `go test -run TestDDM_LegacyPath_BitForBit ./internal/services/valuation/models/` PASS (pre + post); `go test ./internal/services/valuation/models/...` PASS; `go test ./...` PASS.
 - **Priority:** Before Tier 3 (parity concern; will accumulate if Tier 3 adds more branches)
 
 ### 6. GAP — `ddm_multistage_test.go` covers shared math via one profile only
@@ -173,7 +174,7 @@ Move to `docs/reviewer/archive/` once:
 
 - ~~Items 1, 2, 3, 9, 10, 11 (NIT / cleanup batch) are resolved in a single polishing-pass commit OR explicitly waived~~ — items 2, 9, 10 RESOLVED 2026-05-23 (commit `106c960`); items 1, 3 RESOLVED 2026-05-23 (branch `chore/t2-p4-w2-batch-1-3-doc-and-comment`); item 11 RESOLVED 2026-05-23 (branch `refactor/t2-p4-w2-item11-patch-filing-dates-helper`)
 - Item 4 (LATENT validation invariant) is added to `profile/validation.go` with a test
-- Item 5 (CONCERN — DDM multi-stage diagnostics parity) is either implemented OR explicitly deferred to a Tier 3 design note
+- ~~Item 5 (CONCERN — DDM multi-stage diagnostics parity) is either implemented OR explicitly deferred to a Tier 3 design note~~ [RESOLVED 2026-05-23 — branch `refactor/t2-p4-w2-item5-ddm-diagnostics-parity`]
 - Item 6 (GAP — per-archetype DDM pins) lands once `testhelpers.RunValuation` ships
 - Item 7 (DEFERRED — `ArchetypeREITCommercial` rename) is either executed OR explicitly deferred to a named Tier 3 phase
 - ~~Item 8 (MINOR — FFO loader coverage) has a regression test added OR is explicitly waived (package-level gate continues to pass)~~ [RESOLVED 2026-05-23 — branch `test/t2-p4-w2-item8-ffo-loader-coverage`]
