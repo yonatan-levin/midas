@@ -1,10 +1,26 @@
 # G-1 — `growth.estimated` narrate weights are coarse 0.5/0.5
 
-**Status:** OPEN — filed 2026-04-25 from QA pass on `feat/observability-narrative` branch.
+**Status:** RESOLVED — fixed 2026-05-23 on branch `feat/g-1-growth-blend-weights` via Option A (the recommended path).
 **Severity:** Minor (field accuracy; does not block production).
 **Origin:** QA finding MINOR-2 on the observability-narrative Phase 1 spec implementation.
 
-## Context
+## Resolution summary (2026-05-23)
+
+- `entities.GrowthEstimate` gained two fields: `AnalystWeight float64` and `HistoricalWeight float64` (JSON: `analyst_weight`, `historical_weight`). They sum to 1.0 by construction.
+- `internal/services/growth/estimator.go::blendGrowthRate` populates both fields on every path:
+  - No analyst coverage (or `NumberOfAnalysts == 0`) → 0.0 / 1.0.
+  - 1-2 analysts → 0.40 / 0.60 (low confidence).
+  - 3-9 analysts → 0.60 / 0.40 (medium confidence).
+  - 10+ analysts → 0.80 / 0.20 (high confidence).
+- `internal/services/valuation/service.go` (the `growth.estimated` narrate emit site) now reads `growthEstimate.AnalystWeight` / `growthEstimate.HistoricalWeight` directly, replacing the coarse `analystData != nil ? 0.5 : 0.0` ternary. The "Coarse signal — actual weighting is internal to estimator" comment is gone.
+- Tests:
+  - Existing `TestEstimator_NoAnalystData_UsesHistorical`, `TestEstimator_HighAnalystCoverage`, `TestEstimator_LowAnalystCoverage`, `TestEstimator_MediumAnalystCoverage` now assert the new fields alongside the existing math.
+  - New `TestEstimator_BlendWeights_AllBuckets` table-test pins all four bucket → weight mappings + the sum-to-1.0 invariant in one place.
+  - New `TestEstimator_BlendWeights_AnalystPresentButZeroAnalysts` pins the "non-nil but empty" edge case.
+  - `TestNarrateArtifact_TraceOn_EmitsStreamAndBundle` (integration) was extended with a G-1 assertion block asserting the emitted `growth.estimated` line carries the estimator-sourced weights, not the legacy placeholder.
+- Coverage on `internal/services/growth/` after the change: 95.4% of statements (unchanged from pre-G-1; new lines are exercised by existing + new tests).
+
+## Original context (for traceability)
 
 The `growth.estimated` narrate phase (one of the 17 phases defined in `internal/observability/narrate/phases.go`) is emitted from `internal/services/valuation/service.go:475-481` after the growth service returns its multi-stage estimate. Per the observability narrative spec §5 row 12, this phase carries the fields:
 

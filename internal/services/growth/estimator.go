@@ -200,6 +200,8 @@ func (e *Estimator) blendGrowthRate(
 		estimate.Source = "historical_only"
 		estimate.Confidence = e.assessHistoricalConfidence(historicalCAGR)
 		estimate.Method = "100% historical CAGR (no analyst coverage)"
+		estimate.AnalystWeight = 0.0
+		estimate.HistoricalWeight = 1.0
 		return historicalCAGR
 	}
 
@@ -238,6 +240,8 @@ func (e *Estimator) blendGrowthRate(
 	estimate.Source = "analyst_blend"
 	estimate.Method = fmt.Sprintf("%.0f%% analyst (%d analysts) + %.0f%% historical CAGR",
 		analystWeight*100, n, historicalWeight*100)
+	estimate.AnalystWeight = analystWeight
+	estimate.HistoricalWeight = historicalWeight
 
 	// Divergence check
 	if historicalCAGR != 0 {

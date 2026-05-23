@@ -177,6 +177,36 @@ func TestNarrateArtifact_TraceOn_EmitsStreamAndBundle(t *testing.T) {
 		assert.True(t, phasesSeen[p], "narrate stream missing required phase=%s; saw=%v", p, phasesSeen)
 	}
 
+	// --- Assert (1b): G-1 — growth.estimated emits the ACTUAL analyst/
+	//     historical blend weights from the estimator, not the legacy coarse
+	//     0.5/0.5 placeholder. In this seeded fixture YFinance is disabled
+	//     (cfg.Market.YFinance.Enabled=false), so analystData is nil and the
+	//     estimator routes through the historical-only path → AnalystWeight=0
+	//     / HistoricalWeight=1. Pre-G-1 this line would have emitted 0/1 for
+	//     a different reason (the analystData==nil branch of the coarse
+	//     ternary), so the regression-protective signal here is that the
+	//     fields actually surface what the estimator computed.
+	var growthEntry observer.LoggedEntry
+	var foundGrowth bool
+	for _, e := range narrateEntries {
+		if fieldString(e, "phase") == "growth.estimated" {
+			growthEntry = e
+			foundGrowth = true
+			break
+		}
+	}
+	require.True(t, foundGrowth, "growth.estimated narrate line must be emitted")
+	growthFields := growthEntry.ContextMap()
+	assert.Equal(t, 0.0, growthFields["analyst_weight"],
+		"G-1: AnalystWeight must reflect estimator output (0.0 with no analyst coverage)")
+	assert.Equal(t, 1.0, growthFields["historical_weight"],
+		"G-1: HistoricalWeight must reflect estimator output (1.0 with no analyst coverage)")
+	// stage_count must be the actual length of ProjectedGrowthRates (7 with
+	// the default estimator config). Defensive pin so a future Stage3 default
+	// bump doesn't silently break the narrate contract.
+	assert.EqualValues(t, 7, growthFields["stage_count"],
+		"stage_count must equal len(ProjectedGrowthRates)")
+
 	// --- Assert (2): bundle directory created with the expected per-phase
 	//     files. The directory layout is artifacts/<UTC-date>/AAPL/req_<id>/. ---
 	bundleDir := findBundleDir(t, artifactRoot, "AAPL", requestID)
