@@ -513,9 +513,27 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			allFlags = append(allFlags, liabilityResult.Flags...)
 			totalRulesApplied += len(liabilityRules)
 		}
-		// Shim branch (liabilities) — delete in PR-4 when B-rules go native.
+
+		// DC-1 Phase 2 PR-4 Task 4.1: drain native Adjuster output so
+		// migrated B-rules' LedgerEntries / Overlays land in rule-
+		// iteration order on data.AdjustmentLedger / data.Overlays.
+		// Mirrors the asset drain shipped in PR-2 Task 2.1 and the
+		// earnings drain shipped in PR-3 Task 3.1.
+		if len(liabilityResult.NativeLedgerEntries) > 0 {
+			data.AdjustmentLedger = append(data.AdjustmentLedger, liabilityResult.NativeLedgerEntries...)
+		}
+		if len(liabilityResult.NativeOverlays) > 0 {
+			data.Overlays = append(data.Overlays, liabilityResult.NativeOverlays...)
+		}
+
+		// Shim branch (liabilities) — delete in PR-4 Task 4.5 when ALL
+		// B-rules go native. Task 4.1 migrates B1; Task 4.2 migrates B2;
+		// Task 4.3 migrates B3. Until the last B-rule is native, the shim
+		// still emits Fired:true / Fired:false entries for the legacy-only
+		// rules, while excluding the natively emitted ones to avoid
+		// double-counting.
 		data.AdjustmentLedger = append(data.AdjustmentLedger,
-			s.shimLedgerEntriesFromLegacy(liabilityRules, liabilityResult.Adjustments)...)
+			s.shimLedgerEntriesFromLegacyExcluding(liabilityRules, liabilityResult.Adjustments, liabilityResult.NativelyEmittedRuleIDs)...)
 	}
 
 	// Apply Category C (Earnings Normalization) adjustments
