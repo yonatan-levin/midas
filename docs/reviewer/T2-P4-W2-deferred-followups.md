@@ -57,7 +57,7 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 
 ## From P3 gates
 
-### 4. LATENT — No load-time invariant for `len(PayoutPath) == DividendForecastHorizon`
+### 4. LATENT — No load-time invariant for `len(PayoutPath) == DividendForecastHorizon` — **RESOLVED 2026-05-23 (commit `f9fc2c9`, branch `feat/t2-p4-w2-item4-payout-path-length-invariant`)**
 
 - **Severity:** LATENT
 - **Surfacing gate:** P3 REVIEWER (N1 finding)
