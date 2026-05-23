@@ -702,3 +702,202 @@ func TestLoadFFOSubsectorTables_FeedsLookup(t *testing.T) {
 	assert.Greater(t, v, 0.0)
 	assert.Less(t, v, 0.20)
 }
+
+// ---------------------------------------------------------------------------
+// NAV cross-check subsector cap-rate end-to-end tests — VAL-3 Phase 4 close.
+//
+// These tests pin the *behaviour* contract: the NAV cross-check at the end of
+// Calculate() must consult the subsector-specific cap rate for input.Industry
+// (via getCapRate), not the model's default 6%. The warning string emitted
+// when P/FFO diverges from NAV embeds the cap rate as "cap rate X.X%" — we
+// assert that string contains the subsector rate, NOT the default. Combined
+// with the explicit NAV/share value assertion (computed from the subsector
+// cap rate, not the default), this proves the cap-rate value flowed from
+// config -> getCapRate -> NAV computation -> warning.
+//
+// Three subsectors with cap rates that differ materially from the 6% default
+// (per config/industry_multiples.json v1.3.1):
+//   - REIT_DATACENTER (DLR-style): cap rate 4.0% — 50% lower than default
+//   - REIT_RETAIL    (SPG-style): cap rate 8.5% — 42% higher than default
+//   - REIT_INDUSTRIAL (PLD-style): cap rate 4.5% — 25% lower than default
+//
+// Each fixture is constructed so the P/FFO value diverges >2x from NAV —
+// guaranteeing the warning fires — and the warning string can be inspected.
+// ---------------------------------------------------------------------------
+
+// TestFFOModel_Calculate_NAVCrossCheck_DataCenterSubsector pins that a
+// REIT_DATACENTER input uses the 4.0% cap rate (per config) in the NAV
+// cross-check, NOT the 6% default. Modeled on DLR (Digital Realty).
+func TestFFOModel_Calculate_NAVCrossCheck_DataCenterSubsector(t *testing.T) {
+	// Use the embedded-config constructor so the subsector tables are loaded
+	// straight from config/industry_multiples.json — proves the end-to-end
+	// path including config -> getCapRate -> NAV warning.
+	model := NewFFOModel(testLogger())
+	ctx := context.Background()
+
+	// FFO = 200M + 800M = 1B; FFO/share = 10; with REIT_DATACENTER multiple
+	// (31x per config) -> value/share = 310. With the 4% cap rate, NAV/share
+	// = OI / 0.04 / shares = 50M / 0.04 / 100M = 12.5. Ratio = 310 / 12.5 =
+	// 24.8x -> well above DeviationHigh (2.0), so warning fires.
+	//
+	// If the model were to incorrectly use the 6% default instead of 4%,
+	// NAV/share would be 50M / 0.06 / 100M ≈ 8.33 and the embedded cap rate
+	// in the warning string would be "6.0%". The assertions below would fail.
+	input := &ModelInput{
+		Industry: "REIT_DATACENTER",
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "DLR",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   200000000,
+					DepreciationAndAmortization: 800000000,
+					OperatingIncome:             50000000, // NOI proxy
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      100000000,
+		InterestBearingDebt:    15000000000,
+		CashAndCashEquivalents: 500000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// FFO/share = 10; subsector multiple (REIT_DATACENTER) = 31 -> 310.
+	assert.InDelta(t, 310.0, result.IntrinsicValuePerShare, 0.01,
+		"REIT_DATACENTER must apply the 31x P/FFO multiple, not the 15x default")
+
+	// The NAV warning must be present and must embed the subsector cap rate.
+	navWarning := findNAVWarning(t, result.Warnings)
+	require.NotEmpty(t, navWarning, "NAV divergence warning should fire on this fixture")
+	assert.Contains(t, navWarning, "cap rate 4.0%",
+		"warning must embed REIT_DATACENTER cap rate (4.0%%), not default 6.0%%")
+	assert.NotContains(t, navWarning, "cap rate 6.0%",
+		"warning must NOT embed the default 6.0%% cap rate for a REIT_DATACENTER input")
+
+	// NAV/share computed from the subsector cap rate: 50M / 0.04 / 100M = 12.5
+	// per share. Cross-check the warning embeds the right NAV figure.
+	assert.Contains(t, navWarning, "$12.5",
+		"warning must report NAV/share computed from the 4.0%% subsector cap rate")
+}
+
+// TestFFOModel_Calculate_NAVCrossCheck_RetailSubsector pins REIT_RETAIL uses
+// the 8.5% cap rate. Modeled on SPG (Simon Property Group).
+func TestFFOModel_Calculate_NAVCrossCheck_RetailSubsector(t *testing.T) {
+	model := NewFFOModel(testLogger())
+	ctx := context.Background()
+
+	// FFO = 300M + 700M = 1B; FFO/share = 10. REIT_RETAIL multiple (10x) ->
+	// value/share = 100. OI = 100M -> NAV with 8.5% cap = 100M / 0.085 /
+	// 100M = 11.76/share. Ratio = 100 / 11.76 = 8.5x -> warning fires.
+	//
+	// With 6% default NAV/share = 100M / 0.06 / 100M = 16.67 — different
+	// number, different warning string. We assert against the 8.5%-derived
+	// value.
+	input := &ModelInput{
+		Industry: "REIT_RETAIL",
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "SPG",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   300000000,
+					DepreciationAndAmortization: 700000000,
+					OperatingIncome:             100000000,
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      100000000,
+		InterestBearingDebt:    20000000000,
+		CashAndCashEquivalents: 1000000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// REIT_RETAIL multiple (10x) -> value/share = 100.
+	assert.InDelta(t, 100.0, result.IntrinsicValuePerShare, 0.01,
+		"REIT_RETAIL must apply the 10x P/FFO multiple, not the 15x default")
+
+	navWarning := findNAVWarning(t, result.Warnings)
+	require.NotEmpty(t, navWarning, "NAV divergence warning should fire on this fixture")
+	assert.Contains(t, navWarning, "cap rate 8.5%",
+		"warning must embed REIT_RETAIL cap rate (8.5%%), not default 6.0%%")
+	assert.NotContains(t, navWarning, "cap rate 6.0%",
+		"warning must NOT embed the default 6.0%% cap rate for a REIT_RETAIL input")
+
+	// NAV/share = 100M / 0.085 / 100M ≈ 11.76. fmt's %.4g rounds to "11.76".
+	assert.Contains(t, navWarning, "$11.76",
+		"warning must report NAV/share computed from the 8.5%% subsector cap rate")
+}
+
+// TestFFOModel_Calculate_NAVCrossCheck_IndustrialSubsector pins
+// REIT_INDUSTRIAL uses the 4.5% cap rate. Modeled on PLD (Prologis).
+func TestFFOModel_Calculate_NAVCrossCheck_IndustrialSubsector(t *testing.T) {
+	model := NewFFOModel(testLogger())
+	ctx := context.Background()
+
+	// FFO = 400M + 600M = 1B; FFO/share = 10. REIT_INDUSTRIAL multiple
+	// (22.5x) -> value/share = 225. OI = 45M -> NAV with 4.5% cap = 45M /
+	// 0.045 / 100M = 10/share. Ratio = 225 / 10 = 22.5x -> warning fires.
+	//
+	// With 6% default NAV/share = 45M / 0.06 / 100M = 7.5 — different
+	// number, different warning string.
+	input := &ModelInput{
+		Industry: "REIT_INDUSTRIAL",
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "PLD",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   400000000,
+					DepreciationAndAmortization: 600000000,
+					OperatingIncome:             45000000,
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      100000000,
+		InterestBearingDebt:    25000000000,
+		CashAndCashEquivalents: 800000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// REIT_INDUSTRIAL multiple (22.5x) -> value/share = 225.
+	assert.InDelta(t, 225.0, result.IntrinsicValuePerShare, 0.01,
+		"REIT_INDUSTRIAL must apply the 22.5x P/FFO multiple, not the 15x default")
+
+	navWarning := findNAVWarning(t, result.Warnings)
+	require.NotEmpty(t, navWarning, "NAV divergence warning should fire on this fixture")
+	assert.Contains(t, navWarning, "cap rate 4.5%",
+		"warning must embed REIT_INDUSTRIAL cap rate (4.5%%), not default 6.0%%")
+	assert.NotContains(t, navWarning, "cap rate 6.0%",
+		"warning must NOT embed the default 6.0%% cap rate for a REIT_INDUSTRIAL input")
+
+	// NAV/share = 45M / 0.045 / 100M = 10.
+	assert.Contains(t, navWarning, "$10",
+		"warning must report NAV/share computed from the 4.5%% subsector cap rate")
+}
+
+// findNAVWarning is a tiny helper for the subsector NAV tests. Returns the
+// first warning containing "NAV cross-check" (the substring stable across the
+// warning string format) or the empty string if none. The phrase
+// "NAV cross-check" appears verbatim in ffo.go's warning template (see
+// "diverges from NAV cross-check ($X.XX/share, cap rate Y.Y%)").
+func findNAVWarning(t *testing.T, warnings []string) string {
+	t.Helper()
+	for _, w := range warnings {
+		if strings.Contains(w, "NAV cross-check") {
+			return w
+		}
+	}
+	return ""
+}
