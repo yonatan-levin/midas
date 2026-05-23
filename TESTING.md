@@ -222,8 +222,42 @@ a dedicated subtest in `c6_capitalized_interest_adjuster_test.go` with an
 explicit failure message naming "Phase 3 Restated() must NOT add C6 DeltaAmount
 to retained earnings" — this is the load-bearing carrier of the
 capitalized-interest reclassification semantics and must not regress when
-Phase 3 ships the `Restated()` accessor. PR-4 (liabilities B1/B2/B3) extends
-this template to the remaining category.
+Phase 3 ships the `Restated()` accessor. **PR-4 (liabilities B1/B2/B3)
+extends this template to the final category** — see
+`b1_operating_leases_adjuster_test.go`, `b2_pension_adjuster_test.go`, and
+`b3_contingent_liabilities_adjuster_test.go`. The B3 test pins
+`Field:"DebtLikeClaims"` on the emitted OverlaySpec with an explicit
+failure message naming the Phase 4 routing intent ("B3 emits
+DebtLikeClaims overlay — Phase 4 consumer reads Overlays[Field:DebtLikeClaims],
+NOT data.TotalDebt"), mirroring the C6 EquityOffset=0 pin convention.
+B3's `AIProvenance` best-effort capture (`ModelName: b3AIModelName`;
+`PromptHash`/`SourceDocHash`/`ExtractedSpan` empty per Q4 deferral) is
+pinned by a dedicated subtest that asserts the populated fields are
+non-zero AND the deferred-hash fields are empty.
+
+**Basket-snapshot ledger integration test (DC-1 Phase 2 PR-4 Task 4.6).**
+`internal/integration/datacleaner_ledger_basket_test.go::TestLedger_BasketSnapshot_ClusterPrediction`
+is the first integration test to read `data.AdjustmentLedger` directly
+and assert on per-ticker expected AdjusterID sets. The test runs the
+production cleaner pipeline (`CleanFinancialData`) against every period
+of every basket ticker bundle under
+`artifacts/tier2-baseline/<newest-date>/<TICKER>/` and asserts that the
+observed-across-all-periods SET of `AdjusterID` values on
+`data.AdjustmentLedger` is a SUPERSET of a conservative per-ticker
+lower-bound table (the `predictionRows` table). Truth source: the
+committed shadow snapshots at
+`internal/integration/testdata/recompute-shadow/<TICKER>.json` (filed
+by Phase 1's basket-recording test) plus the 7-cluster mapping in
+`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md`,
+inverted via `service.go::checkRuleApplicability`. The assertion
+granularity is "considered, not fired" — the AdjusterID is populated
+on every LedgerEntry regardless of `Fired` state, so the test catches
+the regression "a future refactor silently stopped emitting LedgerEntries
+for adjuster X on ticker Y" without depending on per-period firing
+state we can't predict from the bundle root alone. Skip behavior for
+missing bundles + `passedCount >= 5` floor mirror
+`TestDataCleanerRecompute_ShadowMode_TickerBasket` so the two tests
+degrade in lockstep.
 
 **FlagEmitter test convention (DC-1 Phase 2 PR-2 Task 2.5).** Flag-only reviews
 (R&D capitalization, capitalized software) emit `Fired:false` LedgerEntries on

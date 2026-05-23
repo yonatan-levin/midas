@@ -1,6 +1,6 @@
 # T2-BS-3 — SEC parser emits `TotalLiabilities = 0` for AMD and KO across all periods
 
-**Status:** OPEN — surfaced by DC-1 Phase 1 shadow-mode shim on first basket run (2026-05-19)
+**Status:** OPEN — Disposition: **Option B (carve-out)** chosen by Phase 2 ARCH on 2026-05-19. Parser fix DEFERRED. Phase 2 closes 2026-05-23 with this tracker still OPEN. Parser fix reconsidered if a future phase needs `AsReported.TotalLiabilities` to be truthful for AMD/KO (today every consumer that needs a non-zero value falls back to the Graham-floor `resolveTotalLiabilities` derivation or to Phase 3's `Restated` view), or if a separate parser-side initiative requests it. Originally surfaced by DC-1 Phase 1 shadow-mode shim on first basket run (2026-05-19).
 **Severity:** MEDIUM (data-quality bug; existing consumers tolerate it via the Graham-floor `resolveTotalLiabilities` fallback at `internal/services/valuation/service.go`, but Phase 2's `Adjuster`-based view reconstruction will inherit the parser zero unless this is addressed)
 **Filed:** 2026-05-19 by DC-1 Phase 1 post-merge follow-up
 **Phase context:** Discovered via `internal/integration/testdata/recompute-shadow/{AMD,KO}.json` after DC-1 Phase 1 merged to master (`2d916a7`). The shadow-mode `recomputeUmbrellas` shim recorded 12 `clamp_suspected: true` divergences each for AMD and KO TotalLiabilities — 12 of 12 periods covered in `artifacts/tier2-baseline/2026-05-15/`.
@@ -108,3 +108,4 @@ curl -A "midas-dev contact@example.com" 'https://data.sec.gov/api/xbrl/companyfa
 | Date | Change |
 |------|--------|
 | 2026-05-19 | Filed by DC-1 Phase 1 post-merge follow-up. Empirical evidence from committed `recompute-shadow/{AMD,KO}.json` snapshots at master `b8e9c77`. Cross-referenced from DC-1 tracker. |
+| 2026-05-23 | DC-1 Phase 2 closes with this tracker OPEN. Disposition recorded in the Status header above: **Option B (carve-out)** chosen by Phase 2 ARCH on 2026-05-19. Parser fix DEFERRED. Phase 3's `Restated` view reconstruction (from `sum(components) + plug`) will produce a non-zero `TotalLiabilities` for AMD/KO downstream, correctly surfacing the components-derived liability total. `AsReported.TotalLiabilities` stays at 0 for these tickers. Tracker reconsidered if (a) a future phase needs `AsReported.TotalLiabilities` to be truthful for AMD/KO, or (b) a separate parser-side initiative requests it. |
