@@ -154,6 +154,22 @@ type Config struct {
 	// flags / config at startup.
 	GitSHA       string
 	BuildVersion string
+
+	// ConfigSnapshot holds the algorithmically-load-bearing subset of the
+	// resolved production config under which the captured request ran
+	// (Valuation + Macro). Stamped into the bundle root as `00-config.json`
+	// at construction time (eager) or Promote()-time (deferred) so the
+	// replay binary can re-run against the EXACT configuration the original
+	// request used. Closes RPL-9 (capture side).
+	//
+	// Zero-value (the default for callers that haven't been updated to
+	// populate it) → `00-config.json` is NOT written and the bundle is
+	// indistinguishable from a pre-1.2 capture. Replay-side consumers
+	// fall back to the production-defaults mirror in
+	// replay/module.go::replayConfig() (RPL-10 stopgap) when the file is
+	// absent. The bundle's manifest version stays 1.2 either way; the
+	// presence-or-absence of `00-config.json` is the per-bundle signal.
+	ConfigSnapshot ConfigSnapshot
 }
 
 // Bundle is the per-request, on-disk capture context. Created at request
@@ -242,6 +258,17 @@ type Bundle struct {
 	// contract honest under -race).
 	qualityFlagThreshold string
 	qualityFlagCount     atomic.Int64
+
+	// configSnapshot is the resolved valuation + macro config subset
+	// captured at construction time. Written to `00-config.json` under
+	// the bundle root by OpenBundle (eager) immediately after MkdirAll
+	// and by Promote() (deferred) after its MkdirAll. The Bundle keeps
+	// the value so deferred-mode bundles can stamp it at promote-time
+	// without re-reading cfg. Zero-value snapshots skip the write
+	// (preserves backward-compat for callers that haven't been updated
+	// to populate Config.ConfigSnapshot — bundle reads identically to
+	// pre-RPL-9 1.1 layout).
+	configSnapshot ConfigSnapshot
 }
 
 // snapshotJob is the unit of work passed from Snapshot() (request-thread,
@@ -316,6 +343,26 @@ func OpenBundle(cfg Config, requestID, ticker string, trigger Trigger) (*Bundle,
 		pendingCap:           pendingCap,
 		queueCap:             queueSize,
 		qualityFlagThreshold: cfg.Triggers.QualityFlagThreshold,
+		configSnapshot:       cfg.ConfigSnapshot,
+	}
+
+	// RPL-9 (capture side): stamp `00-config.json` at bundle root as soon
+	// as the directory exists. We write synchronously here (request-thread)
+	// rather than dispatch through the snapshot worker because:
+	//   1. Sequencing — the manifest reader expects the file alongside
+	//      `00-manifest.json` at bundle inspection time, not "eventually
+	//      after the worker drains". Doing it inline guarantees that.
+	//   2. Size — the payload is ~300 bytes; write latency is negligible.
+	//   3. Failure handling — a marshal/write failure here would be
+	//      strictly silent if dispatched async; surfacing it inline lets
+	//      writeErrors increment so the manifest's outcome degrades to
+	//      "partial" and operators can find the failure in postmortem.
+	//
+	// Zero-value snapshots (the back-compat default for callers that have
+	// not been updated to populate Config.ConfigSnapshot) are no-op'd by
+	// writeConfigSnapshot.
+	if err := writeConfigSnapshot(root, cfg.ConfigSnapshot); err != nil {
+		b.writeErrors.Add(1)
 	}
 
 	// Single background worker keeps the file-write order deterministic and
@@ -383,6 +430,7 @@ func OpenDeferredBundle(cfg Config, requestID, ticker string, trigger Trigger) (
 		pendingCap:           pendingCap,
 		queueCap:             queueSize,
 		qualityFlagThreshold: cfg.Triggers.QualityFlagThreshold,
+		configSnapshot:       cfg.ConfigSnapshot,
 		// pendingStreams is allocated lazily on first AppendStream so the
 		// common case (no stream activity) carries zero map overhead.
 	}
@@ -984,6 +1032,16 @@ func (b *Bundle) Promote(trigger Trigger) error {
 	if err := os.MkdirAll(mkdirRoot, 0o755); err != nil {
 		b.pendingMu.Unlock()
 		return fmt.Errorf("artifact: promote mkdir %s: %w", mkdirRoot, err)
+	}
+
+	// RPL-9 (capture side): stamp `00-config.json` at bundle root now that
+	// the directory exists. Mirror of the OpenBundle stamp — written
+	// synchronously so postmortem readers see the file alongside the
+	// manifest. Zero-value snapshots (back-compat default) are no-op'd by
+	// writeConfigSnapshot. Failure increments writeErrors so the manifest
+	// outcome degrades to "partial".
+	if err := writeConfigSnapshot(mkdirRoot, b.configSnapshot); err != nil {
+		b.writeErrors.Add(1)
 	}
 
 	// Snapshot the buffers and clear them under the lock.

@@ -1,7 +1,7 @@
 # RPL-9 — Bundle manifest doesn't snapshot production config → replay-side mirrors by hand-copy (brittle)
 
-**Status:** OPEN — filed 2026-05-14 as the durable fix for the bug class that produced debug cycles 1+2+3.
-**Severity:** MEDIUM (architectural debt) — no current symptom, but the same bug class will recur until this is closed.
+**Status:** PARTIALLY RESOLVED — capture side SHIPPED 2026-05-23 on branch `feat/rpl-9-capture-side-config-snapshot`. Replay-side consumer remains OPEN (follow-up; RPL-10 stopgap continues to cover it).
+**Severity:** MEDIUM (architectural debt) — no current symptom, but the same bug class will recur until the consumer side closes.
 **Origin:** Identified during debug cycle 2 root-cause analysis; forward-referenced in `internal/observability/replay/module.go` inline comment.
 
 ## The problem class
@@ -36,12 +36,18 @@ Out of scope for this tracker (these are runtime-only, not algorithmic): server 
 
 ## Acceptance criteria
 
-- [ ] Capture path writes the effective valuation config to the bundle.
-- [ ] Replay path reads the bundle's config (with fallback to current hand-copy for old bundles).
-- [ ] Golden test: introduce a config divergence between replay/module.go and production viper defaults; verify replay STILL produces zero-diff because the bundle's saved config overrides.
-- [ ] Bundle version bumped 1.1 → 1.2.
-- [ ] Old 1.0 + 1.1 bundles continue to replay (with the hand-copy fallback).
-- [ ] Inline comment in `replay/module.go` cycle-2 block removed (the manifest now carries the source of truth; no more hand-mirror discipline needed).
+- [x] **Capture path writes the effective valuation config to the bundle.** RESOLVED 2026-05-23: `internal/observability/artifact/config_snapshot.go` defines `ConfigSnapshot` + `00-config.json` writer; `OpenBundle` (eager) writes inline after MkdirAll, `Promote` (deferred) writes after its MkdirAll. Wired in `internal/api/server.go::setupMiddleware` from `*config.Config.Valuation` + `Macro`.
+- [ ] **Replay path reads the bundle's config (with fallback to current hand-copy for old bundles).** OPEN — follow-up. Today the replay binary still uses `replay/module.go::replayConfig()`'s hand-mirrored production defaults (RPL-10 stopgap). 1.2 bundles ship the snapshot file but no replay-side consumer reads it yet.
+- [ ] **Golden test: introduce a config divergence between replay/module.go and production viper defaults; verify replay STILL produces zero-diff because the bundle's saved config overrides.** OPEN — gated on the replay-side consumer landing.
+- [x] **Bundle version bumped 1.1 → 1.2.** RESOLVED 2026-05-23: `internal/observability/artifact/manifest.go::ManifestVersion` is now `"1.2"`; `internal/observability/replay/manifest.go::SupportedBundleVersions` adds `"1.2": true`. Pinned by `TestManifestVersion_BumpedTo1_2`.
+- [x] **Old 1.0 + 1.1 bundles continue to replay (with the hand-copy fallback).** RESOLVED 2026-05-23: capture-side writer no-ops on zero-value `ConfigSnapshot` (back-compat), and replay-side reads ignore the new file today. Manually verified by replaying `artifacts/tier2-baseline/2026-05-15/AAPL/` (1.1 bundle) post-bump — replay accepts the manifest and runs end-to-end (drift fields seen are unrelated pre-existing Tier-2 engine evolution).
+- [ ] **Inline comment in `replay/module.go` cycle-2 block removed (the manifest now carries the source of truth; no more hand-mirror discipline needed).** OPEN — gated on the replay-side consumer landing. While the RPL-10 stopgap is still load-bearing, the cycle-2 mirror discipline still applies.
+
+### Implementation notes (capture side, 2026-05-23)
+
+- **Design choice: new `00-config.json` (NOT extending `02-handler-options.json`).** Rationale: `02-handler-options.json` carries per-request user-supplied overrides (ticker, override_beta, override_rf) under the `handler.entry` phase. The config snapshot is bundle-level boot-time metadata — conceptually closer to `00-manifest.json` than to a phase payload. Naming `00-config.json` groups it with manifest data in directory listings and avoids muddying handler-input semantics.
+- **Synchronous write at MkdirAll.** Both `OpenBundle` and `Promote` write the snapshot inline (request-thread / promote-thread) rather than dispatching through the snapshot worker, because the file is ~300 bytes and postmortem readers expect to see it alongside the manifest at any inspection time, not "eventually after the worker drains".
+- **Back-compat via zero-value snapshot.** Callers that construct `artifact.Config` without populating `ConfigSnapshot` (most tests, any future caller that hasn't been updated) get a bundle indistinguishable from pre-1.2 layout — no `00-config.json` written. The manifest version stays 1.2 either way; presence-or-absence of the file is the per-bundle signal.
 
 ## Estimated effort
 
