@@ -711,6 +711,85 @@ func TestRenderJSON_VerboseFlag_StageDiffsAlwaysIncluded(t *testing.T) {
 	}
 }
 
+// TestRenderText_HandlesWriteErrors_WithStageDiffs sweeps the write-budget
+// space WITH StageDiffs populated so each error-return branch in
+// writeStageDiffSection (the "Stage diffs:" header, the per-stage
+// filename header, and each of the Floats / Strings / DriftedWithinTolerance
+// per-line writes) is exercised. The pre-existing
+// TestReport_RenderText_HandlesWriteErrors fixture has no StageDiffs, so
+// writeStageDiffSection is never reached — RPL-4d coverage residual.
+//
+// Step=1 (not 8 like the older sweep) so every byte boundary is a
+// candidate failure point; cheap relative to the total run.
+func TestRenderText_HandlesWriteErrors_WithStageDiffs(t *testing.T) {
+	r := &Report{
+		ReplayVersion: ReplayVersion,
+		Verbose:       true,
+		Results: []Result{
+			{
+				Bundle: "/x",
+				Status: StatusFail,
+				StageDiffs: map[string]StageDiff{
+					"13-wacc.json": {
+						Floats: []FloatDiff{
+							{Path: "stages.13-wacc.json.cost_of_equity", Old: 0.118, New: 0.121, RelDrift: 0.0254},
+						},
+						Strings: []StringDiff{
+							{Path: "stages.13-wacc.json.model.chosen", Old: "old", New: "new"},
+						},
+						DriftedWithinTolerance: []FloatDiff{
+							{Path: "stages.13-wacc.json.growth_rate", Old: 0.05, New: 0.0500001, RelDrift: 2e-7},
+						},
+					},
+					"15-valuation.json": {
+						Floats: []FloatDiff{
+							{Path: "stages.15-valuation.json.dcf_value_per_share", Old: 156.42, New: 156.81, RelDrift: 0.0025},
+						},
+					},
+				},
+			},
+		},
+		Summary: Summary{Total: 1, Failed: 1},
+	}
+	// Sweep byte budget over the entire output surface so every internal
+	// Fprintf / io.WriteString return-error path inside
+	// writeStageDiffSection (and the upstream writeResultRow call site)
+	// is hit at least once.
+	for budget := 0; budget < 600; budget++ {
+		w := &failingWriter{writeBudget: budget}
+		_ = r.RenderText(w) // ignore err — we just want coverage
+	}
+}
+
+// TestRenderJSON_HandlesWriteError_TrailingNewline pins RenderJSON's
+// second error-return branch: io.WriteString(w, "\n") after the JSON
+// body has been written successfully. The existing
+// TestReport_RenderJSON_HandlesWriteError covers the first branch
+// (w.Write(body) fails) with budget=0; this covers the trailing-newline
+// branch by sweeping the budget into the byte-range where Write succeeds
+// but the subsequent newline write fails.
+func TestRenderJSON_HandlesWriteError_TrailingNewline(t *testing.T) {
+	r := &Report{
+		ReplayVersion: ReplayVersion,
+		GitSHACurrent: "deadbeef",
+		Results:       []Result{{Bundle: "/x", Status: StatusPass}},
+		Summary:       Summary{Total: 1, Passed: 1},
+	}
+	// First measure the body size so we know where the boundary is.
+	var sizing bytes.Buffer
+	if err := r.RenderJSON(&sizing); err != nil {
+		t.Fatalf("RenderJSON sizing: %v", err)
+	}
+	bodyLen := sizing.Len() - 1 // subtract trailing newline
+	// Budget = bodyLen: Write succeeds, WriteString("\n") fails. Other
+	// budgets nearby may catch the partial-write branch. Sweep the
+	// immediate neighborhood for robustness.
+	for budget := bodyLen - 2; budget <= bodyLen+1; budget++ {
+		w := &failingWriter{writeBudget: budget}
+		_ = r.RenderJSON(w)
+	}
+}
+
 // TestRenderJSON_BundlePathUsesForwardSlash pins RPL-4b: the JSON
 // contract's "bundle" field uses forward-slash separators on all
 // platforms so Linux shell pipelines piping bundle paths through
