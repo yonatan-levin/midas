@@ -77,3 +77,42 @@ func TestRevenueMultipleModel_GetMultiple_RM2P1Buckets(t *testing.T) {
 		})
 	}
 }
+
+// TestRevenueMultipleModel_GetMultiple_RM2P1ContractFullSeven pins the full
+// seven-bucket contract specified in docs/reviewer/RM-2-sector-multiple-coverage-gaps.md
+// Phase 1. This is the load-bearing assertion that locks the EV/Revenue
+// multiples table to the tracker values exactly — a change to any of these
+// constants needs an explicit doc + acceptance-criteria edit, not a silent
+// re-tune. The first three (MFG_SEMI, FIN_BANK, FIN_INSURANCE) overlap with
+// TestRevenueMultipleModel_GetMultiple_RM2P1Buckets above; duplicated here so
+// the seven-row contract reads as one block.
+//
+// Failure mode being prevented: an editor bumps TECH_AI to 8.0 or
+// HEALTH_BIOTECH back up to 6.0 in a "tidy-up" pass and the revenue_multiple
+// model silently emits a different valuation for every AI-tagged or biotech
+// ticker. Tracker spec values are the legal source of truth.
+func TestRevenueMultipleModel_GetMultiple_RM2P1ContractFullSeven(t *testing.T) {
+	model := NewRevenueMultipleModel(testLogger())
+	require.NotNil(t, model)
+
+	// Tracker spec values from docs/reviewer/RM-2-sector-multiple-coverage-gaps.md
+	// Phase 1 — RM-2.1.1. Any drift here = tracker contract violation.
+	contract := map[string]float64{
+		"MFG_SEMI":       6.5,  // fabless semis — fixes MXL silent-1.5x fallback
+		"TECH_SAAS":      8.0,  // SaaS — calibrated above TECH parent (5.0)
+		"TECH_AI":        12.0, // AI infrastructure / model providers
+		"HEALTH_BIOTECH": 5.0,  // biotech (clinical + late-stage blended)
+		"HEALTH_PHARMA":  4.0,  // big pharma
+		"FIN_BANK":       2.0,  // commercial banks
+		"FIN_INSURANCE":  1.0,  // insurance carriers
+	}
+
+	for industry, expected := range contract {
+		t.Run(industry, func(t *testing.T) {
+			got := model.getMultiple(industry)
+			assert.InDelta(t, expected, got, 0.0001,
+				"RM-2 P1 tracker requires getMultiple(%q) = %v; got %v — update tracker before changing this value",
+				industry, expected, got)
+		})
+	}
+}
