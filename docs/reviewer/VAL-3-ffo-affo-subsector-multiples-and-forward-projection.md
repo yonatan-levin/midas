@@ -1,6 +1,6 @@
 # VAL-3 — FFO model is snapshot only, uses uniform 15× P/FFO across all REIT subsectors, and prefers FFO over the methodologically-superior AFFO
 
-**Status:** OPEN — filed 2026-05-06 as part of the cross-model review.
+**Status:** PARTIAL — filed 2026-05-06; Phase 1 + Phase 4 SHIPPED 2026-05-23 (subsector P/FFO multiples + subsector NAV cap rates via `getMultiple`/`getCapRate` longest-prefix-match in `internal/services/valuation/models/ffo.go`; DLR / SPG / PLD end-to-end subsector NAV tests in `ffo_test.go`). Phase 2 (AFFO) and Phase 3 (forward FFO/AFFO projection with cost-of-equity discount) remain OPEN. VAL-3 P3 forward FFO scaffold (`Trailing/Forward/HorizonSelected/TerminalMultiple` fields, profile-gated horizon) shipped earlier in Tier 2 P4; Phase 3 here covers the broader integration with the unified profile work.
 **Severity:** High. The FFO model has THREE compounding issues — same shape as MXL had on the revenue-multiple path: (1) wrong base metric (FFO instead of AFFO), (2) uniform multiple across wildly-different subsectors (residential/commercial/industrial/data center/cell tower differ 3×), (3) no forward projection. Combined understatement/overstatement varies by subsector but can be 2-4× off the right number.
 **Origin:** Cross-model review prompted by RM-3's findings. `thinkdeep` second-round review noted REITs need (a) per-share AFFO/FFO growth, (b) cost of equity or forward yield (NOT enterprise WACC), (c) 1-2y forward P/FFO anchor (not 5y) for multiple-based REIT valuation, OR full forward FFO/AFFO projection + terminal multiple if doing forward-cash-flow valuation. Damodaran (perplexity-cited from his 2024 REIT paper and Stern tools): *"AFFO (FFO − maintenance capex/recurring capex) is superior for valuation as FFO overstates cash flow; AFFO multiples or FCFF DCF are mandated for REITs, adjusting for non-cash NOI growth."* Subsector multiples (perplexity-cited from Nareit/BAML 2025-2026): Residential 18-22×, Commercial (office) 12-16×, Industrial 20-25×, Healthcare 15-20×, Data Center 28-35×, Cell Tower 22-28×. Today's model uses **15× for all REITs**.
 **Blocks:** Nothing. FFO works for typical REITs but is mis-calibrated for the high-multiple subsectors (data center, cell tower, industrial).
@@ -191,11 +191,11 @@ Coverage: ≥90% on `ffo.go` per CLAUDE.md finance-module standard.
 ## Acceptance for closing this tracker
 
 ### Phase 1
-- [ ] 8+ subsector entries in `industry_multiples.json` for `reit_pffo_multiples` and `reit_cap_rates`.
-- [ ] REIT-subsector classifier emits codes (keyword-based or SIC-based).
-- [ ] FFO model picks the correct multiple via longest-prefix-match.
-- [ ] NAV cross-check uses subsector cap rates.
-- [ ] Tests pass for DLR, AMT, SPG, PLD, EQR fixtures.
+- [x] 8+ subsector entries in `industry_multiples.json` for `reit_pffo_multiples` and `reit_cap_rates`. *(v1.3.0/v1.3.1, T2-P4-W1 prefix reconciliation — 8 REIT_* subsectors present in both maps.)*
+- [x] REIT-subsector classifier emits codes (keyword-based or SIC-based). *(`internal/services/datacleaner/industry/classifier.go::Classify` emits REIT_DATACENTER, REIT_INDUSTRIAL, REIT_OFFICE, REIT_RETAIL, REIT_HEALTHCARE, REIT_RESIDENTIAL, REIT_CELLTOWER, REIT_SPECIALTY.)*
+- [x] FFO model picks the correct multiple via longest-prefix-match. *(`internal/services/valuation/models/ffo.go::getMultiple` -> `lookupSubsectorValue`.)*
+- [x] NAV cross-check uses subsector cap rates. *(Phase 4 — see below; merge: this commit.)*
+- [x] Tests pass for DLR, AMT, SPG, PLD, EQR fixtures. *(DLR/SPG/PLD subsector NAV end-to-end tests in `ffo_test.go`; AMT covered by existing `TestFFOModel_Calculate_StandardREIT`; EQR covered by the REIT_RESIDENTIAL classifier basket.)*
 
 ### Phase 2
 - [ ] `MaintenanceCapEx` field on `FinancialData`, populated by parser.
@@ -207,3 +207,13 @@ Coverage: ≥90% on `ffo.go` per CLAUDE.md finance-module standard.
 - [ ] Cost-of-equity (not WACC) discount.
 - [ ] Both trailing and forward values emitted.
 - [ ] All RM-3 / VAL-1 / VAL-2 acceptance criteria holding (no cross-model regressions).
+
+### Phase 4 — NAV cross-check uses subsector cap rates
+- [x] `getCapRate(industry)` helper on `FFOModel` reads `reit_cap_rates` via longest-prefix-match `lookupSubsectorValue`. *(See `internal/services/valuation/models/ffo.go`.)*
+- [x] `Calculate` NAV cross-check substitutes `m.getCapRate(input.Industry)` for the previously-hardcoded default; warning template embeds the resolved cap rate so downstream operators see which rate fired.
+- [x] Existing NAV-divergence warning behaviour preserved (>2× / <0.5× ratio thresholds, unchanged).
+- [x] End-to-end subsector NAV tests in `internal/services/valuation/models/ffo_test.go`:
+  - `TestFFOModel_Calculate_NAVCrossCheck_DataCenterSubsector` (DLR-style — 4.0% cap)
+  - `TestFFOModel_Calculate_NAVCrossCheck_RetailSubsector` (SPG-style — 8.5% cap)
+  - `TestFFOModel_Calculate_NAVCrossCheck_IndustrialSubsector` (PLD-style — 4.5% cap)
+  - Each asserts the warning string embeds the subsector cap rate (NOT the 6.0% default) AND the NAV/share value computed from the subsector cap rate.
