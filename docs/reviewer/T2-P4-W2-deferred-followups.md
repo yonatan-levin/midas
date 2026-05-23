@@ -18,15 +18,16 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 
 ## From P2 gates
 
-### 1. NIT — `terminal_dominance` warning fires on legacy path
+### 1. NIT — `terminal_dominance` warning fires on legacy path — **RESOLVED 2026-05-23 (this commit; branch `chore/t2-p4-w2-batch-1-3-doc-and-comment`)**
 
 - **Severity:** NIT
 - **Surfacing gate:** P2 REVIEWER (LOW finding)
-- **Location:** `internal/services/valuation/service.go:1316`
+- **Location:** `internal/services/valuation/service.go:1306-1310` (the warning emission site; the tracker's original `:1316` pointer was off-by-a-few-lines after intervening edits)
 - **Why not fixed at merge:** The warning is strictly more diagnostic value when it fires broadly; there is no false-positive risk to suppressing it. The plan §6.2 specified "only profile-driven", but the implementation fires on BOTH profile-driven AND legacy DCF paths. This is an implementation/spec drift, not a bug.
 - **Suggested resolution:** Two options:
   - (a) Update the plan doc to match the implementation (recommended — the broader firing is strictly better diagnostically).
   - (b) Gate the warning behind `resolvedProfile != nil` to honor the plan as written.
+- **Resolution:** Chose option (a) per recommendation. Added a post-merge reconciliation NOTE to `docs/refactoring/implementations/assumption-profile-implementation-plan.md` Task P2.2's terminal-dominance snippet explaining that the warning emission is intentionally unconditional (fires on both profile-driven and legacy paths) because terminal-PV dominance is a real model-risk signal regardless of how the horizon was chosen, and gating behind `resolvedProfile != nil` would silently mask the same signal on legacy tickers. No code change. `go test ./...` PASS.
 - **Priority:** Opportunistic (doc reconciliation only)
 
 ### 2. NIT — `itoaP2` shim could be `strconv.Itoa` — **RESOLVED 2026-05-23 (commit `106c960`)**
@@ -39,16 +40,17 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 - **Resolution:** Imported `strconv`, replaced the single `itoaP2(horizonYears)` call site with `strconv.Itoa(horizonYears)`, and removed the shim function. `go test ./internal/services/valuation/...` green.
 - **Priority:** Opportunistic
 
-### 3. NIT — Stale exit-multiple comment
+### 3. NIT — Stale exit-multiple comment — **RESOLVED 2026-05-23 (this commit; branch `chore/t2-p4-w2-batch-1-3-doc-and-comment`)**
 
 - **Severity:** NIT
 - **Surfacing gate:** P2 REVIEWER
-- **Location:** `internal/services/valuation/service.go:1057` (comment) vs `:1119-1128` (actual wiring)
+- **Location:** `internal/services/valuation/service.go:1052` (comment was at `:1057` pre-edit; now removed) vs `:1112-1123` (the actual exit-multiple wiring that does NOT reassign `terminalMethodLabel`)
 - **Why not fixed at merge:** The comment says terminal_method_label "may be overridden by exit-multiple wiring below" but the wiring at `:1119-1128` does not actually reassign `terminalMethodLabel`. Misleading comment but no runtime impact.
 - **Suggested resolution:** Either:
   - (a) Remove the misleading comment; OR
   - (b) Stamp `"gordon_growth+exit_multiple"` when `ExitMultiple > 0` to make the comment true.
   - Defer the (a)-vs-(b) decision to the polishing pass — non-blocking.
+- **Resolution:** Chose option (a) — clean delete. Replaced `terminalMethodLabel := "gordon_growth" // default; may be overridden by profile or exit-multiple wiring below` with just `terminalMethodLabel := "gordon_growth"`. The profile-driven override at `:1069-1071` (`if resolvedProfile.TerminalMethod != "" { ... }`) speaks for itself and is the only reassignment site; the exit-multiple wiring at `:1112-1123` sets `dcf.Inputs.ExitMultiple` so `pkg/finance/dcf` can average the exit-multiple TV in, but does NOT touch the label. Option (b) was rejected as a behavior change (response would gain a `"gordon_growth+exit_multiple"` value not currently in the contract). `go test ./internal/services/valuation/...` PASS.
 - **Priority:** Opportunistic
 
 ---
@@ -169,7 +171,7 @@ Validation: `go test ./internal/observability/replay/...` PASS; `go test ./...` 
 
 Move to `docs/reviewer/archive/` once:
 
-- Items 1, 2, 3, 9, 10, 11 (NIT / cleanup batch) are resolved in a single polishing-pass commit OR explicitly waived [items 2, 9, 10, 11 RESOLVED]
+- ~~Items 1, 2, 3, 9, 10, 11 (NIT / cleanup batch) are resolved in a single polishing-pass commit OR explicitly waived~~ — items 2, 9, 10 RESOLVED 2026-05-23 (commit `106c960`); items 1, 3 RESOLVED 2026-05-23 (branch `chore/t2-p4-w2-batch-1-3-doc-and-comment`); item 11 RESOLVED 2026-05-23 (branch `refactor/t2-p4-w2-item11-patch-filing-dates-helper`)
 - Item 4 (LATENT validation invariant) is added to `profile/validation.go` with a test
 - Item 5 (CONCERN — DDM multi-stage diagnostics parity) is either implemented OR explicitly deferred to a Tier 3 design note
 - Item 6 (GAP — per-archetype DDM pins) lands once `testhelpers.RunValuation` ships
