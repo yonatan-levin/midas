@@ -94,7 +94,7 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 - **Suggested resolution:** Coordinate with a type-system audit pass; rename `ArchetypeREITCommercial` → `ArchetypeREITOffice` (or alternative agreed naming) and update all consumers in a single coordinated commit.
 - **Priority:** Before Tier 3 (asymmetry is a footgun for new contributors)
 
-### 8. MINOR — Per-function coverage on FFO subsector loaders below 90%
+### 8. MINOR — Per-function coverage on FFO subsector loaders below 90% — RESOLVED 2026-05-23
 
 - **Severity:** MINOR
 - **Surfacing gate:** P4 QA (C4 finding)
@@ -102,6 +102,10 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 - **Why not fixed at merge:** The package-level gate (≥90%) passed; per-function gap is below the per-function bar but does not block under the package criterion.
 - **Suggested resolution:** Add a malformed-row regression test in `internal/services/valuation/models/ffo_test.go` (e.g., subsector row with non-numeric multiple, missing key, empty subsector string) to cover the error branches of `loadFFOSubsectorTables` and `lookupSubsectorValue`.
 - **Priority:** Opportunistic (gate passed; nice-to-have for resilience)
+- **Resolution:** branch `test/t2-p4-w2-item8-ffo-loader-coverage` adds 12 targeted defensive tests in `internal/services/valuation/models/ffo_test.go` (test-only addition; no changes to `ffo.go`). Final per-function coverage:
+  - `lookupSubsectorValue`: 76.5% → **100.0%** (all branches covered: exact match, longest-prefix-match, underscore-boundary guard, `default`-key skip, nil/empty table, empty industry, no-match fall-through)
+  - `loadFFOSubsectorTables`: 71.4% → 71.4% (unchanged — the two remaining branches are `configfs.Read` failure and `json.Unmarshal` failure; both are structurally unreachable because `configfs.Read` is backed by `embed.FS` rooted at `config/` and always returns the same valid JSON bytes baked into the binary, and the task scope explicitly excluded modifying `ffo.go` to add a production-side seam). The happy-path return is pinned by new tests `TestLoadFFOSubsectorTables_EmbeddedConfig` (asserts all 8 REIT_* subsector keys + `default` present in both tables) and `TestLoadFFOSubsectorTables_FeedsLookup` (regression pin for the loader↔lookup data-shape contract).
+  - Package total: 94.4% → **95.3%**.
 
 ### 9. NIT — Long notes field on `reit_commercial`
 
@@ -157,7 +161,7 @@ Move to `docs/reviewer/archive/` once:
 - Item 5 (CONCERN — DDM multi-stage diagnostics parity) is either implemented OR explicitly deferred to a Tier 3 design note
 - Item 6 (GAP — per-archetype DDM pins) lands once `testhelpers.RunValuation` ships
 - Item 7 (DEFERRED — `ArchetypeREITCommercial` rename) is either executed OR explicitly deferred to a named Tier 3 phase
-- Item 8 (MINOR — FFO loader coverage) has a regression test added OR is explicitly waived (package-level gate continues to pass)
+- Item 8 (MINOR — FFO loader coverage) has a regression test added OR is explicitly waived (package-level gate continues to pass) — **RESOLVED 2026-05-23** (branch `test/t2-p4-w2-item8-ffo-loader-coverage`)
 - Item 12 (replay `ResolutionTrace` walker) scope is confirmed and either resolved or refiled
 
 This tracker SHOULD close before Tier 3 begins. None of its items are blockers for Tier 2 ship; all are quality-of-life improvements that compound if left unaddressed.
