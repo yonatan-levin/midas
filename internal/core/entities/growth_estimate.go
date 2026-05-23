@@ -16,6 +16,15 @@ type GrowthEstimate struct {
 	AnalystEarningsGrowth5Y float64 `json:"analyst_earnings_growth_5y"`
 	NumberOfAnalysts        int     `json:"number_of_analysts"`
 
+	// Blend weights — the actual mix applied when combining analyst consensus
+	// with historical CAGR for Stage 1 growth. AnalystWeight is 0.0 when no
+	// analyst data is available (Source == "historical_only"). The two fields
+	// sum to 1.0 by construction. Surfaced for the `growth.estimated` narrate
+	// phase (spec §5 row 12) and for downstream debuggers wanting to know
+	// which signal dominated the projection. Filed as G-1 (closed).
+	AnalystWeight    float64 `json:"analyst_weight"`
+	HistoricalWeight float64 `json:"historical_weight"`
+
 	// Historical baseline
 	HistoricalCAGR        float64 `json:"historical_cagr"`
 	SustainableGrowthRate float64 `json:"sustainable_growth_rate"` // ROIC x reinvestment rate

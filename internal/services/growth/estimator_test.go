@@ -33,6 +33,10 @@ func TestEstimator_NoAnalystData_UsesHistorical(t *testing.T) {
 	assert.Equal(t, 0.12, result.HistoricalCAGR)
 	assert.Equal(t, 7, len(result.ProjectedGrowthRates)) // 3 + 4 = 7 years
 
+	// G-1: no analyst coverage → 0/1 weights.
+	assert.Equal(t, 0.0, result.AnalystWeight, "no analyst coverage → AnalystWeight=0")
+	assert.Equal(t, 1.0, result.HistoricalWeight, "no analyst coverage → HistoricalWeight=1")
+
 	// Stage 1 (years 1-3): should be historical CAGR (12%)
 	for i := 0; i < 3; i++ {
 		assert.InDelta(t, 0.12, result.ProjectedGrowthRates[i], 0.001,
@@ -76,6 +80,11 @@ func TestEstimator_HighAnalystCoverage(t *testing.T) {
 	// With 15 analysts: 80% analyst (25%) + 20% historical (10%) = 22%
 	expectedBlend := 0.80*0.25 + 0.20*0.10
 	assert.InDelta(t, expectedBlend, result.ProjectedGrowthRates[0], 0.001)
+
+	// G-1: high coverage bucket (n>=10) uses 0.80/0.20.
+	assert.InDelta(t, 0.80, result.AnalystWeight, 1e-9)
+	assert.InDelta(t, 0.20, result.HistoricalWeight, 1e-9)
+	assert.InDelta(t, 1.0, result.AnalystWeight+result.HistoricalWeight, 1e-9, "weights must sum to 1")
 }
 
 func TestEstimator_LowAnalystCoverage(t *testing.T) {
@@ -95,6 +104,10 @@ func TestEstimator_LowAnalystCoverage(t *testing.T) {
 	// With 2 analysts: 40% analyst (30%) + 60% historical (10%) = 18%
 	expectedBlend := 0.40*0.30 + 0.60*0.10
 	assert.InDelta(t, expectedBlend, result.ProjectedGrowthRates[0], 0.001)
+
+	// G-1: low coverage bucket (1-2 analysts) uses 0.40/0.60.
+	assert.InDelta(t, 0.40, result.AnalystWeight, 1e-9)
+	assert.InDelta(t, 0.60, result.HistoricalWeight, 1e-9)
 }
 
 func TestEstimator_MediumAnalystCoverage(t *testing.T) {
@@ -114,6 +127,10 @@ func TestEstimator_MediumAnalystCoverage(t *testing.T) {
 	// With 5 analysts: 60% analyst (20%) + 40% historical (10%) = 16%
 	expectedBlend := 0.60*0.20 + 0.40*0.10
 	assert.InDelta(t, expectedBlend, result.ProjectedGrowthRates[0], 0.001)
+
+	// G-1: medium coverage bucket (3<=n<10) uses 0.60/0.40.
+	assert.InDelta(t, 0.60, result.AnalystWeight, 1e-9)
+	assert.InDelta(t, 0.40, result.HistoricalWeight, 1e-9)
 }
 
 func TestEstimator_ROICSustainabilityCeiling(t *testing.T) {
@@ -285,6 +302,112 @@ func TestEstimator_DefaultConfig_StillProduces7Stages(t *testing.T) {
 
 	assert.Equal(t, 7, len(result.ProjectedGrowthRates),
 		"default config must still produce 3+4=7 stages (backward compatibility)")
+}
+
+// TestEstimator_BlendWeights_AllBuckets pins the G-1 contract: every
+// analyst-count bucket populates AnalystWeight + HistoricalWeight on
+// the returned GrowthEstimate, and the two always sum to 1.0. The
+// narrate `growth.estimated` phase reads these fields directly (see
+// internal/services/valuation/service.go around the call site), so a
+// regression here silently demotes the operator signal back to the
+// coarse 0.5/0.5 era this tracker closed. Filed as
+// docs/reviewer/G1-growth-blend-weights-coarse.md.
+func TestEstimator_BlendWeights_AllBuckets(t *testing.T) {
+	cases := []struct {
+		name             string
+		analystCount     int
+		wantAnalyst      float64
+		wantHistorical   float64
+		wantConfidence   string
+		analystGrowth    float64
+		historicalGrowth float64
+	}{
+		{
+			name:             "no analyst data → 0/1",
+			analystCount:     0, // sentinel; below switches to nil path
+			wantAnalyst:      0.0,
+			wantHistorical:   1.0,
+			wantConfidence:   "medium", // historical-only assessHistoricalConfidence
+			analystGrowth:    0.0,
+			historicalGrowth: 0.10,
+		},
+		{
+			name:             "low coverage (1-2) → 0.40/0.60",
+			analystCount:     2,
+			wantAnalyst:      0.40,
+			wantHistorical:   0.60,
+			wantConfidence:   "low",
+			analystGrowth:    0.20,
+			historicalGrowth: 0.10,
+		},
+		{
+			name:             "medium coverage (3-9) → 0.60/0.40",
+			analystCount:     5,
+			wantAnalyst:      0.60,
+			wantHistorical:   0.40,
+			wantConfidence:   "medium",
+			analystGrowth:    0.20,
+			historicalGrowth: 0.10,
+		},
+		{
+			name:             "high coverage (>=10) → 0.80/0.20",
+			analystCount:     15,
+			wantAnalyst:      0.80,
+			wantHistorical:   0.20,
+			wantConfidence:   "high",
+			analystGrowth:    0.20,
+			historicalGrowth: 0.10,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEstimator()
+			historical := &pkggrowth.CalculationResult{
+				GrowthRate: tc.historicalGrowth,
+				IsReliable: true,
+			}
+			var analyst *ports.YFinanceAnalystEstimates
+			if tc.analystCount > 0 {
+				analyst = &ports.YFinanceAnalystEstimates{
+					EarningsGrowth5Year: tc.analystGrowth,
+					NumberOfAnalysts:    tc.analystCount,
+				}
+			}
+
+			result := e.EstimateGrowthRates(context.Background(), "TEST", analyst, historical, 0)
+
+			assert.InDelta(t, tc.wantAnalyst, result.AnalystWeight, 1e-9,
+				"AnalystWeight for %s", tc.name)
+			assert.InDelta(t, tc.wantHistorical, result.HistoricalWeight, 1e-9,
+				"HistoricalWeight for %s", tc.name)
+			assert.InDelta(t, 1.0, result.AnalystWeight+result.HistoricalWeight, 1e-9,
+				"weights must sum to 1.0 (G-1 invariant)")
+			if tc.analystCount > 0 {
+				assert.Equal(t, tc.wantConfidence, result.Confidence)
+			}
+		})
+	}
+}
+
+// TestEstimator_BlendWeights_AnalystPresentButZeroAnalysts pins the
+// edge case where YFinanceAnalystEstimates is non-nil but its
+// NumberOfAnalysts == 0 (Yahoo returned an empty earningsTrend
+// payload). The estimator must treat this identically to "no analyst
+// coverage" — Source=historical_only and weights 0/1.
+func TestEstimator_BlendWeights_AnalystPresentButZeroAnalysts(t *testing.T) {
+	e := newTestEstimator()
+	historical := &pkggrowth.CalculationResult{GrowthRate: 0.10, IsReliable: true}
+	analyst := &ports.YFinanceAnalystEstimates{
+		EarningsGrowth5Year: 0.25, // present but no analysts behind it
+		NumberOfAnalysts:    0,
+	}
+
+	result := e.EstimateGrowthRates(context.Background(), "TEST", analyst, historical, 0)
+
+	assert.Equal(t, "historical_only", result.Source)
+	assert.Equal(t, 0.0, result.AnalystWeight)
+	assert.Equal(t, 1.0, result.HistoricalWeight)
 }
 
 func TestGrowthEstimate_SummaryGrowthRate(t *testing.T) {

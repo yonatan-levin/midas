@@ -616,19 +616,14 @@ func (s *Service) performValuation(
 	growthEstimate := s.growthEstimator.EstimateGrowthRates(ctx, historicalData.Ticker, analystData, historicalGrowth, sustainableGrowth)
 
 	// Tier-1 narrate: growth.estimated. Spec §5 row 12 fields. Reports
-	// year-1 + terminal growth and an indication of which inputs drove the
-	// blend (analyst vs historical weights).
+	// year-1 + terminal growth and the actual analyst/historical blend
+	// weights the estimator applied. G-1 (closed 2026-05-23): weights now
+	// reflect the real per-analyst-count bucket (e.g. 0.80/0.20 for n>=10,
+	// 0.0/1.0 when no analyst coverage) rather than a coarse 0.5/0.5 flag.
 	{
 		gYear1 := 0.0
 		if rates := growthEstimate.ProjectedGrowthRates; len(rates) > 0 {
 			gYear1 = rates[0]
-		}
-		analystWeight := 0.0
-		historicalWeight := 1.0
-		if analystData != nil {
-			// Coarse signal — actual weighting is internal to estimator.
-			analystWeight = 0.5
-			historicalWeight = 0.5
 		}
 		gOutcome := narrate.OutcomeOK
 		if !historicalGrowth.IsReliable {
@@ -636,8 +631,8 @@ func (s *Service) performValuation(
 		}
 		narrate.From(ctx).Emit(ctx, narrate.PhaseGrowthEstimated, gOutcome, "",
 			zap.Int("stage_count", len(growthEstimate.ProjectedGrowthRates)),
-			zap.Float64("analyst_weight", analystWeight),
-			zap.Float64("historical_weight", historicalWeight),
+			zap.Float64("analyst_weight", growthEstimate.AnalystWeight),
+			zap.Float64("historical_weight", growthEstimate.HistoricalWeight),
 			zap.Float64("g_year_1", gYear1),
 			zap.Float64("g_terminal", growthEstimate.TerminalGrowthRate),
 		)
