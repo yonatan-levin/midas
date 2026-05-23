@@ -3,7 +3,6 @@ package integration
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -306,7 +305,3 @@ func TestLedger_BasketSnapshot_ClusterPrediction(t *testing.T) {
 	require.GreaterOrEqual(t, passedCount.Load(), int32(5),
 		"basket coverage degraded — fewer than 5 tickers exercised the ledger successfully (got %d)", passedCount.Load())
 }
-
-// Compile-time enforcement: keep the fmt import live so a future edit
-// removing the only %-format string doesn't break the build silently.
-var _ = fmt.Sprintf

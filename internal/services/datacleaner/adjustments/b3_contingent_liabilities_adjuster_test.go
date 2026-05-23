@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,6 +55,97 @@ func (f *failingAIService) GetAnalysisCapabilities() []ai.FootnoteAnalysisType {
 
 func (f *failingAIService) HealthCheck(ctx context.Context) error {
 	return errors.New("simulated AI service outage")
+}
+
+// nilResponseAIService returns (nil, nil) from AnalyzeFootnote — exercises
+// the defensive `if response == nil` branch in captureB3AIProvenance. A
+// well-behaved AI service should never do this, but the defensive guard
+// exists to prevent a downstream nil-deref if a buggy implementation slips
+// through; this mock keeps the guard covered by tests.
+type nilResponseAIService struct{}
+
+func (n *nilResponseAIService) AnalyzeFootnote(ctx context.Context, request *ai.FootnoteAnalysisRequest) (*ai.FootnoteAnalysisResponse, error) {
+	return nil, nil
+}
+
+func (n *nilResponseAIService) BatchAnalyzeFootnotes(ctx context.Context, requests []*ai.FootnoteAnalysisRequest) ([]*ai.FootnoteAnalysisResponse, error) {
+	return nil, nil
+}
+
+func (n *nilResponseAIService) GetAnalysisCapabilities() []ai.FootnoteAnalysisType {
+	return []ai.FootnoteAnalysisType{ai.ContingentLiabilityAnalysis}
+}
+
+func (n *nilResponseAIService) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+// errorFieldAIService returns a non-nil response with a populated Error
+// field — exercises the `if response.Error != ""` branch in
+// captureB3AIProvenance. Real HTTP-backed AI services use this shape when
+// the upstream model returns a structured error response (HTTP 200 with
+// `error: "..."`) rather than a transport-level failure.
+type errorFieldAIService struct{}
+
+func (e *errorFieldAIService) AnalyzeFootnote(ctx context.Context, request *ai.FootnoteAnalysisRequest) (*ai.FootnoteAnalysisResponse, error) {
+	return &ai.FootnoteAnalysisResponse{
+		RequestID:    "test-error-response",
+		Ticker:       request.Ticker,
+		AnalysisType: request.AnalysisType,
+		Error:        "upstream model returned structured error",
+	}, nil
+}
+
+func (e *errorFieldAIService) BatchAnalyzeFootnotes(ctx context.Context, requests []*ai.FootnoteAnalysisRequest) ([]*ai.FootnoteAnalysisResponse, error) {
+	return nil, nil
+}
+
+func (e *errorFieldAIService) GetAnalysisCapabilities() []ai.FootnoteAnalysisType {
+	return []ai.FootnoteAnalysisType{ai.ContingentLiabilityAnalysis}
+}
+
+func (e *errorFieldAIService) HealthCheck(ctx context.Context) error {
+	return nil
+}
+
+// mapFormAIService returns a response where the contingent_liability_estimate
+// is a map[string]interface{} (HTTP-service shape) rather than a typed
+// ai.ContingentLiabilityEstimate struct (in-process mock shape). Exercises
+// the `case map[string]interface{}:` arm of the type-switch decoder in
+// captureB3AIProvenance — this is the path that fires when the AI response
+// arrives via JSON unmarshal (which materializes nested objects as
+// map[string]interface{} by default).
+type mapFormAIService struct {
+	probabilityPercent float64
+	confidence         float64
+	supportingEvidence []interface{}
+}
+
+func (m *mapFormAIService) AnalyzeFootnote(ctx context.Context, request *ai.FootnoteAnalysisRequest) (*ai.FootnoteAnalysisResponse, error) {
+	return &ai.FootnoteAnalysisResponse{
+		RequestID:    "test-map-form",
+		Ticker:       request.Ticker,
+		AnalysisType: request.AnalysisType,
+		Confidence:   m.confidence,
+		ExtractedData: map[string]interface{}{
+			"contingent_liability_estimate": map[string]interface{}{
+				"probability_percent": m.probabilityPercent,
+				"supporting_evidence": m.supportingEvidence,
+			},
+		},
+	}, nil
+}
+
+func (m *mapFormAIService) BatchAnalyzeFootnotes(ctx context.Context, requests []*ai.FootnoteAnalysisRequest) ([]*ai.FootnoteAnalysisResponse, error) {
+	return nil, nil
+}
+
+func (m *mapFormAIService) GetAnalysisCapabilities() []ai.FootnoteAnalysisType {
+	return []ai.FootnoteAnalysisType{ai.ContingentLiabilityAnalysis}
+}
+
+func (m *mapFormAIService) HealthCheck(ctx context.Context) error {
+	return nil
 }
 
 // TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract pins the
@@ -296,6 +388,72 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 			"AI-failure path — AIProvenance must be nil because recorded amount is the conservative fallback, not AI-derived")
 	})
 
+	t.Run("AI returns map-form ContingentLiabilityEstimate populates AIProvenance", func(t *testing.T) {
+		// Defensive-branch coverage for captureB3AIProvenance lines
+		// ~1209-1217: `case map[string]interface{}:` decoder arm. This
+		// fires when the AI response arrives via JSON unmarshal (which
+		// materializes nested objects as map[string]interface{} by
+		// default) instead of as a typed ai.ContingentLiabilityEstimate
+		// struct. Mirrors the legacy helper's branching at
+		// analyzeContingentLiabilityWithAI — both decoder arms must
+		// produce equivalent provenance.
+		//
+		// End-to-end through Apply is reachable for this branch because
+		// the legacy `analyzeContingentLiabilityWithAI` ALSO has a
+		// map-form decoder arm (liabilities.go:1686-1693) and produces
+		// a valid amount, so captureB3AIProvenance runs second and
+		// populates the provenance fields. The nil-response and
+		// Error-field branches are exercised by direct unit tests on
+		// captureB3AIProvenance — see TestCaptureB3AIProvenance_Defensive
+		// Branches below.
+		mapAI := &mapFormAIService{
+			probabilityPercent: 25.0, // 0.25 after /100.0
+			confidence:         0.75,
+			supportingEvidence: []interface{}{
+				"Patent infringement settlement disclosure — pending court approval",
+				"Secondary evidence not surfaced — only first element is captured",
+			},
+		}
+		la := NewLiabilityAdjuster(mapAI, nil).WithAI(true)
+		adj := NewB3ContingentLiabilityAdjuster(la)
+		rule := productionContingentLiabilitiesRule()
+
+		data := &entities.FinancialData{
+			Ticker:                   "AI_MAP_FORM",
+			ContingentLiabilities:    100_000.0,
+			EnvironmentalLiabilities: 50_000.0,
+			LitigationLiabilities:    30_000.0,
+			TotalAssets:              1_000_000.0,
+			Revenue:                  500_000.0,
+		}
+		cleaningCtx := &entities.CleaningContext{
+			IndustryCode: "62",
+			FootnoteText: "Material patent and product-liability disputes ongoing.",
+		}
+
+		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		require.NoError(t, err)
+
+		require.Len(t, out.Overlays, 1)
+		overlay := out.Overlays[0]
+		assert.Equal(t, "DebtLikeClaims", overlay.Field)
+
+		// AIProvenance MUST be populated — map-form decoder arm produced
+		// usable probability + extracted-span signal.
+		require.NotNil(t, overlay.AIProvenance,
+			"map-form decoder arm must populate AIProvenance — both decoder branches must produce equivalent provenance")
+		assert.Equal(t, b3AIModelName, overlay.AIProvenance.ModelName)
+		assert.InDelta(t, 0.25, overlay.AIProvenance.Probability, 1e-9,
+			"map-form decoder must convert probability_percent / 100.0 (25.0 → 0.25)")
+		assert.InDelta(t, 0.75, overlay.AIProvenance.Confidence, 1e-9,
+			"AIProvenance.Confidence must equal the AI response Confidence (outer field, not nested)")
+		assert.Equal(t, "Patent infringement settlement disclosure — pending court approval",
+			overlay.AIProvenance.ExtractedSpan,
+			"map-form decoder must capture supporting_evidence[0] as ExtractedSpan (first element only)")
+		assert.False(t, overlay.AIProvenance.Timestamp.IsZero(),
+			"AIProvenance.Timestamp must be populated")
+	})
+
 	t.Run("skip path (no contingent-liability data) emits Fired:false LedgerEntry", func(t *testing.T) {
 		la := NewLiabilityAdjuster(&mockAIService{}, nil)
 		adj := NewB3ContingentLiabilityAdjuster(la)
@@ -492,4 +650,91 @@ func TestB3ContingentLiabilityAdjuster_LegacyDirectInvocation(t *testing.T) {
 	// Adjustment; dual-write is the dispatcher's responsibility).
 	assert.Equal(t, 0.0, data.TotalDebt,
 		"ProcessContingentLiabilityAdjustment does not mutate data — only the dispatcher does")
+}
+
+// TestCaptureB3AIProvenance_DefensiveBranches directly exercises the
+// defensive branches inside captureB3AIProvenance that the higher-level
+// Apply path cannot reach. The legacy `analyzeContingentLiabilityWithAI`
+// runs FIRST inside ApplyB3Contingent → ProcessContingentLiabilityAdjustment;
+// it has its own non-defensive nil-deref on `response.Error` (liabilities.go
+// :1669) so the AI-returns-nil-response path crashes the legacy call before
+// captureB3AIProvenance is reached. Direct unit-testing on the private
+// helper is the only way to validate the defensive guards remain wired
+// correctly — without these tests, a future edit removing the guards would
+// not be caught by any end-to-end coverage.
+//
+// Coverage contract: this test, together with the AI-failure /
+// AI-disabled / nil-AI-service subtests on Apply, brings
+// captureB3AIProvenance coverage from 69.2% toward 80%+ by hitting:
+//   - `if response == nil` (nilResponseAIService)
+//   - `if response.Error != ""` (errorFieldAIService)
+//   - `case map[string]interface{}:` decoder arm (mapFormAIService, also
+//     covered end-to-end via Apply)
+//
+// `if ctx == nil` is exercised by passing a nil context directly.
+func TestCaptureB3AIProvenance_DefensiveBranches(t *testing.T) {
+	baseData := &entities.FinancialData{
+		Ticker:                   "DEFENSIVE",
+		ContingentLiabilities:    100_000.0,
+		EnvironmentalLiabilities: 50_000.0,
+		LitigationLiabilities:    30_000.0,
+		TotalAssets:              1_000_000.0,
+		Revenue:                  500_000.0,
+		FilingPeriod:             "10-K",
+	}
+	baseCleaningCtx := &entities.CleaningContext{
+		IndustryCode: "45",
+		FootnoteText: "Material patent and product-liability disputes ongoing.",
+	}
+	now := time.Now()
+
+	t.Run("AI returns nil response yields error and nil provenance", func(t *testing.T) {
+		la := NewLiabilityAdjuster(&nilResponseAIService{}, nil).WithAI(true)
+		prov, err := la.captureB3AIProvenance(context.Background(), baseData, baseCleaningCtx, now)
+		require.Error(t, err, "nil-response branch must surface a descriptive error")
+		assert.Contains(t, err.Error(), "nil response",
+			"error message must identify the defensive nil-response branch for diagnostics")
+		assert.Nil(t, prov, "provenance must be nil when AI returned no usable response")
+	})
+
+	t.Run("AI response with populated Error field yields error and nil provenance", func(t *testing.T) {
+		la := NewLiabilityAdjuster(&errorFieldAIService{}, nil).WithAI(true)
+		prov, err := la.captureB3AIProvenance(context.Background(), baseData, baseCleaningCtx, now)
+		require.Error(t, err, "Error-field branch must surface a descriptive error")
+		assert.Contains(t, err.Error(), "upstream model returned structured error",
+			"error message must surface the AI service's Error field verbatim for diagnostics")
+		assert.Nil(t, prov, "provenance must be nil when AI signaled an upstream error")
+	})
+
+	t.Run("AI returns map-form estimate populates provenance via map decoder arm", func(t *testing.T) {
+		mapAI := &mapFormAIService{
+			probabilityPercent: 15.0, // 0.15 after /100.0
+			confidence:         0.6,
+			supportingEvidence: []interface{}{"Direct-unit map-form decoder evidence"},
+		}
+		la := NewLiabilityAdjuster(mapAI, nil).WithAI(true)
+		prov, err := la.captureB3AIProvenance(context.Background(), baseData, baseCleaningCtx, now)
+		require.NoError(t, err)
+		require.NotNil(t, prov)
+		assert.Equal(t, b3AIModelName, prov.ModelName)
+		assert.InDelta(t, 0.15, prov.Probability, 1e-9)
+		assert.InDelta(t, 0.6, prov.Confidence, 1e-9)
+		assert.Equal(t, "Direct-unit map-form decoder evidence", prov.ExtractedSpan)
+		assert.Equal(t, now, prov.Timestamp,
+			"Timestamp must be the value passed in, not time.Now() inside the helper")
+	})
+
+	t.Run("nil ctx is promoted to context.Background", func(t *testing.T) {
+		// Defensive-branch coverage for `if ctx == nil`. The legacy
+		// dispatcher signature does not accept ctx today (PR-4 TODO at
+		// liabilities.go:204) so the production call site at line 1091
+		// passes ctx through unchanged — which could be nil. The guard
+		// promotes it so MockAIService.AnalyzeFootnote (which calls
+		// ctx.Err()) does not nil-deref.
+		la := NewLiabilityAdjuster(&mockAIService{}, nil).WithAI(true)
+		//nolint:staticcheck // SA1012: intentional nil ctx to exercise defensive guard
+		prov, err := la.captureB3AIProvenance(nil, baseData, baseCleaningCtx, now)
+		require.NoError(t, err, "nil-ctx must be promoted to Background, not surfaced as error")
+		require.NotNil(t, prov, "with valid mockAIService the provenance must be populated even on nil-ctx entry")
+	})
 }
