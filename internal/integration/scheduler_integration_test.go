@@ -91,6 +91,13 @@ func TestScheduler_EndToEnd_WatchlistIntegration(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 		defer cancel()
 
+		// Drain the scheduler's supervisor + job goroutines before the subtest
+		// exits (see SCHED-1 / docs/reviewer/scheduler-test-cleanup-race.md).
+		t.Cleanup(func() {
+			cancel()
+			sched.Stop()
+		})
+
 		sched.Start(ctx)
 		<-ctx.Done() // Wait for timeout
 

@@ -84,6 +84,15 @@ func TestSchedulerService_StartStop(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 			defer cancel()
 
+			// Drain the scheduler's supervisor + job goroutines before the test
+			// exits; otherwise late zap log calls panic with
+			// "Log in goroutine after <Test> has completed".
+			// See docs/reviewer/scheduler-test-cleanup-race.md (SCHED-1).
+			t.Cleanup(func() {
+				cancel()
+				scheduler.Stop()
+			})
+
 			// Start scheduler
 			scheduler.Start(ctx)
 
@@ -125,6 +134,13 @@ func TestSchedulerService_ConcurrencyLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
+	// Drain the scheduler's supervisor + job goroutines before the test exits
+	// (see SCHED-1 / docs/reviewer/scheduler-test-cleanup-race.md).
+	t.Cleanup(func() {
+		cancel()
+		scheduler.Stop()
+	})
+
 	scheduler.Start(ctx)
 	<-ctx.Done()
 
@@ -151,6 +167,13 @@ func TestSchedulerService_ErrorHandling(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
+
+	// Drain the scheduler's supervisor + job goroutines before the test exits
+	// (see SCHED-1 / docs/reviewer/scheduler-test-cleanup-race.md).
+	t.Cleanup(func() {
+		cancel()
+		scheduler.Stop()
+	})
 
 	scheduler.Start(ctx)
 	<-ctx.Done()
