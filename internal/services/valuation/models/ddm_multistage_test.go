@@ -13,24 +13,6 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile/testhelpers"
 )
 
-// stampFilingDatesFromAsOf patches FilingDate on every period of the
-// synthetic historical data so HistoricalFinancialData.GetLatestPeriod
-// (which keys on FilingDate, not AsOf) returns the newest entry. The
-// Bootstrap fixture sets AsOf but not FilingDate, which would cause every
-// DDM call against this fixture to fail with "no financial data
-// available". Patching at the test boundary avoids modifying the shared
-// fixture and keeps the testhelpers package contract stable for P4.
-func stampFilingDatesFromAsOf(input *models.ModelInput) {
-	if input == nil || input.HistoricalData == nil {
-		return
-	}
-	for _, period := range input.HistoricalData.Data {
-		if period != nil {
-			period.FilingDate = period.AsOf
-		}
-	}
-}
-
 // TestDDM_MultiStage_AAPLishProfile_HigherThanSingleStage exercises the
 // Tier 2 P3 multi-stage DDM path. Input is the synthetic AAPL-ish fixture
 // (maturing-tech-first-dividend shape: $0.95 latest DPS, rising payout
@@ -44,7 +26,7 @@ func stampFilingDatesFromAsOf(input *models.ModelInput) {
 // Spec §6.3, §7.1; plan Phase P3 task P3.2.
 func TestDDM_MultiStage_AAPLishProfile_HigherThanSingleStage(t *testing.T) {
 	input := testhelpers.BuildSyntheticAAPLishModelInput(t)
-	stampFilingDatesFromAsOf(input)
+	testhelpers.PatchFilingDatesFromAsOf(input)
 	input.Profile = &profile.ResolvedProfile{
 		AssumptionProfile: profile.AssumptionProfile{
 			ProfileID:               "maturing_tech_first_dividend:standard_growth",
@@ -74,7 +56,7 @@ func TestDDM_MultiStage_AAPLishProfile_HigherThanSingleStage(t *testing.T) {
 // dispatcher MUST fall through (preserving pre-Tier-2 behavior).
 func TestDDM_MultiStage_NilProfile_FallsThroughToLegacyGordon(t *testing.T) {
 	input := testhelpers.BuildSyntheticAAPLishModelInput(t)
-	stampFilingDatesFromAsOf(input)
+	testhelpers.PatchFilingDatesFromAsOf(input)
 	input.Profile = nil
 
 	ddm := models.NewDDMModel(zap.NewNop())
@@ -93,7 +75,7 @@ func TestDDM_MultiStage_NilProfile_FallsThroughToLegacyGordon(t *testing.T) {
 // still take the bit-for-bit legacy Gordon path.
 func TestDDM_MultiStage_LegacyMatureLargeBank_RoutesToLegacy(t *testing.T) {
 	input := testhelpers.BuildSyntheticAAPLishModelInput(t)
-	stampFilingDatesFromAsOf(input)
+	testhelpers.PatchFilingDatesFromAsOf(input)
 	input.Profile = &profile.ResolvedProfile{
 		AssumptionProfile: profile.AssumptionProfile{
 			ProfileID:               "mature_large_bank:mature",
@@ -176,7 +158,7 @@ func TestDDM_MultiStage_ErrorPaths(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			input := testhelpers.BuildSyntheticAAPLishModelInput(t)
-			stampFilingDatesFromAsOf(input)
+			testhelpers.PatchFilingDatesFromAsOf(input)
 			input.Profile = multiStageProfile
 			tc.mutate(input)
 
@@ -209,7 +191,7 @@ func TestDDM_MultiStage_DPSGrowthCapClamping(t *testing.T) {
 
 	buildInput := func(p profile.AssumptionProfile) *models.ModelInput {
 		input := testhelpers.BuildSyntheticAAPLishModelInput(t)
-		stampFilingDatesFromAsOf(input)
+		testhelpers.PatchFilingDatesFromAsOf(input)
 		// Engine growth high enough to trigger clamping when the cap is set.
 		input.GrowthEstimate.ProjectedGrowthRates = []float64{0.40, 0.35, 0.30, 0.25, 0.20}
 		input.Profile = &profile.ResolvedProfile{AssumptionProfile: p}

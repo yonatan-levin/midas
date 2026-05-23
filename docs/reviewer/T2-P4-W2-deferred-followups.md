@@ -132,7 +132,7 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 
 ## Cross-phase findings
 
-### 11. CONVERGENT — `FilingDate := AsOf` fixture-patch duplicated across phase tests
+### 11. CONVERGENT — `FilingDate := AsOf` fixture-patch duplicated across phase tests — **RESOLVED 2026-05-23 (commit `bfbaa59`)**
 
 - **Severity:** NIT (test-helper duplication)
 - **Surfacing gate:** P1 REVIEWER (NIT #4) + P1 VERIFIER observation + P3 VERIFIER
@@ -143,6 +143,7 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 - **Why not fixed at merge:** Each phase landed independently; consolidation would have required coordinating against worktrees in flight. Now that all three phases are merged on master, the helper can be extracted in one commit.
 - **Suggested resolution:** Extract to a `testhelpers` helper like `PatchFilingDatesFromAsOf(input *models.ModelInput)` (loops over `input.HistoricalData.Data` setting `FilingDate = AsOf` when zero). Update the three call sites to use the helper.
 - **Priority:** Opportunistic (low blast radius, closes a small duplication)
+- **Resolution:** branch `refactor/t2-p4-w2-item11-patch-filing-dates-helper` adds `PatchFilingDatesFromAsOf(input *models.ModelInput)` to `internal/services/valuation/profile/testhelpers/patch_filing_dates.go` (nil-safe at input / HistoricalData / per-period level; only overwrites FilingDate when zero so fixtures that intentionally pre-stamp FilingDate are preserved). Grep surfaced **5** duplicated implementations (not 3): the two named files plus `profile/tier2_pin_inputs_test.go` (local `stampHistoricalFilingDates`), `models/ddm_multistage_test.go` (local `stampFilingDatesFromAsOf`, 5 call sites), and `models/ffo_forward_test.go` (local `stampFilingDates`, 3 call sites). All three local helpers deleted; all 11 inline call sites migrated. 6 unit tests in `patch_filing_dates_test.go` pin every safety branch + the non-overwrite guarantee. `go test ./...` PASS; `go test -tags pincapture -run TestCapturePins` PASS with byte-identical pin values (MXL primary 9.14634146341463, forward 80.4393754310359).
 
 ### 12. CONVERGENT — Replay walker (T2-P0b-1) closed by P2; `ResolutionTrace` gap remains [RESOLVED 2026-05-23]
 
@@ -168,7 +169,7 @@ Validation: `go test ./internal/observability/replay/...` PASS; `go test ./...` 
 
 Move to `docs/reviewer/archive/` once:
 
-- Items 1, 2, 3, 9, 10, 11 (NIT / cleanup batch) are resolved in a single polishing-pass commit OR explicitly waived
+- Items 1, 2, 3, 9, 10, 11 (NIT / cleanup batch) are resolved in a single polishing-pass commit OR explicitly waived [items 2, 9, 10, 11 RESOLVED]
 - Item 4 (LATENT validation invariant) is added to `profile/validation.go` with a test
 - Item 5 (CONCERN — DDM multi-stage diagnostics parity) is either implemented OR explicitly deferred to a Tier 3 design note
 - Item 6 (GAP — per-archetype DDM pins) lands once `testhelpers.RunValuation` ships

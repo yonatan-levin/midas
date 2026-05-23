@@ -43,13 +43,9 @@ func TestCapturePins(t *testing.T) {
 	// The Bootstrap fixture leaves FilingDate at the zero value (only AsOf
 	// is set), which makes GetLatestPeriod return nil and the model error
 	// out with "no financial data available". Patch FilingDate from AsOf
-	// so the latest period is discoverable. Doing this in the test rather
-	// than in the shared fixture keeps the Bootstrap helper untouched.
-	for _, d := range input.HistoricalData.Data {
-		if d.FilingDate.IsZero() {
-			d.FilingDate = d.AsOf
-		}
-	}
+	// via the shared helper so the latest period is discoverable, keeping
+	// the Bootstrap fixture untouched.
+	testhelpers.PatchFilingDatesFromAsOf(input)
 	input.Profile = &profile.ResolvedProfile{
 		AssumptionProfile: profile.AssumptionProfile{
 			ProfileID:         "cyclical_trough:standard_growth",

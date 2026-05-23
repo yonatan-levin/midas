@@ -60,13 +60,9 @@ func TestTier2_BasketRegression(t *testing.T) {
 func TestTier2_MXL_Pin(t *testing.T) {
 	input := testhelpers.BuildMXLModelInput(t)
 	// Bootstrap fixture leaves FilingDate at zero (only AsOf is set); the
-	// model uses GetLatestPeriod which keys on FilingDate. Patch here so
-	// the pin runs without modifying the shared fixture.
-	for _, d := range input.HistoricalData.Data {
-		if d.FilingDate.IsZero() {
-			d.FilingDate = d.AsOf
-		}
-	}
+	// model uses GetLatestPeriod which keys on FilingDate. Patch via the
+	// shared helper so the pin runs without modifying the shared fixture.
+	testhelpers.PatchFilingDatesFromAsOf(input)
 	input.Profile = &profile.ResolvedProfile{
 		AssumptionProfile: profile.AssumptionProfile{
 			ProfileID:         "cyclical_trough:standard_growth",
