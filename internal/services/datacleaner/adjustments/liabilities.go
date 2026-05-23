@@ -119,6 +119,48 @@ func (b *b1OperatingLeaseCapitalizationAdjuster) Apply(ctx context.Context, work
 	return b.la.ApplyB1OperatingLeases(ctx, working, rule, cleaningCtx)
 }
 
+// b2PensionUnderfundingAdjuster is the per-rule adapter that lets
+// LiabilityAdjuster — which hosts multiple Category B rules — satisfy the
+// single-Apply Adjuster interface for the B2 rule. Mirrors
+// b1OperatingLeaseCapitalizationAdjuster's shape: the adapter holds a
+// pointer to the existing LiabilityAdjuster and Apply delegates to the new
+// mutation-free ApplyB2PensionUnderfunding method.
+//
+// Role classification (plan §3.5 / §4 row B2): OverlayEmitter. The fired
+// LedgerEntry carries NO Component / DeltaAmount / EquityOffset — the
+// declarative amount lives on the OverlaySpec (Field:"TotalDebt",
+// Operation:"add"). The fired LedgerEntry exists for ordering / audit
+// purposes so consumers can answer "did B2 fire?" without reading overlays.
+type b2PensionUnderfundingAdjuster struct {
+	la *LiabilityAdjuster
+}
+
+// NewB2PensionUnderfundingAdjuster returns an Adjuster-shaped wrapper around
+// LiabilityAdjuster's B2 rule. Exported for parity with
+// NewB1OperatingLeaseCapitalizationAdjuster so the cleaner orchestrator can
+// hold the instance alongside the legacy LiabilityAdjuster.
+func NewB2PensionUnderfundingAdjuster(la *LiabilityAdjuster) Adjuster {
+	return &b2PensionUnderfundingAdjuster{la: la}
+}
+
+// Compile-time assertion: b2PensionUnderfundingAdjuster MUST implement
+// Adjuster. If either signature drifts, the package fails to build.
+var _ Adjuster = (*b2PensionUnderfundingAdjuster)(nil)
+
+// Name implements Adjuster.
+func (b *b2PensionUnderfundingAdjuster) Name() string {
+	return adjusterIDB2PensionUnderfunding
+}
+
+// Apply implements Adjuster by delegating to
+// LiabilityAdjuster.ApplyB2PensionUnderfunding. The dual-write contract
+// (in-place mutation of data.TotalDebt / data.InterestBearingDebt) is
+// preserved by the dispatcher in ProcessLiabilityAdjustments — NOT by Apply
+// itself. See ApplyB2PensionUnderfunding godoc for the role split.
+func (b *b2PensionUnderfundingAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return b.la.ApplyB2PensionUnderfunding(ctx, working, rule, cleaningCtx)
+}
+
 // ProcessLiabilityAdjustments orchestrates all Category B liability adjustments
 //
 // DC-1 Phase 2 PR-4 Task 4.1 (incremental Adjuster-interface migration):
@@ -201,7 +243,36 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
 		case "pension_obligations":
-			result = la.ProcessPensionAdjustment(data, rule, cleaningCtx)
+			// DC-1 Phase 2 PR-4 Task 4.2: route B2 through the new
+			// Adjuster-shaped ApplyB2PensionUnderfunding. Mirrors the B1
+			// wiring above — Apply is mutation-free; the dispatcher
+			// performs the dual-write AFTER Apply so the legacy
+			// *AdjustmentResult callers stay byte-identical AND the
+			// AdjusterOutput's LedgerEntries / Overlays / Flags reach the
+			// cleaner orchestrator.
+			out, err := la.ApplyB2PensionUnderfunding(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				// Adjuster.Apply errors are not yet a defined surface in
+				// Phase 2; today's ApplyB2PensionUnderfunding never returns
+				// one. Falling back to the legacy path on hypothetical
+				// future errors preserves the dual-write contract.
+				result = la.ProcessPensionAdjustment(data, rule, cleaningCtx)
+				break
+			}
+
+			// Translate the AdjusterOutput into the legacy *AdjustmentResult
+			// shape so the dispatcher's existing dual-write + audit-trail
+			// accounting keeps working. The dual-write at the bottom of the
+			// loop performs the actual data.TotalDebt mutation.
+			result = b2AdjusterOutputToLegacyResult(out, rule)
+
+			// Record native emissions for the orchestrator. Even when the
+			// rule does not "fire" in the legacy sense (Applied=false), the
+			// AdjusterOutput carries a Fired:false LedgerEntry that is still
+			// load-bearing for "why didn't B2 fire?" observability.
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
 		case "contingent_liabilities":
 			result = la.ProcessContingentLiabilityAdjustment(data, rule, cleaningCtx)
 		default:
@@ -597,6 +668,162 @@ func (la *LiabilityAdjuster) fallbackToSimpleCapitalization(data *entities.Finan
 		Adjustments: []entities.Adjustment{adjustment},
 		Flags:       flags,
 		Reasoning:   fmt.Sprintf("Fallback capitalization of %.0f in operating lease obligations due to PV calculation failure", totalLeaseObligation),
+	}
+}
+
+// ApplyB2PensionUnderfunding is the Adjuster-shaped (DC-1 Phase 2 PR-4 Task
+// 4.2) implementation of the B2 pension / OPEB underfunding rule. Mirrors
+// ApplyB1OperatingLeases's structure — produces an AdjusterOutput describing
+// what the rule would do (LedgerEntry audit trail + OverlaySpec on
+// TotalDebt + significance Flag) but does NOT mutate `working`. The dual-
+// write mutation (data.TotalDebt += totalPensionObligation,
+// data.InterestBearingDebt += totalPensionObligation) is performed by
+// ProcessLiabilityAdjustments' dispatcher so the legacy *AdjustmentResult
+// callers stay byte-identical.
+//
+// Role classification (plan §3.5 / §4 row B2): OverlayEmitter. The fired
+// LedgerEntry intentionally carries NO Component / DeltaAmount /
+// EquityOffset — the declarative amount lives on OverlaySpec
+// (Field:"TotalDebt", Operation:"add"). The audit-only LedgerEntry exists
+// for ordering / "did B2 fire?" diagnostics; the Restater fields are left
+// zero per the OverlayEmitter convention (mirrors A1 goodwill / B1 leases).
+//
+// Implementation strategy: delegates to ProcessPensionAdjustment for the
+// actual underfunding + OPEB math (PBO − PlanAssets fallback to
+// PensionLiabilities, plus OPEBLiability addition) and translates the
+// returned *AdjustmentResult into the AdjusterOutput shape. Preserves the
+// legacy "pension_adjustment:" reasoning prefix on the OverlaySpec for
+// downstream log greppability.
+//
+// Skipped path emits a Fired:false LedgerEntry with SkipReason
+// "No under-funded pension or OPEB obligations present" so observability
+// can answer "why didn't B2 fire on this ticker?" without code reading.
+//
+// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
+// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row B2 / §7 Task 4.2
+func (la *LiabilityAdjuster) ApplyB2PensionUnderfunding(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	// ctx accepted for interface symmetry with future industry-aware
+	// adjusters; B2 itself uses neither today.
+	_ = ctx
+
+	now := time.Now()
+
+	// Delegate to the legacy method for the actual underfunding calculation.
+	// This preserves the existing flag taxonomy + reasoning strings bit-for-
+	// bit, which is load-bearing for downstream consumers that grep on the
+	// "pension_adjustment:" / "pension_underfunding" prefixes.
+	legacy := la.ProcessPensionAdjustment(working, rule, cleaningCtx)
+
+	// Skip path: no underfunding / OPEB present. Emit a single Fired:false
+	// LedgerEntry so observability can answer "why didn't B2 fire on this
+	// ticker?". The legacy method returns a deterministic reasoning string;
+	// surface it verbatim as SkipReason.
+	if legacy == nil || !legacy.Applied {
+		skipReason := "No under-funded pension or OPEB obligations present"
+		reasoning := skipReason
+		if legacy != nil && legacy.Reasoning != "" {
+			skipReason = legacy.Reasoning
+			reasoning = legacy.Reasoning
+		}
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDB2PensionUnderfunding,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  reasoning,
+				SkipReason: skipReason,
+			}},
+		}, nil
+	}
+
+	// Fired path: emit a declarative OverlaySpec on TotalDebt + a Fired:true
+	// audit LedgerEntry (no Component / DeltaAmount per OverlayEmitter role)
+	// + any flags the legacy path generated. legacy.Amount carries the
+	// total pension obligation (underfunding + OPEB).
+	overlay := entities.OverlaySpec{
+		OverlayID:       adjusterIDB2PensionUnderfunding,
+		RuleID:          rule.ID,
+		Field:           "TotalDebt",
+		Operation:       "add",
+		Amount:          legacy.Amount,
+		AmountSemantics: entities.AmountIncremental,
+		// Preserve the legacy "pension_adjustment:" prefix on the overlay
+		// so existing log greps keep working. firstAdjustmentReasoning
+		// pulls it from legacy.Adjustments[0].Reasoning.
+		Reasoning: firstAdjustmentReasoning(legacy),
+	}
+
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:  now,
+			AdjusterID: adjusterIDB2PensionUnderfunding,
+			RuleID:     rule.ID,
+			Fired:      true,
+			// Greppable summary; the load-bearing detail lives on the
+			// OverlaySpec.Reasoning. Component / DeltaAmount intentionally
+			// unset (OverlayEmitter role per plan §3.5).
+			Reasoning: "B2 pension/OPEB underfunding overlay emitted",
+		}},
+		Overlays: []entities.OverlaySpec{overlay},
+		Flags:    legacy.Flags,
+	}
+
+	return out, nil
+}
+
+// b2AdjusterOutputToLegacyResult translates the new AdjusterOutput shape
+// into the legacy *AdjustmentResult expected by ProcessLiabilityAdjustments'
+// existing audit-trail accounting. Mirrors b1AdjusterOutputToLegacyResult —
+// B2 is an OverlayEmitter, so the translation reads the pension amount
+// from the OverlaySpec.Amount (not from a LedgerEntry DeltaAmount; B2
+// emits none on the LedgerEntry per the OverlayEmitter convention).
+func b2AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule) *AdjustmentResult {
+	// Locate the firing OverlaySpec — B2 emits exactly one when fired and
+	// zero when skipped (skip paths produce a Fired:false LedgerEntry only).
+	for _, overlay := range out.Overlays {
+		if overlay.OverlayID != adjusterIDB2PensionUnderfunding {
+			continue
+		}
+		adjustment := entities.Adjustment{
+			ID:          fmt.Sprintf("pension-adj-%d", time.Now().UnixNano()),
+			RuleID:      rule.ID,
+			Category:    entities.LiabilityCompleteness,
+			Type:        entities.TreatAsDebt,
+			Amount:      overlay.Amount,
+			FromAccount: "PensionUnderfunding",
+			ToAccount:   "InterestBearingDebt",
+			Reasoning:   overlay.Reasoning,
+			Applied:     true,
+			Timestamp:   time.Now(),
+		}
+		return &AdjustmentResult{
+			Amount:      overlay.Amount,
+			Applied:     true,
+			Adjustments: []entities.Adjustment{adjustment},
+			Flags:       out.Flags,
+			Reasoning:   fmt.Sprintf("Added %.0f in under-funded pension/OPEB obligations to debt", overlay.Amount),
+		}
+	}
+
+	// Skipped path — surface the SkipReason from the Fired:false LedgerEntry
+	// for parity with the legacy "no adjustment" branches.
+	reasoning := "No under-funded pension or OPEB obligations present"
+	for _, entry := range out.LedgerEntries {
+		if entry.AdjusterID == adjusterIDB2PensionUnderfunding {
+			reasoning = entry.SkipReason
+			if reasoning == "" {
+				reasoning = entry.Reasoning
+			}
+			break
+		}
+	}
+	return &AdjustmentResult{
+		Amount:      0.0,
+		Applied:     false,
+		Adjustments: []entities.Adjustment{},
+		Flags:       []entities.Flag{},
+		Reasoning:   reasoning,
 	}
 }
 
