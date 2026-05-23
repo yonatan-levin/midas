@@ -499,10 +499,10 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 		// capitalized_software) emit LedgerEntries natively via the
 		// dispatcher in ProcessAssetAdjustments, drained at the
 		// NativeLedgerEntries / NativeOverlays appends immediately above.
-		// PR-3 will delete the earnings shim branch; PR-4 will delete the
-		// liability shim branch and the shimLedgerEntriesFromLegacy /
-		// shimLedgerEntriesFromLegacyExcluding helpers themselves (this PR
-		// keeps both helpers because liability + earnings still call them).
+		// PR-3 Task 3.8 deleted the earnings shim branch; PR-4 Task 4.5
+		// deleted the liability shim branch AND removed both shim helpers
+		// (shimLedgerEntriesFromLegacy / shimLedgerEntriesFromLegacyExcluding)
+		// — PR-1's shim is fully gone.
 	}
 
 	// Apply Category B (Liability Completeness) adjustments
@@ -526,14 +526,13 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			data.Overlays = append(data.Overlays, liabilityResult.NativeOverlays...)
 		}
 
-		// Shim branch (liabilities) — delete in PR-4 Task 4.5 when ALL
-		// B-rules go native. Task 4.1 migrates B1; Task 4.2 migrates B2;
-		// Task 4.3 migrates B3. Until the last B-rule is native, the shim
-		// still emits Fired:true / Fired:false entries for the legacy-only
-		// rules, while excluding the natively emitted ones to avoid
-		// double-counting.
-		data.AdjustmentLedger = append(data.AdjustmentLedger,
-			s.shimLedgerEntriesFromLegacyExcluding(liabilityRules, liabilityResult.Adjustments, liabilityResult.NativelyEmittedRuleIDs)...)
+		// DC-1 Phase 2 PR-4 Task 4.5: liability-side shim deleted — all B-rules
+		// (B1/B2/B3 OverlayEmitters) emit OverlaySpecs natively via the
+		// dispatcher in ProcessLiabilityAdjustments, drained at the
+		// NativeLedgerEntries / NativeOverlays appends immediately above.
+		// PR-1's shim is now FULLY removed; helpers shimLedgerEntriesFromLegacy
+		// + shimLedgerEntriesFromLegacyExcluding deleted below in this same
+		// commit (no remaining callers across A/B/C categories).
 	}
 
 	// Apply Category C (Earnings Normalization) adjustments
@@ -569,123 +568,27 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 		// (C1/C2/C3/C5/C6 Restaters + C4/C7 FlagEmitters) emit LedgerEntries
 		// natively via the dispatcher in ProcessEarningsAdjustments, drained at
 		// the NativeLedgerEntries / NativeOverlays appends immediately above.
-		// PR-4 will delete the liability-side shim branch AND the helpers
-		// shimLedgerEntriesFromLegacy / shimLedgerEntriesFromLegacyExcluding
-		// themselves (this PR keeps the helpers because the liability adjuster
-		// still calls shimLedgerEntriesFromLegacy).
+		// PR-4 Task 4.5 then deleted the liability-side shim branch AND removed
+		// both shim helpers (shimLedgerEntriesFromLegacy /
+		// shimLedgerEntriesFromLegacyExcluding) — PR-1's shim is fully gone.
 	}
 
 	return allAdjustments, allFlags, totalRulesApplied, nil
 }
 
-// shimLedgerEntriesFromLegacy maps the legacy []entities.Adjustment shape onto
-// the new []entities.LedgerEntry shape. It exists ONLY for the duration of
-// DC-1 Phase 2 PR-1; PR-2/PR-3/PR-4 replace each category's call site with
-// adjusters that emit LedgerEntries natively, at which point the matching
-// shim branch and this helper's caller(s) are deleted. The helper itself is
-// removed when the final category migrates (PR-4 absorbs B-rules — the last
-// caller).
-//
-// Mapping (plan §7 Task 1.4):
-//   - Each applied Adjustment → LedgerEntry{Fired:true, AdjusterID:RuleID,
-//     RuleID, Reasoning, Timestamp, Component:FromAccount,
-//     DeltaAmount:-Amount}. Writedowns and exclusions are recorded as negative
-//     deltas; lease/pension/contingent overlays that ADD to TotalDebt are also
-//     recorded as negative deltas because the dual-write Amount field is a
-//     positive magnitude in the legacy struct. PR-4 (B-rule native migration)
-//     fixes the sign convention for OverlayEmitters by populating
-//     OverlaySpec.Operation explicitly instead of using DeltaAmount.
-//   - Each rule.ID that did NOT appear as an Adjustment.RuleID in result →
-//     LedgerEntry{Fired:false, AdjusterID:rule.ID, RuleID:rule.ID,
-//     Reasoning:"shim: skipped rule", SkipReason:"shim: per-rule skip
-//     metadata not surfaced in PR-1 …", Timestamp:now}. Reasoning is a
-//     short greppable summary; SkipReason carries the dual-write context.
-//     The shim has no access to the per-rule skip reason (it's discarded
-//     inside Process*Adjustments) so a generic SkipReason is recorded. Native
-//     adjusters in PR-2/3/4 emit the real SkipReason from each Process* helper.
-func (s *service) shimLedgerEntriesFromLegacy(rules []*entities.CleaningRule, applied []entities.Adjustment) []entities.LedgerEntry {
-	return s.shimLedgerEntriesFromLegacyExcluding(rules, applied, nil)
-}
-
-// shimLedgerEntriesFromLegacyExcluding is the DC-1 Phase 2 PR-2 Task 2.1
-// variant of the shim that respects an exclusion set: rule IDs in
-// nativelyEmittedRuleIDs are SKIPPED from both Pass 1 (fired) and Pass 2
-// (skipped) shim emission so the cleaner orchestrator can drain the rule's
-// native AdjusterOutput first without producing a duplicate shim entry.
-//
-// During Task 2.1 only goodwill_exclusion populates nativelyEmittedRuleIDs;
-// Tasks 2.2-2.5 widen the set as more A-rules migrate; Task 2.6 deletes the
-// asset call site entirely and reverts to shimLedgerEntriesFromLegacy for
-// the remaining liability + earnings branches. When the LAST category
-// migrates, the shim — and both helpers — are removed.
-//
-// A nil exclusion set is treated as the empty set, so the helper's
-// behavior is bit-for-bit identical to shimLedgerEntriesFromLegacy for the
-// liability + earnings call sites.
-func (s *service) shimLedgerEntriesFromLegacyExcluding(rules []*entities.CleaningRule, applied []entities.Adjustment, nativelyEmittedRuleIDs map[string]bool) []entities.LedgerEntry {
-	if len(rules) == 0 {
-		return nil
-	}
-
-	entries := make([]entities.LedgerEntry, 0, len(applied)+len(rules))
-	firedRuleIDs := make(map[string]struct{}, len(applied))
-
-	// Pass 1: emit one Fired:true entry per applied adjustment, in the order
-	// the adjuster returned them. Skip any rule whose native Adjuster.Apply
-	// path already produced a LedgerEntry — see godoc.
-	// TODO(PR-4): liability-overlay adjusters (B1/B2/B3) emit OverlaySpec{Operation:"add"} natively; their shim DeltaAmount sign is opposite the actual TotalDebt change (documented dual-write artifact — see godoc + plan §7 Task 1.4).
-	for _, adj := range applied {
-		if nativelyEmittedRuleIDs[adj.RuleID] {
-			// Native emission already covered this rule; do not double-count.
-			firedRuleIDs[adj.RuleID] = struct{}{}
-			continue
-		}
-		entries = append(entries, entities.LedgerEntry{
-			Timestamp:   adj.Timestamp,
-			AdjusterID:  adj.RuleID,
-			RuleID:      adj.RuleID,
-			Fired:       true,
-			Reasoning:   adj.Reasoning,
-			Component:   adj.FromAccount,
-			DeltaAmount: -adj.Amount,
-		})
-		firedRuleIDs[adj.RuleID] = struct{}{}
-	}
-
-	// Pass 2: for any rule that did NOT fire (and was not natively emitted),
-	// emit a Fired:false entry so downstream observability can answer "why
-	// didn't this rule fire on this ticker?" without code reading. Iterates
-	// rules in input order so skip entries are deterministic.
-	now := time.Now()
-	for _, rule := range rules {
-		if rule == nil {
-			continue
-		}
-		if _, fired := firedRuleIDs[rule.ID]; fired {
-			continue
-		}
-		if nativelyEmittedRuleIDs[rule.ID] {
-			// Native skip path already produced a Fired:false LedgerEntry
-			// with rule-specific SkipReason + SkipMetrics.
-			continue
-		}
-		// Reasoning is a short, greppable summary; SkipReason carries the
-		// specific dual-write context. Both remain non-empty (the
-		// TestLedgerEntry_FiredFalse_NoMonetaryDeltas contract requires
-		// SkipReason non-empty; the LedgerEntry godoc keeps Reasoning
-		// non-empty for fired AND skipped entries for symmetry).
-		entries = append(entries, entities.LedgerEntry{
-			Timestamp:  now,
-			AdjusterID: rule.ID,
-			RuleID:     rule.ID,
-			Fired:      false,
-			Reasoning:  "shim: skipped rule",
-			SkipReason: "shim: per-rule skip metadata not surfaced in PR-1 (PR-2/3/4 native adjusters carry SkipReason)",
-		})
-	}
-
-	return entries
-}
+// DC-1 Phase 2 PR-4 Task 4.5: the shim helpers shimLedgerEntriesFromLegacy
+// and shimLedgerEntriesFromLegacyExcluding were removed here. Their job
+// (mechanically translating the legacy []entities.Adjustment shape into
+// []entities.LedgerEntry records during the PR-1 bootstrap window) is now
+// fully served by the native Adjuster.Apply path:
+//   - A-rules (PR-2 Task 2.6, commit 2c132aa) — A1/A2/A4/A5 + RD/CapSW
+//     FlagEmitters drain via assetResult.NativeLedgerEntries/Overlays.
+//   - C-rules (PR-3 Task 3.8, commit 4af3c33) — C1/C2/C3/C5/C6 Restaters
+//     + C4/C7 FlagEmitters drain via earningsResult.NativeLedgerEntries/
+//     Overlays.
+//   - B-rules (PR-4 Tasks 4.1-4.5) — B1/B2/B3 OverlayEmitters drain via
+//     liabilityResult.NativeLedgerEntries/Overlays.
+// PR-1's shim is fully removed; no remaining callers across the codebase.
 
 func (s *service) checkRuleApplicability(rule *entities.CleaningRule, data *entities.FinancialData) bool {
 	// Use rule-based thresholds instead of hardcoded values
