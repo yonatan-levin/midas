@@ -239,11 +239,24 @@ func (b *b3ContingentLiabilityAdjuster) Apply(ctx context.Context, working *enti
 // set; Task 4.4 absorbs the dispatcher dual-write into the Adjuster path and
 // Task 4.5 deletes the shim's liability branch entirely.
 //
-// IMPORTANT (PR-4 Task 4.1/4.2 scope): the dual-write at the bottom of this
-// loop (data.TotalDebt += result.Amount, data.InterestBearingDebt +=
-// result.Amount) STAYS UNCHANGED. This is load-bearing for the DDM legacy
-// path (JPM bit-for-bit invariant — DDM reads data.TotalDebt directly).
-// Task 4.4 audits the absorption strategy.
+// DC-1 Phase 2 PR-4 Task 4.4 (Option α absorption — SHIPPED): the dual-write
+// that used to live in a post-switch `if result != nil && result.Applied`
+// block (mutating data.TotalDebt += result.Amount and data.InterestBearingDebt
+// += result.Amount uniformly) has been MOVED INTO each per-rule switch arm
+// via a small helper closure `dualWrite` that mutates the working
+// FinancialData when the result fires. Mutation source remains
+// `result.Amount` for byte-for-byte parity with the pre-Task-4.4 behavior;
+// for the native OverlayEmitter path of B1/B2/B3 this is equal to
+// `out.Overlays[0].Amount` (see b{1,2,3}AdjusterOutputToLegacyResult, which
+// sets result.Amount = overlay.Amount when fired). The dual-write firing
+// order B1→B2→B3 is preserved because the rule iteration order is unchanged
+// and the helper is invoked at the same logical point in each arm. The
+// mutation REMAINS load-bearing for the DDM legacy path (JPM bit-for-bit
+// invariant — DDM reads data.TotalDebt directly); Phase 4 deletes it when
+// downstream consumers read views/overlays instead. The post-switch
+// `data.TotalDebt += result.Amount` line is GONE; what remains is aggregate
+// accumulation (allAdjustments, allFlags, totalAdjustment) which is NOT a
+// mutation of `data` and therefore stays at the rule-loop level.
 //
 // Parameter `cleaningCtx` was historically named `context` here; PR-4 Task
 // 4.1 renames it so the `context` package identifier is unshadowed inside
@@ -265,9 +278,30 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 	// Apply.ctx is nil here because ProcessLiabilityAdjustments does not yet
 	// thread ctx through its public signature. ApplyB1OperatingLeases treats
 	// nil ctx as safe (it only uses ctx for future industry-aware logic).
-	// TODO(PR-4 follow-up): thread context.Context through
-	// ProcessLiabilityAdjustments to align with the Adjuster.Apply signature.
+	// TODO(Phase 3): thread context.Context through ProcessLiabilityAdjustments
+	// to align with the Adjuster.Apply signature.
 	var applyCtx context.Context
+
+	// Task 4.4 absorbed dual-write helper. Invoked at the tail of every
+	// per-rule switch arm so each arm owns its own mutation. The helper
+	// reads result.Amount (== out.Overlays[0].Amount for fired
+	// OverlayEmitter B-rules) and applies the uniform B-category
+	// dual-write contract:
+	//   - data.TotalDebt          += result.Amount
+	//   - data.InterestBearingDebt += result.Amount
+	// Both fields are mutated for ALL three B-rules (B1, B2, B3) — there
+	// is no per-rule conditional. B3 mutates InterestBearingDebt despite
+	// its OverlaySpec.Field being "DebtLikeClaims" (the Field/mutation
+	// mismatch is the Phase 4 routing intent per spec §"B3 routing
+	// correction"). Phase 4 deletes this helper when consumers read
+	// overlays/views.
+	dualWrite := func(result *AdjustmentResult) {
+		if result == nil || !result.Applied {
+			return
+		}
+		data.TotalDebt += result.Amount
+		data.InterestBearingDebt += result.Amount
+	}
 
 	// Process each Category B rule
 	for _, rule := range rules {
@@ -281,24 +315,28 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 		case "operating_leases":
 			// DC-1 Phase 2 PR-4 Task 4.1: route B1 through the new
 			// Adjuster-shaped ApplyB1OperatingLeases. Apply is mutation-
-			// free; the dispatcher performs the dual-write AFTER Apply
-			// so the legacy *AdjustmentResult callers stay byte-identical
-			// AND the AdjusterOutput's LedgerEntries / Overlays / Flags
-			// reach the cleaner orchestrator.
+			// free; the per-arm dualWrite below performs the legacy
+			// data.TotalDebt mutation so the legacy *AdjustmentResult
+			// callers stay byte-identical AND the AdjusterOutput's
+			// LedgerEntries / Overlays / Flags reach the cleaner
+			// orchestrator.
 			out, err := la.ApplyB1OperatingLeases(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
 				// Adjuster.Apply errors are not yet a defined surface in
 				// Phase 2; today's ApplyB1OperatingLeases never returns one.
 				// Falling back to the legacy path on hypothetical future
-				// errors preserves the dual-write contract.
+				// errors preserves the dual-write contract — dualWrite runs
+				// at the end of this arm regardless of which branch set
+				// `result`.
 				result = la.ProcessOperatingLeaseAdjustment(data, rule, cleaningCtx)
+				dualWrite(result)
 				break
 			}
 
 			// Translate the AdjusterOutput into the legacy *AdjustmentResult
-			// shape so the dispatcher's existing dual-write + audit-trail
-			// accounting keeps working. The dual-write at the bottom of the
-			// loop performs the actual data.TotalDebt mutation.
+			// shape so the dispatcher's audit-trail accounting keeps working.
+			// result.Amount mirrors out.Overlays[0].Amount when fired (see
+			// b1AdjusterOutputToLegacyResult), so dualWrite reads it directly.
 			result = b1AdjusterOutputToLegacyResult(out, rule)
 
 			// Record native emissions for the orchestrator. Even when the
@@ -308,28 +346,34 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
+
+			// Task 4.4 per-arm dual-write — see helper godoc above.
+			dualWrite(result)
 		case "pension_obligations":
 			// DC-1 Phase 2 PR-4 Task 4.2: route B2 through the new
 			// Adjuster-shaped ApplyB2PensionUnderfunding. Mirrors the B1
-			// wiring above — Apply is mutation-free; the dispatcher
-			// performs the dual-write AFTER Apply so the legacy
-			// *AdjustmentResult callers stay byte-identical AND the
-			// AdjusterOutput's LedgerEntries / Overlays / Flags reach the
-			// cleaner orchestrator.
+			// wiring above — Apply is mutation-free; the per-arm
+			// dualWrite below performs the legacy data.TotalDebt mutation
+			// so the legacy *AdjustmentResult callers stay byte-identical
+			// AND the AdjusterOutput's LedgerEntries / Overlays / Flags
+			// reach the cleaner orchestrator.
 			out, err := la.ApplyB2PensionUnderfunding(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
 				// Adjuster.Apply errors are not yet a defined surface in
 				// Phase 2; today's ApplyB2PensionUnderfunding never returns
 				// one. Falling back to the legacy path on hypothetical
-				// future errors preserves the dual-write contract.
+				// future errors preserves the dual-write contract —
+				// dualWrite runs at the end of this arm regardless of
+				// which branch set `result`.
 				result = la.ProcessPensionAdjustment(data, rule, cleaningCtx)
+				dualWrite(result)
 				break
 			}
 
 			// Translate the AdjusterOutput into the legacy *AdjustmentResult
-			// shape so the dispatcher's existing dual-write + audit-trail
-			// accounting keeps working. The dual-write at the bottom of the
-			// loop performs the actual data.TotalDebt mutation.
+			// shape so the dispatcher's audit-trail accounting keeps working.
+			// result.Amount mirrors out.Overlays[0].Amount when fired (see
+			// b2AdjusterOutputToLegacyResult), so dualWrite reads it directly.
 			result = b2AdjusterOutputToLegacyResult(out, rule)
 
 			// Record native emissions for the orchestrator. Even when the
@@ -339,17 +383,21 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
+
+			// Task 4.4 per-arm dual-write — see helper godoc above.
+			dualWrite(result)
 		case "contingent_liabilities":
 			// DC-1 Phase 2 PR-4 Task 4.3: route B3 through the new
 			// Adjuster-shaped ApplyB3Contingent. Mirrors B1/B2 wiring —
-			// Apply is mutation-free; the dispatcher performs the dual-
-			// write AFTER Apply so the legacy *AdjustmentResult callers
-			// stay byte-identical AND the AdjusterOutput's
-			// LedgerEntries / Overlays / Flags reach the cleaner
-			// orchestrator. Unlike B1/B2, the emitted OverlaySpec's
-			// Field is "DebtLikeClaims" (Phase 4 routing intent), but
-			// the dispatcher's dual-write still mutates data.TotalDebt
-			// per spec §"B3 routing correction" lines 181-189.
+			// Apply is mutation-free; the per-arm dualWrite below
+			// performs the legacy data.TotalDebt mutation so the legacy
+			// *AdjustmentResult callers stay byte-identical AND the
+			// AdjusterOutput's LedgerEntries / Overlays / Flags reach
+			// the cleaner orchestrator. Unlike B1/B2, the emitted
+			// OverlaySpec's Field is "DebtLikeClaims" (Phase 4 routing
+			// intent), but the per-arm dual-write still mutates
+			// data.TotalDebt per spec §"B3 routing correction" lines
+			// 181-189.
 			out, err := la.ApplyB3Contingent(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
 				// Adjuster.Apply errors are not yet a defined surface in
@@ -357,16 +405,23 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 				// even when the AI service fails (the AI failure is
 				// absorbed by the legacy fallback path inside Process*).
 				// Falling back to the legacy path on hypothetical future
-				// errors preserves the dual-write contract.
+				// errors preserves the dual-write contract — dualWrite
+				// runs at the end of this arm regardless of which branch
+				// set `result`.
 				result = la.ProcessContingentLiabilityAdjustment(data, rule, cleaningCtx)
+				dualWrite(result)
 				break
 			}
 
 			// Translate the AdjusterOutput into the legacy
-			// *AdjustmentResult shape so the dispatcher's existing
-			// dual-write + audit-trail accounting keeps working. The
-			// dual-write at the bottom of the loop performs the actual
-			// data.TotalDebt mutation.
+			// *AdjustmentResult shape so the dispatcher's audit-trail
+			// accounting keeps working. result.Amount mirrors
+			// out.Overlays[0].Amount when fired (see
+			// b3AdjusterOutputToLegacyResult), so dualWrite reads it
+			// directly. Note the Field-vs-mutation mismatch:
+			// OverlaySpec.Field is "DebtLikeClaims" but dualWrite mutates
+			// data.TotalDebt — Phase 4 closes this gap by flipping
+			// consumers to read the overlay.
 			result = b3AdjusterOutputToLegacyResult(out, rule)
 
 			// Record native emissions for the orchestrator. Even when
@@ -377,20 +432,21 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
+
+			// Task 4.4 per-arm dual-write — see helper godoc above.
+			dualWrite(result)
 		default:
 			continue // Skip unknown rules
 		}
 
+		// Aggregate bookkeeping — NOT a mutation of `data`. Each per-rule
+		// arm above already performed its dual-write via dualWrite(result)
+		// before reaching this point, so this block only collects
+		// allAdjustments/allFlags and tallies totalAdjustment.
 		if result != nil && result.Applied {
 			allAdjustments = append(allAdjustments, result.Adjustments...)
 			allFlags = append(allFlags, result.Flags...)
 			totalAdjustment += result.Amount
-
-			// Add to debt base for WACC calculations.
-			// PR-4 Task 4.1/4.2: this dual-write STAYS UNCHANGED in this
-			// task. Task 4.4 absorbs the absorption into the Adjuster path.
-			data.TotalDebt += result.Amount
-			data.InterestBearingDebt += result.Amount
 		}
 	}
 
