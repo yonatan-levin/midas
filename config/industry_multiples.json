@@ -1,6 +1,6 @@
 {
-  "version": "1.3.0",
-  "description": "Industry-specific valuation multiples for alternative models (DDM, FFO, Revenue Multiple) and exit-multiple terminal value cross-check. Values represent sector median multiples derived from market data. v1.3.0 (T2-P4-W1) renames REIT subsector keys from bare form (RESIDENTIAL, DATA_CENTER, ...) to REIT_* prefixed form (REIT_RESIDENTIAL, REIT_DATACENTER, ...) to align with the parallel Tier 2 archetype rules in assumption_profiles.json that key on REIT_* prefixes. v1.2.0 (VAL-3 P1+P4) recalibrated REIT subsector P/FFO multiples and cap rates to 2025-26 ranges and added CELLTOWER + SPECIALTY buckets. The FFO model's longest-prefix-match lookup operates over these prefixed keys.",
+  "version": "1.3.1",
+  "description": "Industry-specific valuation multiples for alternative models (DDM, FFO, Revenue Multiple) and exit-multiple terminal value cross-check. Values represent sector median multiples derived from market data. v1.3.1 (RM-2 P1 second pass) realigns TECH_AI EV/Revenue 10.0 -> 12.0 and HEALTH_BIOTECH EV/Revenue 6.0 -> 5.0 to the values pinned in docs/reviewer/RM-2-sector-multiple-coverage-gaps.md Phase 1; the seven RM-2 P1 buckets now match the tracker contract exactly. v1.3.0 (T2-P4-W1) renames REIT subsector keys from bare form (RESIDENTIAL, DATA_CENTER, ...) to REIT_* prefixed form (REIT_RESIDENTIAL, REIT_DATACENTER, ...) to align with the parallel Tier 2 archetype rules in assumption_profiles.json that key on REIT_* prefixes. v1.2.0 (VAL-3 P1+P4) recalibrated REIT subsector P/FFO multiples and cap rates to 2025-26 ranges and added CELLTOWER + SPECIALTY buckets. The FFO model's longest-prefix-match lookup operates over these prefixed keys.",
   "reit_pffo_multiples": {
     "default": 15.0,
     "REIT_RESIDENTIAL": 20.0,
@@ -16,9 +16,9 @@
     "default": 2.0,
     "TECH": 5.0,
     "TECH_SAAS": 8.0,
-    "TECH_AI": 10.0,
+    "TECH_AI": 12.0,
     "HEALTH": 3.0,
-    "HEALTH_BIOTECH": 6.0,
+    "HEALTH_BIOTECH": 5.0,
     "HEALTH_PHARMA": 4.0,
     "FIN": 2.5,
     "FIN_BANK": 2.0,
