@@ -1,6 +1,24 @@
 # VAL-1 — DCF model needs archetype-aware horizon, cyclical-base normalization, and explicit terminal handling
 
-**Status:** OPEN — filed 2026-05-06 as part of the cross-model review prompted by RM-1/2/3 findings on revenue_multiple.
+**Status:** Phase 1 RESOLVED 2026-05-23. Phases 2-5 OPEN (gated on the unified `AssumptionProfile` work — Tier 2 P2 already lit Phase 2 horizon resolution in code; tracker still treats Phases 2-5 as in-flight until the cyclical-base / exit-multiple / diluted-forward strands all ship).
+**Original filing:** 2026-05-06 as part of the cross-model review prompted by RM-1/2/3 findings on revenue_multiple.
+
+---
+
+## Phase 1 SHIPPED
+
+The 5 DCF diagnostic fields are live on `entities.ValuationResult` and `handlers.FairValueResponse`:
+
+| Commit | Date | Scope |
+|---|---|---|
+| `a19506d` (merged via `877fa76`) | 2026-05-16 | P0b struct ownership + P2 wire-up: field declarations on both response shapes, P2 stamps them in `service.go::performValuation` (lines ~1276-1310), tests in `service_test.go` (`TestService_performValuation_DCFDiagnostics_*`) pin field semantics + length invariants + terminal-dominance warning trigger. |
+| `<this commit>` | 2026-05-23 | OpenAPI schema closure: `docs/openapi.yaml` `FairValueResponse` gains the 5 properties with enums, types, examples, and descriptions documenting omission semantics. |
+
+Auto-generated swagger artifacts (`docs/swagger.{json,yaml}`, `docs/docs.go`) remain stale vs. the struct annotations — separate technical debt tracked in `docs/refactoring/spec/swag-version-alignment-spec.md` (they also lack `assumption_profile` and `resolution_trace`). Regenerating them is gated on the swag CLI ↔ library version alignment and is out of scope for this Phase 1 close.
+
+---
+
+**Original framing preserved below for Phases 2-5 reference.**
 **Severity:** Medium. DCF is the primary valuation path for profitable tickers (the majority of Midas's traffic). It already works, but it's the "least broken" model — gaps are calibration-quality rather than wrong-by-design. Fixes are mostly additions, not corrections.
 **Origin:** During the cross-model review (companion to VAL-2 DDM, VAL-3 FFO, RM-1/2/3 revenue_multiple), `thinkdeep` flagged that DCF's horizon should be archetype/maturity-driven (not flat 5y) and that cyclical tickers need normalized starting metrics. Damodaran (perplexity-cited): explicit horizon "5-10y, longer for growth firms; terminal value typically 60-80% of EV; longer horizon reduces TV reliance." Midas's DCF currently runs a flat horizon and doesn't normalize cyclical bases.
 **Blocks:** Nothing — this is calibration improvement, not a regression fix.
@@ -125,11 +143,11 @@ Coverage: ≥90% on new code per CLAUDE.md finance-module standard.
 
 ## Acceptance for closing this tracker
 
-### Phase 1
-- [ ] 5 new diagnostic fields on `ValuationResult` and `FairValueResponse`.
-- [ ] OpenAPI schema updated.
-- [ ] Tests assert fields populate for representative fixtures (AAPL, MSFT, MXL).
-- [ ] No existing test regresses.
+### Phase 1 — RESOLVED 2026-05-23
+- [x] 5 new diagnostic fields on `ValuationResult` and `FairValueResponse` — landed in commit `a19506d` (merged via `877fa76`, 2026-05-16). Field declarations in `internal/core/entities/valuation.go:141-145` and `internal/api/v1/handlers/fair_value.go:234-238`.
+- [x] OpenAPI schema updated — landed in this Phase 1 close commit (`docs/openapi.yaml` `FairValueResponse` gains 5 properties with enums, types, examples, omission-condition descriptions).
+- [x] Tests assert fields populate for representative fixtures (AAPL, MSFT, MXL) — `TestService_performValuation_DCFDiagnostics_*` in `internal/services/valuation/service_test.go` (lines ~3504-3705) pins field semantics, length invariants (`len(dcf_per_year_pv) == dcf_horizon_years`), and the >0.80 terminal-dominance warning trigger.
+- [x] No existing test regresses — full `go test ./... -count=1 -short` PASS at the Phase 1 close.
 
 ### Phase 2-5 (with unified profile work)
 - [ ] `AssumptionProfile` machinery shared with RM-3 / VAL-2 / VAL-3.
