@@ -1049,7 +1049,7 @@ func (s *Service) performValuation(
 	if projectionYears == 0 {
 		projectionYears = 5 // fallback
 	}
-	terminalMethodLabel := "gordon_growth" // default; may be overridden by profile or exit-multiple wiring below
+	terminalMethodLabel := "gordon_growth"
 	if resolvedProfile != nil && resolvedProfile.HorizonYears > 0 {
 		profileHorizon := resolvedProfile.HorizonYears
 		// Guardrail: cap horizon by the number of growth rates we actually
