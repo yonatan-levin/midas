@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/thresholds"
 )
@@ -125,7 +126,53 @@ func (m *DDMModel) calculateLegacyGordon(ctx context.Context, input *ModelInput)
 	equityValue := valuePerShare * input.SharesOutstanding
 	enterpriseValue := equityValue + input.InterestBearingDebt - input.CashAndCashEquivalents
 
-	warnings := []string{}
+	warnings, confidence := m.runDividendDiagnostics(ctx, latest, input, dps, dividendGrowth, costOfEquity, valuePerShare, nil)
+
+	logctx.Or(ctx, m.logger).Info("DDM valuation completed",
+		zap.Float64("dps", dps),
+		zap.Float64("dividend_growth", dividendGrowth),
+		zap.Float64("cost_of_equity", costOfEquity),
+		zap.Float64("value_per_share", valuePerShare))
+
+	return &ModelResult{
+		IntrinsicValuePerShare: valuePerShare,
+		EnterpriseValue:        enterpriseValue,
+		EquityValue:            equityValue,
+		ModelType:              "ddm",
+		Warnings:               warnings,
+		Confidence:             confidence,
+	}, nil
+}
+
+// runDividendDiagnostics emits the ROE / payout-ratio / P/BV cross-check
+// warnings and computes the warning-count-adjusted confidence score that
+// both DDM branches share. Per T2-P4-W2 item 5, lifting these diagnostics
+// out of the legacy path lets the multi-stage path achieve parity without
+// duplicating the rules.
+//
+// Path discipline: the legacy single-stage Gordon path's bit-for-bit
+// invariant (TestDDM_LegacyPath_BitForBit) asserts equality on
+// ModelResult.Warnings (slice content + order) and Confidence in addition
+// to the three load-bearing floats. This helper's body is the verbatim
+// pre-extraction body of calculateLegacyGordon's diagnostics block —
+// warning strings, append order, and confidence ladder are unchanged from
+// pre-Tier-2 master HEAD 0324057. Modifying the strings or reordering the
+// appends here will trip the bit-for-bit test.
+//
+// The initialWarnings slice lets callers seed the diagnostics with a
+// preamble (e.g. the multi-stage path's "DDM multi-stage: ..." note);
+// pass nil to start clean (the legacy path does this).
+func (m *DDMModel) runDividendDiagnostics(
+	ctx context.Context,
+	latest *entities.FinancialData,
+	input *ModelInput,
+	dps, dividendGrowth, costOfEquity, valuePerShare float64,
+	initialWarnings []string,
+) ([]string, string) {
+	warnings := initialWarnings
+	if warnings == nil {
+		warnings = []string{}
+	}
 
 	// Compute ROE once — reused by the ROE sanity check and the P/BV cross-check (V4.1-N7).
 	hasROE := latest.StockholdersEquity > 0 && latest.NetIncome > 0
@@ -202,20 +249,7 @@ func (m *DDMModel) calculateLegacyGordon(ctx context.Context, input *ModelInput)
 		confidence = "low"
 	}
 
-	logctx.Or(ctx, m.logger).Info("DDM valuation completed",
-		zap.Float64("dps", dps),
-		zap.Float64("dividend_growth", dividendGrowth),
-		zap.Float64("cost_of_equity", costOfEquity),
-		zap.Float64("value_per_share", valuePerShare))
-
-	return &ModelResult{
-		IntrinsicValuePerShare: valuePerShare,
-		EnterpriseValue:        enterpriseValue,
-		EquityValue:            equityValue,
-		ModelType:              "ddm",
-		Warnings:               warnings,
-		Confidence:             confidence,
-	}, nil
+	return warnings, confidence
 }
 
 // estimateDividendGrowth calculates the expected dividend growth rate.
@@ -364,6 +398,20 @@ func (m *DDMModel) calculateMultiStage(ctx context.Context, input *ModelInput) (
 	equityValue := valuePerShare * input.SharesOutstanding
 	enterpriseValue := equityValue + input.InterestBearingDebt - input.CashAndCashEquivalents
 
+	// Per T2-P4-W2 item 5, the multi-stage path uses the same shared
+	// dividend-diagnostics helper as the legacy path so the two branches
+	// emit ROE / payout / P/BV warnings and warning-count-adjusted
+	// confidence on equal footing. The multi-stage preamble warning is
+	// seeded in first so the diagnostics output remains diagnostic.
+	//
+	// Diagnostics use the terminal Gordon growth rate (the stable rate that
+	// drives the perpetuity tail) as the dividend-growth input to the
+	// P/BV cross-check — this is the dividend trajectory that anchors the
+	// resulting value, just as it does in the legacy single-stage path.
+	preamble := []string{fmt.Sprintf("DDM multi-stage: %dy explicit + Gordon terminal (g=%.1f%%)",
+		horizon, terminalGrowth*100)}
+	warnings, confidence := m.runDividendDiagnostics(ctx, latest, input, dps, terminalGrowth, costOfEquity, valuePerShare, preamble)
+
 	logctx.Or(ctx, m.logger).Info("DDM multi-stage valuation completed",
 		zap.Float64("dps", dps),
 		zap.Int("horizon", horizon),
@@ -376,9 +424,8 @@ func (m *DDMModel) calculateMultiStage(ctx context.Context, input *ModelInput) (
 		EnterpriseValue:        enterpriseValue,
 		EquityValue:            equityValue,
 		ModelType:              "ddm",
-		Confidence:             "medium",
+		Confidence:             confidence,
 		HorizonSelected:        horizon,
-		Warnings: []string{fmt.Sprintf("DDM multi-stage: %dy explicit + Gordon terminal (g=%.1f%%)",
-			horizon, terminalGrowth*100)},
+		Warnings:               warnings,
 	}, nil
 }
