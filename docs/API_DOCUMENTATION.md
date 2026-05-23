@@ -1510,6 +1510,8 @@ go build -o /tmp/replay ./cmd/replay    # Linux/macOS
 | `1` | At least one bundle differed outside tolerance. |
 | `2` | Infrastructure failure: missing files, schema-version mismatch, invalid flags, empty bundle directory, etc. |
 
+**Exit codes are format-independent.** `--format=text` and `--format=json` against the same bundle (or batch) produce the same exit code. The code is a pure function of the per-bundle outcomes (PASS / FAIL / ERRORED), NOT of the chosen output renderer. This is a stable contract — CI scripts that branch on `$?` can pick either format for human-readable logs vs machine-parseable artifacts without changing the regression-detection semantics. Pinned by `cmd/replay/main_test.go::TestRun_ExitCode_IsFormatIndependent` (plus the mixed-tree + quiet variants).
+
 #### Sample output
 
 Verbose text mode with `--diff-stages`:
