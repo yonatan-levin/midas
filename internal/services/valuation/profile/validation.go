@@ -11,7 +11,7 @@ import (
 // calibration artifact, not an external API contract.
 var semverRegex = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
-// validateConfig enforces the 9 load-time invariants from spec §4.3. Any
+// validateConfig enforces the 10 load-time invariants from spec §4.3. Any
 // failure refuses startup; invalid shipped config is an operator error,
 // not a user-data graceful-degradation case.
 func validateConfig(c *configFile) error {
@@ -99,6 +99,20 @@ func validateProfile(id string, p AssumptionProfile) error {
 		// would shrink or freeze projection growth, which is never the
 		// intent for a non-zero horizon.
 		return fmt.Errorf("profile %s: compound_growth_cap must be > 1.0 for non-zero horizon", id)
+	}
+	// Invariant 10 (T2-P4-W2 item 4): when both DividendForecastHorizon and
+	// PayoutPath are populated, their lengths MUST match. The runtime guard
+	// in models/ddm.go:342 (`i < len(p.PayoutPath)`) silently truncates the
+	// payout-multiplier effect on mismatch; this load-time check promotes
+	// the silent truncation to fail-fast at startup per spec §4.4 fail-loud
+	// philosophy. Predicate requires BOTH conditions so that legacy single-
+	// stage profiles (horizon=0, empty path) and multi-stage profiles that
+	// intentionally defer payout-path population (horizon>0, empty path)
+	// remain valid; only populated-but-mismatched configs are rejected.
+	if p.DividendForecastHorizon > 0 && len(p.PayoutPath) > 0 &&
+		len(p.PayoutPath) != p.DividendForecastHorizon {
+		return fmt.Errorf("profile %s: payout_path length %d must equal dividend_forecast_horizon %d",
+			id, len(p.PayoutPath), p.DividendForecastHorizon)
 	}
 	return nil
 }
