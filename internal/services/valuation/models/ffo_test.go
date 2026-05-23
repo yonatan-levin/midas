@@ -473,3 +473,232 @@ func TestNewFFOModelWithConfig(t *testing.T) {
 	assert.InDelta(t, 14.0, model.pffoMultiple, 0.001)
 	assert.InDelta(t, 0.055, model.navCapRate, 0.0001)
 }
+
+// ---------------------------------------------------------------------------
+// Subsector loader + lookup coverage — T2-P4-W2 item 8 close
+//
+// `loadFFOSubsectorTables` and `lookupSubsectorValue` ship subsector-specific
+// P/FFO multiples and cap rates (VAL-3 P1+P4). Per-function coverage was
+// flagged at 71.4% / 76.5% by P4 QA (C4 finding). These tests pin the
+// defensive branches that the existing Calculate-driven tests don't hit:
+//
+//   - lookupSubsectorValue exact-match path on uppercased keys
+//   - longest-prefix-match path (e.g. REIT_DATACENTER_PRIMARY beating REIT)
+//   - the "default" key is excluded from prefix matching
+//   - nil / empty-table / empty-industry early returns
+//   - case-insensitive comparison (industry input lowercased)
+//   - loadFFOSubsectorTables returns the expected REIT_* subsector keys from
+//     the embedded industry_multiples.json (happy path)
+//
+// Test-only addition; no changes to ffo.go production code. The two
+// loadFFOSubsectorTables error branches (configfs.Read failure /
+// json.Unmarshal failure) are unreachable from the public API because
+// configfs.Read is backed by the embed.FS rooted at config/ which always
+// returns the same valid bytes baked into the binary. Those branches are
+// structurally defensive — exercising them would require a production-code
+// seam that the task scope explicitly excludes.
+// ---------------------------------------------------------------------------
+
+// TestLookupSubsectorValue_ExactMatch verifies the exact-match path returns
+// the value when the input matches a table key after uppercasing.
+func TestLookupSubsectorValue_ExactMatch(t *testing.T) {
+	table := map[string]float64{
+		"REIT_DATACENTER":  31.0,
+		"REIT_RESIDENTIAL": 20.0,
+		"default":          15.0,
+	}
+
+	// Already uppercased.
+	v, ok := lookupSubsectorValue(table, "REIT_DATACENTER")
+	assert.True(t, ok)
+	assert.InDelta(t, 31.0, v, 0.001)
+
+	// Mixed case input — lookup uppercases internally.
+	v, ok = lookupSubsectorValue(table, "reit_residential")
+	assert.True(t, ok)
+	assert.InDelta(t, 20.0, v, 0.001)
+}
+
+// TestLookupSubsectorValue_PrefixMatch verifies the longest-prefix-match
+// branch fires for inputs that extend a known key past an underscore
+// boundary. This is the previously-uncovered branch in lookupSubsectorValue.
+func TestLookupSubsectorValue_PrefixMatch(t *testing.T) {
+	table := map[string]float64{
+		"REIT":            15.0,
+		"REIT_DATACENTER": 31.0,
+		"default":         12.0,
+	}
+
+	// Should match REIT_DATACENTER (longer key wins) — not REIT.
+	v, ok := lookupSubsectorValue(table, "REIT_DATACENTER_PRIMARY")
+	assert.True(t, ok)
+	assert.InDelta(t, 31.0, v, 0.001, "longest-prefix-match should pick the longer key")
+
+	// Should match REIT (only prefix that ends at an underscore boundary).
+	v, ok = lookupSubsectorValue(table, "REIT_UNKNOWN_SUB")
+	assert.True(t, ok)
+	assert.InDelta(t, 15.0, v, 0.001, "shorter key wins when longer key isn't a prefix")
+}
+
+// TestLookupSubsectorValue_PrefixMatch_UnderscoreBoundary verifies the
+// underscore-boundary guard — "TECHNOLOGY" must NOT match key "TECH" because
+// the match would not end at an underscore (W-4 invariant from ffo.go).
+func TestLookupSubsectorValue_PrefixMatch_UnderscoreBoundary(t *testing.T) {
+	table := map[string]float64{
+		"TECH": 25.0,
+	}
+
+	// "TECHNOLOGY" extends "TECH" but not at an underscore -> miss.
+	v, ok := lookupSubsectorValue(table, "TECHNOLOGY")
+	assert.False(t, ok, "match must end at underscore or string end (W-4 invariant)")
+	assert.Equal(t, 0.0, v)
+
+	// "TECH_X" extends "TECH" at an underscore -> hit.
+	v, ok = lookupSubsectorValue(table, "TECH_X")
+	assert.True(t, ok)
+	assert.InDelta(t, 25.0, v, 0.001)
+}
+
+// TestLookupSubsectorValue_DefaultKeyExcludedFromPrefix verifies the "default"
+// key is skipped in the prefix-match loop. An industry input that happens to
+// start with "DEFAULT" must NOT match the "default" entry via prefix-match.
+func TestLookupSubsectorValue_DefaultKeyExcludedFromPrefix(t *testing.T) {
+	table := map[string]float64{
+		"default": 15.0,
+	}
+
+	// Even exact-match on "DEFAULT" (uppercased) misses because "default" is
+	// stored lowercased and the exact-match step is case-sensitive after
+	// upper(). The prefix-match step then explicitly skips the "default" key.
+	v, ok := lookupSubsectorValue(table, "DEFAULT_VARIANT")
+	assert.False(t, ok, "the default key must not participate in prefix matching")
+	assert.Equal(t, 0.0, v)
+}
+
+// TestLookupSubsectorValue_NilTable verifies the early return on a nil map.
+func TestLookupSubsectorValue_NilTable(t *testing.T) {
+	v, ok := lookupSubsectorValue(nil, "REIT_DATACENTER")
+	assert.False(t, ok)
+	assert.Equal(t, 0.0, v)
+}
+
+// TestLookupSubsectorValue_EmptyTable verifies the early return on an empty map.
+func TestLookupSubsectorValue_EmptyTable(t *testing.T) {
+	v, ok := lookupSubsectorValue(map[string]float64{}, "REIT_DATACENTER")
+	assert.False(t, ok)
+	assert.Equal(t, 0.0, v)
+}
+
+// TestLookupSubsectorValue_EmptyIndustry verifies the early return on an
+// empty industry string. Mirrors the "missing required key / empty subsector"
+// branch named in the T2-P4-W2 item 8 spec.
+func TestLookupSubsectorValue_EmptyIndustry(t *testing.T) {
+	table := map[string]float64{
+		"REIT_DATACENTER": 31.0,
+		"default":         15.0,
+	}
+	v, ok := lookupSubsectorValue(table, "")
+	assert.False(t, ok, "empty industry must short-circuit before any map iteration")
+	assert.Equal(t, 0.0, v)
+}
+
+// TestLookupSubsectorValue_NoMatch verifies the fall-through branch returns
+// (0, false) when neither exact nor prefix match succeeds. Callers (getMultiple
+// / getCapRate) treat this as "apply the model default".
+func TestLookupSubsectorValue_NoMatch(t *testing.T) {
+	table := map[string]float64{
+		"REIT_DATACENTER": 31.0,
+		"REIT_RETAIL":     16.0,
+	}
+	v, ok := lookupSubsectorValue(table, "UTILITIES_REGULATED")
+	assert.False(t, ok)
+	assert.Equal(t, 0.0, v)
+}
+
+// TestFFOModel_getMultiple_FallbackToDefault verifies the getMultiple wrapper
+// returns the model's default pffoMultiple when the subsector lookup misses.
+// Exercises the lookupSubsectorValue → false → fallback chain end-to-end.
+func TestFFOModel_getMultiple_FallbackToDefault(t *testing.T) {
+	tables := map[string]float64{
+		"REIT_DATACENTER": 31.0,
+	}
+	model := NewFFOModelWithTables(15.0, 0.06, tables, nil, testLogger())
+
+	// Hit -> 31.0 from the subsector table.
+	assert.InDelta(t, 31.0, model.getMultiple("REIT_DATACENTER"), 0.001)
+
+	// Miss -> 15.0 default from the model.
+	assert.InDelta(t, 15.0, model.getMultiple("UTILITIES"), 0.001)
+
+	// Empty industry -> 15.0 default from the model.
+	assert.InDelta(t, 15.0, model.getMultiple(""), 0.001)
+}
+
+// TestFFOModel_getCapRate_FallbackToDefault mirrors getMultiple's fallback test
+// for the cap-rate path.
+func TestFFOModel_getCapRate_FallbackToDefault(t *testing.T) {
+	capRateTable := map[string]float64{
+		"REIT_DATACENTER": 0.04,
+	}
+	model := NewFFOModelWithTables(15.0, 0.06, nil, capRateTable, testLogger())
+
+	assert.InDelta(t, 0.04, model.getCapRate("REIT_DATACENTER"), 0.0001)
+	assert.InDelta(t, 0.06, model.getCapRate("UTILITIES"), 0.0001)
+	assert.InDelta(t, 0.06, model.getCapRate(""), 0.0001)
+}
+
+// TestLoadFFOSubsectorTables_EmbeddedConfig verifies loadFFOSubsectorTables
+// returns the populated REIT_* subsector tables from the embedded
+// industry_multiples.json. Pins the happy-path return statement and asserts
+// the keys the T2-P4-W1 prefix reconciliation guarantees are present.
+func TestLoadFFOSubsectorTables_EmbeddedConfig(t *testing.T) {
+	pffoTable, capRateTable := loadFFOSubsectorTables()
+	require.NotNil(t, pffoTable, "embedded config should yield a populated P/FFO table")
+	require.NotNil(t, capRateTable, "embedded config should yield a populated cap-rate table")
+
+	// All 8 REIT subsectors from T2-P4-W1 prefix reconciliation must be
+	// present in both tables.
+	subsectors := []string{
+		"REIT_RESIDENTIAL",
+		"REIT_OFFICE",
+		"REIT_INDUSTRIAL",
+		"REIT_HEALTHCARE",
+		"REIT_DATACENTER",
+		"REIT_CELLTOWER",
+		"REIT_RETAIL",
+		"REIT_SPECIALTY",
+	}
+	for _, key := range subsectors {
+		_, hasP := pffoTable[key]
+		assert.Truef(t, hasP, "P/FFO table missing REIT subsector key %q", key)
+		_, hasC := capRateTable[key]
+		assert.Truef(t, hasC, "cap-rate table missing REIT subsector key %q", key)
+	}
+
+	// Default keys also present (loadFFOConfig consumes these).
+	_, hasDefault := pffoTable["default"]
+	assert.True(t, hasDefault, "P/FFO table must carry a default entry")
+	_, hasCapDefault := capRateTable["default"]
+	assert.True(t, hasCapDefault, "cap-rate table must carry a default entry")
+}
+
+// TestLoadFFOSubsectorTables_FeedsLookup verifies the tables returned by
+// loadFFOSubsectorTables flow correctly through lookupSubsectorValue — i.e.,
+// the integration is wired without surprises. Acts as a regression pin for
+// the data-shape contract between the loader and the lookup helper.
+func TestLoadFFOSubsectorTables_FeedsLookup(t *testing.T) {
+	pffoTable, capRateTable := loadFFOSubsectorTables()
+	require.NotNil(t, pffoTable)
+	require.NotNil(t, capRateTable)
+
+	// Data-center multiple is the highest (>=25 per VAL-3 P4 spec).
+	v, ok := lookupSubsectorValue(pffoTable, "REIT_DATACENTER")
+	require.True(t, ok)
+	assert.GreaterOrEqual(t, v, 20.0, "data-center P/FFO multiple should be elevated vs default")
+
+	// Cap rate is positive and below 20% for any well-formed REIT subsector.
+	v, ok = lookupSubsectorValue(capRateTable, "REIT_DATACENTER")
+	require.True(t, ok)
+	assert.Greater(t, v, 0.0)
+	assert.Less(t, v, 0.20)
+}
