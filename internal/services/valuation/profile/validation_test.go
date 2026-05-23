@@ -102,6 +102,38 @@ func TestLoadFromJSON_NegativeValidation(t *testing.T) {
 				`"horizon_years": 3, "compound_growth_cap": 0.5`),
 			wantErrPart: "compound_growth_cap must be > 1.0",
 		},
+		{
+			// Invariant 10 (T2-P4-W2 item 4): PayoutPath shorter than
+			// DividendForecastHorizon must fail load-time validation rather
+			// than silently truncate at runtime in ddm.go.
+			name: "payout_path_shorter_than_horizon",
+			config: replaceJSONField(minimalValidConfig,
+				`"payout_path": [], "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"payout_path": [0.30, 0.32], "dividend_forecast_horizon": 5,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`),
+			wantErrPart: "payout_path length 2 must equal dividend_forecast_horizon 5",
+		},
+		{
+			// Invariant 10 (T2-P4-W2 item 4): PayoutPath longer than
+			// DividendForecastHorizon must fail load-time validation; extra
+			// elements would be silently ignored by the runtime ddm.go guard.
+			name: "payout_path_longer_than_horizon",
+			config: replaceJSONField(minimalValidConfig,
+				`"payout_path": [], "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"payout_path": [0.30, 0.32, 0.34, 0.36, 0.38, 0.40], "dividend_forecast_horizon": 3,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`),
+			wantErrPart: "payout_path length 6 must equal dividend_forecast_horizon 3",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,6 +226,78 @@ func TestResolve_TraceConfigStamping(t *testing.T) {
 	assert.Equal(t, "1.0.0", trace.ResolverVersion)
 	assert.Equal(t, "1.0.0", trace.ConfigVersion)
 	assert.NotEmpty(t, trace.ConfigHash, "config_hash must be stamped onto every trace for replay determinism")
+}
+
+// TestLoadFromJSON_PayoutPathLengthInvariant_PositiveCases pins the three
+// configurations that MUST NOT trip invariant 10 (T2-P4-W2 item 4):
+//
+//  1. Happy path: PayoutPath length matches DividendForecastHorizon exactly.
+//  2. Edge: DividendForecastHorizon == 0 with non-empty PayoutPath. The
+//     predicate requires BOTH `horizon > 0` AND non-empty PayoutPath, so
+//     this is intentionally permitted (and harmless — ddm.go's legacy
+//     dispatcher gates on horizon == 0 alone).
+//  3. Edge: DividendForecastHorizon > 0 with empty PayoutPath. The
+//     predicate requires non-empty PayoutPath to trigger; an empty path
+//     with a positive horizon is a legitimate "defer payout-path
+//     population to a later phase" configuration that should remain
+//     loadable.
+//
+// Each case mutates minimalValidConfig's mature_large_bank:mature entry
+// (which ships with horizon=0 + empty PayoutPath) so only the
+// invariant-10-relevant fields change between cases.
+func TestLoadFromJSON_PayoutPathLengthInvariant_PositiveCases(t *testing.T) {
+	cases := []struct {
+		name   string
+		config string
+	}{
+		{
+			name: "matching_lengths_horizon_5",
+			config: replaceJSONField(minimalValidConfig,
+				`"payout_path": [], "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"payout_path": [0.30, 0.32, 0.34, 0.36, 0.38], "dividend_forecast_horizon": 5,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`),
+		},
+		{
+			name: "horizon_zero_with_nonempty_payout_path_predicate_not_fired",
+			config: replaceJSONField(minimalValidConfig,
+				`"payout_path": [], "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"payout_path": [0.30, 0.32, 0.34], "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`),
+		},
+		{
+			name: "horizon_positive_with_empty_payout_path_predicate_not_fired",
+			config: replaceJSONField(minimalValidConfig,
+				`"payout_path": [], "dividend_forecast_horizon": 0,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"payout_path": [], "dividend_forecast_horizon": 5,
+      "stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "profiles.json")
+			require.NoError(t, os.WriteFile(path, []byte(tc.config), 0o644))
+
+			reg, err := profile.LoadFromJSON(path)
+			require.NoError(t, err, "invariant 10 must NOT fire for this configuration")
+			require.NotNil(t, reg)
+		})
+	}
 }
 
 // replaceJSONField performs a literal string replacement in the JSON
