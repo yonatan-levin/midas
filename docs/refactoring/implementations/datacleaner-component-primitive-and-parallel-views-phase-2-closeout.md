@@ -183,7 +183,7 @@ The consumer-migration gate after Phase 3:
 
 ## Next steps
 
-1. **Phase 3 ARCH spec authoring** — convert the deferred items above into an implementation plan. Anchor on the spec's "view reconstruction" section.
+1. **Phase 3 ARCH spec authoring** — convert the deferred items above into an implementation plan. Anchor on the spec's "view reconstruction" section. **DONE 2026-05-23** — Phase 3 spec + implementer plan filed; see `datacleaner-component-primitive-and-parallel-views-phase-3-spec.md` + `datacleaner-component-primitive-and-parallel-views-phase-3-implementation-plan.md`. Phase 3 BACKEND dispatch is the immediate next action.
 2. **Watch the shadow snapshots in every Phase 3+ PR.** Recording-not-asserting policy continues: snapshot diff is the diff-review signal; reviewers must read the snapshot changes intentionally. The `TestLedger_BasketSnapshot_ClusterPrediction` integration test (PR-4 Task 4.6) is the structural-regression sentinel.
 3. **Phase 3 worktree workflow** — start a new worktree at `midas-dc1-phase-3/` per the worktree-first MEMORY rule; do NOT touch master.
 
