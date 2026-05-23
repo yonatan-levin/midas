@@ -459,6 +459,18 @@ var goFieldToJSON = map[string]string{
 	"HeuristicCode": "heuristic_code",
 	"HeuristicName": "heuristic_name",
 	"Match":         "match",
+	// ResolutionTrace (closes T2-P4-W2 item 12 — kept here so a future
+	// migration of Replay() to the reflection-based CompareResponse walker
+	// gets the same dotted snake_case paths the hand-rolled walker emits).
+	"ProfileID":       "profile_id",
+	"Source":          "source",
+	"ResolverVersion": "resolver_version",
+	"ConfigVersion":   "config_version",
+	"ConfigHash":      "config_hash",
+	"MatchedRuleID":   "matched_rule_id",
+	"FallbackReason":  "fallback_reason",
+	"MissingFacts":    "missing_facts",
+	"HumanReason":     "human_reason",
 }
 
 // camelToSnake is a fallback for fields not in goFieldToJSON. Best-effort
