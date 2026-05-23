@@ -613,7 +613,7 @@
       "priority": 100,
       "industry_prefix": "REIT_OFFICE",
       "archetype": "reit_commercial",
-      "notes": "Tier 2 P4 (VAL-3 P3) — office REIT subsector with secular headwinds; low terminal multiple. Industry prefix is REIT_OFFICE (per T2-P4-W1 classifier reconciliation merged be92a79); archetype id remains reit_commercial for type-system continuity (renaming ArchetypeREITCommercial enum is out of scope for this fixup)."
+      "notes": "Tier 2 P4 (VAL-3 P3) — office REIT subsector with secular headwinds; low terminal multiple. See docs/reviewer/T2-P4-W2 item 7 — archetype id retained as reit_commercial pending coordinated rename."
     },
     {
       "id": "reit_industrial",
@@ -655,7 +655,7 @@
       "priority": 100,
       "industry_prefix": "REIT_SPECIALTY",
       "archetype": "reit_specialty",
-      "notes": "Tier 2 P4 (VAL-3 P3) — self-storage / billboard / prison / timber REIT subsector (Public Storage, Lamar, CoreCivic, Weyerhaeuser). Added in defect-fixup sweep before P4 merge to close the gap surfaced by REVIEWER + QA + BACKEND gates against the prior tier2-p4 commit."
+      "notes": "Tier 2 P4 (VAL-3 P3) — specialty REIT subsector (self-storage, billboard, prison, timber); heterogeneous niche assets with subsector-specific durability."
     },
     {
       "id": "fallback_default",

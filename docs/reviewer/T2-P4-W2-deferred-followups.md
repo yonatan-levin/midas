@@ -29,13 +29,14 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
   - (b) Gate the warning behind `resolvedProfile != nil` to honor the plan as written.
 - **Priority:** Opportunistic (doc reconciliation only)
 
-### 2. NIT — `itoaP2` shim could be `strconv.Itoa`
+### 2. NIT — `itoaP2` shim could be `strconv.Itoa` — **RESOLVED 2026-05-23 (commit `106c960`)**
 
 - **Severity:** NIT
 - **Surfacing gate:** P2 REVIEWER
 - **Location:** `internal/services/valuation/service_test.go` (test helper)
 - **Why not fixed at merge:** Trivial style cleanup; not behavior-affecting.
 - **Suggested resolution:** Replace `itoaP2` shim with `strconv.Itoa` (stdlib equivalent). Single-commit cleanup.
+- **Resolution:** Imported `strconv`, replaced the single `itoaP2(horizonYears)` call site with `strconv.Itoa(horizonYears)`, and removed the shim function. `go test ./internal/services/valuation/...` green.
 - **Priority:** Opportunistic
 
 ### 3. NIT — Stale exit-multiple comment
@@ -107,22 +108,24 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
   - `loadFFOSubsectorTables`: 71.4% → 71.4% (unchanged — the two remaining branches are `configfs.Read` failure and `json.Unmarshal` failure; both are structurally unreachable because `configfs.Read` is backed by `embed.FS` rooted at `config/` and always returns the same valid JSON bytes baked into the binary, and the task scope explicitly excluded modifying `ffo.go` to add a production-side seam). The happy-path return is pinned by new tests `TestLoadFFOSubsectorTables_EmbeddedConfig` (asserts all 8 REIT_* subsector keys + `default` present in both tables) and `TestLoadFFOSubsectorTables_FeedsLookup` (regression pin for the loader↔lookup data-shape contract).
   - Package total: 94.4% → **95.3%**.
 
-### 9. NIT — Long notes field on `reit_commercial`
+### 9. NIT — Long notes field on `reit_commercial` — **RESOLVED 2026-05-23 (commit `106c960`)**
 
 - **Severity:** NIT
 - **Surfacing gate:** P4 REVIEWER (NIT-1 alternative)
 - **Location:** `config/assumption_profiles.json` — `reit_commercial` rule's `notes` field documenting the prefix↔archetype-id asymmetry
 - **Why not fixed at merge:** The notes field documents real rationale that should not be lost; shortening it without a destination would lose context.
 - **Suggested resolution:** Now that this tracker exists, extract the rationale here (where item #7 already captures it) and shorten the rule's `notes` to a pointer like `"see docs/reviewer/T2-P4-W2 item 7 — archetype id retained as reit_commercial pending coordinated rename"`.
+- **Resolution:** Shortened the `reit_commercial` rule's `notes` to a pointer referencing item #7 of this tracker; thesis (office headwinds, low terminal multiple) retained. `go test ./internal/services/valuation/profile/...` green.
 - **Priority:** Opportunistic (after item #7 resolves, this self-closes)
 
-### 10. NIT — `reit_specialty` notes-style inconsistency
+### 10. NIT — `reit_specialty` notes-style inconsistency — **RESOLVED 2026-05-23 (commit `106c960`)**
 
 - **Severity:** NIT
 - **Surfacing gate:** P4 REVIEWER (NIT-2)
 - **Location:** `config/assumption_profiles.json` — `reit_specialty` rule's `notes` lists specific tickers ("self-storage / billboard / prison / timber") while siblings follow a shorter "<subsector> REIT subsector; <thesis>" pattern.
 - **Why not fixed at merge:** Style consistency only; no functional impact.
 - **Suggested resolution:** Align `reit_specialty` notes to the sibling pattern when doing a notes-style sweep across `config/assumption_profiles.json`.
+- **Resolution:** Rewrote notes to the sibling pattern: "specialty REIT subsector (self-storage, billboard, prison, timber); heterogeneous niche assets with subsector-specific durability." `go test ./internal/services/valuation/profile/...` green.
 - **Priority:** Opportunistic (batch with item #9 in a single notes-style sweep)
 
 ---

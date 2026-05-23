@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -3528,7 +3529,7 @@ func loadP2TestRegistry(t *testing.T, archetype, maturity string, horizonYears i
 				"profile_id": "` + archetype + `:` + maturity + `",
 				"archetype": "` + archetype + `",
 				"maturity": "` + maturity + `",
-				"horizon_years": ` + itoaP2(horizonYears) + `,
+				"horizon_years": ` + strconv.Itoa(horizonYears) + `,
 				"compound_growth_cap": 4.0,
 				"revenue_base_method": "raw_ttm",
 				"discount_method": "wacc",
@@ -3556,23 +3557,6 @@ func loadP2TestRegistry(t *testing.T, archetype, maturity string, horizonYears i
 	reg, err := profile.LoadFromBytes([]byte(jsonConfig), "p2_test_registry")
 	require.NoError(t, err, "P2 test registry must load")
 	return reg
-}
-
-// itoaP2 is a tiny strconv.Itoa shim local to P2 tests so the inline JSON
-// literal stays compile-time readable without pulling strconv into the
-// test imports a second time.
-func itoaP2(n int) string {
-	// Test horizons are always in [0,15] per spec §3.1 — a single digit or
-	// two digits is sufficient.
-	if n < 0 {
-		return "0"
-	}
-	if n < 10 {
-		return string(rune('0' + n))
-	}
-	tens := n / 10
-	ones := n % 10
-	return string([]byte{byte('0' + tens), byte('0' + ones)})
 }
 
 // buildP2TestService constructs a Service whose profileRegistry routes
