@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sync/atomic"
+
+	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
@@ -71,18 +74,44 @@ type BundleMacroGateway struct {
 	// the production default at internal/config/config.go:490.
 	cfg *config.Config
 
+	// logger emits the RPL-7 raw→parsed fallback WARN line. nil is
+	// permitted — falls back to zap.NewNop() so the gateway stays
+	// safe to construct in throwaway tests. Production replays wire
+	// the fx-resolved *zap.Logger via the constructor.
+	logger *zap.Logger
+
+	// rawFallbackUsed is set atomically the first time the raw→parsed
+	// fallback fires. Exposed via FellBackToParsed() so tests can pin
+	// the contract without parsing log output. Stays observable for
+	// the lifetime of the gateway.
+	rawFallbackUsed atomic.Bool
+
 	callsCount uint64
 }
 
 // NewBundleMacroGateway constructs a replay-mode macro gateway. cfg may be
 // nil; when nil, GetMarketRiskPremium falls back to defaultMarketRiskPremium
-// (which is pinned to the production-config default).
-func NewBundleMacroGateway(bundleDir string, mode Mode, cfg *config.Config) *BundleMacroGateway {
+// (which is pinned to the production-config default). logger may also be
+// nil; when nil, RPL-7 fallback WARNs are silently dropped via
+// zap.NewNop().
+func NewBundleMacroGateway(bundleDir string, mode Mode, cfg *config.Config, logger *zap.Logger) *BundleMacroGateway {
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &BundleMacroGateway{
 		bundleDir: bundleDir,
 		mode:      mode,
 		cfg:       cfg,
+		logger:    logger,
 	}
+}
+
+// FellBackToParsed reports whether ModeRaw transparently fell back to
+// ModeParsed at any point in this gateway's lifetime. Exposed for tests
+// pinning the RPL-7 contract; operators in the field grep the structured
+// WARN log line (key "phase":"RPL-7-raw-fallback") instead.
+func (g *BundleMacroGateway) FellBackToParsed() bool {
+	return g.rawFallbackUsed.Load()
 }
 
 // CallsCount is test-only telemetry.
@@ -127,10 +156,66 @@ func (g *BundleMacroGateway) GetTreasuryRates(ctx context.Context) (*entities.Tr
 			assignTreasuryField(rates, fieldName, rate)
 		}
 		if present == 0 {
-			// No FRED files at all — fall through to ErrBundleMissingPayload
-			// so callers can detect a fully-absent macro phase distinctly
-			// from "FRED captured but every series happened to be empty".
-			return nil, NewBundleMissingPayloadError(g.bundleDir, "07-fetch-macro-*.raw.json", nil)
+			// RPL-7 (tracker docs/reviewer/RPL7-raw-mode-macro-per-series-snapshot.md):
+			// the production capture path at internal/infra/gateways/macro/gateway.go:115-132
+			// only snapshots the aggregated 07-fetch-macro.parsed.json — it
+			// never writes per-FRED-series 07-fetch-macro-<seriesID>.raw.json
+			// files. So a "no per-series files" outcome here is the common
+			// case for every production bundle, NOT a missing-payload bug.
+			//
+			// Option B (recommended in the tracker): transparently route
+			// raw-mode → parsed payload when per-series files don't exist,
+			// emit a structured WARN so operators can grep for the
+			// fallback, and surface the same signal in-process via
+			// FellBackToParsed() for tests to pin.
+			//
+			// Hermeticity (CLAUDE.md F11): falling back to the bundle's
+			// own parsed payload is still bundle-local I/O — no production
+			// DB / Redis / external API is touched. ErrBundleMissingPayload
+			// is still returned (NOT a panic) when BOTH the per-series
+			// files AND the parsed payload are absent.
+			// Fall through to ModeParsed handling. Reuse the same
+			// payload-read + unmarshal path so the contract stays
+			// byte-identical to a ModeParsed call against this bundle.
+			// We attempt the parsed read FIRST, before stamping
+			// rawFallbackUsed / emitting the WARN, so the flag and log
+			// line track "fallback succeeded" rather than "fallback was
+			// attempted but the bundle is fully broken". Operators chasing
+			// drift in production will see FellBackToParsed=true paired
+			// with a successful replay; a fully-empty bundle still
+			// surfaces as ErrBundleMissingPayload with no fallback noise.
+			body, err := readBundlePayload(g.bundleDir, macroParsedFile)
+			if err != nil {
+				// Neither per-series files NOR the parsed payload exist.
+				// The original ErrBundleMissingPayload signal is preserved
+				// — callers / tests that errors.Is on ErrBundleMissingPayload
+				// continue to match. Wrap the parsed-file read err as the
+				// inner cause for full context.
+				return nil, NewBundleMissingPayloadError(g.bundleDir, "07-fetch-macro-*.raw.json", err)
+			}
+			var rates entities.TreasuryRates
+			if err := json.Unmarshal(body, &rates); err != nil {
+				return nil, fmt.Errorf("replay: BundleMacroGateway: raw-mode fallback parse %s: %w", macroParsedFile, err)
+			}
+			g.rawFallbackUsed.Store(true)
+			g.logger.Warn("replay: raw-mode macro fallback to parsed payload",
+				zap.String("phase", "RPL-7-raw-fallback"),
+				zap.String("bundle_dir", g.bundleDir),
+				zap.String("expected", "07-fetch-macro-<seriesID>.raw.json (per-series)"),
+				zap.String("actual", macroParsedFile),
+				zap.String("reason", "production capture path snapshots only the aggregated parsed payload; per-series files were never written"),
+			)
+			// Operator-visible signal: replay.Module wires zap.NewNop() by
+			// design (replay must produce deterministic stdout), so the
+			// structured Warn above is invisible to end users. The tracker
+			// (RPL-7) asks for a WARN that operators can grep / see. We
+			// write a single-line marker directly to stderr — minimally
+			// scoped, grep-friendly (phase=RPL-7-raw-fallback), and does
+			// not pollute the stdout JSON / text report. Tests pinning
+			// the structured field consume FellBackToParsed() instead.
+			fmt.Fprintf(os.Stderr, "replay: WARN phase=RPL-7-raw-fallback bundle_dir=%q reason=\"per-series files absent; using %s\"\n",
+				g.bundleDir, macroParsedFile)
+			return &rates, nil
 		}
 		return rates, nil
 

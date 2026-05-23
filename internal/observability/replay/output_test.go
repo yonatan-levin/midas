@@ -782,3 +782,90 @@ func TestRenderJSON_BundlePathUsesForwardSlash(t *testing.T) {
 			r.Results[0].Bundle, winPath)
 	}
 }
+
+
+// TestRenderJSON_RPL7_OptionC_ErroredEmitsFieldsChangedMinusOne pins the
+// RPL-7 Option C contract: when Result.Status == StatusErrored, the
+// JSON output must emit fields_changed: -1 so CI scripts and operators
+// cannot false-positive on "0 changes" while the run actually errored.
+//
+// Non-errored statuses (pass / fail / skeleton_ok / warn) must continue
+// to emit the raw FieldsChanged count. The in-memory Result is NOT
+// mutated — only the rendered JSON copy receives the sentinel.
+func TestRenderJSON_RPL7_OptionC_ErroredEmitsFieldsChangedMinusOne(t *testing.T) {
+	results := []Result{
+		{
+			Bundle:        "/fixtures/RPL7/req_errored",
+			Status:        StatusErrored,
+			Ticker:        "RPL7",
+			FieldsTotal:   0,
+			FieldsChanged: 0, // in-memory zero — JSON output must show -1
+			DurationMs:    7,
+			Error:         "replay: bundle missing payload: 05-fetch-sec.raw.json",
+		},
+		{
+			Bundle:        "/fixtures/RPL7/req_pass",
+			Status:        StatusPass,
+			Ticker:        "RPL7",
+			FieldsTotal:   36,
+			FieldsChanged: 0, // in-memory zero — JSON output must STAY 0
+			DurationMs:    11,
+		},
+		{
+			Bundle:        "/fixtures/RPL7/req_fail",
+			Status:        StatusFail,
+			Ticker:        "RPL7",
+			FieldsTotal:   36,
+			FieldsChanged: 3, // raw count must survive into JSON
+			DurationMs:    13,
+		},
+	}
+	r := &Report{
+		ReplayVersion: ReplayVersion,
+		GitSHACurrent: "test-build",
+		Summary:       ComputeSummary(results),
+		Results:       results,
+	}
+
+	var buf bytes.Buffer
+	if err := r.RenderJSON(&buf); err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+
+	var got struct {
+		Results []struct {
+			Bundle        string `json:"bundle"`
+			Status        string `json:"status"`
+			FieldsChanged int    `json:"fields_changed"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatalf("Unmarshal: %v\nrendered:\n%s", err, buf.String())
+	}
+	want := map[string]int{
+		"/fixtures/RPL7/req_errored": -1,
+		"/fixtures/RPL7/req_pass":    0,
+		"/fixtures/RPL7/req_fail":    3,
+	}
+	for _, row := range got.Results {
+		w, ok := want[row.Bundle]
+		if !ok {
+			t.Errorf("unexpected bundle in output: %s", row.Bundle)
+			continue
+		}
+		if row.FieldsChanged != w {
+			t.Errorf("bundle=%s status=%s: fields_changed = %d, want %d", row.Bundle, row.Status, row.FieldsChanged, w)
+		}
+	}
+
+	// Input Report.Results.FieldsChanged must NOT have been mutated — the
+	// sentinel exists only at the JSON boundary. Downstream consumers
+	// reading res.FieldsChanged in-memory continue to see the raw count
+	// (integration tests in this package assert against 0 in the errored
+	// case).
+	for _, res := range r.Results {
+		if res.Status == StatusErrored && res.FieldsChanged != 0 {
+			t.Errorf("RenderJSON must not mutate input Result.FieldsChanged; errored row now %d, want 0", res.FieldsChanged)
+		}
+	}
+}

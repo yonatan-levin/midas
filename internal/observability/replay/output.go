@@ -58,6 +58,16 @@ type Result struct {
 	FieldsTotal int `json:"fields_total"`
 	// FieldsChanged is the number of fields out of tolerance. Always
 	// reported even when 0.
+	//
+	// JSON-render contract (RPL-7 Option C, tracker
+	// docs/reviewer/RPL7-raw-mode-macro-per-series-snapshot.md):
+	// when Status == StatusErrored, RenderJSON emits this field as -1
+	// so CI scripts and operators cannot false-positive on
+	// `fields_changed: 0` while `status: errored`. The in-memory
+	// Result.FieldsChanged value is NOT mutated — diff-layer counters
+	// and integration assertions (which compare against 0) continue
+	// to read the raw count. The sentinel exists only at the JSON
+	// boundary.
 	FieldsChanged int `json:"fields_changed"`
 	// SchemaDrift is true when the bundle's schema_versions disagree
 	// with CurrentSchemaVersions. May coexist with a Pass status when
@@ -244,6 +254,14 @@ func (r *Report) RenderJSON(w io.Writer) error {
 	normalized.Results = make([]Result, len(r.Results))
 	for i, res := range r.Results {
 		res.Bundle = filepath.ToSlash(res.Bundle)
+		// RPL-7 Option C: errored rows emit fields_changed = -1 so
+		// downstream consumers can't false-positive on "0 changes"
+		// while the run actually errored. The mutation lives ONLY in
+		// the JSON copy — see the FieldsChanged doc comment for the
+		// in-memory contract.
+		if res.Status == StatusErrored {
+			res.FieldsChanged = -1
+		}
 		normalized.Results[i] = res
 	}
 

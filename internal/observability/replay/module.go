@@ -86,11 +86,16 @@ func Module(bundleDir string, opts Options) fx.Option {
 		fx.Provide(func() ports.MarketDataGateway {
 			return NewBundleMarketGateway(bundleDir, opts.Mode)
 		}),
-		fx.Provide(func(cfg *config.Config) ports.MacroDataGateway {
+		fx.Provide(func(cfg *config.Config, logger *zap.Logger) ports.MacroDataGateway {
 			// Threaded *config.Config so GetMarketRiskPremium reads
 			// cfg.Macro.ManualMarketRiskPremium (matches production
 			// gateway.go:140-157). VERIFIER finding HIGH-1.
-			return NewBundleMacroGateway(bundleDir, opts.Mode, cfg)
+			//
+			// logger is threaded so the RPL-7 raw→parsed fallback WARN
+			// line (tracker docs/reviewer/RPL7-raw-mode-macro-per-series-snapshot.md)
+			// reaches the operator. Grep with
+			// `rg '"phase":"RPL-7-raw-fallback"'`.
+			return NewBundleMacroGateway(bundleDir, opts.Mode, cfg, logger)
 		}),
 		// YFinance is wired post-construct via the fx.Invoke at the bottom;
 		// expose it here so the post-construct hook can resolve it.
