@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/viper"
@@ -382,6 +383,67 @@ func Load() (*Config, error) {
 	}
 
 	return &config, nil
+}
+
+// loadDefaultsMu serialises LoadDefaults() calls that briefly mutate the
+// global viper singleton. Without the mutex, two concurrent LoadDefaults()
+// calls could race on viper.Reset() and corrupt each other's snapshot.
+//
+// RPL-10 (2026-05-22).
+var loadDefaultsMu sync.Mutex
+
+// LoadDefaults returns a *Config populated with every viper.SetDefault that
+// production applies via setDefaults() and the "development" branch of
+// applyLoggingEnvironmentDefaults(), without reading any config file or
+// environment variables and without running validate().
+//
+// This is the canonical "what does production look like with nothing on
+// disk and no env overrides?" snapshot. It exists so callers (notably
+// internal/observability/replay/module.go's
+// TestReplayConfig_MirrorsAllValuationViperDefaults parity test) can
+// compare a hand-mirrored config against the source-of-truth defaults
+// without having to know how viper is wired.
+//
+// Implementation: briefly mutates the global viper singleton because
+// setDefaults() and applyLoggingEnvironmentDefaults() are written
+// against viper.SetDefault. We bracket the call with viper.Reset() on
+// entry and exit, holding loadDefaultsMu so parallel calls do not race.
+// Production Load() does its own viper setup at the top of its body, so
+// a leaked default from LoadDefaults() would be overwritten anyway —
+// but the defensive Reset is cheap and obvious.
+//
+// Contract: callers must NOT interleave LoadDefaults() with arbitrary
+// viper mutation in the same goroutine. Tests that touch viper already
+// viper.Reset() at start (see config_logging_test.go's resetViper).
+//
+// RPL-10 (2026-05-22). The alternative — parameterising setDefaults to
+// take a *viper.Viper — would have been a cleaner long-term shape but a
+// much larger diff (~80 viper.SetDefault call sites to rewrite) for a
+// stopgap fix that becomes obsolete once RPL-9 lands the manifest-config
+// snapshot. The Reset+mutex pattern keeps the production code path
+// untouched.
+func LoadDefaults() (*Config, error) {
+	loadDefaultsMu.Lock()
+	defer loadDefaultsMu.Unlock()
+
+	viper.Reset()
+	defer viper.Reset()
+
+	setDefaults()
+	applyLoggingEnvironmentDefaults()
+
+	var cfg Config
+	if err := viper.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal defaults: %w", err)
+	}
+
+	// Backward-compat: mirror Load()'s fallback so callers see the same
+	// shape they'd see from a real Load() with no config file present.
+	if cfg.Logging.Level == "" && cfg.LogLevel != "" {
+		cfg.Logging.Level = cfg.LogLevel
+	}
+
+	return &cfg, nil
 }
 
 // setDefaults sets base (environment-agnostic) default configuration values.

@@ -217,43 +217,80 @@ func Module(bundleDir string, opts Options) fx.Option {
 func replayConfig() *config.Config {
 	return &config.Config{
 		Valuation: config.ValuationConfig{
-			// MUST mirror production viper defaults at
-			// internal/config/config.go:494,504-505 (DCF growth-rate caps
-			// + terminal-growth fallback). These knobs feed
+			// RPL-10 (2026-05-22): mirror ALL non-zero production viper
+			// defaults from internal/config/config.go:setDefaults() —
+			// not just the few currently consumed by replay-reachable
+			// code paths. Defense-in-depth: cycles 1+2+3 of the
+			// replay-fidelity debug each fixed one instance of "replay-
+			// side config field hand-copied wrong from production
+			// default" (DCFMaxGrowthRate, DCFMinGrowthRate,
+			// DefaultTerminalGrowthCap). Mirroring the rest closes the
+			// trap for the day a future engine change starts reading
+			// any of the remaining fields. Parity is pinned by
+			// TestReplayConfig_MirrorsAllValuationViperDefaults — that
+			// test fails the moment someone adds a new viper default
+			// without mirroring it here.
+			//
+			// The growth caps in particular feed
 			// *growth.Estimator.MaxGrowthRate / MinGrowthRate via
-			// valuation.NewService:88-93 (caps) and are consulted directly
-			// in service.go:569 as the terminal-growth fallback when
+			// valuation.NewService:88-93 and are consulted directly in
+			// service.go:569 as the terminal-growth fallback when
 			// historical CAGR computation errors out. They are NOT
 			// snapshotted into the bundle today, so the replay-side
 			// config must mirror production defaults — any divergence
-			// silently clips/floors the blended Stage 1 growth rate when
-			// |blended| > replay-cap (which cascades through the Stage 2
-			// fade interpolation and corrupts every projected rate, the
-			// `growth_rate` summary, DCF value, etc.), OR substitutes a
-			// different terminal-growth rate when the historical fallback
-			// fires (sparse OI history, all-negative OI, etc.) — the
-			// MXL bundle does not exercise the fallback because its
-			// analyst+historical data is clean, but biotech/startup-shape
-			// bundles will. Debug cycle 2 (MAJOR-1 / MXL 2026-05-13): the
-			// prior 0.40 / -0.10 values clipped MXL's blended 0.516 down
-			// to 0.40, producing a ~0.10 absolute drop on every stage and
-			// 9 drift fields in replay diffs against a production-captured
-			// 17-response.json (which had used the 0.50 cap). Bundles
-			// captured against a non-default production config cannot be
-			// faithfully replayed until the manifest captures config
-			// (tracker filing pending).
-			// Regression-pinned by TestReplayFidelity_MXLClassFixture_ZeroDiffs
-			// in integration_test.go.
-			DCFMaxGrowthRate:         0.50,
-			DCFMinGrowthRate:         -0.30,
-			DefaultTerminalGrowthCap: 0.03,
+			// silently clips/floors the blended Stage 1 growth rate
+			// when |blended| > replay-cap (which cascades through the
+			// Stage 2 fade interpolation and corrupts every projected
+			// rate, the `growth_rate` summary, DCF value, etc.), OR
+			// substitutes a different terminal-growth rate when the
+			// historical fallback fires (sparse OI history, all-
+			// negative OI, etc.) — the MXL bundle does not exercise
+			// the fallback because its analyst+historical data is
+			// clean, but biotech/startup-shape bundles will. Debug
+			// cycle 2 (MAJOR-1 / MXL 2026-05-13): the prior 0.40 /
+			// -0.10 values clipped MXL's blended 0.516 down to 0.40,
+			// producing a ~0.10 absolute drop on every stage and 9
+			// drift fields in replay diffs against a production-
+			// captured 17-response.json (which had used the 0.50 cap).
+			// Bundles captured against a non-default production config
+			// cannot be faithfully replayed until the manifest
+			// captures config (RPL-9 tracker; RPL-10 is the stopgap
+			// mirror). Regression-pinned by
+			// TestReplayFidelity_MXLClassFixture_ZeroDiffs in
+			// integration_test.go.
+			//
+			// Field order below matches config.ValuationConfig struct
+			// declaration order at internal/config/config.go:263-286.
+			DefaultMarketRiskPremium: 0.05,             // config.go:493
+			DefaultTerminalGrowthCap: 0.03,             // config.go:494
+			DefaultTaxRate:           0.21,             // config.go:495
+			MinDataPointsForGrowth:   2,                // config.go:496
+			MaxBulkSize:              50,               // config.go:497
+			CacheTTL:                 time.Hour,        // config.go:498
+			SlowRequestThreshold:     5 * time.Second,  // config.go:499
+			DataFetchTimeout:         10 * time.Second, // config.go:500
+			// EnableConcurrentDataFetch has no viper.SetDefault in
+			// setDefaults(), so its production default is the zero
+			// value (false). Mirroring as false would be redundant but
+			// harmless; we elide for clarity that this is the un-set
+			// zero default.
+			DCFProjectionYears:    5,      // config.go:503
+			DCFMaxGrowthRate:      0.50,   // config.go:504
+			DCFMinGrowthRate:      -0.30,  // config.go:505
+			DCFIterationTolerance: 0.0001, // config.go:506
+			DCFMaxIterations:      100,    // config.go:507
 		},
-		// Mirror viper default at config.go:490
-		// (viper.SetDefault "macro.manual_market_risk_premium", 0.05).
-		// Threaded into BundleMacroGateway so replay's MRP matches
-		// production for bundles captured against the default config.
-		// VERIFIER finding HIGH-1.
+		// Mirror viper defaults at config.go:489-490
+		// (manual_risk_free_rate=0.045, manual_market_risk_premium=0.05).
+		// ManualMarketRiskPremium is threaded into BundleMacroGateway so
+		// replay's MRP matches production for bundles captured against
+		// the default config (VERIFIER finding HIGH-1, debug cycle 2).
+		// ManualRiskFreeRate is NOT consumed by replay-reachable paths
+		// today (replay uses the bundle's macro snapshot for the risk-
+		// free rate), but RPL-10 mirrors it as defense-in-depth and the
+		// parity test guards against future drift.
 		Macro: config.MacroConfig{
+			ManualRiskFreeRate:      0.045,
 			ManualMarketRiskPremium: 0.05,
 		},
 		DataCleaner: config.DataCleanerConfig{
