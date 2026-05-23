@@ -26,7 +26,7 @@ For MXL specifically, the math difference is dramatic. From the artifact bundle:
 
 | Quantity | Trailing model (today) | Forward model (proposed) |
 |---|---|---|
-| Revenue base | $137M (Q1 only — see RM-1 bug) | $560M TTM × growth chain to year 5 = ~$3,775M |
+| Revenue base | $137M (Q1 only, pre-RM-1) → $549M (post-RM-1 ANNUALIZED_QUARTER) | $560M TTM × growth chain to year 5 = ~$3,775M |
 | Sector multiple | 1.5× (MFG default — see RM-2 bug) | 6.0× (MFG_SEMI — see RM-2 fix) |
 | Discount | none (immediate value) | (1 + WACC)^5 = 1.19^5 ≈ 2.39 |
 | EV (or PV(EV)) | $137M × 1.5 = $206M | $3,775M × 6.0 / 2.39 = $9,477M |
@@ -533,7 +533,7 @@ Coverage target: 100% on the new file (per CLAUDE.md ≥90% finance floor; the m
 
 ## Acceptance for closing this tracker
 
-- [ ] RM-1 (TTM revenue helper) has landed.
+- [x] RM-1 (TTM revenue helper) has landed. Shipped via merge `cfdf7b4` (entity helper `2428ae1` + consumer wire-up `3902703` + V/R/Q bridge-ordering follow-up `9da6c68`); RM-1.A T7 stale-data follow-up via `9a32d94`. See `docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md` for the closeout status.
 - [ ] RM-2 Phase 1 (missing sector buckets including MFG_SEMI) has landed.
 - [ ] `internal/services/valuation/models/forward_revenue_multiple.go` ships with the algorithm above.
 - [ ] Router (`models/router.go`) selects forward when `shouldUseForwardRevenueMultiple()` returns true; selects trailing otherwise.
