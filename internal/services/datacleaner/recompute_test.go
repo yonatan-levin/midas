@@ -400,6 +400,177 @@ func TestRecomputeUmbrellas_Property_WellFormedNoDivergence(t *testing.T) {
 	properties.TestingRun(t)
 }
 
+// ---------------------------------------------------------------------------
+// TestRecomputeUmbrellas_RecentAdjustersField (DC-1 Phase 2 PR-1 Task 1.6)
+//
+// emitIfDiverged renders a `recent_adjusters` zap.Strings field on every
+// divergence WARN, populated from the last recentAdjustersWindow entries of
+// fd.AdjustmentLedger. The field must:
+//   - render as an empty array ([]) when the ledger is nil/empty
+//   - render the AdjusterIDs of the last N entries in chronological order
+//     when the ledger is non-empty, where N is recentAdjustersWindow
+//   - never trigger a Phase 1 NoMutation regression (covered by the
+//     existing TestRecomputeUmbrellas_NoMutation; this test also checks
+//     the ledger slice header is unchanged after the recompute call)
+//
+// ---------------------------------------------------------------------------
+func TestRecomputeUmbrellas_RecentAdjustersField(t *testing.T) {
+	// Helper: a FinancialData with a known divergence so the WARN fires.
+	makeDivergedFD := func(ledger []entities.LedgerEntry) *entities.FinancialData {
+		fd := &entities.FinancialData{
+			Ticker:                            "AAPL",
+			CIK:                               "0000320193",
+			FilingPeriod:                      "2023FY",
+			TotalAssets:                       352_755.0,
+			CurrentAssets:                     143_566.0,
+			CurrentLiabilities:                145_308.0,
+			TotalLiabilities:                  290_437.0,
+			CashAndCashEquivalents:            29_965.0,
+			Inventory:                         6_331.0,
+			TotalDebt:                         111_088.0,
+			OperatingLeaseLiabilityCurrent:    1_410.0,
+			OperatingLeaseLiabilityNoncurrent: 10_550.0,
+			OtherCurrentAssets:                107_270.0,
+			OtherNonCurrentAssets:             209_189.0,
+			OtherCurrentLiabilities:           143_898.0,
+			OtherNonCurrentLiabilities:        23_491.0,
+			AdjustmentLedger:                  ledger,
+		}
+		// Drift the TotalAssets umbrella by 100 to force exactly one WARN.
+		fd.TotalAssets -= 100.0
+		return fd
+	}
+
+	// extractRecentAdjusters pulls the recent_adjusters field from a zap
+	// observer ContextMap. zap.Strings serializes through the observer as
+	// []interface{} (each element a string), NOT []string — undocumented
+	// but consistent across zap versions. Normalize to []string so the
+	// assertions are simple.
+	extractRecentAdjusters := func(t *testing.T, ctxMap map[string]interface{}) []string {
+		t.Helper()
+		raw, present := ctxMap["recent_adjusters"]
+		require.True(t, present, "WARN must always carry the recent_adjusters field")
+		switch v := raw.(type) {
+		case []string:
+			return v
+		case []interface{}:
+			out := make([]string, 0, len(v))
+			for i, elem := range v {
+				s, ok := elem.(string)
+				require.True(t, ok, "recent_adjusters[%d] is not a string: got %T (%v)", i, elem, elem)
+				out = append(out, s)
+			}
+			return out
+		default:
+			t.Fatalf("recent_adjusters must be string-shaped; got %T (%v)", raw, raw)
+			return nil
+		}
+	}
+
+	t.Run("empty-ledger renders empty array", func(t *testing.T) {
+		fd := makeDivergedFD(nil)
+
+		recorded, ctx := freshObserver(t)
+		recomputeUmbrellas(ctx, fd)
+
+		entries := recorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All()
+		require.Len(t, entries, 1, "exactly one WARN expected for the TotalAssets-only divergence")
+
+		strs := extractRecentAdjusters(t, entries[0].ContextMap())
+		assert.Empty(t, strs, "empty ledger ⇒ empty recent_adjusters; got %v", strs)
+	})
+
+	t.Run("non-empty ledger renders last-N AdjusterIDs in order", func(t *testing.T) {
+		// Build a ledger with more entries than the window (5) so the
+		// truncation path is exercised. The 7-entry ledger below should
+		// emit only the LAST 5 IDs: ["a3","l1","l2","e1","e2"].
+		ledger := []entities.LedgerEntry{
+			{AdjusterID: "a1", RuleID: "goodwill_exclusion", Fired: true},
+			{AdjusterID: "a2", RuleID: "intangible_adjustment", Fired: true},
+			{AdjusterID: "a3", RuleID: "obsolete_inventory", Fired: true},
+			{AdjusterID: "l1", RuleID: "operating_leases", Fired: true},
+			{AdjusterID: "l2", RuleID: "pension_obligations", Fired: false, SkipReason: "no pension"},
+			{AdjusterID: "e1", RuleID: "restructuring_charges", Fired: true},
+			{AdjusterID: "e2", RuleID: "stock_compensation", Fired: true},
+		}
+		fd := makeDivergedFD(ledger)
+
+		// Snapshot the ledger header so we can verify recomputeUmbrellas
+		// does not mutate it (in addition to the existing NoMutation test).
+		preLedgerLen := len(fd.AdjustmentLedger)
+		preLedgerCap := cap(fd.AdjustmentLedger)
+
+		recorded, ctx := freshObserver(t)
+		recomputeUmbrellas(ctx, fd)
+
+		assert.Equal(t, preLedgerLen, len(fd.AdjustmentLedger),
+			"recomputeUmbrellas must not append to ledger")
+		assert.Equal(t, preLedgerCap, cap(fd.AdjustmentLedger),
+			"recomputeUmbrellas must not grow ledger backing array")
+
+		entries := recorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All()
+		require.Len(t, entries, 1, "exactly one WARN expected for the TotalAssets-only divergence")
+
+		strs := extractRecentAdjusters(t, entries[0].ContextMap())
+		assert.Equal(t, []string{"a3", "l1", "l2", "e1", "e2"}, strs,
+			"recent_adjusters must contain the last %d AdjusterIDs in chronological order",
+			recentAdjustersWindow)
+	})
+
+	t.Run("ledger shorter than window renders all entries", func(t *testing.T) {
+		// 2-entry ledger; window is 5; expect all 2 IDs.
+		ledger := []entities.LedgerEntry{
+			{AdjusterID: "a1", RuleID: "goodwill_exclusion", Fired: true},
+			{AdjusterID: "l1", RuleID: "operating_leases", Fired: true},
+		}
+		fd := makeDivergedFD(ledger)
+
+		recorded, ctx := freshObserver(t)
+		recomputeUmbrellas(ctx, fd)
+
+		entries := recorded.FilterMessage("recomputeUmbrellas: umbrella divergence").All()
+		require.Len(t, entries, 1)
+		strs := extractRecentAdjusters(t, entries[0].ContextMap())
+		assert.Equal(t, []string{"a1", "l1"}, strs)
+	})
+}
+
+// ---------------------------------------------------------------------------
+// TestLastNAdjusterIDs (DC-1 Phase 2 PR-1 Task 1.6 helper)
+//
+// Unit-tests the pure-function slice helper. The cases cover the same
+// boundaries the WARN-level test exercises but at lower cost, so future
+// refactors can verify the helper independently from the recompute path.
+// ---------------------------------------------------------------------------
+func TestLastNAdjusterIDs(t *testing.T) {
+	mkEntry := func(id string) entities.LedgerEntry {
+		return entities.LedgerEntry{AdjusterID: id}
+	}
+
+	tests := []struct {
+		name   string
+		ledger []entities.LedgerEntry
+		n      int
+		want   []string
+	}{
+		{"nil ledger ⇒ empty slice", nil, 5, []string{}},
+		{"empty ledger ⇒ empty slice", []entities.LedgerEntry{}, 5, []string{}},
+		{"n<=0 ⇒ empty slice", []entities.LedgerEntry{mkEntry("a")}, 0, []string{}},
+		{"n=0 negative ⇒ empty slice", []entities.LedgerEntry{mkEntry("a")}, -1, []string{}},
+		{"ledger shorter than n ⇒ all entries", []entities.LedgerEntry{mkEntry("a"), mkEntry("b")}, 5, []string{"a", "b"}},
+		{"ledger equal to n ⇒ all entries", []entities.LedgerEntry{mkEntry("a"), mkEntry("b"), mkEntry("c")}, 3, []string{"a", "b", "c"}},
+		{"ledger longer than n ⇒ tail in order", []entities.LedgerEntry{mkEntry("a"), mkEntry("b"), mkEntry("c"), mkEntry("d"), mkEntry("e"), mkEntry("f")}, 3, []string{"d", "e", "f"}},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := lastNAdjusterIDs(tc.ledger, tc.n)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // Compile-time enforcement: this test file must compile against the real
 // entity shape. If a future entity rename happens, this declaration breaks
 // first (matches the pattern in datacleaner_plug_invariants_test.go).

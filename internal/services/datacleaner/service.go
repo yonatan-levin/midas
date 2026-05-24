@@ -295,7 +295,11 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	if b := artifact.From(ctx); b != nil {
 		b.Snapshot(ctx, "clean.normalized", "10-clean-output.json", result.CleanedData)
 		b.Snapshot(ctx, "clean.normalized", "10-clean-trace.json", result)
-		b.AddSchemaVersion("FinancialData", 7)
+		// DC-1 Phase 2 PR-2 Task 2.1: FinancialData schema bumped 7 → 8 in the
+		// first PR that POPULATES AdjustmentLedger / Overlays from a native
+		// adjuster (A1 goodwill_exclusion). Replay drift output stays
+		// diagnostic until tier2-baseline bundles are refreshed.
+		b.AddSchemaVersion("FinancialData", 8)
 
 		// Phase 2.B — auto-on-quality-flag trigger. Count flags at or above
 		// the bundle's configured severity threshold and report the count
@@ -458,6 +462,17 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 		}
 	}
 
+	// DC-1 Phase 2 PR-1 SHIM (Task 1.4 / plan §7).
+	//
+	// Each category's Process* call STILL runs unchanged (dual-write invariant);
+	// after it returns, we mechanically translate the legacy []entities.Adjustment
+	// slice and the set of rules that were considered into LedgerEntry records
+	// appended onto data.AdjustmentLedger. The shim's three branches (assets,
+	// liabilities, earnings) are deletion order: PR-2 deletes the asset branch
+	// when A-rules implement Adjuster.Apply natively, PR-3 deletes the earnings
+	// branch, PR-4 deletes the liability branch. PR-1 ships zero adjuster code
+	// changes, so this shim is the ONLY ledger producer in PR-1.
+
 	// Apply Category A (Asset Quality) adjustments
 	if len(assetRules) > 0 {
 		assetResult := s.assetAdjuster.ProcessAssetAdjustments(data, assetRules, cleaningCtx)
@@ -466,6 +481,28 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			allFlags = append(allFlags, assetResult.Flags...)
 			totalRulesApplied += len(assetRules)
 		}
+
+		// DC-1 Phase 2 PR-2 Task 2.1: drain native Adjuster output so
+		// migrated rules' LedgerEntries / Overlays land in rule-iteration
+		// order on data.AdjustmentLedger / data.Overlays.
+		if len(assetResult.NativeLedgerEntries) > 0 {
+			data.AdjustmentLedger = append(data.AdjustmentLedger, assetResult.NativeLedgerEntries...)
+		}
+		if len(assetResult.NativeOverlays) > 0 {
+			data.Overlays = append(data.Overlays, assetResult.NativeOverlays...)
+		}
+
+		// DC-1 Phase 2 PR-2 Task 2.6: asset-side shim deleted — all A-rules
+		// (A1 goodwill_exclusion, A2 intangible_adjustment, A4
+		// deferred_tax_assets, A5 obsolete_inventory, plus the two
+		// FlagEmitter reviews rd_capitalization_review and
+		// capitalized_software) emit LedgerEntries natively via the
+		// dispatcher in ProcessAssetAdjustments, drained at the
+		// NativeLedgerEntries / NativeOverlays appends immediately above.
+		// PR-3 Task 3.8 deleted the earnings shim branch; PR-4 Task 4.5
+		// deleted the liability shim branch AND removed both shim helpers
+		// (shimLedgerEntriesFromLegacy / shimLedgerEntriesFromLegacyExcluding)
+		// — PR-1's shim is fully gone.
 	}
 
 	// Apply Category B (Liability Completeness) adjustments
@@ -476,6 +513,26 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			allFlags = append(allFlags, liabilityResult.Flags...)
 			totalRulesApplied += len(liabilityRules)
 		}
+
+		// DC-1 Phase 2 PR-4 Task 4.1: drain native Adjuster output so
+		// migrated B-rules' LedgerEntries / Overlays land in rule-
+		// iteration order on data.AdjustmentLedger / data.Overlays.
+		// Mirrors the asset drain shipped in PR-2 Task 2.1 and the
+		// earnings drain shipped in PR-3 Task 3.1.
+		if len(liabilityResult.NativeLedgerEntries) > 0 {
+			data.AdjustmentLedger = append(data.AdjustmentLedger, liabilityResult.NativeLedgerEntries...)
+		}
+		if len(liabilityResult.NativeOverlays) > 0 {
+			data.Overlays = append(data.Overlays, liabilityResult.NativeOverlays...)
+		}
+
+		// DC-1 Phase 2 PR-4 Task 4.5: liability-side shim deleted — all B-rules
+		// (B1/B2/B3 OverlayEmitters) emit OverlaySpecs natively via the
+		// dispatcher in ProcessLiabilityAdjustments, drained at the
+		// NativeLedgerEntries / NativeOverlays appends immediately above.
+		// PR-1's shim is now FULLY removed; helpers shimLedgerEntriesFromLegacy
+		// + shimLedgerEntriesFromLegacyExcluding deleted below in this same
+		// commit (no remaining callers across A/B/C categories).
 	}
 
 	// Apply Category C (Earnings Normalization) adjustments
@@ -495,10 +552,43 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 			allFlags = append(allFlags, earningsResult.Flags...)
 			totalRulesApplied += len(earningsRules)
 		}
+
+		// DC-1 Phase 2 PR-3 Task 3.1: drain native Adjuster output so migrated
+		// C-rules' LedgerEntries / Overlays land in rule-iteration order on
+		// data.AdjustmentLedger / data.Overlays. Mirrors the asset drain
+		// shipped in PR-2 Task 2.1.
+		if len(earningsResult.NativeLedgerEntries) > 0 {
+			data.AdjustmentLedger = append(data.AdjustmentLedger, earningsResult.NativeLedgerEntries...)
+		}
+		if len(earningsResult.NativeOverlays) > 0 {
+			data.Overlays = append(data.Overlays, earningsResult.NativeOverlays...)
+		}
+
+		// DC-1 Phase 2 PR-3 Task 3.8: earnings-side shim deleted — all C-rules
+		// (C1/C2/C3/C5/C6 Restaters + C4/C7 FlagEmitters) emit LedgerEntries
+		// natively via the dispatcher in ProcessEarningsAdjustments, drained at
+		// the NativeLedgerEntries / NativeOverlays appends immediately above.
+		// PR-4 Task 4.5 then deleted the liability-side shim branch AND removed
+		// both shim helpers (shimLedgerEntriesFromLegacy /
+		// shimLedgerEntriesFromLegacyExcluding) — PR-1's shim is fully gone.
 	}
 
 	return allAdjustments, allFlags, totalRulesApplied, nil
 }
+
+// DC-1 Phase 2 PR-4 Task 4.5: the shim helpers shimLedgerEntriesFromLegacy
+// and shimLedgerEntriesFromLegacyExcluding were removed here. Their job
+// (mechanically translating the legacy []entities.Adjustment shape into
+// []entities.LedgerEntry records during the PR-1 bootstrap window) is now
+// fully served by the native Adjuster.Apply path:
+//   - A-rules (PR-2 Task 2.6, commit 2c132aa) — A1/A2/A4/A5 + RD/CapSW
+//     FlagEmitters drain via assetResult.NativeLedgerEntries/Overlays.
+//   - C-rules (PR-3 Task 3.8, commit 4af3c33) — C1/C2/C3/C5/C6 Restaters
+//     + C4/C7 FlagEmitters drain via earningsResult.NativeLedgerEntries/
+//     Overlays.
+//   - B-rules (PR-4 Tasks 4.1-4.5) — B1/B2/B3 OverlayEmitters drain via
+//     liabilityResult.NativeLedgerEntries/Overlays.
+// PR-1's shim is fully removed; no remaining callers across the codebase.
 
 func (s *service) checkRuleApplicability(rule *entities.CleaningRule, data *entities.FinancialData) bool {
 	// Use rule-based thresholds instead of hardcoded values
