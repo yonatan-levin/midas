@@ -36,10 +36,19 @@ var CurrentSchemaVersions = map[string]int{
 	// adjuster (A1 goodwill_exclusion). Per feedback_schema_version_atomic_bump
 	// (MEMORY): the bump lands in the FIRST populating PR, not the introducing
 	// PR — PR-1 introduced the omitempty fields without populating them, so
-	// PR-2 is where replay-drift signaling becomes diagnostic. Re-capturing
-	// tier2-baseline bundles after this bump is deferred to a follow-up commit
-	// that has live API access.
-	"FinancialData":     8,
+	// PR-2 is where replay-drift signaling becomes diagnostic.
+	//
+	// DC-1 Phase 3 Task 3.10 bumps FinancialData 8 → 9 atomically with the
+	// first commit that POPULATES a previously-zero omitempty field on the
+	// LedgerEntry serialized envelope:
+	//   - Task 3.7 (Q2): A2 LedgerEntry.TaxShieldDTA now populates as
+	//     writedown × EffectiveTaxRate when ETR > 0. Tickers with
+	//     non-zero ETR that fire A2 emit a new tax_shield_dta JSON field.
+	// The bundle's stamped LedgerEntry shape grows the populated
+	// tax_shield_dta key in production, so a replay drift signal is
+	// expected on tickers that fire A2 with ETR > 0. Use
+	// --allow-schema-drift on the first replay sweep after this bump.
+	"FinancialData":     9,
 	"GrowthEstimate":    1,
 	"ValuationResult":   2,
 	"FairValueResponse": 1,

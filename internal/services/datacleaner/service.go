@@ -296,11 +296,13 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	if b := artifact.From(ctx); b != nil {
 		b.Snapshot(ctx, "clean.normalized", "10-clean-output.json", result.CleanedData)
 		b.Snapshot(ctx, "clean.normalized", "10-clean-trace.json", result)
-		// DC-1 Phase 2 PR-2 Task 2.1: FinancialData schema bumped 7 → 8 in the
-		// first PR that POPULATES AdjustmentLedger / Overlays from a native
-		// adjuster (A1 goodwill_exclusion). Replay drift output stays
-		// diagnostic until tier2-baseline bundles are refreshed.
-		b.AddSchemaVersion("FinancialData", 8)
+		// DC-1 Phase 2 PR-2 Task 2.1 bumped FinancialData 7 → 8 for the first
+		// AdjustmentLedger / Overlays population. DC-1 Phase 3 Task 3.10 bumps
+		// 8 → 9 atomically with the first commit that populates a
+		// previously-zero LedgerEntry omitempty field — A2 TaxShieldDTA (Q2
+		// resolution). Replay drift output stays diagnostic until tier2-baseline
+		// bundles are refreshed.
+		b.AddSchemaVersion("FinancialData", 9)
 
 		// Phase 2.B — auto-on-quality-flag trigger. Count flags at or above
 		// the bundle's configured severity threshold and report the count
