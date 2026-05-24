@@ -249,7 +249,8 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		// outer Response.Confidence=0.8 too. Expected weighted amount =
 		// 180k * 0.30 = 54k. AIProvenance must capture ModelName,
 		// Confidence, Probability, Timestamp; PromptHash + SourceDocHash
-		// stay empty per Q4 (Phase 3 TODO).
+		// are SHA-256 hex strings per Q4 resolution (DC-1 Phase 3
+		// Task 3.8). Determinism test lives in q4_b3_aiprovenance_test.go.
 		la := NewLiabilityAdjuster(&mockAIService{}, nil).WithAI(true)
 		adj := NewB3ContingentLiabilityAdjuster(la)
 		rule := productionContingentLiabilitiesRule()
@@ -277,9 +278,11 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		assert.InDelta(t, 180_000.0*b3AIMockResponseProbability, overlay.Amount, 1e-9,
 			"AI path weighted amount = totalContingent * AI probability (180k * 0.30)")
 
-		// AIProvenance contract — best-effort capture per Q4. Probability
-		// + Confidence + ModelName + Timestamp populated; hashes empty
-		// (Phase 3 TODO).
+		// AIProvenance contract — best-effort capture. Probability +
+		// Confidence + ModelName + Timestamp populated. PromptHash +
+		// SourceDocHash now populated per Q4 resolution (DC-1 Phase 3
+		// Task 3.8); the determinism + sensitivity proofs live in
+		// TestQ4_AIProvenance_SHA256_Deterministic.
 		require.NotNil(t, overlay.AIProvenance,
 			"AI-enabled fired path must populate AIProvenance")
 		assert.Equal(t, b3AIModelName, overlay.AIProvenance.ModelName,
@@ -291,13 +294,12 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		assert.False(t, overlay.AIProvenance.Timestamp.IsZero(),
 			"AIProvenance.Timestamp must be populated")
 
-		// Q4 resolution per plan §10: empty hashes are accepted in Phase 2
-		// with a Phase 3 TODO. Phase 3 introduces SHA-256 hashing of the
-		// prompt template + footnote source text for replay determinism.
-		assert.Empty(t, overlay.AIProvenance.PromptHash,
-			"PromptHash must stay empty in Phase 2 — Phase 3 TODO per Q4 resolution (plan §10)")
-		assert.Empty(t, overlay.AIProvenance.SourceDocHash,
-			"SourceDocHash must stay empty in Phase 2 — Phase 3 TODO per Q4 resolution (plan §10)")
+		// Q4 resolution (DC-1 Phase 3 Task 3.8): both hashes are
+		// non-empty SHA-256 hex digests (64 chars).
+		assert.Len(t, overlay.AIProvenance.PromptHash, 64,
+			"PromptHash must be a 64-char SHA-256 hex digest per Q4 resolution")
+		assert.Len(t, overlay.AIProvenance.SourceDocHash, 64,
+			"SourceDocHash must be a 64-char SHA-256 hex digest per Q4 resolution")
 	})
 
 	t.Run("fired path with AI disabled produces nil AIProvenance", func(t *testing.T) {

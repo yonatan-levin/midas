@@ -298,9 +298,10 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 		b.Snapshot(ctx, "clean.normalized", "10-clean-trace.json", result)
 		// DC-1 Phase 2 PR-2 Task 2.1 bumped FinancialData 7 → 8 for the first
 		// AdjustmentLedger / Overlays population. DC-1 Phase 3 Task 3.10 bumps
-		// 8 → 9 atomically with the first commit that populates a
-		// previously-zero LedgerEntry omitempty field — A2 TaxShieldDTA (Q2
-		// resolution). Replay drift output stays diagnostic until tier2-baseline
+		// 8 → 9 atomically with the first commit that populates previously-
+		// zero omitempty fields on LedgerEntry / OverlaySpec — A2 TaxShieldDTA
+		// (Q2 resolution, Task 3.7) and B3 AIProvenance hashes (Q4 resolution,
+		// Task 3.8). Replay drift output stays diagnostic until tier2-baseline
 		// bundles are refreshed.
 		b.AddSchemaVersion("FinancialData", 9)
 

@@ -1182,6 +1182,23 @@ func (la *LiabilityAdjuster) captureB3AIProvenance(ctx context.Context, data *en
 		},
 	}
 
+	// Q4 resolution (DC-1 Phase 3 Task 3.8, spec §5.2): SHA-256 the prompt
+	// + source-doc PRE-API-CALL so a network failure does not leave a
+	// partial hash. The hash is a deterministic function of the inputs —
+	// model upgrades change the AI RESPONSE but not the INPUTS, so a
+	// future replay that finds matching hashes alongside differing
+	// responses cleanly attributes the drift to the model rather than
+	// the input.
+	//
+	// promptHash hashes a timestamp-free canonical serialization of the
+	// request inputs (ticker + filing_type + footnote text + analysis
+	// type + context map). RequestTimestamp is intentionally excluded —
+	// two calls on the same fixture must produce identical hashes
+	// regardless of wall-clock, otherwise replay tooling sees spurious
+	// drift on every re-run.
+	promptHash := sha256HexPromptCanonical(request)
+	sourceDocHash := sha256Hex(footnoteText)
+
 	response, err := la.aiService.AnalyzeFootnote(ctx, request)
 	if err != nil {
 		return nil, fmt.Errorf("AI provenance capture failed: %w", err)
@@ -1219,8 +1236,8 @@ func (la *LiabilityAdjuster) captureB3AIProvenance(ctx context.Context, data *en
 
 	return &entities.AIProvenance{
 		ModelName:     b3AIModelName,
-		PromptHash:    "", // TODO Phase 3: compute SHA-256 of prompt template (Q4 per plan §10)
-		SourceDocHash: "", // TODO Phase 3: compute SHA-256 of footnote text (Q4 per plan §10)
+		PromptHash:    promptHash,    // Q4 (Phase 3): SHA-256 of canonical request inputs
+		SourceDocHash: sourceDocHash, // Q4 (Phase 3): SHA-256 of footnote text
 		ExtractedSpan: extractedSpan,
 		Probability:   probability,
 		Confidence:    response.Confidence,

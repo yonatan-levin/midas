@@ -39,14 +39,16 @@ var CurrentSchemaVersions = map[string]int{
 	// PR-2 is where replay-drift signaling becomes diagnostic.
 	//
 	// DC-1 Phase 3 Task 3.10 bumps FinancialData 8 → 9 atomically with the
-	// first commit that POPULATES a previously-zero omitempty field on the
-	// LedgerEntry serialized envelope:
+	// first commit that POPULATES previously-zero omitempty fields on the
+	// LedgerEntry / OverlaySpec serialized envelope:
 	//   - Task 3.7 (Q2): A2 LedgerEntry.TaxShieldDTA now populates as
 	//     writedown × EffectiveTaxRate when ETR > 0. Tickers with
 	//     non-zero ETR that fire A2 emit a new tax_shield_dta JSON field.
-	// The bundle's stamped LedgerEntry shape grows the populated
-	// tax_shield_dta key in production, so a replay drift signal is
-	// expected on tickers that fire A2 with ETR > 0. Use
+	//   - Task 3.8 (Q4): B3 OverlaySpec.AIProvenance.PromptHash and
+	//     SourceDocHash now populate as SHA-256 hex digests on every
+	//     fired AI-path B3. Replaces the previously-empty strings.
+	// Both populations grow the JSON shape produced by the cleaner; replay
+	// drift is expected on tickers that fire either rule. Use
 	// --allow-schema-drift on the first replay sweep after this bump.
 	"FinancialData":     9,
 	"GrowthEstimate":    1,
