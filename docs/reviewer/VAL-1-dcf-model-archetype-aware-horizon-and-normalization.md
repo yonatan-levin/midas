@@ -22,7 +22,7 @@ Auto-generated swagger artifacts (`docs/swagger.{json,yaml}`, `docs/docs.go`) re
 **Severity:** Medium. DCF is the primary valuation path for profitable tickers (the majority of Midas's traffic). It already works, but it's the "least broken" model — gaps are calibration-quality rather than wrong-by-design. Fixes are mostly additions, not corrections.
 **Origin:** During the cross-model review (companion to VAL-2 DDM, VAL-3 FFO, RM-1/2/3 revenue_multiple), `thinkdeep` flagged that DCF's horizon should be archetype/maturity-driven (not flat 5y) and that cyclical tickers need normalized starting metrics. Damodaran (perplexity-cited): explicit horizon "5-10y, longer for growth firms; terminal value typically 60-80% of EV; longer horizon reduces TV reliance." Midas's DCF currently runs a flat horizon and doesn't normalize cyclical bases.
 **Blocks:** Nothing — this is calibration improvement, not a regression fix.
-**Related specs:** RM-1 (TTM revenue base), RM-2 (sector multiple coverage), RM-3 (revenue multiple forward), VAL-2 (DDM multi-stage), VAL-3 (FFO forward), `docs/refactoring/valuation-engine-upgrade-spec.md`.
+**Related specs:** RM-1 (TTM revenue base), RM-2 (sector multiple coverage), RM-3 (revenue multiple forward), VAL-2 (DDM multi-stage), VAL-3 (FFO forward), `docs/refactoring/spec/valuation-engine-upgrade-spec.md`.
 
 ---
 

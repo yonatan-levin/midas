@@ -158,7 +158,7 @@ definitions:
           tangible_value_per_share are denominated in. Always "USD" — the
           valuation service FX-converts each period's reporting-currency
           monetary fields to USD via Phase B9 of the IFRS-FPI plan
-          (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md), so
+          (docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md), so
           API consumers MUST NOT re-convert. Surfaced so a downstream client
           can display "USD" alongside the per-share value rather than guessing.
         example: USD
@@ -166,7 +166,7 @@ definitions:
       current_assets_per_share:
         description: |-
           Graham-school asset-floor diagnostics — see
-          docs/refactoring/graham-floor-metrics-spec.md. All four use *float64 +
+          docs/refactoring/archive/graham-floor-metrics-spec.md. All four use *float64 +
           omitempty: nil = TotalLiabilities unresolved (a warning is appended to
           `warnings`). Non-nil = resolved; values may be negative (NCAV on
           distressed companies) or 0 (floor clamped when NCAV is negative). Pointer

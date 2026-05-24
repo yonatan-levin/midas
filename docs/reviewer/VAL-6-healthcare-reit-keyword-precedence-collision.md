@@ -4,7 +4,7 @@
 **Severity:** Medium. Same defect class as the documented DLR/TECH known-fail; affects healthcare REITs whose company names contain HEALTH-parent keywords.
 **Origin:** Stream A V/R/Q first-pass REVIEWER finding #2 (2026-05-09).
 **Blocks:** Nothing functionally — affected tickers still get a sensible value via the HEALTH path. But the `HEALTHCARE_REIT` subsector multiple (17.5× P/FFO) and cap rate (6.0%) are bypassed entirely.
-**Related:** RM-2 P1, VAL-3 P1+P4 (which introduced HEALTHCARE_REIT), `docs/refactoring/industry-classification-unification-spec.md` (the canonical solution path), inline DLR known-fail comment at `classifier_val3p1_reit_test.go:28-36`.
+**Related:** RM-2 P1, VAL-3 P1+P4 (which introduced HEALTHCARE_REIT), `docs/refactoring/spec/industry-classification-unification-spec.md` (the canonical solution path), inline DLR known-fail comment at `classifier_val3p1_reit_test.go:28-36`.
 
 ---
 
@@ -29,7 +29,7 @@ Healthcare REITs are a 6-7% slice of the public REIT universe. Mis-routing them 
 
 ## Proposed fix
 
-Same root-cause solution as the unification spec: invert global classifier precedence so SIC outranks company-name keywords. SIC 6798 unambiguously identifies a REIT; the keyword "health" should not override that. Tracked in `docs/refactoring/industry-classification-unification-spec.md`.
+Same root-cause solution as the unification spec: invert global classifier precedence so SIC outranks company-name keywords. SIC 6798 unambiguously identifies a REIT; the keyword "health" should not override that. Tracked in `docs/refactoring/spec/industry-classification-unification-spec.md`.
 
 ### Hotfix alternative — rejected
 

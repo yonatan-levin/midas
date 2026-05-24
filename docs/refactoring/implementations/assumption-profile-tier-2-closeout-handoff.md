@@ -214,7 +214,7 @@ In this order:
 1. `AGENTS.md` (project root) — canonical load order
 2. `CLAUDE.md` (project root) — gotchas + key conventions
 3. `docs/THESIS.md` — phase status (now shows Tier 2 COMPLETE)
-4. `docs/refactoring/implementations/assumption-profile-implementation-plan.md` §8 — Tier 2 implementation outcome with all phase B-V-R-Q verdicts
+4. `docs/refactoring/archive/assumption-profile-implementation-plan.md` §8 — Tier 2 implementation outcome with all phase B-V-R-Q verdicts
 5. `docs/reviewer/T2-P4-W2-deferred-followups.md` — 12 deferred items
 6. `docs/reviewer/archive/T2-P4-W1-classifier-prefix-mismatch.md` — closed tracker with validation evidence
 7. This file (the Tier 2 closeout handoff)

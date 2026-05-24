@@ -4,7 +4,7 @@
 **Severity:** Major. Compounds with RM-1 to produce silent ~25× understatements of fair value for negative-OI tickers in tech/biotech/finance sectors.
 **Origin:** Live MXL response showed `revenue_multiple` applying `1.5×` (the MFG default) to a fabless semiconductor whose peer-group EV/Revenue is in the 6-12× range. Investigation revealed `config/industry_multiples.json` has only a handful of broad sector entries and no semiconductor-specific bucket.
 **Blocks:** Nothing — long-standing gap, not a regression.
-**Related specs:** `docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md` (revenue base; the multiplier and the base are independent fixes for the same headline number), `docs/refactoring/industry-classification-unification-spec.md` (the underlying classifier-emits-coarse-codes problem).
+**Related specs:** `docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md` (revenue base; the multiplier and the base are independent fixes for the same headline number), `docs/refactoring/spec/industry-classification-unification-spec.md` (the underlying classifier-emits-coarse-codes problem).
 
 ---
 

@@ -93,5 +93,5 @@ Option A. The growth blend math is exactly the kind of thing an investor wants t
 ## Traceability
 
 - Filed by: QA pass 2026-04-25 on `feat/observability-narrative` branch
-- Spec it relates to: `docs/refactoring/observability-narrative-and-artifacts-spec.md` §5 row 12
+- Spec it relates to: `docs/refactoring/spec/observability-narrative-and-artifacts-spec.md` §5 row 12
 - Code it relates to: `internal/services/valuation/service.go:475-481`, `internal/services/growth/estimator.go`

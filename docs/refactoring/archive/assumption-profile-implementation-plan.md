@@ -2884,19 +2884,6 @@ result.DCFPerYearPV = perYearPV
 result.DCFTerminalGrowthUsed = terminalGrowthClamped
 
 // >80% terminal-dominance warning
-//
-// NOTE (post-merge reconciliation, 2026-05-23): although this warning lives under
-// the "profile-driven diagnostics" feature framing of P2, the emission itself is
-// INTENTIONALLY UNCONDITIONAL — it fires on BOTH profile-driven and legacy DCF
-// paths whenever DCFTerminalPctOfEV exceeds the 0.80 threshold. The broader
-// firing is strictly more diagnostic with no false-positive risk: terminal-PV
-// dominance is a real model-risk signal regardless of how the horizon was
-// chosen, and gating the warning behind `resolvedProfile != nil` would
-// silently mask the same signal on legacy tickers. The plan's surrounding
-// framing here ("driven by AssumptionProfile") describes the horizon/method
-// selection logic; it does not (and should not) gate the diagnostic warnings
-// derived from the resulting DCF outputs. See
-// `docs/reviewer/T2-P4-W2-deferred-followups.md` item 1.
 if terminalPctOfEV > 0.80 {
 	result.Warnings = append(result.Warnings,
 		fmt.Sprintf("terminal_dominance: terminal_pv is %.1f%% of EV (>80%% threshold; consider longer horizon)",

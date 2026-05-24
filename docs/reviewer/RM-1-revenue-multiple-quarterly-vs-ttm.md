@@ -2,9 +2,9 @@
 
 **Status:** OPEN — filed 2026-05-06 during live-API verification of the Graham-floor PR.
 **Severity:** Major. Affects every ticker that routes to `revenue_multiple` (i.e., every company with negative or zero operating income whose latest filing is a 10-Q). Default behaviour silently understates fair value by ~4×.
-**Origin:** Live MXL response inspection during HUMAN sign-off of the Graham-floor PR (`docs/refactoring/graham-floor-metrics-spec.md`). The user noted that `dcf_value_per_share = $1.32` was lower than `current_assets_per_share = $2.85` despite a 7-stage growth curve averaging 37%/yr. Investigation found the model treats `FinancialData.Revenue` as if it were annual, but for 10-Q filings it is quarterly.
+**Origin:** Live MXL response inspection during HUMAN sign-off of the Graham-floor PR (`docs/refactoring/archive/graham-floor-metrics-spec.md`). The user noted that `dcf_value_per_share = $1.32` was lower than `current_assets_per_share = $2.85` despite a 7-stage growth curve averaging 37%/yr. Investigation found the model treats `FinancialData.Revenue` as if it were annual, but for 10-Q filings it is quarterly.
 **Blocks:** Nothing — this is a long-standing latent bug, not a regression. The Graham-floor PR did not introduce it.
-**Related specs:** `docs/refactoring/graham-floor-metrics-spec.md` (where the bug surfaced), `docs/reviewer/RM-3-forward-revenue-multiple-model.md` (a forward-looking model that would also benefit from a TTM revenue base).
+**Related specs:** `docs/refactoring/archive/graham-floor-metrics-spec.md` (where the bug surfaced), `docs/reviewer/RM-3-forward-revenue-multiple-model.md` (a forward-looking model that would also benefit from a TTM revenue base).
 
 ---
 

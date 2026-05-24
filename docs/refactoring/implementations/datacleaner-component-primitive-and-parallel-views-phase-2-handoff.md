@@ -5,8 +5,8 @@
 **Estimated effort:** 2-3 weeks per the DC-1 spec (Layer 2 — materially larger than Phase 1's shadow-mode shim)
 **Master HEAD when Phase 1 closed:** `7a08506` (2026-05-19) — full Phase 1 chronology: `2d916a7` (main merge) → `b8e9c77` (followup merge) → `5544e74` (T2-BS-3 filed) → `7a08506` (tier2-baseline refresh to 10/10)
 **Prerequisites:**
-- Phase 0 SHIPPED — see [Phase 0 closeout](datacleaner-component-primitive-and-parallel-views-phase-0-closeout.md)
-- Phase 1 SHIPPED — see [Phase 1 closeout](datacleaner-component-primitive-and-parallel-views-phase-1-closeout.md) + [Phase 1 shadow-analysis report](datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md)
+- Phase 0 SHIPPED — see [Phase 0 closeout](../archive/datacleaner-component-primitive-and-parallel-views-phase-0-closeout.md)
+- Phase 1 SHIPPED — see [Phase 1 closeout](../archive/datacleaner-component-primitive-and-parallel-views-phase-1-closeout.md) + [Phase 1 shadow-analysis report](datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md)
 - **T2-BS-3 disposition decision required** before BACKEND dispatch — see `docs/reviewer/T2-BS-3-parser-totalliabilities-zero-amd-ko.md`. ARCH must choose between fixing the AMD/KO parser dropout (Option A) or carving it out via the `Restated` view (Option B). Option B is the path of least resistance for Phase 2 scope; Option A is the more "true to source data" path that adds parser-side scope. Recommend Option B unless the user has a strong opinion otherwise.
 
 ---
@@ -40,7 +40,7 @@ Stop at the first tier that gives you enough context:
    - "Adjuster interface" — the proposed shape (refine during ARCH cycle if needed)
    - "AdjustmentLedger" — entry schema + invariants
 5. **`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md`** — **the load-bearing input for Phase 2's punch list.** Read in full. The 7 clusters with adjuster-line correlations ARE Phase 2's target list.
-6. **`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-closeout.md`** — what landed in Phase 1, V-R-Q outcomes, lessons learned (especially: master-drift during multi-week phases, gopls workspace artifacts, snapshot quantization).
+6. **`docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-closeout.md`** — what landed in Phase 1, V-R-Q outcomes, lessons learned (especially: master-drift during multi-week phases, gopls workspace artifacts, snapshot quantization).
 7. **`docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md`** — the live tracker
 8. **`docs/reviewer/T2-BS-3-parser-totalliabilities-zero-amd-ko.md`** — the parser-side prerequisite. Read the "Phase 2 dependency analysis" section. ARCH chooses Option A or B.
 

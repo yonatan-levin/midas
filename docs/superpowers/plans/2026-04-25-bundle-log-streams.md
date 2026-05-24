@@ -17,8 +17,8 @@ Per-request scope: each request's wrapper writes only to that request's bundle d
 **Branch:** `feat/observability-narrative` (this will be a 5th commit on top of `41bd91c`).
 
 **Spec sections:**
-- `docs/refactoring/observability-narrative-and-artifacts-spec.md` §7.1 (bundle layout — lists `99-narrate.jsonl` and `99-debug-trace.jsonl`)
-- `docs/refactoring/observability-narrative-and-artifacts-spec.md` §7.3 (capture mechanics — describes the `zapcore.Core` wrapper mechanism)
+- `docs/refactoring/spec/observability-narrative-and-artifacts-spec.md` §7.1 (bundle layout — lists `99-narrate.jsonl` and `99-debug-trace.jsonl`)
+- `docs/refactoring/spec/observability-narrative-and-artifacts-spec.md` §7.3 (capture mechanics — describes the `zapcore.Core` wrapper mechanism)
 
 ---
 
@@ -327,7 +327,7 @@ Per-request scope: each request's wrapper writes only to that request's bundle d
 ## Task 5: Update the spec to document the implementation
 
 **Files:**
-- Modify: `docs/refactoring/observability-narrative-and-artifacts-spec.md`
+- Modify: `docs/refactoring/spec/observability-narrative-and-artifacts-spec.md`
 
 - [ ] **Step 5.1: Add Change Log entry**
 
@@ -374,7 +374,7 @@ Per-request scope: each request's wrapper writes only to that request's bundle d
           internal/api/middleware/trace.go \
           internal/api/middleware/trace_test.go \
           internal/integration/narrate_artifact_test.go \
-          docs/refactoring/observability-narrative-and-artifacts-spec.md \
+          docs/refactoring/spec/observability-narrative-and-artifacts-spec.md \
           docs/superpowers/plans/2026-04-25-bundle-log-streams.md \
           docs/reviewer/G1-growth-blend-weights-coarse.md
 

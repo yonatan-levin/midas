@@ -380,12 +380,12 @@ const docTemplate = `{
                     "example": "4.1"
                 },
                 "currency": {
-                    "description": "Currency is the ISO-4217 code that dcf_value_per_share and\ntangible_value_per_share are denominated in. Always \"USD\" — the\nvaluation service FX-converts each period's reporting-currency\nmonetary fields to USD via Phase B9 of the IFRS-FPI plan\n(docs/refactoring/ifrs-foreign-private-issuer-support-spec.md), so\nAPI consumers MUST NOT re-convert. Surfaced so a downstream client\ncan display \"USD\" alongside the per-share value rather than guessing.",
+                    "description": "Currency is the ISO-4217 code that dcf_value_per_share and\ntangible_value_per_share are denominated in. Always \"USD\" — the\nvaluation service FX-converts each period's reporting-currency\nmonetary fields to USD via Phase B9 of the IFRS-FPI plan\n(docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md), so\nAPI consumers MUST NOT re-convert. Surfaced so a downstream client\ncan display \"USD\" alongside the per-share value rather than guessing.",
                     "type": "string",
                     "example": "USD"
                 },
                 "current_assets_per_share": {
-                    "description": "Graham-school asset-floor diagnostics — see\ndocs/refactoring/graham-floor-metrics-spec.md. All four use *float64 +\nomitempty: nil = TotalLiabilities unresolved (a warning is appended to\n` + "`" + `warnings` + "`" + `). Non-nil = resolved; values may be negative (NCAV on\ndistressed companies) or 0 (floor clamped when NCAV is negative). Pointer\ntypes preserve the deep-distress signal (resolved + negative + clamped)\ndistinct from the unresolved-fallback signal (all four absent + warning).",
+                    "description": "Graham-school asset-floor diagnostics — see\ndocs/refactoring/archive/graham-floor-metrics-spec.md. All four use *float64 +\nomitempty: nil = TotalLiabilities unresolved (a warning is appended to\n` + "`" + `warnings` + "`" + `). Non-nil = resolved; values may be negative (NCAV on\ndistressed companies) or 0 (floor clamped when NCAV is negative). Pointer\ntypes preserve the deep-distress signal (resolved + negative + clamped)\ndistinct from the unresolved-fallback signal (all four absent + warning).",
                     "type": "number",
                     "example": 55.13
                 },

@@ -1,5 +1,5 @@
 -- Migration 0008: Graham-school asset-floor diagnostic columns.
--- See docs/refactoring/graham-floor-metrics-spec.md.
+-- See docs/refactoring/archive/graham-floor-metrics-spec.md.
 --
 -- Adds four diagnostic columns to valuation_results plus the umbrella
 -- total_liabilities column on financial_data. All columns are NULLable;

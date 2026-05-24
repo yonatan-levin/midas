@@ -263,5 +263,5 @@ Each phase independently testable, each with an integration test covering at lea
 
 - `docs/superpowers/specs/2026-04-23-industry-in-response-design.md` — the "ship now" additive response design that this refactor later trims in Phase 4.
 - `docs/FEEDBACK-LOG.md` 2026-04-23 entry — the original decision to track this as a follow-up.
-- `docs/refactoring/valuation-engine-upgrade-spec.md` — parent valuation-engine upgrade; this refactor is a sibling, not a child.
+- `docs/refactoring/spec/valuation-engine-upgrade-spec.md` — parent valuation-engine upgrade; this refactor is a sibling, not a child.
 - `CLAUDE.md` — testing and coverage conventions.

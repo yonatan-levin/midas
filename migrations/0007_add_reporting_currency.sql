@@ -1,5 +1,5 @@
 -- Migration 0007: Add reporting_currency column for IFRS / foreign-private-issuer support.
--- Phase B5 of docs/refactoring/ifrs-foreign-private-issuer-support-spec.md.
+-- Phase B5 of docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md.
 --
 -- The column captures the ISO-4217 code of the currency that every monetary
 -- field on FinancialData (Revenue, Assets, OperatingIncome, etc.) is

@@ -4,7 +4,7 @@
 **Severity:** Major. Today's `revenue_multiple` model produces present-snapshot valuations that ignore the engine's most expensive computations (the multi-stage growth curve and WACC). For high-growth negative-OI tickers (the canonical case: MXL, but also early-stage SaaS/biotech), this systematically understates fair value by 5-30× and renders the engine's growth/WACC stages decorative rather than load-bearing.
 **Origin:** Live MXL response showed a 7-stage growth curve averaging 37%/yr and WACC of 19% computed at full cost, then completely unused — `revenue_multiple.go` reads only `latest.Revenue` and `Industry`. The user noticed the headline number ($1.32) made no economic sense given the growth assumptions.
 **Blocks:** Nothing. This is a new feature, not a regression.
-**Related specs:** `docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md` (revenue base — RM-3 builds on the TTM helper), `docs/reviewer/RM-2-sector-multiple-coverage-gaps.md` (sector multiplier — RM-3 needs the Damodaran-quality multipliers to produce sane forward EVs), `docs/refactoring/valuation-engine-upgrade-spec.md` (broader engine roadmap).
+**Related specs:** `docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md` (revenue base — RM-3 builds on the TTM helper), `docs/reviewer/RM-2-sector-multiple-coverage-gaps.md` (sector multiplier — RM-3 needs the Damodaran-quality multipliers to produce sane forward EVs), `docs/refactoring/spec/valuation-engine-upgrade-spec.md` (broader engine roadmap).
 
 ---
 
@@ -542,5 +542,5 @@ Coverage target: 100% on the new file (per CLAUDE.md ≥90% finance floor; the m
 - [ ] Live AAPL response is unchanged (positive-OI; never routes to revenue-multiple of either flavour).
 - [ ] Unit test pinning that low-confidence growth routes to trailing (no regression).
 - [ ] CLAUDE.md "Common Gotchas" documents the new model selection rules.
-- [ ] Spec doc `docs/refactoring/valuation-engine-upgrade-spec.md` updated to mention forward-revenue-multiple alongside the existing DCF/DDM/FFO models.
+- [ ] Spec doc `docs/refactoring/spec/valuation-engine-upgrade-spec.md` updated to mention forward-revenue-multiple alongside the existing DCF/DDM/FFO models.
 - [ ] CHANGELOG entry: "added forward_revenue_multiple model for high-confidence-growth negative-OI tickers; trailing revenue_multiple retained as low-confidence fallback".

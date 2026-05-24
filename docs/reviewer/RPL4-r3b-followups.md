@@ -27,7 +27,7 @@ The 4 items below are what's left. None gate Phase 2.D's COMPLETE status; they a
 **Status:** RESOLVED — folded into the post-shipment docs dispatch alongside spec v0.4 → v0.5 bump. Spec §7 sample at L498-510 updated to show the as-shipped section order (response-level diffs first without a "Response diffs:" header, then "Stage diffs:" section) and the as-shipped format string `(rel_drift=%.6f)` rather than v0.4's `+X.XX%`. Inline note added to the spec sample documenting the divergence between v0.4 and v0.5 + the format-string deviation as Deviation #3 on the merge-commit body of `0741958`.
 **Severity:** MINOR (spec/sample divergence; documentation-only resolution applied).
 **Origin:** REVIEWER cycle 1 finding #1.
-**Location:** `internal/observability/replay/output.go:347-353` (writeResultRow's section-emission order) + `docs/refactoring/observability-replay-tooling-spec.md` v0.4 §7 sample at L498-510.
+**Location:** `internal/observability/replay/output.go:347-353` (writeResultRow's section-emission order) + `docs/refactoring/archive/observability-replay-tooling-spec.md` v0.4 §7 sample at L498-510.
 
 **Issue:** Spec §7's verbose-mode sample places the `Stage diffs:` section BEFORE `Response diffs:`, with an explicit `"Response diffs:"` header. Implementation flips the order: response-level diff lines render FIRST (no header), then `Stage diffs:` section follows. `TestRenderText_VerboseTrue_EmitsBothResponseAndStageDiffs` (committed in `b87b3b7`) pins the as-shipped order as a contract.
 
@@ -153,7 +153,7 @@ Phase 2.D is COMPLETE as of merge `0741958` (2026-05-09). Filing this tracker pr
 
 - **Filed by:** Phase 2.D R3b post-merge cleanup (2026-05-09) consolidating findings from VERIFIER cycle 1 + REVIEWER cycle 1 + QA cycle 1
 - **R3b merge:** `0741958` (2026-05-09)
-- **Spec it relates to:** `docs/refactoring/observability-replay-tooling-spec.md` v0.4 (will bump to v0.5 in post-shipment HUMAN dispatch)
-- **Implementation plan:** `docs/refactoring/observability-replay-tooling-r3b-implementation-plan.md` v1 (now historical, all 7 stages SHIPPED per §10)
+- **Spec it relates to:** `docs/refactoring/archive/observability-replay-tooling-spec.md` v0.4 (will bump to v0.5 in post-shipment HUMAN dispatch)
+- **Implementation plan:** `docs/refactoring/archive/observability-replay-tooling-r3b-implementation-plan.md` v1 (now historical, all 7 stages SHIPPED per §10)
 - **Prior follow-up files:** `RPL1-replay-walk-and-output-r3-followups.md` (R0+R1, all items folded into R3 plan v2), `RPL2-r2-followups.md` (R2, all items folded into R3 plan v2), `RPL3-r3a-followups.md` (R3a, all items folded into R3b plan v1 — should be marked RESOLVED in the post-shipment HUMAN dispatch)
 - **R3b worktree branch:** `worktree-agent-a927bf55184a27f2a` — preserved for git-blame archeology

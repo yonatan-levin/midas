@@ -4,8 +4,8 @@
 **Version:** v0.2 — Tier 2 close 2026-05-21 (v0.1 was initial spec landing 2026-05-14; v0.2 reflects the final post-Tier-2 state — 31 profiles + 19 rules in `config/assumption_profiles.json`, REIT_* / FIN_* classifier emission canonicalized via T2-P4-W1, JPM/BAC/WFC bit-for-bit DDM invariant preserved across all phase merges)
 **Spec author session:** Tier 2 brainstorming + gpt-5.5-pro architectural critique
 **Companion docs:**
-- `docs/refactoring/tier-2-assumption-profile-kickoff.md` (kickoff brief, scope, estimates)
-- `docs/refactoring/assumption-profile-db-backed-future.md` (future DB-backed `Registry` follow-up)
+- `docs/refactoring/archive/tier-2-assumption-profile-kickoff.md` (kickoff brief, scope, estimates)
+- `docs/refactoring/spec/assumption-profile-db-backed-future.md` (future DB-backed `Registry` follow-up)
 - `docs/reviewer/RM-3-forward-revenue-multiple-model.md`
 - `docs/reviewer/VAL-1-dcf-model-archetype-aware-horizon-and-normalization.md`
 - `docs/reviewer/VAL-2-ddm-multistage-and-cost-of-equity-discipline.md`
@@ -349,7 +349,7 @@ package profile
 
 // Registry is the lookup surface for profiles. Designed so a future
 // DB-backed implementation can swap in without touching consumers
-// (see docs/refactoring/assumption-profile-db-backed-future.md).
+// (see docs/refactoring/spec/assumption-profile-db-backed-future.md).
 type Registry interface {
     Resolve(facts Facts) (*ResolvedProfile, ResolutionTrace)
     Lookup(arch Archetype, mat Maturity) (*AssumptionProfile, bool)
@@ -961,7 +961,7 @@ None significant. All 6 design axes plus 7 critique-driven revisions are settled
 
 ## 14. Companion: future DB-backed Registry
 
-See `docs/refactoring/assumption-profile-db-backed-future.md` for the deferred work. The `Registry` interface ships in Tier 2 specifically to allow a future DB-backed implementation to swap in without consumer changes. The JSON-backed implementation is sufficient for current scope (single-tenant, personal investment use, fintech-platform-grade quality target).
+See `docs/refactoring/spec/assumption-profile-db-backed-future.md` for the deferred work. The `Registry` interface ships in Tier 2 specifically to allow a future DB-backed implementation to swap in without consumer changes. The JSON-backed implementation is sufficient for current scope (single-tenant, personal investment use, fintech-platform-grade quality target).
 
 ---
 

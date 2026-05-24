@@ -20,7 +20,7 @@ Today neither label is exposed to API consumers. The label is observable only vi
 
 This spec adds a single `industry` field to the response containing **both** labels so misclassification is visible in every API call. A `match` flag surfaces disagreement between the two classifiers, making the API a passive watchdog for the classifier-drift class of bugs.
 
-This is intentionally not the architectural unification — that is tracked separately in `docs/refactoring/industry-classification-unification-spec.md`.
+This is intentionally not the architectural unification — that is tracked separately in `docs/refactoring/spec/industry-classification-unification-spec.md`.
 
 ---
 
