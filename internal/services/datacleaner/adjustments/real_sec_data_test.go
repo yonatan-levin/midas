@@ -2,6 +2,7 @@ package adjustments
 
 import (
 	"context"
+	gocontext "context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil" //nolint:staticcheck // test uses ioutil for simplicity
@@ -76,7 +77,7 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 		logger := zap.NewNop()
 		secParser := sec.NewParser(logger)
 
-		historicalData, err := secParser.ParseFinancialData(context.Background(), realAppleData)
+		historicalData, err := secParser.ParseFinancialData(gocontext.Background(), realAppleData)
 		if err != nil && strings.Contains(err.Error(), "data structure may be nested and not yet supported") {
 			t.Skip("Skipping test due to nested SEC data structure not yet fully supported")
 		}
@@ -198,7 +199,7 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 		liabilityRules := filterRulesByCategory(allRules, entities.LiabilityCompleteness)
 
 		// Test Category B adjustments on real Apple data
-		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(financialData, liabilityRules, context)
+		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), financialData, liabilityRules, context)
 		require.NotNil(t, liabilityResult, "Liability result should not be nil")
 
 		// Validate processing completed
@@ -243,7 +244,7 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 		assetResult := assetAdjuster.CalculateNetTangibleAssets(financialData, context)
 		allRules := createComprehensiveRuleSet()
 		liabilityRules := filterRulesByCategory(allRules, entities.LiabilityCompleteness)
-		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(financialData, liabilityRules, context)
+		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), financialData, liabilityRules, context)
 
 		processingTime := time.Since(startTime)
 
@@ -293,7 +294,7 @@ func extractLatestAnnualData(t *testing.T, realAppleData *ports.SECCompanyFacts)
 	logger := zap.NewNop()
 	secParser := sec.NewParser(logger)
 
-	historicalData, err := secParser.ParseFinancialData(context.Background(), realAppleData)
+	historicalData, err := secParser.ParseFinancialData(gocontext.Background(), realAppleData)
 	if err != nil && strings.Contains(err.Error(), "data structure may be nested and not yet supported") {
 		t.Skip("Skipping data extraction due to nested SEC data structure not yet fully supported")
 	}

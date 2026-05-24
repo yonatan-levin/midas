@@ -533,7 +533,7 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB3Emission(t *testi
 	origTotalDebt := data.TotalDebt
 	origInterestBearingDebt := data.InterestBearingDebt
 
-	result := la.ProcessLiabilityAdjustments(data, rules, cleaningCtx)
+	result := la.ProcessLiabilityAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=true, one Adjustment with the weighted
@@ -597,7 +597,7 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB3SkipPath(t *testi
 	rules := []*entities.CleaningRule{productionContingentLiabilitiesRule()}
 	cleaningCtx := &entities.CleaningContext{IndustryCode: "45"}
 
-	result := la.ProcessLiabilityAdjustments(data, rules, cleaningCtx)
+	result := la.ProcessLiabilityAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=false, no Adjustments.

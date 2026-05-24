@@ -1,6 +1,7 @@
 package adjustments
 
 import (
+	gocontext "context"
 	"testing"
 	"time"
 
@@ -474,7 +475,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_ActiveWorkflow(t *testing.T) {
 			assert.Equal(t, tt.expectedOriginalAssets, originalData.TotalAssets, "Original assets should match expected")
 
 			// Apply active adjustments - THIS IS THE KEY DIFFERENCE
-			result := adjuster.ProcessAssetAdjustments(tt.financialData, tt.rules, context)
+			result := adjuster.ProcessAssetAdjustments(gocontext.Background(), tt.financialData, tt.rules, context)
 
 			// Verify the financial data was actually modified
 			assert.Equal(t, tt.expectedFinalGoodwill, tt.financialData.Goodwill, "Final goodwill should be modified")

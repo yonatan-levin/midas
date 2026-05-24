@@ -1,6 +1,7 @@
 package adjustments
 
 import (
+	gocontext "context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -287,7 +288,7 @@ func TestProcessEarningsAdjustments(t *testing.T) {
 		QualityThreshold: 70.0,
 	}
 
-	result := adjuster.ProcessEarningsAdjustments(data, rules, context)
+	result := adjuster.ProcessEarningsAdjustments(gocontext.Background(), data, rules, context)
 
 	assert.True(t, result.Applied, "Should apply earnings adjustments")
 	assert.Len(t, result.Adjustments, 3, "Should have three adjustments")

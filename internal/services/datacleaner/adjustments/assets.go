@@ -1333,7 +1333,7 @@ func (aa *AssetAdjuster) ProcessDeferredTaxAdjustment(data *entities.FinancialDa
 // is not double-counted. Tasks 2.2-2.5 add more rules to the
 // NativelyEmittedRuleIDs set; Task 2.6 deletes the shim's asset branch
 // entirely.
-func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *AssetAdjustmentResult {
+func (aa *AssetAdjuster) ProcessAssetAdjustments(ctx context.Context, data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *AssetAdjustmentResult {
 	var allAdjustments []entities.Adjustment
 	var allFlags []entities.Flag
 	var totalAdjustment float64
@@ -1347,12 +1347,12 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, r
 	var nativeOverlays []entities.OverlaySpec
 	nativelyEmittedRuleIDs := make(map[string]bool, len(rules))
 
-	// Apply.ctx is nil here because ProcessAssetAdjustments does not yet
-	// thread ctx through its public signature. ApplyA1Goodwill treats nil
-	// ctx as safe (it only uses ctx for future industry-aware logic).
-	// TODO(PR-2 follow-up / PR-3): thread context.Context through
-	// ProcessAssetAdjustments to align with the Adjuster.Apply signature.
-	var applyCtx context.Context
+	// DC-1 Phase 3 (Task 3.9): ctx is now threaded through the public
+	// signature from service.go::applyActiveAdjustments. The Apply
+	// methods accept it as their first parameter per Adjuster interface
+	// convention. Phase 4+ may attach OTel spans or read deadlines from
+	// it; today the consumers still treat it as opaque.
+	applyCtx := ctx
 
 	// Process each Category A rule
 	for _, rule := range rules {

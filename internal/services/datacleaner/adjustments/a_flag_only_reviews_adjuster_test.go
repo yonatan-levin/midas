@@ -330,7 +330,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeFlagOnlyReviews_RDFiresFlag
 	preTotalAssets := data.TotalAssets
 
 	rules := []*entities.CleaningRule{productionRDCapitalizationReviewRule()}
-	result := aa.ProcessAssetAdjustments(data, rules, createTechContext())
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, createTechContext())
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=false (flag-only — no balance-sheet adjustment
@@ -389,7 +389,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeFlagOnlyReviews_SoftwareFir
 	preTotalAssets := data.TotalAssets
 
 	rules := []*entities.CleaningRule{productionCapitalizedSoftwareReviewRule()}
-	result := aa.ProcessAssetAdjustments(data, rules, createTechContext())
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, createTechContext())
 	require.NotNil(t, result)
 
 	assert.False(t, result.Applied)
@@ -437,7 +437,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeFlagOnlyReviews_SkipPathNat
 		productionCapitalizedSoftwareReviewRule(),
 	}
 
-	result := aa.ProcessAssetAdjustments(data, rules, createTechContext())
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, createTechContext())
 	require.NotNil(t, result)
 
 	// Both reviews skipped — no flags surface, no adjustments.

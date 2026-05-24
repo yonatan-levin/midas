@@ -501,7 +501,7 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 
 	// Apply Category A (Asset Quality) adjustments
 	if len(assetRules) > 0 {
-		assetResult := s.assetAdjuster.ProcessAssetAdjustments(data, assetRules, cleaningCtx)
+		assetResult := s.assetAdjuster.ProcessAssetAdjustments(ctx, data, assetRules, cleaningCtx)
 		if assetResult.Applied {
 			allAdjustments = append(allAdjustments, assetResult.Adjustments...)
 			allFlags = append(allFlags, assetResult.Flags...)
@@ -533,7 +533,7 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 
 	// Apply Category B (Liability Completeness) adjustments
 	if len(liabilityRules) > 0 {
-		liabilityResult := s.liabilityAdjuster.ProcessLiabilityAdjustments(data, liabilityRules, cleaningCtx)
+		liabilityResult := s.liabilityAdjuster.ProcessLiabilityAdjustments(ctx, data, liabilityRules, cleaningCtx)
 		if liabilityResult.Applied {
 			allAdjustments = append(allAdjustments, liabilityResult.Adjustments...)
 			allFlags = append(allFlags, liabilityResult.Flags...)
@@ -572,7 +572,7 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 	}
 
 	if len(earningsRules) > 0 {
-		earningsResult := s.earningsAdjuster.ProcessEarningsAdjustments(data, earningsRules, cleaningCtx)
+		earningsResult := s.earningsAdjuster.ProcessEarningsAdjustments(ctx, data, earningsRules, cleaningCtx)
 		if earningsResult.Applied {
 			allAdjustments = append(allAdjustments, earningsResult.Adjustments...)
 			allFlags = append(allFlags, earningsResult.Flags...)

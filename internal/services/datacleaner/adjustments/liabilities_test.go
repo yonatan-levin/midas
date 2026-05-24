@@ -2,6 +2,7 @@ package adjustments
 
 import (
 	"context"
+	gocontext "context"
 	"testing"
 	"time"
 
@@ -392,7 +393,7 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments(t *testing.T) {
 		},
 	}
 
-	result := adjuster.ProcessLiabilityAdjustments(data, rules, context)
+	result := adjuster.ProcessLiabilityAdjustments(gocontext.Background(), data, rules, context)
 
 	// Verify comprehensive results
 	require.NotNil(t, result, "Result should not be nil")

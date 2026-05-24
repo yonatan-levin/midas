@@ -141,7 +141,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC3Emission(t *testing
 	}
 	rules := []*entities.CleaningRule{productionLitigationRule()}
 
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	assert.True(t, result.Applied)
@@ -181,7 +181,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC3SkipPath(t *testing
 	}
 	rules := []*entities.CleaningRule{productionLitigationRule()}
 
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	assert.False(t, result.Applied)

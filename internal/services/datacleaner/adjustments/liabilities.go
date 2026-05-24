@@ -261,7 +261,7 @@ func (b *b3ContingentLiabilityAdjuster) Apply(ctx context.Context, working *enti
 // Parameter `cleaningCtx` was historically named `context` here; PR-4 Task
 // 4.1 renames it so the `context` package identifier is unshadowed inside
 // the function body — required for the new Adjuster.Apply call site.
-func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *LiabilityAdjustmentResult {
+func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(ctx context.Context, data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *LiabilityAdjustmentResult {
 	var allAdjustments []entities.Adjustment
 	var allFlags []entities.Flag
 	var totalAdjustment float64
@@ -275,12 +275,11 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 	var nativeOverlays []entities.OverlaySpec
 	nativelyEmittedRuleIDs := make(map[string]bool, len(rules))
 
-	// Apply.ctx is nil here because ProcessLiabilityAdjustments does not yet
-	// thread ctx through its public signature. ApplyB1OperatingLeases treats
-	// nil ctx as safe (it only uses ctx for future industry-aware logic).
-	// TODO(Phase 3): thread context.Context through ProcessLiabilityAdjustments
-	// to align with the Adjuster.Apply signature.
-	var applyCtx context.Context
+	// DC-1 Phase 3 (Task 3.9): ctx is now threaded through the public
+	// signature from service.go::applyActiveAdjustments. B3's AI path
+	// (captureB3AIProvenance) uses this ctx to respect request-scoped
+	// cancellation against the upstream AI service.
+	applyCtx := ctx
 
 	// Task 4.4 absorbed dual-write helper. Invoked at the tail of every
 	// per-rule switch arm so each arm owns its own mutation. The helper

@@ -197,7 +197,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA2Emission(t *testing.T) {
 	rules := []*entities.CleaningRule{productionIntangibleRule()}
 	cleaningCtx := &entities.CleaningContext{}
 
-	result := aa.ProcessAssetAdjustments(data, rules, cleaningCtx)
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=true, one Adjustment, Adjustments[0].Amount
@@ -249,7 +249,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA2SkipPath(t *testing.T) {
 	}
 	rules := []*entities.CleaningRule{productionIntangibleRule()}
 
-	result := aa.ProcessAssetAdjustments(data, rules, &entities.CleaningContext{})
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=false, no Adjustments.

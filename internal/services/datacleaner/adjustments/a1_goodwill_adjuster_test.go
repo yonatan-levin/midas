@@ -211,7 +211,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA1Emission(t *testing.T) {
 	rules := []*entities.CleaningRule{productionGoodwillRule()}
 	cleaningCtx := &entities.CleaningContext{}
 
-	result := aa.ProcessAssetAdjustments(data, rules, cleaningCtx)
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=true, one Adjustment, Adjustments[0].Amount =
@@ -249,7 +249,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA1SkipPath(t *testing.T) {
 	// the goodwill_exclusion case rather than `default: continue`.
 	rules := []*entities.CleaningRule{productionGoodwillRule()}
 
-	result := aa.ProcessAssetAdjustments(data, rules, &entities.CleaningContext{})
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=false, no Adjustments.

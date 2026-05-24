@@ -1314,7 +1314,7 @@ func c7AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 // then instructs the shim to SKIP those rules so the same rule is not
 // double-counted. Tasks 3.2-3.6 add more rules to the NativelyEmittedRuleIDs
 // set; Task 3.8 deletes the shim's earnings branch entirely.
-func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *EarningsAdjustmentResult {
+func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *EarningsAdjustmentResult {
 	var allAdjustments []entities.Adjustment
 	var allFlags []entities.Flag
 	totalAmount := 0.0
@@ -1328,12 +1328,11 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(data *entities.FinancialD
 	var nativeOverlays []entities.OverlaySpec
 	nativelyEmittedRuleIDs := make(map[string]bool, len(rules))
 
-	// Apply.ctx is nil here because ProcessEarningsAdjustments does not yet
-	// thread ctx through its public signature. ApplyC1Restructuring treats nil
-	// ctx as safe (it only uses ctx for future industry-aware logic).
-	// TODO(PR-3 follow-up / PR-4): thread context.Context through
-	// ProcessEarningsAdjustments to align with the Adjuster.Apply signature.
-	var applyCtx context.Context
+	// DC-1 Phase 3 (Task 3.9): ctx is now threaded through the public
+	// signature from service.go::applyActiveAdjustments. The Apply
+	// methods accept it as their first parameter per Adjuster interface
+	// convention.
+	applyCtx := ctx
 
 	for _, rule := range rules {
 		if !rule.Enabled || rule.Category != entities.EarningsNormalization {
