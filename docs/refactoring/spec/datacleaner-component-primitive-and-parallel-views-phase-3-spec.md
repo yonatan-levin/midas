@@ -3,7 +3,7 @@
 **Status:** DESIGN (authored 2026-05-23, ready for BACKEND dispatch)
 **Phase:** Phase 3 of the DC-1 refactor sequence (5 phases total)
 **Parent spec:** [datacleaner-component-primitive-and-parallel-views-spec.md](datacleaner-component-primitive-and-parallel-views-spec.md) — §"Phasing & implementation sequence" row "Phase 3 — `CleanedFinancialData` + view reconstruction"
-**Phase 2 closeout:** [datacleaner-component-primitive-and-parallel-views-phase-2-closeout.md](../implementations/datacleaner-component-primitive-and-parallel-views-phase-2-closeout.md)
+**Phase 2 closeout:** [datacleaner-component-primitive-and-parallel-views-phase-2-closeout.md](../archive/datacleaner-component-primitive-and-parallel-views-phase-2-closeout.md)
 **Implementer plan:** [datacleaner-component-primitive-and-parallel-views-phase-3-implementation-plan.md](../implementations/datacleaner-component-primitive-and-parallel-views-phase-3-implementation-plan.md)
 **Tracker:** [docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md](../../reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md)
 **Estimated effort:** 1–2 agent shifts (1 PR or a 2-PR split — see §"PR strategy")

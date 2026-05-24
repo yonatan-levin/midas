@@ -39,7 +39,7 @@ If anything looks wrong, STOP and re-check. The bash-branch-switch friction that
 
 ### Tier 2 — Phase 3 spec + Phase 2 ground truth
 4. **`docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md`** — the authoritative spec. Focus on §4 (Architecture), §5 (Q-resolutions), §8 (Testing strategy), §10 (Phase 3 → Phase 4 gate).
-5. **`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-closeout.md`** — what landed in Phase 2; especially "Q-resolutions" + "What's deferred to Phase 3" sections.
+5. **`docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-closeout.md`** — what landed in Phase 2; especially "Q-resolutions" + "What's deferred to Phase 3" sections.
 6. **`docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md`** — the parent spec. Re-read §"Phasing & implementation sequence" row "Phase 3" + §"Consumer migration map" (Phase 4's input, NOT in scope for Phase 3 but useful context).
 
 ### Tier 3 — Phase 2 deliverables (the code Phase 3 builds on)
@@ -53,7 +53,7 @@ If anything looks wrong, STOP and re-check. The bash-branch-switch friction that
 14. **`internal/observability/replay/schema.go`** — `CurrentSchemaVersions` map. Phase 3 bumps `"FinancialData": 8` to `9` atomic with Q4's first populating commit.
 
 ### Tier 4 — Phase 2 handoff templates (shape Phase 3 follows)
-15. **`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-pr-4-handoff.md`** — most recent Phase 2 handoff. Template for any Phase 3 PR-N handoff doc.
+15. **`docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-pr-4-handoff.md`** — most recent Phase 2 handoff. Template for any Phase 3 PR-N handoff doc.
 
 ---
 

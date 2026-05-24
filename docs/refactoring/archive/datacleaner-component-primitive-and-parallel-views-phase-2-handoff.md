@@ -137,7 +137,7 @@ Stop at the first tier that gives you enough context:
 
 ## Suggested implementation approach
 
-1. **Start with an ARCH cycle** (`/plan-and-create` skill). The spec describes Phase 2 at a high level; ARCH produces a focused implementation plan at `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md`. The plan MUST include:
+1. **Start with an ARCH cycle** (`/plan-and-create` skill). The spec describes Phase 2 at a high level; ARCH produces a focused implementation plan at `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md`. The plan MUST include:
    - T2-BS-3 disposition (Option A or B) with explicit rationale
    - Final `Adjuster` / `AdjusterOutput` / `LedgerEntry` signatures
    - File-by-file deltas for every adjuster (8+ adjusters to refactor)
@@ -196,9 +196,9 @@ Stop at the first tier that gives you enough context:
 3. `internal/core/entities/adjustment_ledger.go` (NEW) — LedgerEntry entity + invariants
 4. `internal/core/entities/adjustment_ledger_test.go` (NEW)
 5. `internal/services/datacleaner/adjustments/ledger_invariants_test.go` (NEW) — property test for equity-offset zero-sum
-6. `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md` (NEW — ARCH output)
+6. `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md` (NEW — ARCH output)
 7. `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-shadow-analysis.md` (NEW — post-merge)
-8. `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-closeout.md` (NEW — at close)
+8. `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-closeout.md` (NEW — at close)
 
 ## Files you will likely modify
 
@@ -233,12 +233,12 @@ Stop at the first tier that gives you enough context:
 > Phase 2's scope is to introduce the `Adjuster` interface (single Go interface with Restater / Overlay / Hybrid roles emerging from output shape) and refactor every existing adjuster in `internal/services/datacleaner/adjustments/{assets,liabilities,earnings}.go` to implement it, producing explicit `LedgerEntry` records on a new `AdjustmentLedger` field of `FinancialData`. Phase 2 does NOT introduce `CleanedFinancialData` views (Phase 3) or migrate any consumer (Phase 4).
 >
 > Authoritative documents to read in order:
-> 1. **`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-handoff.md`** — read this FIRST. It has scope, required reading list, gotchas, acceptance criteria, and the T2-BS-3 disposition decision gate.
+> 1. **`docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-handoff.md`** — read this FIRST. It has scope, required reading list, gotchas, acceptance criteria, and the T2-BS-3 disposition decision gate.
 > 2. The Phase 1 shadow-analysis report at `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md` — the 7-cluster punch list IS Phase 2's target list.
 > 3. The design spec at `docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md` — focus on the "Adjuster interface" + "AdjustmentLedger" sections and the Phase 2 row of the phasing table.
 > 4. The T2-BS-3 tracker at `docs/reviewer/T2-BS-3-parser-totalliabilities-zero-amd-ko.md` — ARCH must choose Option A (parser fix) or Option B (carve-out via Restated view) before BACKEND dispatch.
 >
-> Recommended starting move: invoke `/plan-and-create` to dispatch an ARCH agent that produces a focused Phase 2 implementation plan at `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md`. Then consider whether to ship as one PR (~2-3 weeks) or split into PR1 (interface + ledger skeleton, ~3-5 days) + PR2/3/4 (per-adjuster reroute, ~1 week each). The split approach keeps reviewer load manageable and lets each adjuster's snapshot diff be reviewed in isolation against the cluster predictions.
+> Recommended starting move: invoke `/plan-and-create` to dispatch an ARCH agent that produces a focused Phase 2 implementation plan at `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md`. Then consider whether to ship as one PR (~2-3 weeks) or split into PR1 (interface + ledger skeleton, ~3-5 days) + PR2/3/4 (per-adjuster reroute, ~1 week each). The split approach keeps reviewer load manageable and lets each adjuster's snapshot diff be reviewed in isolation against the cluster predictions.
 >
 > Critical invariants: (a) snapshot files in `internal/integration/testdata/recompute-shadow/` are the Phase 2 regression signal — diffs MUST be explainable as cluster-predicted reroutes; (b) `TestRecomputeUmbrellas_NoMutation` stays green; (c) Tier 2 mature-large-bank DDM bit-for-bit invariant (`TestDDM_LegacyPath_BitForBit`) stays green; (d) full test suite green modulo pre-existing SCHED-1 flake.
 >

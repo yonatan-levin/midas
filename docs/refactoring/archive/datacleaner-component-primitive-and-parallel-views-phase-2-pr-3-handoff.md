@@ -61,7 +61,7 @@ with two flavors of exception:
 
 ### Tier 2 — Phase 2 design + PR-2 ground truth (the canonical pattern to inherit)
 
-4. **`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md`** — the authoritative Phase 2 plan. Focus on:
+4. **`docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md`** — the authoritative Phase 2 plan. Focus on:
    - §3 (Adjuster interface design) — PR-1 implemented this; PR-3 consumes it.
    - **§4 row "Cluster — Earnings"** — the per-C-rule field map (`NormalizedOperatingIncome` vs `InterestExpense`).
    - §4.4 "Why earnings before liabilities (PR-3 before PR-4)" — establishes PR-3's zero-snapshot-drift prediction.
@@ -215,7 +215,7 @@ All gates GREEN before VERIFIER handoff:
 - AAPL + MSFT replay shows zero NUMERIC drift in `17-response.json`. `10-clean-output.json`'s `adjustment_ledger` now contains C-rule LedgerEntries (the per-PR success signal).
 - Coverage ≥80% on migrated `earnings.go` methods (CLAUDE.md target; new C-rule tests should drive this naturally).
 - Documentation updates land in PR-3 closeout: CLAUDE.md DC-1 Phase 2 PR-3 sub-bullet (under the existing PR-2 sub-bullet); spec changelog row; plan changelog row; DC-1 reviewer tracker progress paragraph.
-- PR-4 handoff doc authored at `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-pr-4-handoff.md` (copy-adapt from this file).
+- PR-4 handoff doc authored at `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-pr-4-handoff.md` (copy-adapt from this file).
 
 ---
 

@@ -44,7 +44,7 @@ PR-2 also ships **the Phase 2 first-populating SchemaVersion bump** (`CurrentSch
 
 ### Tier 2 — Phase 2 design + PR-1 ground truth
 
-4. **`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md`** — the **authoritative Phase 2 plan.** Focus on:
+4. **`docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md`** — the **authoritative Phase 2 plan.** Focus on:
    - §3 (Adjuster interface design) — PR-1 implemented this; PR-2 consumes it. Field shapes are LOAD-BEARING; do NOT change them.
    - §5 (test strategy + invariants)
    - **§7 PR-2 Tasks 2.1–2.7** — your task list, in execution order
@@ -162,7 +162,7 @@ All gates GREEN before VERIFIER handoff:
 
 When PR-2 ships:
 - Update task tracker (PR-2 complete; PR-3 ready).
-- Author PR-3 handoff doc (this template at `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-pr-3-handoff.md` — copy-adapt from this file).
+- Author PR-3 handoff doc (this template at `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-pr-3-handoff.md` — copy-adapt from this file).
 - Notify user. Wait for explicit go-ahead before starting PR-3.
 
 ## Change log

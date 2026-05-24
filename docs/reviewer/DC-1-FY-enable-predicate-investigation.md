@@ -225,4 +225,4 @@ If experiment 1 or 2 confirms, change this tracker's status to RESOLVED-NOT-A-BU
   - `docs/reviewer/T2-BS-3-parser-totalliabilities-zero-amd-ko.md` — orthogonal AMD/KO TL=0 parser dropout; visible on the same FY rows in `AMD.json` / `KO.json` snapshots but unrelated mechanism.
 - **Spec / plan references:**
   - `docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md` — DC-1 spec (FY-NULL is outside the spec's mutation-symmetry remit; resolution is a future heuristic-review subtask).
-  - `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md` — PR-2 plan (this tracker is Task 2.7's deliverable).
+  - `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md` — PR-2 plan (this tracker is Task 2.7's deliverable).
