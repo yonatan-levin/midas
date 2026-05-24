@@ -82,7 +82,7 @@ func TestE2E_Live_FairValue_RealAPIs(t *testing.T) {
 // the current heuristic-classifier gaps as expected Match outcomes.
 //
 // Heuristic-side classification has known gaps captured in
-// docs/refactoring/industry-classification-unification-spec.md (the SIC-only
+// docs/refactoring/spec/industry-classification-unification-spec.md (the SIC-only
 // unification will retire the heuristic). Those gaps mean Match legitimately
 // returns false for financial and owned-store-retail tickers today. This test
 // pins that behavior so the gap is visible in CI and detects silent regressions.

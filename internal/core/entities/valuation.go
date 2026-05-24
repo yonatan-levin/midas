@@ -16,7 +16,7 @@ type ValuationResult struct {
 	DCFValuePerShare      float64 `json:"dcf_value_per_share"`      // Intrinsic value from DCF model
 
 	// Graham-school asset-floor diagnostics (see internal/services/valuation/graham.go
-	// and docs/refactoring/graham-floor-metrics-spec.md). All four use *float64 +
+	// and docs/refactoring/archive/graham-floor-metrics-spec.md). All four use *float64 +
 	// omitempty: nil = TotalLiabilities unresolved (a warning is appended to
 	// Warnings instead). Non-nil = resolved; the value may be negative
 	// (NCAVPerShare on distressed companies) or 0 (GrahamFloorPerShare clamped
@@ -85,7 +85,7 @@ type ValuationResult struct {
 	IndustryHeuristicName string `json:"industry_heuristic_name,omitempty"` // Human-readable GICS sector name (e.g. "Information Technology")
 
 	// IFRS / FPI transparency fields (Phase B12 of the IFRS-FPI plan,
-	// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+	// docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md).
 	//
 	// ReportingCurrency is the ISO-4217 code that DCFValuePerShare and
 	// every other monetary field on this result are denominated in.

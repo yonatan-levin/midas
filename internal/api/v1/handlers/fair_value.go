@@ -170,7 +170,7 @@ type FairValueResponse struct {
 	DCFValuePerShare      float64   `json:"dcf_value_per_share" example:"156.42"`            // Discounted cash flow fair value per share
 
 	// Graham-school asset-floor diagnostics — see
-	// docs/refactoring/graham-floor-metrics-spec.md. All four use *float64 +
+	// docs/refactoring/archive/graham-floor-metrics-spec.md. All four use *float64 +
 	// omitempty: nil = TotalLiabilities unresolved (a warning is appended to
 	// `warnings`). Non-nil = resolved; values may be negative (NCAV on
 	// distressed companies) or 0 (floor clamped when NCAV is negative). Pointer
@@ -194,7 +194,7 @@ type FairValueResponse struct {
 	// tangible_value_per_share are denominated in. Always "USD" — the
 	// valuation service FX-converts each period's reporting-currency
 	// monetary fields to USD via Phase B9 of the IFRS-FPI plan
-	// (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md), so
+	// (docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md), so
 	// API consumers MUST NOT re-convert. Surfaced so a downstream client
 	// can display "USD" alongside the per-share value rather than guessing.
 	Currency string `json:"currency" example:"USD"`
@@ -405,7 +405,7 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		} else if errors.Is(err, valuation.ErrForeignPrivateIssuer) {
 			h.sendError(c, http.StatusUnprocessableEntity, "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
 				"Foreign private issuer not covered",
-				"This ticker files using a taxonomy or currency pair Midas does not yet cover. Supported: ifrs-full taxonomy with FRED-tracked currencies (TWD, EUR, JPY, GBP, HKD, CNY, KRW, CHF, CAD, AUD, INR, BRL, DKK). Out-of-coverage taxonomies (JGAAP, K-IFRS, ifrs-smes) and currencies are tracked in docs/refactoring/ifrs-foreign-private-issuer-support-spec.md.",
+				"This ticker files using a taxonomy or currency pair Midas does not yet cover. Supported: ifrs-full taxonomy with FRED-tracked currencies (TWD, EUR, JPY, GBP, HKD, CNY, KRW, CHF, CAD, AUD, INR, BRL, DKK). Out-of-coverage taxonomies (JGAAP, K-IFRS, ifrs-smes) and currencies are tracked in docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md.",
 				map[string]interface{}{
 					"ticker":      ticker,
 					"filing_type": "20-F",

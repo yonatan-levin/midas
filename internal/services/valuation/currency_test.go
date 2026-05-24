@@ -1,7 +1,7 @@
 package valuation
 
 // Tests for the FX-conversion service-layer step (Phase B9 of the IFRS-FPI
-// plan, docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+// plan, docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md).
 //
 // The contract under test:
 //   - convertFinancialsToUSD multiplies every monetary field on every period

@@ -2,7 +2,7 @@
 // +build replay_spike
 
 // Spike test for Phase R2 Pre-Flight (§2 of
-// docs/refactoring/observability-replay-tooling-r2-implementation-plan.md).
+// docs/refactoring/archive/observability-replay-tooling-r2-implementation-plan.md).
 //
 // Purpose: prove that fx.Decorate composes against the real di.CoreModule at
 // the pinned go.uber.org/fx v1.24.0 and that the decorated value reaches

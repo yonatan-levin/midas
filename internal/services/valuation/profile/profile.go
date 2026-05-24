@@ -10,7 +10,7 @@
 // and consume ResolvedProfile from ModelInput. See:
 //
 //	docs/refactoring/spec/assumption-profile-spec.md             (canonical spec)
-//	docs/refactoring/implementations/assumption-profile-implementation-plan.md
+//	docs/refactoring/archive/assumption-profile-implementation-plan.md
 package profile
 
 // Archetype identifies the company shape for valuation calibration purposes.

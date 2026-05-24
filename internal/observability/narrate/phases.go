@@ -2,7 +2,7 @@
 // log line per pipeline phase that, when filtered by event=narrate, reads
 // top-to-bottom as the story of one request.
 //
-// See docs/refactoring/observability-narrative-and-artifacts-spec.md (§5)
+// See docs/refactoring/spec/observability-narrative-and-artifacts-spec.md (§5)
 // for the closed-enum phase taxonomy and §4 for the standard-fields contract.
 package narrate
 
@@ -79,7 +79,7 @@ const (
 
 	// PhaseFXConvert is emitted by the valuation service after FX-converting
 	// reporting-currency financials to USD (Phase B9 of IFRS-FPI plan,
-	// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+	// docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md).
 	// Outcome=ok with currencies_converted + periods_converted on success;
 	// outcome=error with currencies_failed when one or more FX pairs are
 	// unresolved by FRED + static config.

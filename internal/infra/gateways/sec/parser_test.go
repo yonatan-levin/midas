@@ -355,7 +355,7 @@ func TestParser_ExtractFiscalPeriods_TWD_Currency(t *testing.T) {
 // ReportingCurrency="TWD" and no FPI/INSUFFICIENT_DATA error.
 //
 // This test is the regression guard for "TSM 422 → 200" in the IFRS / FPI
-// support spec (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+// support spec (docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md).
 func TestParser_ParseFinancialData_TSM_IFRS_HappyPath(t *testing.T) {
 	logger := zap.NewNop()
 	parser := NewParser(logger)

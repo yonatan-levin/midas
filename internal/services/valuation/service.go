@@ -838,7 +838,7 @@ func (s *Service) performValuation(
 	// inside Classify) so only the valuation pipeline fires it once per valuation —
 	// avoids double-emission if Classify is also called from the datacleaner path.
 	// Surfaces the full Phase M spec field set (sic, naics, sector, industry,
-	// sub_industry, model_hint) per docs/refactoring/observability-upgrade-spec.md
+	// sub_industry, model_hint) per docs/refactoring/archive/observability-upgrade-spec.md
 	// §374. industry_code is preserved as a back-compat alias for downstream
 	// log consumers that key on the original field name.
 	if s.calcEmitter != nil {

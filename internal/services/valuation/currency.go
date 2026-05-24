@@ -340,7 +340,7 @@ func sortedKeysFloat(m map[string]float64) []string {
 // chose the configured ratio over Yahoo's count by maintaining
 // config/adr_ratios.json.
 //
-// Phase B10 of docs/refactoring/ifrs-foreign-private-issuer-support-spec.md.
+// Phase B10 of docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md.
 func (s *Service) applyADRRatio(ctx context.Context, ticker string, hist *entities.HistoricalFinancialData, marketData *entities.MarketData) {
 	// Defensive guards: nothing to do for nil/empty inputs. Each is its own
 	// branch so a future debugger can step through and see exactly which

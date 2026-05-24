@@ -23,7 +23,7 @@ type FinancialData struct {
 	// monetary field on this struct (Revenue, Assets, OperatingIncome, …) is
 	// denominated in, as taken from the SEC XBRL `Units` key. Set by the SEC
 	// parser; populated by Phase B5 of the IFRS-FPI plan
-	// (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+	// (docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md).
 	//
 	// Empty string is treated as "USD" by callers — backward compat for
 	// FinancialData rows persisted before the field shipped, and for tests

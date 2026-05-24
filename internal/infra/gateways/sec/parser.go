@@ -28,7 +28,7 @@ func NewParser(logger *zap.Logger) *Parser {
 // carried. Called when ParseFinancialData extracted zero usable periods.
 //
 // Post-Phase-B6 invariant (see
-// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md): the parser
+// docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md): the parser
 // now reads IFRS-full concepts (Revenue, ProfitLossFromOperatingActivities,
 // CashAndCashEquivalents, …) and stamps the period's reporting currency
 // from any ISO-4217 unit key. So for the well-mapped IFRS-full filers (TSM,
@@ -946,7 +946,7 @@ func (p *Parser) calculateDeadInventoryWritedown(data *entities.FinancialData) f
 // The list is grouped by taxonomy. US-GAAP concepts come first (preserving
 // historical reporting behavior); IFRS-full concepts were added in Phase B6
 // of the IFRS / foreign-private-issuer support plan
-// (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md) so 20-F
+// (docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md) so 20-F
 // filers like TSM, ASML, BABA, NVO, AZN, SAP can be parsed.
 func (p *Parser) GetSupportedConcepts() []string {
 	return []string{

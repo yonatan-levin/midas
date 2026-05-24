@@ -52,7 +52,7 @@ import (
 // individual ticker skips for lack of captured fixtures.
 //
 // Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md
-// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-implementation-plan.md
+// Plan: docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-implementation-plan.md
 func TestDataCleanerRecompute_ShadowMode_TickerBasket(t *testing.T) {
 	// DC-1 Phase 0+1 acceptance basket per the spec. Tickers without a
 	// captured bundle skip via t.Skipf — they are recorded in the test

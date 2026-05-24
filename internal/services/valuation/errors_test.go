@@ -97,7 +97,7 @@ func TestHasCompanyFactsNotFoundError(t *testing.T) {
 //
 // Regression ticker: TSM (Taiwan Semiconductor Manufacturing — see
 // artifacts/2026-04-26/_no-ticker/req_78653629… and
-// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+// docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md).
 func TestHasForeignPrivateIssuerError(t *testing.T) {
 	tests := []struct {
 		name string

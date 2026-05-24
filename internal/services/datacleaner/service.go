@@ -238,7 +238,7 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	// through recomputeUmbrellas and produces the same WARN set.
 	//
 	//   docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md
-	//   docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-implementation-plan.md
+	//   docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-implementation-plan.md
 	recomputeUmbrellas(ctx, result.CleanedData)
 
 	// Calculate quality score

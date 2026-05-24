@@ -17,12 +17,12 @@ import (
 
 // expectedPhases pins the closed phase set against accidental string drift.
 // If you add or remove a phase here, you MUST also update the spec
-// (docs/refactoring/observability-narrative-and-artifacts-spec.md §5).
+// (docs/refactoring/spec/observability-narrative-and-artifacts-spec.md §5).
 //
 // Count history:
 //   - 17 (initial taxonomy)
 //   - 18 (added "fx.convert" for Phase B9 of IFRS-FPI plan,
-//     docs/refactoring/ifrs-foreign-private-issuer-support-spec.md)
+//     docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md)
 //   - 19 (added "adr_ratio.applied" for Phase B10 of IFRS-FPI plan)
 var expectedPhases = map[string]struct{}{
 	"request.received":     {},

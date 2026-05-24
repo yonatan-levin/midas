@@ -9,7 +9,7 @@ import "time"
 // because the calendar year changed.
 //
 // Introduced by Phase R0 of the observability replay-tooling spec
-// (docs/refactoring/observability-replay-tooling-spec.md §5 D10).
+// (docs/refactoring/archive/observability-replay-tooling-spec.md §5 D10).
 // Production behavior is byte-identical to a direct time.Now() call.
 type Clock interface {
 	Now() time.Time

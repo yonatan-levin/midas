@@ -1,7 +1,7 @@
 package macro
 
 // Tests for the per-series FRED parser extracted in Phase R2 Stage A.6
-// (docs/refactoring/observability-replay-tooling-r2-implementation-plan.md
+// (docs/refactoring/archive/observability-replay-tooling-r2-implementation-plan.md
 // §3 Task A.6). The extraction is a precondition for Task A.3
 // (BundleMacroGateway raw-mode dispatch) — replay's bundle gateway needs to
 // invoke the same parser the production gateway uses on raw FRED bytes so

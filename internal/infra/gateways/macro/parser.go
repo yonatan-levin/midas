@@ -2,7 +2,7 @@ package macro
 
 // Pure FRED per-series parser, extracted in Phase R2 Stage A.6 of the
 // observability replay tooling
-// (docs/refactoring/observability-replay-tooling-r2-implementation-plan.md
+// (docs/refactoring/archive/observability-replay-tooling-r2-implementation-plan.md
 // §3 Task A.6).
 //
 // Why a pure free function and not a method on *Gateway:

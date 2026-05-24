@@ -5,7 +5,7 @@ package handlers_test
 // (and the Industry struct it returns) are exported.
 //
 // Pinned for Phase R2 D1.1 of the observability replay tooling
-// (docs/refactoring/observability-replay-tooling-r2-implementation-plan.md
+// (docs/refactoring/archive/observability-replay-tooling-r2-implementation-plan.md
 // §3 Task D1.1). The replay orchestration layer in
 // internal/observability/replay/replay.go will import this exported helper
 // to rebuild a FairValueResponse-equivalent shape from

@@ -2,7 +2,7 @@
 // directory of raw + parsed payloads + before/after pipeline snapshots
 // captured to disk so a single request's data flow can be replayed offline.
 //
-// See docs/refactoring/observability-narrative-and-artifacts-spec.md (§7).
+// See docs/refactoring/spec/observability-narrative-and-artifacts-spec.md (§7).
 package artifact
 
 import (

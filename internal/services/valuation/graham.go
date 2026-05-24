@@ -19,7 +19,7 @@ import (
 //     values) and GrahamDiscountPct populated only when the floor and price
 //     are both > 0
 //
-// See docs/refactoring/graham-floor-metrics-spec.md and
+// See docs/refactoring/archive/graham-floor-metrics-spec.md and
 // docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md
 // for the routing decision that led to direct-XBRL preference over derived
 // total liabilities.

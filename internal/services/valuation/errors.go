@@ -29,7 +29,7 @@ var (
 	// generic ErrInsufficientData so users can tell "no data available" apart
 	// from "data exists in a format we don't yet parse".
 	//
-	// Once Phase B of docs/refactoring/ifrs-foreign-private-issuer-support-spec.md
+	// Once Phase B of docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md
 	// ships, the parser will read IFRS data successfully and this sentinel
 	// only fires for taxonomies still outside our coverage (JGAAP, K-IFRS).
 	ErrForeignPrivateIssuer = errors.New("foreign private issuer: ifrs-full taxonomy not yet supported")

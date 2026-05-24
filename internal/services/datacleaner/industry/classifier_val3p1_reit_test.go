@@ -31,7 +31,7 @@ func TestClassify_VAL3P1_REITSubsectors(t *testing.T) {
 		// (priority 100 vs 65) on company-name matching, so DLR currently lands
 		// under TECH despite SIC 6798. Fixing that is out of scope for VAL-3 P1
 		// (would require SIC > keyword priority globally — see
-		// docs/refactoring/industry-classification-unification-spec.md). The
+		// docs/refactoring/spec/industry-classification-unification-spec.md). The
 		// "data center" / "data centre" / "interconnection" keywords still fire
 		// reliably for tickers without "digital" in their name.
 		{name: "Equinix → REIT_DATACENTER", companyName: "Equinix, Inc.", expected: "REIT_DATACENTER"},

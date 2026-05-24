@@ -2,7 +2,7 @@
 // +build replay_spike
 
 // Spike test for Phase R3 Pre-Flight (§2 of
-// docs/refactoring/observability-replay-tooling-r3-implementation-plan.md).
+// docs/refactoring/archive/observability-replay-tooling-r3-implementation-plan.md).
 //
 // Purpose: prove that 4 concurrent fx.App lifecycles built from
 // replay.Module(bundleDir, opts) can start/stop in parallel without:

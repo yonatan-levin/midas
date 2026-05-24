@@ -1,5 +1,5 @@
 // Package replay implements the offline-bundle replay tooling described in
-// docs/refactoring/observability-replay-tooling-spec.md.
+// docs/refactoring/archive/observability-replay-tooling-spec.md.
 //
 // Phase R1 (this commit) provides:
 //   - manifest read + validate

@@ -25,7 +25,7 @@ import (
 //
 // See implementation plan §C for the full rationale:
 //
-//	docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-implementation-plan.md
+//	docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-implementation-plan.md
 const divergenceTolerance = 1.0
 
 // recomputeUmbrellas (shadow-mode, DC-1 Phase 1) reads fd and, for each of the
@@ -48,7 +48,7 @@ const divergenceTolerance = 1.0
 // zap.NewNop() so unit tests don't need to thread a real context.
 //
 // Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md
-// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-implementation-plan.md
+// Plan: docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-implementation-plan.md
 //
 // The recompute formulas mirror computePlugs (internal/infra/gateways/sec/plugs.go)
 // byte-for-byte. In well-formed Phase 0 state (no cleaner mutation), the

@@ -4,7 +4,7 @@
 // request whether tracing is on, opens the bundle if so, attaches the
 // narrate emitter + bundle to ctx, and finalises both on response.
 //
-// See docs/refactoring/observability-narrative-and-artifacts-spec.md (§8).
+// See docs/refactoring/spec/observability-narrative-and-artifacts-spec.md (§8).
 package middleware
 
 import (

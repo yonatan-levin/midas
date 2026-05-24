@@ -72,14 +72,14 @@ var ErrCompanyFactsNotFound = errors.New("no usable SEC XBRL company facts")
 // Distinguished from ErrCompanyFactsNotFound so the HTTP layer can emit a
 // tailored 422 explaining the taxonomy mismatch instead of the misleading
 // "no data available" message. The full IFRS-FPI support roadmap lives in
-// docs/refactoring/ifrs-foreign-private-issuer-support-spec.md; once Phase B
+// docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md; once Phase B
 // of that spec ships, this sentinel only fires for taxonomies still outside
 // our coverage (JGAAP, K-IFRS, certain unmapped IFRS extensions).
 var ErrForeignPrivateIssuer = errors.New("foreign private issuer: non-US-GAAP taxonomy")
 
 // ErrFXRateUnavailable indicates neither FRED nor the static config has an
 // exchange rate for a requested currency pair. Phase B9 of the IFRS-FPI spec
-// (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md) uses this
+// (docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md) uses this
 // sentinel to abort FX conversion with a clear, classifiable error instead
 // of producing nonsensical USD values from a zero-rate fallback.
 var ErrFXRateUnavailable = errors.New("FX rate unavailable")
@@ -112,7 +112,7 @@ type MacroDataGateway interface {
 	// for TWD→USD) and fall back to config/fx_rates.json when FRED is
 	// unavailable. fromCcy == toCcy short-circuits to 1.0.
 	//
-	// Phase B9 of docs/refactoring/ifrs-foreign-private-issuer-support-spec.md
+	// Phase B9 of docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md
 	// will be the only consumer; until then this method has no production
 	// callers and exists purely as a forward-compatibility seam.
 	GetFXRate(ctx context.Context, fromCcy, toCcy string) (float64, error)

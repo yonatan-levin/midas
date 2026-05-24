@@ -18,7 +18,7 @@ import (
 )
 
 // TestE2E_TSM_ProducesValuation is the headline acceptance test for Phase B
-// of the IFRS-FPI plan (docs/refactoring/ifrs-foreign-private-issuer-support-spec.md).
+// of the IFRS-FPI plan (docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md).
 //
 // It executes the FULL pipeline against live SEC + Yahoo Finance + FRED:
 //
