@@ -56,7 +56,7 @@ Lead with the rule. The **Why** lets future sessions judge edge cases. The **How
 **How to apply:**
 - Add a third branch to `isRetailCompany`: a strong `inventoryRatio` (e.g., > 0.15) combined with near-zero R&D should qualify even when tangibles are high and intangibles are low. Owned-store retailers have meaningful inventory turnover by definition.
 - Strengthen `TestIsRetailCompany_AcceptsActualRetailer` with a third subcase: inventory-20%+, intangibles-5%, tangibles-75%+, R&D-0, matching Target's actual balance-sheet shape.
-- Consider this a sibling finding to the SIC-only unification (`docs/refactoring/industry-classification-unification-spec.md`) — fixing it right may not be worth the churn if the heuristic is going away; but the refactor doesn't close for weeks, so interim tightening is defensible.
+- Consider this a sibling finding to the SIC-only unification (`docs/refactoring/spec/industry-classification-unification-spec.md`) — fixing it right may not be worth the churn if the heuristic is going away; but the refactor doesn't close for weeks, so interim tightening is defensible.
 
 **Source:** Live QA run 2026-04-24, part of the Industry-in-response feature verification.
 

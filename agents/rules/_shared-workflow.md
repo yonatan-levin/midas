@@ -214,6 +214,34 @@ HANDOFF_TO: <ARCH | BACKEND | FRONTEND | UX_UI | VERIFIER | QA | REVIEWER | HUMA
 6. **No scope creep**: Unrelated changes should be separate tasks.
 7. **Explicit gaps**: Ask for clarification rather than guessing.
 8. **Documentation**: Update ARCHITECTURE.md, CONTRACTS.md, TESTING.md, CLAUDE.md, docs/ as needed.
+9. **Doc moves are atomic with ref updates**: see the "Moving documentation files" section below.
+
+---
+
+## Moving documentation files
+
+When relocating any file under `docs/` (e.g., `spec/` → `archive/`, or introducing a new subdir for the first time), the move PR MUST also sweep all inbound references in the same commit:
+
+1. `git mv <old> <new>` — preserves history. Never `mv` + `git add` (that registers as delete + add and breaks `git log --follow`).
+2. `rg -n '<old-path>\.md'` across the whole repo.
+3. Update every hit, including:
+   - **Source-code comments** (`// see docs/...` pointers in `internal/`, `cmd/`, `pkg/`).
+   - **Top-level docs** (`CLAUDE.md`, `AGENTS.md`, `THESIS.md`, `FEEDBACK-LOG.md`, `API_DOCUMENTATION.md`).
+   - **Auto-generated artifacts** (`docs/swagger.yaml`, `docs/swagger.json`, `docs/docs.go`) — when the source annotation moves, the regenerated file moves with it; for manual edits, regenerate via `swag init`.
+   - **SQL migration headers** (`migrations/*.sql` comment blocks).
+   - **`docs/reviewer/*.md` trackers** that cite the spec or implementation plan.
+   - **Internal cross-refs** inside other `docs/refactoring/spec/` or `implementations/` files that are still LIVE.
+4. Skip refs inside `docs/refactoring/archive/`, `docs/reviewer/archive/`, `docs/bugs/archive/` — those are historical snapshots; updating them creates churn without value.
+5. Verify with a final `rg` pass returning zero hits to the old path outside archived directories.
+6. Run `go build ./...` if any source-code comment was touched — comments don't compile, but the build catches accidental deletions of surrounding code.
+
+### Why atomic
+
+If the ref update is deferred, subsequent PRs touching the docs will re-anchor inconsistently — half to the new path, half to the old — creating "ref-debt" that compounds. The 2026-05-22 docs/refactoring/ housekeeping pass caught ~60 stale refs across 41 files accumulated from prior un-swept moves. The cost of sweeping in the same PR is small (10-30 min); the cost of leaving ref-debt is days of cleanup later.
+
+### Collision check before `git mv`
+
+If two files in different subdirs share a name (e.g., `spec/X.md` and `implementations/X.md`), `git mv`-ing both to `archive/` will fail or overwrite. Rename one with a disambiguating suffix (`-scaffold`, `-v1`, `-backend`) describing what makes it distinct.
 
 ---
 
