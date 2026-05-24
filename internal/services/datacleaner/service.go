@@ -16,6 +16,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/adjustments"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/rules"
 )
@@ -319,6 +320,31 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	}
 
 	return result, nil
+}
+
+// CleanFinancialDataWithViews runs CleanFinancialData and wraps the cleaned
+// *entities.FinancialData in a *cleaneddata.CleanedFinancialData so the
+// caller can opt into the AsReported / Restated / InvestedCapital view
+// accessors.
+//
+// Phase 3 invariant: this is a thin wrapper. No additional work happens
+// here — the cleaner pipeline is identical to CleanFinancialData; only
+// the return shape differs. Phase 4 consumers grep for "CleanFinancialDataWithViews"
+// to enumerate migration progress.
+//
+// Mutation contract: callers MUST NOT mutate result.CleanedData after this
+// call; doing so would invalidate the view cache held by the returned
+// CleanedFinancialData wrapper. The wrapper holds the same *FinancialData
+// pointer as result.CleanedData, so any mutation reaches both.
+func (s *service) CleanFinancialDataWithViews(ctx context.Context, data *entities.FinancialData) (*entities.CleaningResult, *cleaneddata.CleanedFinancialData, error) {
+	result, err := s.CleanFinancialData(ctx, data)
+	if err != nil {
+		return nil, nil, err
+	}
+	if result == nil {
+		return nil, nil, nil
+	}
+	return result, cleaneddata.New(result.CleanedData), nil
 }
 
 // GetIndustryRules returns applicable rules for a specific industry

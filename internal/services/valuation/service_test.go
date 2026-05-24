@@ -18,6 +18,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	growthsvc "github.com/midas/dcf-valuation-api/internal/services/growth"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
@@ -301,6 +302,21 @@ type MockDataCleanerService struct {
 func (m *MockDataCleanerService) CleanFinancialData(ctx context.Context, data *entities.FinancialData) (*entities.CleaningResult, error) {
 	args := m.Called(ctx, data)
 	return args.Get(0).(*entities.CleaningResult), args.Error(1)
+}
+
+// CleanFinancialDataWithViews satisfies the Phase 3 sibling method on
+// DataCleanerService. The mock delegates to CleanFinancialData and wraps
+// the result in cleaneddata.New so test fixtures that don't explicitly
+// set up the views path still surface the wrapper consumers expect.
+func (m *MockDataCleanerService) CleanFinancialDataWithViews(ctx context.Context, data *entities.FinancialData) (*entities.CleaningResult, *cleaneddata.CleanedFinancialData, error) {
+	result, err := m.CleanFinancialData(ctx, data)
+	if err != nil {
+		return nil, nil, err
+	}
+	if result == nil {
+		return nil, nil, nil
+	}
+	return result, cleaneddata.New(result.CleanedData), nil
 }
 
 func (m *MockDataCleanerService) GetIndustryRules(industryCode string) ([]entities.CleaningRule, error) {
