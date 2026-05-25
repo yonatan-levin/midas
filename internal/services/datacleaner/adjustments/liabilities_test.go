@@ -335,7 +335,7 @@ func TestLiabilityAdjuster_ProcessContingentLiabilityAdjustment(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := adjuster.ProcessContingentLiabilityAdjustment(tt.data, tt.rule, tt.context)
+			result := adjuster.ProcessContingentLiabilityAdjustment(context.Background(), tt.data, tt.rule, tt.context)
 
 			assert.Equal(t, tt.expectApplied, result.Applied, "Applied flag mismatch")
 			assert.Equal(t, tt.expectAmount, result.Amount, "Adjustment amount mismatch")

@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -35,11 +36,11 @@ func TestLiabilityAdjuster_DirectCall_ContingentLiabilities(t *testing.T) {
 		Enabled:  true,
 	}
 
-	context := &entities.CleaningContext{
+	cleaningCtx := &entities.CleaningContext{
 		IndustryCode: "45", // Technology
 	}
 
-	result := adjuster.ProcessContingentLiabilityAdjustment(data, rule, context)
+	result := adjuster.ProcessContingentLiabilityAdjustment(context.Background(), data, rule, cleaningCtx)
 	require.NotNil(t, result, "ProcessContingentLiabilityAdjustment should return a result")
 
 	t.Logf("Direct call result: Applied=%v, Amount=%.2f, Adjustments=%d, Flags=%d",
