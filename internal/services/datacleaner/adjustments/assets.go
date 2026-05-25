@@ -165,14 +165,14 @@ func (a *a4DTAValuationAllowanceAdjuster) Apply(ctx context.Context, working *en
 // mutation-free ApplyA5InventoryWritedown, and the dispatcher in
 // ProcessAssetAdjustments performs the dual-write on data after Apply runs.
 //
-// Role classification (plan §3.5 / §4 row A5): Restater + TaxShieldDTA. A5 is
+// Role classification (plan §3.5 / §4 row A5): Restater + TaxShieldDTA. A5 was
 // the FIRST PR-2 adjuster to populate LedgerEntry.TaxShieldDTA — the 40%
 // inventory writedown generates a derived deferred-tax-asset shield equal to
-// writedownAmount * working.EffectiveTaxRate (when the rate is > 0). This
-// distinguishes A5 from A1/A2/A4, all of which leave TaxShieldDTA at zero for
-// distinct reasons (A1 is OverlayEmitter; A2 defers TaxShieldDTA to Phase 3
-// per Q2; A4 IS the DTA reduction itself). See ApplyA5InventoryWritedown
-// godoc for the full TaxShieldDTA rationale.
+// writedownAmount * working.EffectiveTaxRate (when the rate is > 0). DC-1
+// Phase 3 Task 3.7 extends the same pattern to A2 (intangible writedowns also
+// generate a tax shield). A1 (OverlayEmitter) and A4 (which IS the DTA
+// reduction itself) intentionally still leave TaxShieldDTA at zero. See
+// ApplyA5InventoryWritedown godoc for the full TaxShieldDTA rationale.
 type a5InventoryWritedownAdjuster struct {
 	aa *AssetAdjuster
 }
@@ -417,13 +417,18 @@ func (aa *AssetAdjuster) ApplyA1Goodwill(ctx context.Context, working *entities.
 //
 // Role classification (plan §3.5 / §4 row A2): Restater. The fired LedgerEntry
 // carries Component:"OtherIntangibles", DeltaAmount:-writedownAmount,
-// EquityOffset:-writedownAmount, TaxShieldDTA:0. No OverlaySpec — the
+// EquityOffset:-writedownAmount, TaxShieldDTA:writedownAmount*EffectiveTaxRate
+// (when ETR > 0; zero otherwise). No OverlaySpec — the
 // writedown is a direct component reduction, not an analytical overlay.
 //
-// Q2 resolution (plan §10): TaxShieldDTA is set to 0 in Phase 2 to preserve
-// the dual-write bit-for-bit contract. Today's A2 code does not compute a
-// tax shield; populating it here would diverge from legacy outputs. Phase 3
-// revisits TaxShieldDTA when consumers actually read it.
+// Q2 resolution (DC-1 Phase 3 Task 3.7, spec §5.1): TaxShieldDTA is now
+// populated as writedownAmount × working.EffectiveTaxRate when ETR > 0,
+// mirroring A5's pattern. Phase 3's Restated() accessor adds TaxShieldDTA
+// to DeferredTaxAssets so the restated view reflects the real economic
+// position post-impairment. The dispatcher dual-write still mutates only
+// data.OtherIntangibles (not data.DeferredTaxAssets), so legacy consumers
+// reading data.DeferredTaxAssets directly see no change — only Restated()
+// consumers see the tax shield. Phase 4 migrates the consumers.
 //
 // Skipped paths emit Fired:false LedgerEntries so observability can answer
 // "why didn't A2 fire on this ticker?" without code reading. The threshold-
@@ -493,6 +498,17 @@ func (aa *AssetAdjuster) ApplyA2Intangible(ctx context.Context, working *entitie
 	writedownAmount := originalIntangibles - retainedAmount
 	writedownRate := writedownAmount / originalIntangibles
 
+	// Q2 resolution (DC-1 Phase 3 Task 3.7, spec §5.1): an intangible
+	// writedown generates a deferred-tax-asset shield equal to
+	// writedown × EffectiveTaxRate (IRC §197 / equivalent IFRS treatment).
+	// Only populated when EffectiveTaxRate > 0 — foreign filers without
+	// tax-rate data or zero-rate jurisdictions stay at the zero default,
+	// matching A5's convention.
+	var taxShieldDTA float64
+	if working.EffectiveTaxRate > 0 {
+		taxShieldDTA = writedownAmount * working.EffectiveTaxRate
+	}
+
 	out := AdjusterOutput{
 		LedgerEntries: []entities.LedgerEntry{{
 			Timestamp:    now,
@@ -503,7 +519,7 @@ func (aa *AssetAdjuster) ApplyA2Intangible(ctx context.Context, working *entitie
 			Component:    "OtherIntangibles",
 			DeltaAmount:  -writedownAmount,
 			EquityOffset: -writedownAmount,
-			TaxShieldDTA: 0, // Q2 deferral (plan §10): A2 does not compute tax shield in Phase 2.
+			TaxShieldDTA: taxShieldDTA,
 		}},
 	}
 
@@ -658,11 +674,11 @@ func (aa *AssetAdjuster) ApplyA4DTAValuationAllowance(ctx context.Context, worki
 // TaxShieldDTA rationale (plan §4 row A5 + §7 Task 2.4): an inventory
 // writedown of $X at an effective tax rate of T produces a derived
 // deferred-tax-asset shield of $X*T because the writedown is deductible for
-// tax purposes once realized. This makes A5 the FIRST PR-2 adjuster to
-// populate TaxShieldDTA — A1 is OverlayEmitter (leaves all monetary fields
-// on OverlaySpec), A2 defers TaxShieldDTA to Phase 3 per Q2 to preserve the
-// bit-for-bit dual-write contract, and A4 IS the DTA reduction itself so
-// computing a separate shield would double-count.
+// tax purposes once realized. A5 was the FIRST PR-2 adjuster to populate
+// TaxShieldDTA; DC-1 Phase 3 Task 3.7 extended the same pattern to A2.
+// A1 (OverlayEmitter — leaves all monetary fields on OverlaySpec) and A4
+// (which IS the DTA reduction itself, so a separate shield would
+// double-count) intentionally still leave TaxShieldDTA at zero.
 //
 // Two-condition firing logic (mirrors legacy ProcessInventoryAdjustment):
 // A5 fires when EITHER (a) detectInventoryObsolescence returns true
@@ -1333,7 +1349,7 @@ func (aa *AssetAdjuster) ProcessDeferredTaxAdjustment(data *entities.FinancialDa
 // is not double-counted. Tasks 2.2-2.5 add more rules to the
 // NativelyEmittedRuleIDs set; Task 2.6 deletes the shim's asset branch
 // entirely.
-func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *AssetAdjustmentResult {
+func (aa *AssetAdjuster) ProcessAssetAdjustments(ctx context.Context, data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *AssetAdjustmentResult {
 	var allAdjustments []entities.Adjustment
 	var allFlags []entities.Flag
 	var totalAdjustment float64
@@ -1347,12 +1363,12 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(data *entities.FinancialData, r
 	var nativeOverlays []entities.OverlaySpec
 	nativelyEmittedRuleIDs := make(map[string]bool, len(rules))
 
-	// Apply.ctx is nil here because ProcessAssetAdjustments does not yet
-	// thread ctx through its public signature. ApplyA1Goodwill treats nil
-	// ctx as safe (it only uses ctx for future industry-aware logic).
-	// TODO(PR-2 follow-up / PR-3): thread context.Context through
-	// ProcessAssetAdjustments to align with the Adjuster.Apply signature.
-	var applyCtx context.Context
+	// DC-1 Phase 3 (Task 3.9): ctx is now threaded through the public
+	// signature from service.go::applyActiveAdjustments. The Apply
+	// methods accept it as their first parameter per Adjuster interface
+	// convention. Phase 4+ may attach OTel spans or read deadlines from
+	// it; today the consumers still treat it as opaque.
+	applyCtx := ctx
 
 	// Process each Category A rule
 	for _, rule := range rules {

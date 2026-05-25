@@ -16,6 +16,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/adjustments"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/rules"
 )
@@ -295,11 +296,14 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	if b := artifact.From(ctx); b != nil {
 		b.Snapshot(ctx, "clean.normalized", "10-clean-output.json", result.CleanedData)
 		b.Snapshot(ctx, "clean.normalized", "10-clean-trace.json", result)
-		// DC-1 Phase 2 PR-2 Task 2.1: FinancialData schema bumped 7 → 8 in the
-		// first PR that POPULATES AdjustmentLedger / Overlays from a native
-		// adjuster (A1 goodwill_exclusion). Replay drift output stays
-		// diagnostic until tier2-baseline bundles are refreshed.
-		b.AddSchemaVersion("FinancialData", 8)
+		// DC-1 Phase 2 PR-2 Task 2.1 bumped FinancialData 7 → 8 for the first
+		// AdjustmentLedger / Overlays population. DC-1 Phase 3 Task 3.10 bumps
+		// 8 → 9 atomically with the first commit that populates previously-
+		// zero omitempty fields on LedgerEntry / OverlaySpec — A2 TaxShieldDTA
+		// (Q2 resolution, Task 3.7) and B3 AIProvenance hashes (Q4 resolution,
+		// Task 3.8). Replay drift output stays diagnostic until tier2-baseline
+		// bundles are refreshed.
+		b.AddSchemaVersion("FinancialData", 9)
 
 		// Phase 2.B — auto-on-quality-flag trigger. Count flags at or above
 		// the bundle's configured severity threshold and report the count
@@ -319,6 +323,31 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	}
 
 	return result, nil
+}
+
+// CleanFinancialDataWithViews runs CleanFinancialData and wraps the cleaned
+// *entities.FinancialData in a *cleaneddata.CleanedFinancialData so the
+// caller can opt into the AsReported / Restated / InvestedCapital view
+// accessors.
+//
+// Phase 3 invariant: this is a thin wrapper. No additional work happens
+// here — the cleaner pipeline is identical to CleanFinancialData; only
+// the return shape differs. Phase 4 consumers grep for "CleanFinancialDataWithViews"
+// to enumerate migration progress.
+//
+// Mutation contract: callers MUST NOT mutate result.CleanedData after this
+// call; doing so would invalidate the view cache held by the returned
+// CleanedFinancialData wrapper. The wrapper holds the same *FinancialData
+// pointer as result.CleanedData, so any mutation reaches both.
+func (s *service) CleanFinancialDataWithViews(ctx context.Context, data *entities.FinancialData) (*entities.CleaningResult, *cleaneddata.CleanedFinancialData, error) {
+	result, err := s.CleanFinancialData(ctx, data)
+	if err != nil {
+		return nil, nil, err
+	}
+	if result == nil {
+		return nil, nil, nil
+	}
+	return result, cleaneddata.New(result.CleanedData), nil
 }
 
 // GetIndustryRules returns applicable rules for a specific industry
@@ -475,7 +504,7 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 
 	// Apply Category A (Asset Quality) adjustments
 	if len(assetRules) > 0 {
-		assetResult := s.assetAdjuster.ProcessAssetAdjustments(data, assetRules, cleaningCtx)
+		assetResult := s.assetAdjuster.ProcessAssetAdjustments(ctx, data, assetRules, cleaningCtx)
 		if assetResult.Applied {
 			allAdjustments = append(allAdjustments, assetResult.Adjustments...)
 			allFlags = append(allFlags, assetResult.Flags...)
@@ -507,7 +536,7 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 
 	// Apply Category B (Liability Completeness) adjustments
 	if len(liabilityRules) > 0 {
-		liabilityResult := s.liabilityAdjuster.ProcessLiabilityAdjustments(data, liabilityRules, cleaningCtx)
+		liabilityResult := s.liabilityAdjuster.ProcessLiabilityAdjustments(ctx, data, liabilityRules, cleaningCtx)
 		if liabilityResult.Applied {
 			allAdjustments = append(allAdjustments, liabilityResult.Adjustments...)
 			allFlags = append(allFlags, liabilityResult.Flags...)
@@ -546,7 +575,7 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 	}
 
 	if len(earningsRules) > 0 {
-		earningsResult := s.earningsAdjuster.ProcessEarningsAdjustments(data, earningsRules, cleaningCtx)
+		earningsResult := s.earningsAdjuster.ProcessEarningsAdjustments(ctx, data, earningsRules, cleaningCtx)
 		if earningsResult.Applied {
 			allAdjustments = append(allAdjustments, earningsResult.Adjustments...)
 			allFlags = append(allFlags, earningsResult.Flags...)

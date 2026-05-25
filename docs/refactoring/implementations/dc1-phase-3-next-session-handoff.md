@@ -64,7 +64,7 @@ The DC-1 Phase 2 datacleaner refactor is **merged to master**. All 17 cleaner-si
 3. **Q2 resolution:** A2 populates `TaxShieldDTA = writedownAmount × working.EffectiveTaxRate` when rate > 0 (mirrors A5).
 4. **Q4 resolution:** B3 `AIProvenance.PromptHash` + `SourceDocHash` = SHA-256 hex of rendered-prompt + footnote-text, computed in `captureB3AIProvenance` pre-API-call.
 5. Thread `ctx context.Context` through `Process*Adjustments` signatures (Asset, Liability, Earnings).
-6. New `Service.CleanWithViews(ctx, ...)` sibling method (additive; no signature changes to existing `Clean`).
+6. New `Service.CleanFinancialDataWithViews(ctx, ...)` sibling method (additive; no signature changes to existing `Clean`).
 7. **Translator-extraction decision:** LOCKED as KEEP per-rule (Phase 4 deletes alongside dual-write deletion).
 
 ### Phase 3 NON-goals

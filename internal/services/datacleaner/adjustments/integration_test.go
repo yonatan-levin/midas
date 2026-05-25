@@ -2,6 +2,7 @@ package adjustments
 
 import (
 	"context"
+	gocontext "context"
 	"testing"
 	"time"
 
@@ -135,7 +136,7 @@ func TestCompleteDataCleaningPipeline(t *testing.T) {
 
 			// Apply liability adjustments (Category B)
 			liabilityRules := filterRulesByCategory(tt.rules, entities.LiabilityCompleteness)
-			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(tt.data, liabilityRules, tt.context)
+			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), tt.data, liabilityRules, tt.context)
 
 			require.NotNil(t, liabilityResult, "Liability adjustment result should not be nil")
 			assert.Equal(t, tt.expectSuccess, liabilityResult.Applied, "Liability adjustment application mismatch")
@@ -240,7 +241,7 @@ func TestRealWorldScenarios(t *testing.T) {
 			assetResult := assetAdjuster.CalculateNetTangibleAssets(tt.data, tt.context)
 
 			liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
-			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(tt.data, liabilityRules, tt.context)
+			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), tt.data, liabilityRules, tt.context)
 
 			processingTime := time.Since(startTime)
 
@@ -343,8 +344,8 @@ func TestIndustrySpecificAdjustments(t *testing.T) {
 			assetRules := filterRulesByCategory(rules, entities.AssetQuality)
 			liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
-			assetResult := assetAdjuster.ProcessAssetAdjustments(&testData, assetRules, context)
-			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(&testData, liabilityRules, context)
+			assetResult := assetAdjuster.ProcessAssetAdjustments(gocontext.Background(), &testData, assetRules, context)
+			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), &testData, liabilityRules, context)
 
 			// Validate industry-specific behavior
 			allAdjustments := append(assetResult.Adjustments, liabilityResult.Adjustments...)
@@ -435,7 +436,7 @@ func TestPerformanceBenchmarks(t *testing.T) {
 				liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
 				assetResult := assetAdjuster.CalculateNetTangibleAssets(&testData, context)
-				liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(&testData, liabilityRules, context)
+				liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), &testData, liabilityRules, context)
 
 				iterationTime := time.Since(startTime)
 				totalTime += iterationTime
@@ -524,7 +525,7 @@ func TestErrorHandlingScenarios(t *testing.T) {
 			liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
 			assetResult := assetAdjuster.CalculateNetTangibleAssets(tt.data, tt.context)
-			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(tt.data, liabilityRules, tt.context)
+			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), tt.data, liabilityRules, tt.context)
 
 			// Validate graceful error handling
 			if tt.expectPartial {
@@ -561,7 +562,7 @@ func TestAuditTrailCompleteness(t *testing.T) {
 	liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
 	assetResult := assetAdjuster.CalculateNetTangibleAssets(data, context)
-	liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(data, liabilityRules, context)
+	liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), data, liabilityRules, context)
 
 	// Validate audit trail completeness
 	allAdjustments := append(assetResult.Adjustments, liabilityResult.Adjustments...)
@@ -642,7 +643,7 @@ func TestRealSECDataIntegration(t *testing.T) {
 		liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
 		assetResult := assetAdjuster.CalculateNetTangibleAssets(appleData, context)
-		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(appleData, liabilityRules, context)
+		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), appleData, liabilityRules, context)
 
 		duration := time.Since(start)
 
@@ -682,7 +683,7 @@ func TestRealSECDataIntegration(t *testing.T) {
 	t.Run("Technology Industry Validation", func(t *testing.T) {
 		// Validate technology-specific rules applied correctly
 		liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
-		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(appleData, liabilityRules, context)
+		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), appleData, liabilityRules, context)
 
 		// Technology companies typically have minimal pension obligations
 		pensionAdjustments := 0
@@ -715,7 +716,7 @@ func TestRealSECDataIntegration(t *testing.T) {
 		start := time.Now()
 
 		liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
-		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(appleData, liabilityRules, context)
+		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), appleData, liabilityRules, context)
 
 		duration := time.Since(start)
 
@@ -736,7 +737,7 @@ func TestRealSECDataIntegration(t *testing.T) {
 		liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
 		assetResult := assetAdjuster.CalculateNetTangibleAssets(appleData, context)
-		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(appleData, liabilityRules, context)
+		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), appleData, liabilityRules, context)
 
 		// Validate comprehensive audit trail for real data
 		assert.NotEmpty(t, assetResult.AuditTrail, "Asset audit trail should be populated")

@@ -140,7 +140,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC2Emission(t *testing
 	}
 	rules := []*entities.CleaningRule{productionAssetSaleGainsRule()}
 
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	// Legacy contract.
@@ -186,7 +186,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC2SkipPath(t *testing
 	}
 	rules := []*entities.CleaningRule{productionAssetSaleGainsRule()}
 
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	assert.False(t, result.Applied)

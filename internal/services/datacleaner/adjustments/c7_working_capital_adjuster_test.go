@@ -220,7 +220,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC7FiresFlag(t *testin
 	preWC := data.WorkingCapitalAdjustment
 
 	rules := []*entities.CleaningRule{productionWorkingCapitalRule()}
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied:true on fire (matches the legacy
@@ -270,7 +270,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC7SkipPath(t *testing
 	preNOI := data.NormalizedOperatingIncome
 
 	rules := []*entities.CleaningRule{productionWorkingCapitalRule()}
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	assert.False(t, result.Applied)

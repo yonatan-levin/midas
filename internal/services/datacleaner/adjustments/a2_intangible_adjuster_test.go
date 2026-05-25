@@ -92,7 +92,8 @@ func TestA2IntangibleAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 		assert.InDelta(t, -200_000.0, entry.EquityOffset, 1e-6,
 			"EquityOffset must mirror DeltaAmount — writedowns reduce equity 1:1")
 		assert.Zero(t, entry.TaxShieldDTA,
-			"Q2 deferral: A2 TaxShieldDTA stays 0 in Phase 2 to preserve dual-write bit-for-bit")
+			"TaxShieldDTA stays 0 when EffectiveTaxRate is unset (this fixture); see "+
+				"TaxShieldDTA populated... subtest for the Q2 Phase 3 resolution path")
 		assert.Empty(t, entry.SkipReason, "SkipReason must be empty for fired entries")
 
 		// Flag contract: severity comes from the legacy ratio bucket helper.
@@ -159,13 +160,16 @@ func TestA2IntangibleAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 		assert.InDelta(t, 0.02, entry.SkipMetrics["threshold"], 1e-9)
 	})
 
-	t.Run("fired path TaxShieldDTA stays zero per Q2 deferral", func(t *testing.T) {
-		// Independent assertion of the Q2 (plan §10) deferral contract:
-		// non-zero EffectiveTaxRate must NOT cause A2 to populate
-		// TaxShieldDTA. Future Phase 3 work may revisit this; until then,
-		// any change to Apply that starts populating TaxShieldDTA must
-		// fail this test FIRST so the implementer notices the deferral
-		// contract.
+	t.Run("TaxShieldDTA populated when EffectiveTaxRate > 0 (Q2 resolution, Phase 3)", func(t *testing.T) {
+		// Q2 resolution (DC-1 Phase 3 Task 3.7, spec §5.1): A2 populates
+		// TaxShieldDTA = writedownAmount * working.EffectiveTaxRate when
+		// the ETR is non-zero. Replaces the Phase 2 deferral pin.
+		//
+		// Fixture: OtherIntangibles=250_000, TotalAssets=1_000_000 →
+		// intangibleRatio = 25% (above 2% threshold); originalIntangibles
+		// = 250_000 is in the $200k-$300k tier → retentionRate = 0.3 →
+		// writedownAmount = 175_000. At ETR=0.21, expected TaxShieldDTA
+		// = 175_000 * 0.21 = 36_750.
 		data := &entities.FinancialData{
 			OtherIntangibles: 250_000.0,
 			TotalAssets:      1_000_000.0,
@@ -177,8 +181,26 @@ func TestA2IntangibleAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 		require.Len(t, out.LedgerEntries, 1)
 		entry := out.LedgerEntries[0]
 		require.True(t, entry.Fired, "preconditions chosen to fire — sanity check")
+		assert.InDelta(t, 36_750.0, entry.TaxShieldDTA, 1e-6,
+			"Q2 resolution: A2 must populate TaxShieldDTA = writedown * EffectiveTaxRate when ETR > 0")
+	})
+
+	t.Run("TaxShieldDTA stays zero when EffectiveTaxRate is zero", func(t *testing.T) {
+		// Mirror A5's convention: foreign filers without tax-rate data
+		// or zero-rate jurisdictions produce no shield. The zero stays.
+		data := &entities.FinancialData{
+			OtherIntangibles: 250_000.0,
+			TotalAssets:      1_000_000.0,
+			EffectiveTaxRate: 0.0,
+		}
+
+		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		require.NoError(t, err)
+		require.Len(t, out.LedgerEntries, 1)
+		entry := out.LedgerEntries[0]
+		require.True(t, entry.Fired)
 		assert.Zero(t, entry.TaxShieldDTA,
-			"Q2 deferral (plan §10): A2 must NOT compute TaxShieldDTA in Phase 2 even when EffectiveTaxRate is non-zero")
+			"EffectiveTaxRate=0 must leave TaxShieldDTA at the zero default (A5 convention)")
 	})
 }
 
@@ -197,7 +219,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA2Emission(t *testing.T) {
 	rules := []*entities.CleaningRule{productionIntangibleRule()}
 	cleaningCtx := &entities.CleaningContext{}
 
-	result := aa.ProcessAssetAdjustments(data, rules, cleaningCtx)
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=true, one Adjustment, Adjustments[0].Amount
@@ -226,7 +248,8 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA2Emission(t *testing.T) {
 	assert.Equal(t, "OtherIntangibles", nativeEntry.Component)
 	assert.InDelta(t, -200_000.0, nativeEntry.DeltaAmount, 1e-6)
 	assert.InDelta(t, -200_000.0, nativeEntry.EquityOffset, 1e-6)
-	assert.Zero(t, nativeEntry.TaxShieldDTA, "Q2 deferral: TaxShieldDTA stays 0 on dispatcher path too")
+	assert.Zero(t, nativeEntry.TaxShieldDTA,
+		"this fixture's EffectiveTaxRate is unset (0); the Q2 populated path is exercised by a dedicated subtest")
 
 	// Dual-write preserved — data was mutated as the legacy code did.
 	// retainedAmount = 300_000 / 3 = 100_000; writedown = 200_000.
@@ -249,7 +272,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA2SkipPath(t *testing.T) {
 	}
 	rules := []*entities.CleaningRule{productionIntangibleRule()}
 
-	result := aa.ProcessAssetAdjustments(data, rules, &entities.CleaningContext{})
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=false, no Adjustments.

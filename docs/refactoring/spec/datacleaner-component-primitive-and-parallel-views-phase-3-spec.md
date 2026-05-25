@@ -468,7 +468,7 @@ Phase 3 makes ONE change to `service.go::Clean`:
  }
 
  // NEW Phase 3 exported sibling:
- func (s *Service) CleanWithViews(
+ func (s *Service) CleanFinancialDataWithViews(
      ctx context.Context,
      asReported *entities.FinancialData,
      cleaningCtx *entities.CleaningContext,
@@ -479,9 +479,9 @@ Phase 3 makes ONE change to `service.go::Clean`:
  }
 ```
 
-**Rationale:** keeping `Clean(ctx, ...)` returning `*FinancialData` means **zero call-site changes for any existing consumer** in Phase 3. Phase 4 consumers opt in to `CleanWithViews(ctx, ...)` one at a time as they migrate. Phase 5 (post-Phase-4) deletes the legacy `Clean(...)` signature.
+**Rationale:** keeping `Clean(ctx, ...)` returning `*FinancialData` means **zero call-site changes for any existing consumer** in Phase 3. Phase 4 consumers opt in to `CleanFinancialDataWithViews(ctx, ...)` one at a time as they migrate. Phase 5 (post-Phase-4) deletes the legacy `Clean(...)` signature.
 
-The new method is a thin wrapper, but it gives Phase 4 a clean migration boundary: any consumer that calls `CleanWithViews` MUST consume views; any consumer still calling `Clean` is provably unmigrated. Grep-friendly: `grep -r "CleanWithViews"` enumerates migration progress.
+The new method is a thin wrapper, but it gives Phase 4 a clean migration boundary: any consumer that calls `CleanFinancialDataWithViews` MUST consume views; any consumer still calling `Clean` is provably unmigrated. Grep-friendly: `grep -r "CleanFinancialDataWithViews"` enumerates migration progress.
 
 ---
 
@@ -501,7 +501,7 @@ Phase 3 ships with **zero downstream behavior change**:
 | Shadow snapshots | Byte-identical (no recompute changes) |
 | Replay golden bundles | Numeric drift = 0; STRUCTURAL drift only on `13-cleaner-audit.json` (Q2 `tax_shield_dta` populated for A2; Q4 `prompt_hash`/`source_doc_hash` populated for B3). Use `--allow-schema-drift`. |
 
-The only consumer change in Phase 3 is the **internal** addition of `CleanWithViews` as an additional `Service` method; no existing consumer is forced to call it.
+The only consumer change in Phase 3 is the **internal** addition of `CleanFinancialDataWithViews` as an additional `Service` method; no existing consumer is forced to call it.
 
 ---
 
@@ -559,7 +559,7 @@ Two options for the implementer:
 
 ### Option B — 2-PR split
 
-- **PR-1 (`dc1-phase-3-pr-1`)**: `cleaneddata` package (`AsReported`/`Restated`/`InvestedCapital` accessors) + `CleanWithViews` Service method + import-boundary test + property tests. Reads Phase 2's TaxShieldDTA=0 / empty hashes verbatim.
+- **PR-1 (`dc1-phase-3-pr-1`)**: `cleaneddata` package (`AsReported`/`Restated`/`InvestedCapital` accessors) + `CleanFinancialDataWithViews` Service method + import-boundary test + property tests. Reads Phase 2's TaxShieldDTA=0 / empty hashes verbatim.
 - **PR-2 (`dc1-phase-3-pr-2`)**: Q2 (A2 TaxShieldDTA population) + Q4 (B3 AIProvenance hashes) + ctx threading + SchemaVersion 8→9 + bundle baseline refresh.
 
 **Recommendation:** Option A. The view accessor logic is small (~200 LOC), and the Q2/Q4 resolutions are independent 20-line changes. Splitting introduces extra HUMAN signoff cycles without test-isolation benefit; the SchemaVersion bump is atomic with Q4's first populating commit regardless of which PR holds it.
@@ -596,7 +596,7 @@ Phase 4 inherits the standard reviewer-deferred questions (B3 WACC opt-in knob, 
 - [ ] This spec lands at `docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md`
 - [ ] Implementer plan filed at `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-3-implementation-plan.md`
 - [ ] `cleaneddata` package exists with `New`, `AsReported`, `Restated`, `InvestedCapital`
-- [ ] `Service.CleanWithViews(ctx, ...)` exists as a sibling of `Service.Clean(ctx, ...)`
+- [ ] `Service.CleanFinancialDataWithViews(ctx, ...)` exists as a sibling of `Service.Clean(ctx, ...)`
 - [ ] Q2 resolved: A2 populates `TaxShieldDTA` when `EffectiveTaxRate > 0`
 - [ ] Q4 resolved: B3 populates `PromptHash` + `SourceDocHash` as SHA-256 hex strings
 - [ ] ctx threaded through `ProcessLiabilityAdjustments` + symmetric asset/earnings sibling signatures
@@ -613,3 +613,5 @@ Phase 4 inherits the standard reviewer-deferred questions (B3 WACC opt-in knob, 
 | Date | Change |
 |---|---|
 | 2026-05-23 | Initial spec authored by Phase 2 closeout ARCH. Covers `CleanedFinancialData` view reconstruction (`AsReported`/`Restated`/`InvestedCapital`), Q2 (A2 TaxShieldDTA), Q4 (AIProvenance SHA-256 hashes), `ctx` threading through `Process*Adjustments` signatures, translator-extraction decision (KEEP per-rule), and T2-BS-3 Option B carve-out reconstruction in `Restated()`. PR strategy: single PR recommended. Phase 3 → Phase 4 gate documented. Implementation plan filed alongside at `datacleaner-component-primitive-and-parallel-views-phase-3-implementation-plan.md`. |
+| 2026-05-24 | Phase 3 SHIPPED in single PR on branch `dc1-phase-3` (Option A). All 14 tasks landed across 8 implementation commits + 1 closeout/docs-sweep commit. `cleaneddata` package created with `AsReported` / `Restated` / `InvestedCapital` accessors + memoization + import-boundary test. `Service.CleanFinancialDataWithViews(ctx, data)` sibling added to `DataCleanerService` interface. Q2 + Q4 resolved with named tests (`TestQ2_A2TaxShieldDTA_Populated`, `TestQ4_AIProvenance_SHA256_Deterministic`). ctx threaded through `Process{Asset,Liability,Earnings}Adjustments`. `SchemaVersion["FinancialData"]` 8 → 9 atomic with the Q2 commit. T2-BS-3 acceptance signal LIVE — AMD 2023Q2 reconstructs to $9.679B, KO 2023Q2 to $60.912B against the 2026-05-19 baseline (`TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction`). All load-bearing invariants stayed GREEN at every commit. NON-goals honored (no consumer migration / no B3 routing flip / no dual-write deletion / no CalcVersion bump). Closeout: `datacleaner-component-primitive-and-parallel-views-phase-3-closeout.md`. |
+| 2026-05-25 | V/R/Q-driven cleanup commit `b997ce6` landed on `dc1-phase-3` (10th commit total). REVIEWER Tier-2: explicit `default:` clauses in `cleaneddata/restate.go` + `cleaneddata/invested_capital.go` switches; stale "Phase 3's planned ctx threading" narrative rewritten in `liabilities.go::captureB3AIProvenance` godoc to describe post-Phase-3 reality. VERIFIER docs-nit: spec + plan + handoff aligned to the production method name `CleanFinancialDataWithViews` (test name `TestCleanWithViews_ReturnsWrapper` preserved where it references the actual test in `service_cleanwithviews_test.go`); closeout commit-count framing clarified (8 implementation + 1 closeout + 1 cleanup = 10 total). No code semantics change. All load-bearing invariants stayed GREEN; full `go test ./...` 0 failures at `b997ce6`. |

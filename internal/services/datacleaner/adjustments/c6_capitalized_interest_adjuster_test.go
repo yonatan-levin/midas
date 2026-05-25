@@ -138,7 +138,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC6Emission(t *testing
 	}
 	rules := []*entities.CleaningRule{productionCapitalizedInterestRule()}
 
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	assert.True(t, result.Applied)
@@ -182,7 +182,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC6SkipPath(t *testing
 	}
 	rules := []*entities.CleaningRule{productionCapitalizedInterestRule()}
 
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	assert.False(t, result.Applied)

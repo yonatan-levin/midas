@@ -294,7 +294,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA5Emission(t *testing.T) {
 	rules := []*entities.CleaningRule{productionObsoleteInventoryRule()}
 	cleaningCtx := createRetailContext()
 
-	result := aa.ProcessAssetAdjustments(data, rules, cleaningCtx)
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=true, one Adjustment, Adjustments[0].Amount
@@ -349,7 +349,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA5SkipPath(t *testing.T) {
 	}
 	rules := []*entities.CleaningRule{productionObsoleteInventoryRule()}
 
-	result := aa.ProcessAssetAdjustments(data, rules, createRetailContext())
+	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, createRetailContext())
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=false, no Adjustments.

@@ -217,7 +217,7 @@ func (asp *AssetQualityStageProcessor) ProcessStage(ctx context.Context, data *e
 	}
 
 	// Apply asset adjustments
-	adjustmentResult := asp.assetAdjuster.ProcessAssetAdjustments(data, rulePointers, cleaningCtx)
+	adjustmentResult := asp.assetAdjuster.ProcessAssetAdjustments(ctx, data, rulePointers, cleaningCtx)
 
 	return &entities.StageResult{
 		Stage:        entities.StageAssetQuality,
@@ -258,7 +258,7 @@ func (lsp *LiabilityCompletenessStageProcessor) ProcessStage(ctx context.Context
 	}
 
 	// Apply liability adjustments
-	adjustmentResult := lsp.liabilityAdjuster.ProcessLiabilityAdjustments(data, rulePointers, cleaningCtx)
+	adjustmentResult := lsp.liabilityAdjuster.ProcessLiabilityAdjustments(ctx, data, rulePointers, cleaningCtx)
 
 	return &entities.StageResult{
 		Stage:        entities.StageLiabilityCompleteness,
@@ -299,7 +299,7 @@ func (esp *EarningsNormalizationStageProcessor) ProcessStage(ctx context.Context
 	}
 
 	// Apply earnings adjustments
-	adjustmentResult := esp.earningsAdjuster.ProcessEarningsAdjustments(data, rulePointers, cleaningCtx)
+	adjustmentResult := esp.earningsAdjuster.ProcessEarningsAdjustments(ctx, data, rulePointers, cleaningCtx)
 
 	return &entities.StageResult{
 		Stage:        entities.StageEarningsNormalization,

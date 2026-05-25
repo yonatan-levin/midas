@@ -305,3 +305,116 @@ func TestLedger_BasketSnapshot_ClusterPrediction(t *testing.T) {
 	require.GreaterOrEqual(t, passedCount.Load(), int32(5),
 		"basket coverage degraded — fewer than 5 tickers exercised the ledger successfully (got %d)", passedCount.Load())
 }
+
+// TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction is the Phase 3 →
+// Phase 4 gate acceptance test (spec §10 item 4): for AMD and KO — the
+// two T2-BS-3 carve-out tickers where the SEC parser leaves
+// FinancialData.TotalLiabilities==0 alongside truthful component values
+// — Restated().TotalLiabilities MUST reconstruct to a positive value
+// from sum(components) + plug.
+//
+// This is the live-fixture sibling of
+// TestCleanedFinancialData_AsReported_PreservesParserZeros_AMD_KO
+// in internal/services/datacleaner/cleaneddata/t2bs3_test.go which uses
+// synthesized seeds. The live-fixture version pins that the
+// reconstruction works against real captured SEC data, which is the
+// signal Phase 4 ARCH needs before dispatching the consumer migration.
+//
+// Per-ticker contract:
+//   - On AT LEAST ONE captured period for the ticker, AsReported and
+//     Restated produce a non-trivial reconstruction:
+//       AsReported().TotalLiabilities == 0
+//       Restated().TotalLiabilities   >  0
+//
+// Phase 4 then flips the Graham + WACC consumers to read
+// Restated().TotalLiabilities instead of data.TotalLiabilities, fixing
+// the AMD/KO downstream symptoms.
+func TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction(t *testing.T) {
+	parser := sec.NewParser(zap.NewNop())
+
+	// Reuse the baseline-resolution pattern from the cluster-prediction
+	// test above — newest tier2-baseline date dir.
+	baselineParent, err := filepath.Abs(filepath.Join("..", "..", "artifacts", "tier2-baseline"))
+	require.NoError(t, err)
+	matches, err := filepath.Glob(filepath.Join(baselineParent, "*"))
+	require.NoError(t, err)
+	var dateDirs []string
+	for _, m := range matches {
+		if info, statErr := os.Stat(m); statErr == nil && info.IsDir() {
+			dateDirs = append(dateDirs, m)
+		}
+	}
+	require.NotEmpty(t, dateDirs)
+	sort.Strings(dateDirs)
+	bundleRoot := dateDirs[len(dateDirs)-1]
+
+	cfg := buildShadowTestConfig(t)
+	cleanerSvc, err := datacleaner.NewDataCleanerService(cfg, ai.NewMockAIService(&ai.AIServiceConfig{}), nil)
+	require.NoError(t, err)
+
+	t2bs3Tickers := []string{"AMD", "KO"}
+
+	for _, ticker := range t2bs3Tickers {
+		ticker := ticker
+		t.Run(ticker, func(t *testing.T) {
+			rawBytes, _, ok := loadSECRawForTicker(t, bundleRoot, ticker)
+			if !ok {
+				t.Skipf("no captured SEC fixture for %s under %s", ticker, bundleRoot)
+				return
+			}
+
+			var facts ports.SECCompanyFacts
+			require.NoError(t, json.Unmarshal(rawBytes, &facts))
+
+			historical, err := parser.ParseFinancialData(context.Background(), &facts)
+			require.NoError(t, err)
+			require.NotNil(t, historical)
+			require.NotEmpty(t, historical.Data)
+
+			// Walk every captured period and find at least one where the
+			// T2-BS-3 carve-out fires (parser-stamped TotalLiabilities==0
+			// alongside positive components that sum to a truthful total).
+			foundCarveOut := false
+			for _, period := range historical.GetSortedPeriods() {
+				fd := historical.Data[period]
+				if fd == nil || fd.FilingPeriod == "" || fd.FilingPeriod == "0" {
+					continue
+				}
+				if fd.Ticker == "" {
+					fd.Ticker = ticker
+				}
+
+				_, views, cleanErr := cleanerSvc.CleanFinancialDataWithViews(context.Background(), fd)
+				if cleanErr != nil || views == nil {
+					continue
+				}
+
+				asReported := views.AsReported()
+				restated := views.Restated()
+
+				// T2-BS-3 carve-out: only periods where AsReported pins
+				// TotalLiabilities==0 are the ones the parser dropped.
+				if asReported.TotalLiabilities != 0 {
+					continue
+				}
+
+				// On a carve-out period, Restated MUST reconstruct the
+				// truthful total from sum(components). The reconstructed
+				// value is the spec-§10-item-4 acceptance signal Phase 4
+				// depends on.
+				if restated.TotalLiabilities > 0 {
+					foundCarveOut = true
+					t.Logf("%s %s: AsReported.TotalLiabilities=0; Restated.TotalLiabilities=%.0f (T2-BS-3 reconstruction OK)",
+						ticker, fd.FilingPeriod, restated.TotalLiabilities)
+					break
+				}
+			}
+
+			require.True(t, foundCarveOut,
+				"%s: no captured period exhibited the T2-BS-3 carve-out reconstruction "+
+					"(AsReported.TotalLiabilities==0 alongside Restated.TotalLiabilities>0). "+
+					"Phase 4 acceptance depends on this signal — investigate the parser "+
+					"or refresh the baseline if AMD/KO no longer hit the carve-out path.", ticker)
+		})
+	}
+}

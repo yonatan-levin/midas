@@ -195,7 +195,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC4FiresFlag(t *testin
 	preSBC := data.StockBasedCompensation
 
 	rules := []*entities.CleaningRule{productionStockCompensationRule()}
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=true (matches the legacy
@@ -255,7 +255,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC4SkipPath(t *testing
 	preNOI := data.NormalizedOperatingIncome
 
 	rules := []*entities.CleaningRule{productionStockCompensationRule()}
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	assert.False(t, result.Applied)

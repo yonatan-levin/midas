@@ -261,7 +261,7 @@ func (b *b3ContingentLiabilityAdjuster) Apply(ctx context.Context, working *enti
 // Parameter `cleaningCtx` was historically named `context` here; PR-4 Task
 // 4.1 renames it so the `context` package identifier is unshadowed inside
 // the function body — required for the new Adjuster.Apply call site.
-func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *LiabilityAdjustmentResult {
+func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(ctx context.Context, data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *LiabilityAdjustmentResult {
 	var allAdjustments []entities.Adjustment
 	var allFlags []entities.Flag
 	var totalAdjustment float64
@@ -275,12 +275,11 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(data *entities.Financia
 	var nativeOverlays []entities.OverlaySpec
 	nativelyEmittedRuleIDs := make(map[string]bool, len(rules))
 
-	// Apply.ctx is nil here because ProcessLiabilityAdjustments does not yet
-	// thread ctx through its public signature. ApplyB1OperatingLeases treats
-	// nil ctx as safe (it only uses ctx for future industry-aware logic).
-	// TODO(Phase 3): thread context.Context through ProcessLiabilityAdjustments
-	// to align with the Adjuster.Apply signature.
-	var applyCtx context.Context
+	// DC-1 Phase 3 (Task 3.9): ctx is now threaded through the public
+	// signature from service.go::applyActiveAdjustments. B3's AI path
+	// (captureB3AIProvenance) uses this ctx to respect request-scoped
+	// cancellation against the upstream AI service.
+	applyCtx := ctx
 
 	// Task 4.4 absorbed dual-write helper. Invoked at the tail of every
 	// per-rule switch arm so each arm owns its own mutation. The helper
@@ -1144,17 +1143,20 @@ func (la *LiabilityAdjuster) ApplyB3Contingent(ctx context.Context, working *ent
 // provenance signal; returns nil + err on AI service errors so the caller
 // can choose to silently fall through.
 //
-// PromptHash + SourceDocHash are deliberately left empty per Q4 (plan §10):
-// today's ai.AnalyzeFootnote does not expose prompt or source-document
-// hashes, and Phase 2 accepted empty hashes with a Phase 3 TODO.
+// Q4 resolution (Phase 3): PromptHash + SourceDocHash are SHA-256 hex
+// digests of the canonical request and the raw footnote text respectively,
+// computed PRE-API-CALL so a network failure does not leave a partial /
+// inconsistent hash. The canonical-prompt form intentionally excludes
+// RequestTimestamp so identical inputs produce identical hashes
+// regardless of wall-clock — replay tooling stays deterministic across
+// re-runs.
 //
-// Nil-ctx tolerance: the legacy `analyzeContingentLiabilityWithAI` uses
-// `context.Background()` because the dispatcher's `applyCtx` is `nil`
-// today (its public signature does not accept a ctx — see PR-4 TODO at
-// liabilities.go:204). To preserve the legacy AI-call invariant and
-// avoid nil-deref panics inside MockAIService.AnalyzeFootnote (which
-// calls ctx.Err()), promote nil ctx to context.Background() here too.
-// Phase 3's planned ctx threading collapses this branch.
+// Nil-ctx tolerance: Process*Adjustments now thread a real request-scoped
+// ctx through to this helper (Phase 3 Task 3.9), so the nil-promotion
+// below is only reached by tests that invoke captureB3AIProvenance
+// directly without a ctx. It stays as a defensive guard to keep
+// MockAIService.AnalyzeFootnote (which calls ctx.Err()) from nil-derefing
+// under that direct-call path.
 func (la *LiabilityAdjuster) captureB3AIProvenance(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext, timestamp time.Time) (*entities.AIProvenance, error) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -1182,6 +1184,23 @@ func (la *LiabilityAdjuster) captureB3AIProvenance(ctx context.Context, data *en
 			"revenue":                 data.Revenue,
 		},
 	}
+
+	// Q4 resolution (DC-1 Phase 3 Task 3.8, spec §5.2): SHA-256 the prompt
+	// + source-doc PRE-API-CALL so a network failure does not leave a
+	// partial hash. The hash is a deterministic function of the inputs —
+	// model upgrades change the AI RESPONSE but not the INPUTS, so a
+	// future replay that finds matching hashes alongside differing
+	// responses cleanly attributes the drift to the model rather than
+	// the input.
+	//
+	// promptHash hashes a timestamp-free canonical serialization of the
+	// request inputs (ticker + filing_type + footnote text + analysis
+	// type + context map). RequestTimestamp is intentionally excluded —
+	// two calls on the same fixture must produce identical hashes
+	// regardless of wall-clock, otherwise replay tooling sees spurious
+	// drift on every re-run.
+	promptHash := sha256HexPromptCanonical(request)
+	sourceDocHash := sha256Hex(footnoteText)
 
 	response, err := la.aiService.AnalyzeFootnote(ctx, request)
 	if err != nil {
@@ -1220,8 +1239,8 @@ func (la *LiabilityAdjuster) captureB3AIProvenance(ctx context.Context, data *en
 
 	return &entities.AIProvenance{
 		ModelName:     b3AIModelName,
-		PromptHash:    "", // TODO Phase 3: compute SHA-256 of prompt template (Q4 per plan §10)
-		SourceDocHash: "", // TODO Phase 3: compute SHA-256 of footnote text (Q4 per plan §10)
+		PromptHash:    promptHash,    // Q4 (Phase 3): SHA-256 of canonical request inputs
+		SourceDocHash: sourceDocHash, // Q4 (Phase 3): SHA-256 of footnote text
 		ExtractedSpan: extractedSpan,
 		Probability:   probability,
 		Confidence:    response.Confidence,

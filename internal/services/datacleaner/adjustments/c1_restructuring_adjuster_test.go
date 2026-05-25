@@ -213,7 +213,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC1Emission(t *testing
 	rules := []*entities.CleaningRule{productionRestructuringRule()}
 	cleaningCtx := &entities.CleaningContext{}
 
-	result := ea.ProcessEarningsAdjustments(data, rules, cleaningCtx)
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=true, one Adjustment, Adjustments[0].Amount
@@ -269,7 +269,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC1SkipPath(t *testing
 	}
 	rules := []*entities.CleaningRule{productionRestructuringRule()}
 
-	result := ea.ProcessEarningsAdjustments(data, rules, &entities.CleaningContext{})
+	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
 	// Legacy contract: Applied=false, no Adjustments.
