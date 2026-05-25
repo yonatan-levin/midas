@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"sort"
 
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
@@ -65,8 +66,22 @@ func sha256HexPromptCanonical(request *ai.FootnoteAnalysisRequest) string {
 	for _, k := range keys {
 		// Encode each value via JSON so int / float / string all produce
 		// a stable, type-aware string. encoding/json on a single value
-		// is total for the types B3 actually stuffs into Context.
-		b, _ := json.Marshal(request.Context[k])
+		// is total for the types B3 stuffs into Context today (string,
+		// float64, int).
+		//
+		// Phase 3 followup (LOW-1 fix): if a future caller stuffs a
+		// channel, func, or cyclic structure into Context, encoding/json
+		// returns a typed error and the raw value would otherwise hash
+		// as an empty string — silently colliding across structurally-
+		// distinct inputs. Tag the value with its type instead so the
+		// canonical-request fingerprint stays sensitive to the
+		// unsupported value's identity even when its content cannot be
+		// serialized.
+		b, err := json.Marshal(request.Context[k])
+		if err != nil {
+			ctx[k] = fmt.Sprintf("<unsupported:%T>", request.Context[k])
+			continue
+		}
 		ctx[k] = string(b)
 	}
 
@@ -78,6 +93,14 @@ func sha256HexPromptCanonical(request *ai.FootnoteAnalysisRequest) string {
 		PriorityLevel: string(request.PriorityLevel),
 		Context:       ctx,
 	}
-	buf, _ := json.Marshal(c) // map keys in `ctx` are not pre-sorted by Marshal across versions; Go's encoder DOES sort them, locking determinism.
+	// Map keys in `ctx` are sorted by Go's JSON encoder (alphabetical),
+	// locking determinism. The outer Marshal CANNOT fail on this shape
+	// (canonical struct fields are scalar strings + map[string]string)
+	// — if Go's stdlib ever regresses that invariant we want a LOUD
+	// panic at hash time, NOT a silent hash collision downstream.
+	buf, err := json.Marshal(c)
+	if err != nil {
+		panic(fmt.Sprintf("hash.go: encoding/json.Marshal failed on canonical hash input: %v", err))
+	}
 	return sha256Hex(string(buf))
 }
