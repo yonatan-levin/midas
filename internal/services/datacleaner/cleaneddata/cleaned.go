@@ -29,6 +29,16 @@ import "github.com/midas/dcf-valuation-api/internal/core/entities"
 // yet. The accessor surface exists so Phase 4 can migrate one consumer at
 // a time without further entity-shape changes.
 //
+// GOROUTINE-SAFETY: NOT goroutine-safe. The accessor methods (AsReported,
+// Restated, InvestedCapital) lazily populate cached *FinancialDataView
+// pointers without locking. Do NOT share a single *CleanedFinancialData
+// across goroutines without external synchronization. Phase 3 / Phase 4
+// consumers all run on a single request goroutine, which is sufficient
+// for current use cases; a future parallel-read consumer (e.g., a batch
+// valuation endpoint) would need a sync.Once retrofit on the three
+// accessor methods. Tracked as a Phase 5 watch item — see
+// docs/refactoring/spec/dc1-phase-3-followup-spec.md §4.6.
+//
 // Neither input *FinancialData is mutated by accessor calls. View
 // construction copies values into new FinancialDataView records.
 type CleanedFinancialData struct {
