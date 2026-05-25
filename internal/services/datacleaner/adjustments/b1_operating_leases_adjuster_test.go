@@ -330,7 +330,7 @@ func TestB1OperatingLeasesAdjuster_LegacyDirectInvocation(t *testing.T) {
 
 	// Direct invocation bypasses the dispatcher's switch arm — must still
 	// return a populated legacy result.
-	result := la.ProcessOperatingLeaseAdjustment(data, rule, cleaningCtx)
+	result := la.ProcessOperatingLeaseAdjustment(context.Background(), data, rule, cleaningCtx)
 	require.NotNil(t, result)
 	assert.True(t, result.Applied)
 	assert.Equal(t, 200_000.0, result.Amount)

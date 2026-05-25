@@ -329,7 +329,7 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(ctx context.Context, da
 				// errors preserves the dual-write contract — dualWrite runs
 				// at the end of this arm regardless of which branch set
 				// `result`.
-				result = la.ProcessOperatingLeaseAdjustment(data, rule, cleaningCtx)
+				result = la.ProcessOperatingLeaseAdjustment(applyCtx, data, rule, cleaningCtx)
 				dualWrite(result)
 				break
 			}
@@ -505,20 +505,20 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(ctx context.Context, da
 // Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"Adjuster output"
 // Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row B1 / §7 Task 4.1
 func (la *LiabilityAdjuster) ApplyB1OperatingLeases(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
-	// ctx accepted for interface symmetry with future industry-aware
-	// adjusters; ProcessOperatingLeaseAdjustment already binds its own
-	// context.Background() internally for the calculator call (today's
-	// production behavior — PR-4 preserves it bit-for-bit).
-	_ = ctx
-
 	now := time.Now()
 
-	// Delegate to the legacy method for the actual PV calculation (including
-	// fallbackToSimpleCapitalization on calculator failure). This preserves
-	// the existing flag taxonomy + reasoning strings bit-for-bit, which is
-	// load-bearing for downstream consumers that grep on the
-	// "operating_lease_adj:" / "lease_calculation_quality" / etc. prefixes.
-	legacy := la.ProcessOperatingLeaseAdjustment(working, rule, cleaningCtx)
+	// Phase 3 followup (MEDIUM-1 fix): forward ctx to the legacy method so
+	// the leaseCalculator.CalculatePresentValue call honors request-scoped
+	// cancellation. Previously ProcessOperatingLeaseAdjustment hard-coded
+	// context.Background() and ignored upstream cancellation.
+	//
+	// Delegate to the legacy method for the actual PV calculation
+	// (including fallbackToSimpleCapitalization on calculator failure).
+	// This preserves the existing flag taxonomy + reasoning strings
+	// bit-for-bit, which is load-bearing for downstream consumers that
+	// grep on the "operating_lease_adj:" / "lease_calculation_quality"
+	// / etc. prefixes.
+	legacy := la.ProcessOperatingLeaseAdjustment(ctx, working, rule, cleaningCtx)
 
 	// Skip path: PV calculation returned no meaningful value OR the fallback
 	// itself returned Applied=false (no operating-lease data at all). Emit a
@@ -651,9 +651,18 @@ func b1AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 }
 
 // ProcessOperatingLeaseAdjustment implements B1 rule: Operating lease present value calculation
-func (la *LiabilityAdjuster) ProcessOperatingLeaseAdjustment(data *entities.FinancialData, rule *entities.CleaningRule, cleaningContext *entities.CleaningContext) *AdjustmentResult {
-	// Step 1: Calculate present value of operating lease commitments using sophisticated engine
-	ctx := context.Background() // TODO: Use proper context from caller
+//
+// Phase 3 followup (MEDIUM-1 fix): takes ctx as the first parameter and
+// forwards it to leaseCalculator.CalculatePresentValue. Previously the
+// helper hard-coded context.Background() with a TODO marker, so
+// request-scoped cancellation never propagated to the lease PV engine.
+func (la *LiabilityAdjuster) ProcessOperatingLeaseAdjustment(ctx context.Context, data *entities.FinancialData, rule *entities.CleaningRule, cleaningContext *entities.CleaningContext) *AdjustmentResult {
+	if ctx == nil {
+		// Defensive: legacy direct-call test paths may pass a nil ctx.
+		// leaseCalculator.CalculatePresentValue may call ctx.Err() so we
+		// promote nil to a Background context rather than crash.
+		ctx = context.Background()
+	}
 
 	presentValueResult, err := la.leaseCalculator.CalculatePresentValue(ctx, data, cleaningContext)
 	if err != nil {
