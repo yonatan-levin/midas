@@ -484,3 +484,4 @@ Spec: docs/refactoring/spec/dc1-phase-3-followup-spec.md §4.2
 | Date | Change |
 |---|---|
 | 2026-05-25 | Initial plan authored by ARCH for Phase 3 followup BACKEND dispatch. 10-task ladder (F.1 through F.10) closing 9 cross-model review findings. Estimated 6–9 agent-hours single-shift. |
+| 2026-05-25 | **All 10 tasks SHIPPED.** Commit ladder (oldest → newest): F.1 `ee9b2e9` (HIGH-1 view-seed double-count) → F.2 `d6312b0` (HIGH-2 + HIGH-3 B3 single AI call + ctx) → F.3 `e1fbe3f` (MEDIUM-1 B1 lease PV ctx threading) → F.5 `48aeee6` (LOW-1 hash.go json.Marshal error handling) → F.7 `6763e60` (LOW-3 identityCopy reflection test) → F.6 `49faba7` (LOW-2 godoc warning) → F.8 `7092654` (LOW-4 Raw() phase-5 TODO) → F.4 `31ed394` (MEDIUM-2 PromptHash spec amend) → F.9 (docs sweep) → F.10 (followup closeout). All 9 acceptance gates GREEN. Load-bearing invariants stayed GREEN at every commit. Closeout: `docs/refactoring/implementations/dc1-phase-3-followup-closeout.md`. |
