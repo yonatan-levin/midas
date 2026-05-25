@@ -80,6 +80,14 @@ func New(asReported, restated *entities.FinancialData) *CleanedFinancialData {
 // for the migration window only — Phase 4 consumers will read views
 // directly. Returning the entity rather than a copy keeps the migration
 // cheap; callers MUST treat it as read-only.
+//
+// TODO(phase-5): delete after Phase 4 consumer migration completes. The
+// "read-only" contract is documented but not enforced; once all 13
+// data.* read sites in internal/services/valuation/ flip to view-based
+// reads, this escape hatch has no callers and should be removed. See
+// docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md
+// (Phase 5 row in "Phasing & implementation sequence") for the planned
+// removal.
 func (c *CleanedFinancialData) Raw() *entities.FinancialData {
 	if c == nil {
 		return nil
