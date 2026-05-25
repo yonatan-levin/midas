@@ -3,7 +3,7 @@
 **Phase:** Phase 3 — `CleanedFinancialData` view reconstruction (`AsReported` / `Restated` / `InvestedCapital` accessors) + Q2 + Q4 resolutions + `ctx` threading
 **Status:** SHIPPED 2026-05-24
 **Branch at close:** `dc1-phase-3` (single-PR Option A; awaiting HUMAN merge to master)
-**Commits on the branch:** 8 implementation commits, anchored on master tip `3238d61` (post Phase 2 4-PR stack merge)
+**Commits on the branch:** 8 implementation commits + 1 closeout/docs-sweep commit (this one) = 9 total, anchored on master tip `3238d61` (post Phase 2 4-PR stack merge)
 **Discovery path:**
 - Tracker: [docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md](../../reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md)
 - Parent spec: [datacleaner-component-primitive-and-parallel-views-spec.md](../spec/datacleaner-component-primitive-and-parallel-views-spec.md)
@@ -16,7 +16,7 @@
 
 ## What landed
 
-A single PR on branch `dc1-phase-3` (Option A per the implementer plan). 14 tasks landed across 8 commits in deliberate ordering — accessor-package skeleton first; sibling service method second; ctx threading + Q2 / Q4 + atomic SchemaVersion bump third; live-fixture acceptance pin last.
+A single PR on branch `dc1-phase-3` (Option A per the implementer plan). 14 tasks landed across 8 implementation commits in deliberate ordering — accessor-package skeleton first; sibling service method second; ctx threading + Q2 / Q4 + atomic SchemaVersion bump third; live-fixture acceptance pin last — plus one closeout/docs-sweep commit (this document + the cross-doc updates listed under Task 3.13).
 
 ### Commit ladder (oldest → newest)
 

@@ -83,7 +83,8 @@ func applyOverlayToView(v *FinancialDataView, o entities.OverlaySpec) {
 		v.TotalAssets += signed
 		v.Goodwill = 0
 		v.TangibleAssets = v.TotalAssets - v.OtherIntangibles
-		// default: silently skip; future overlays added before the view
+	default:
+		// silently skip; future overlays added before the view
 		// is updated fall through here.
 	}
 }

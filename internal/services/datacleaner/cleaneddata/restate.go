@@ -92,7 +92,8 @@ func applyLedgerEntryToView(v *FinancialDataView, e entities.LedgerEntry) {
 		v.NormalizedOperatingIncome += e.DeltaAmount
 	case "InterestExpense":
 		v.InterestExpense += e.DeltaAmount
-		// default: silently skip — empty Component (OverlayEmitter rows) or
+	default:
+		// silently skip — empty Component (OverlayEmitter rows) or
 		// future-added components fall through here. Fail-soft preserves
 		// view reconstruction across schema additions.
 	}

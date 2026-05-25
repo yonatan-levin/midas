@@ -468,7 +468,7 @@ Phase 3 makes ONE change to `service.go::Clean`:
  }
 
  // NEW Phase 3 exported sibling:
- func (s *Service) CleanWithViews(
+ func (s *Service) CleanFinancialDataWithViews(
      ctx context.Context,
      asReported *entities.FinancialData,
      cleaningCtx *entities.CleaningContext,
@@ -479,9 +479,9 @@ Phase 3 makes ONE change to `service.go::Clean`:
  }
 ```
 
-**Rationale:** keeping `Clean(ctx, ...)` returning `*FinancialData` means **zero call-site changes for any existing consumer** in Phase 3. Phase 4 consumers opt in to `CleanWithViews(ctx, ...)` one at a time as they migrate. Phase 5 (post-Phase-4) deletes the legacy `Clean(...)` signature.
+**Rationale:** keeping `Clean(ctx, ...)` returning `*FinancialData` means **zero call-site changes for any existing consumer** in Phase 3. Phase 4 consumers opt in to `CleanFinancialDataWithViews(ctx, ...)` one at a time as they migrate. Phase 5 (post-Phase-4) deletes the legacy `Clean(...)` signature.
 
-The new method is a thin wrapper, but it gives Phase 4 a clean migration boundary: any consumer that calls `CleanWithViews` MUST consume views; any consumer still calling `Clean` is provably unmigrated. Grep-friendly: `grep -r "CleanWithViews"` enumerates migration progress.
+The new method is a thin wrapper, but it gives Phase 4 a clean migration boundary: any consumer that calls `CleanFinancialDataWithViews` MUST consume views; any consumer still calling `Clean` is provably unmigrated. Grep-friendly: `grep -r "CleanFinancialDataWithViews"` enumerates migration progress.
 
 ---
 
@@ -501,7 +501,7 @@ Phase 3 ships with **zero downstream behavior change**:
 | Shadow snapshots | Byte-identical (no recompute changes) |
 | Replay golden bundles | Numeric drift = 0; STRUCTURAL drift only on `13-cleaner-audit.json` (Q2 `tax_shield_dta` populated for A2; Q4 `prompt_hash`/`source_doc_hash` populated for B3). Use `--allow-schema-drift`. |
 
-The only consumer change in Phase 3 is the **internal** addition of `CleanWithViews` as an additional `Service` method; no existing consumer is forced to call it.
+The only consumer change in Phase 3 is the **internal** addition of `CleanFinancialDataWithViews` as an additional `Service` method; no existing consumer is forced to call it.
 
 ---
 
@@ -559,7 +559,7 @@ Two options for the implementer:
 
 ### Option B — 2-PR split
 
-- **PR-1 (`dc1-phase-3-pr-1`)**: `cleaneddata` package (`AsReported`/`Restated`/`InvestedCapital` accessors) + `CleanWithViews` Service method + import-boundary test + property tests. Reads Phase 2's TaxShieldDTA=0 / empty hashes verbatim.
+- **PR-1 (`dc1-phase-3-pr-1`)**: `cleaneddata` package (`AsReported`/`Restated`/`InvestedCapital` accessors) + `CleanFinancialDataWithViews` Service method + import-boundary test + property tests. Reads Phase 2's TaxShieldDTA=0 / empty hashes verbatim.
 - **PR-2 (`dc1-phase-3-pr-2`)**: Q2 (A2 TaxShieldDTA population) + Q4 (B3 AIProvenance hashes) + ctx threading + SchemaVersion 8→9 + bundle baseline refresh.
 
 **Recommendation:** Option A. The view accessor logic is small (~200 LOC), and the Q2/Q4 resolutions are independent 20-line changes. Splitting introduces extra HUMAN signoff cycles without test-isolation benefit; the SchemaVersion bump is atomic with Q4's first populating commit regardless of which PR holds it.
@@ -596,7 +596,7 @@ Phase 4 inherits the standard reviewer-deferred questions (B3 WACC opt-in knob, 
 - [ ] This spec lands at `docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md`
 - [ ] Implementer plan filed at `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-3-implementation-plan.md`
 - [ ] `cleaneddata` package exists with `New`, `AsReported`, `Restated`, `InvestedCapital`
-- [ ] `Service.CleanWithViews(ctx, ...)` exists as a sibling of `Service.Clean(ctx, ...)`
+- [ ] `Service.CleanFinancialDataWithViews(ctx, ...)` exists as a sibling of `Service.Clean(ctx, ...)`
 - [ ] Q2 resolved: A2 populates `TaxShieldDTA` when `EffectiveTaxRate > 0`
 - [ ] Q4 resolved: B3 populates `PromptHash` + `SourceDocHash` as SHA-256 hex strings
 - [ ] ctx threaded through `ProcessLiabilityAdjustments` + symmetric asset/earnings sibling signatures
