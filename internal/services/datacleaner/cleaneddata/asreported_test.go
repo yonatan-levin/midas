@@ -47,7 +47,7 @@ func TestAsReported_IdentityCopy(t *testing.T) {
 		DividendsPerShare:           1.25,
 	}
 
-	view := New(raw).AsReported()
+	view := New(raw, raw).AsReported()
 	require.NotNil(t, view)
 
 	assert.Equal(t, AsReportedView, view.ViewKind)
@@ -81,12 +81,12 @@ func TestAsReported_IdentityCopy(t *testing.T) {
 	assert.Equal(t, 0.0, view.DebtLikeClaims, "AsReported never populates DebtLikeClaims")
 }
 
-// TestAsReported_NilRaw exercises the nil-safe path. New(nil).AsReported()
+// TestAsReported_NilRaw exercises the nil-safe path. New(nil, nil).AsReported()
 // returns a zero view with the correct ViewKind tag rather than crashing,
 // so consumer code can safely call accessors before checking for data
 // availability.
 func TestAsReported_NilRaw(t *testing.T) {
-	view := New(nil).AsReported()
+	view := New(nil, nil).AsReported()
 	require.NotNil(t, view)
 	assert.Equal(t, AsReportedView, view.ViewKind)
 	assert.Equal(t, "", view.Ticker)
@@ -97,7 +97,8 @@ func TestAsReported_NilRaw(t *testing.T) {
 // return the same *FinancialDataView pointer, so consumers can rely on
 // pointer identity for change detection / equality checks.
 func TestAsReported_MemoizedPointer(t *testing.T) {
-	c := New(&entities.FinancialData{Ticker: "MXL"})
+	mxl := &entities.FinancialData{Ticker: "MXL"}
+	c := New(mxl, mxl)
 	v1 := c.AsReported()
 	v2 := c.AsReported()
 	assert.Same(t, v1, v2, "AsReported must memoize its returned pointer")

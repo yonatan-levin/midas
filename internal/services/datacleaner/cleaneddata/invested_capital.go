@@ -36,8 +36,8 @@ func (c *CleanedFinancialData) InvestedCapital() *FinancialDataView {
 	v := *base
 	v.ViewKind = InvestedCapitalView
 
-	if c.raw != nil {
-		for _, o := range c.raw.Overlays {
+	if c.restated != nil {
+		for _, o := range c.restated.Overlays {
 			applyOverlayToView(&v, o)
 		}
 	}

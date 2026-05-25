@@ -54,7 +54,7 @@ func TestCleanedFinancialData_Restated_BitForBitOnNoFiredAdjusters(t *testing.T)
 		StockholdersEquity:                220,
 	}
 
-	c := New(raw)
+	c := New(raw, raw)
 	asReported := c.AsReported()
 	restated := c.Restated()
 	require.NotNil(t, asReported)
@@ -90,9 +90,14 @@ func TestCleanedFinancialData_Restated_BitForBitOnNoFiredAdjusters(t *testing.T)
 // c6_capitalized_interest_adjuster_test.go says explicitly: "Phase 3
 // Restated() must NOT add C6 DeltaAmount to retained earnings".
 func TestCleanedFinancialData_Restated_C6EquityOffsetZero(t *testing.T) {
+	// Phase 3 followup (HIGH-1 fix) note: the post-clean entity already
+	// holds the post-dispatcher InterestExpense (50_000 + 20_000 = 70_000
+	// after C6's dual-write). The C6 invariant — EquityOffset == 0 so
+	// retained equity stays untouched — is the load-bearing assertion
+	// here; it is independent of how the reducer routes DeltaAmount.
 	raw := &entities.FinancialData{
 		Ticker:             "CAPX",
-		InterestExpense:    50_000,
+		InterestExpense:    70_000, // POST-dispatcher value (legacy = 50_000 + 20_000)
 		StockholdersEquity: 1_000_000,
 		AdjustmentLedger: entities.AdjustmentLedger{
 			{
@@ -100,40 +105,48 @@ func TestCleanedFinancialData_Restated_C6EquityOffsetZero(t *testing.T) {
 				AdjusterID:   "C6_capitalized_interest",
 				RuleID:       "capitalized_interest",
 				Component:    "InterestExpense",
-				DeltaAmount:  20_000,
-				EquityOffset: 0, // LOAD-BEARING: C6 reclassification, no equity flow
+				DeltaAmount:  20_000, // recorded for audit; NOT re-applied by reducer
+				EquityOffset: 0,      // LOAD-BEARING: C6 reclassification, no equity flow
 				Reasoning:    "C6 capitalized interest reclassification",
 			},
 		},
 	}
 
-	c := New(raw)
+	c := New(raw, raw)
 	restated := c.Restated()
 	require.NotNil(t, restated)
 
 	assert.Equal(t, 70_000.0, restated.InterestExpense,
-		"C6 DeltaAmount should adjust the InterestExpense component")
+		"Restated.InterestExpense = post-dispatcher value (C6 dual-write already applied)")
 	assert.Equal(t, 1_000_000.0, restated.StockholdersEquity,
 		"C6 reclassification MUST NOT flow into retained equity (EquityOffset=0 LOAD-BEARING)")
 }
 
 // TestCleanedFinancialData_Restated_AppliesEquityOffsetAndTaxShield exercises
-// a Restater that DOES move equity (DeltaAmount + EquityOffset matched) and
-// populates TaxShieldDTA (mirrors A5/A2 Phase 3 pattern). This is the
-// counterpoint to the C6 test: when EquityOffset is non-zero, equity moves.
+// a Restater that DOES move equity (EquityOffset non-zero) and populates
+// TaxShieldDTA (mirrors A5/A2 Phase 3 pattern). Counterpoint to the C6
+// test: when EquityOffset is non-zero, equity moves.
+//
+// Phase 3 followup (HIGH-1 fix) note: the post-clean entity already
+// reflects the dispatcher dual-write on the Restater-touched component
+// (the Inventory field below is the POST-dispatcher value), so the
+// reducer no longer re-applies DeltaAmount to Inventory. The fixture
+// passes the same pointer to both AsReported and Restated positions —
+// the synthesized test does not exercise the snapshot/post-clean split.
 func TestCleanedFinancialData_Restated_AppliesEquityOffsetAndTaxShield(t *testing.T) {
-	// A5-style entry: Inventory write-down of $100 with 25% effective tax rate
-	// producing a $25 deferred-tax-asset shield.
+	// A5-style entry: $100 inventory write-down already applied to
+	// post-clean.Inventory (300 - 100 = 200). EquityOffset and TaxShieldDTA
+	// still flow through the ledger reducer.
 	raw := &entities.FinancialData{
 		Ticker:             "WDWN",
-		Inventory:          300,
+		Inventory:          200, // POST-dispatcher value (pre-clean was 300; writedown=100)
 		DeferredTaxAssets:  10,
 		StockholdersEquity: 1000,
 		// Components-to-umbrella seed (so the recompute equality holds where
 		// applicable; balance-sheet umbrellas not asserted here).
 		CashAndCashEquivalents: 0,
 		OtherCurrentAssets:     0,
-		CurrentAssets:          300,
+		CurrentAssets:          200,
 		Goodwill:               0,
 		OtherIntangibles:       0,
 		OtherNonCurrentAssets:  0,
@@ -143,17 +156,18 @@ func TestCleanedFinancialData_Restated_AppliesEquityOffsetAndTaxShield(t *testin
 				AdjusterID:   "A5_inventory_writedown",
 				RuleID:       "obsolete_inventory",
 				Component:    "Inventory",
-				DeltaAmount:  -100,
+				DeltaAmount:  -100, // recorded for audit; NOT re-applied by reducer
 				EquityOffset: -100,
 				TaxShieldDTA: 25,
 			},
 		},
 	}
 
-	restated := New(raw).Restated()
+	restated := New(raw, raw).Restated()
 	require.NotNil(t, restated)
 
-	assert.Equal(t, 200.0, restated.Inventory, "Inventory should be reduced by 100")
+	assert.Equal(t, 200.0, restated.Inventory,
+		"Restated.Inventory = post-dispatcher value (reducer no longer re-applies DeltaAmount)")
 	assert.Equal(t, 900.0, restated.StockholdersEquity, "equity flows EquityOffset -100")
 	assert.Equal(t, 35.0, restated.DeferredTaxAssets, "DTA gets +25 shield on top of seed 10")
 }
@@ -178,7 +192,7 @@ func TestCleanedFinancialData_Restated_SkipsUnfiredEntries(t *testing.T) {
 		},
 	}
 
-	restated := New(raw).Restated()
+	restated := New(raw, raw).Restated()
 	require.NotNil(t, restated)
 	assert.Equal(t, 500.0, restated.Inventory, "skip-path entries are inert")
 	assert.Equal(t, 1_000.0, restated.StockholdersEquity, "skip-path entries leave equity untouched")
@@ -189,7 +203,8 @@ func TestCleanedFinancialData_Restated_SkipsUnfiredEntries(t *testing.T) {
 // recomputing on every call would be wasteful and would also expose
 // callers to a race against in-progress view construction.
 func TestCleanedFinancialData_Restated_MemoizationIdempotent(t *testing.T) {
-	c := New(&entities.FinancialData{Ticker: "MEM"})
+	mem := &entities.FinancialData{Ticker: "MEM"}
+	c := New(mem, mem)
 	v1 := c.Restated()
 	v2 := c.Restated()
 	assert.Same(t, v1, v2, "Restated must memoize its returned pointer")

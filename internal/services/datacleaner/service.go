@@ -330,16 +330,31 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 // caller can opt into the AsReported / Restated / InvestedCapital view
 // accessors.
 //
-// Phase 3 invariant: this is a thin wrapper. No additional work happens
-// here — the cleaner pipeline is identical to CleanFinancialData; only
-// the return shape differs. Phase 4 consumers grep for "CleanFinancialDataWithViews"
-// to enumerate migration progress.
+// Phase 3 followup (HIGH-1 fix): captures a PRE-CLEAN snapshot of the
+// input *data BEFORE invoking CleanFinancialData. The snapshot lets
+// AsReported() return the parser-stamped values verbatim, independent
+// of the dispatcher's dual-writes (which mutate result.CleanedData in
+// place via the Restater path). Without the snapshot, AsReported would
+// reflect the post-dispatcher values and Restated()'s ledger reducer
+// would double-count every Restater fire.
+//
+// FinancialData has no nested mutable state the dispatcher modifies on
+// the happy path — the AdjustmentLedger / Overlays slices are appended
+// to result.CleanedData (a separate copy made inside CleanFinancialData
+// at "cleanedData := *data") rather than the input pointer, so a value-
+// copy of *data here captures every monetary field at the pre-clean
+// state.
 //
 // Mutation contract: callers MUST NOT mutate result.CleanedData after this
 // call; doing so would invalidate the view cache held by the returned
-// CleanedFinancialData wrapper. The wrapper holds the same *FinancialData
-// pointer as result.CleanedData, so any mutation reaches both.
+// CleanedFinancialData wrapper.
 func (s *service) CleanFinancialDataWithViews(ctx context.Context, data *entities.FinancialData) (*entities.CleaningResult, *cleaneddata.CleanedFinancialData, error) {
+	var snapshot *entities.FinancialData
+	if data != nil {
+		copy := *data
+		snapshot = &copy
+	}
+
 	result, err := s.CleanFinancialData(ctx, data)
 	if err != nil {
 		return nil, nil, err
@@ -347,7 +362,7 @@ func (s *service) CleanFinancialDataWithViews(ctx context.Context, data *entitie
 	if result == nil {
 		return nil, nil, nil
 	}
-	return result, cleaneddata.New(result.CleanedData), nil
+	return result, cleaneddata.New(snapshot, result.CleanedData), nil
 }
 
 // GetIndustryRules returns applicable rules for a specific industry
