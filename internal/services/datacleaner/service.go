@@ -351,8 +351,8 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 func (s *service) CleanFinancialDataWithViews(ctx context.Context, data *entities.FinancialData) (*entities.CleaningResult, *cleaneddata.CleanedFinancialData, error) {
 	var snapshot *entities.FinancialData
 	if data != nil {
-		copy := *data
-		snapshot = &copy
+		snapshotVal := *data
+		snapshot = &snapshotVal
 	}
 
 	result, err := s.CleanFinancialData(ctx, data)

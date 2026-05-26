@@ -1022,33 +1022,35 @@ func b2AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 // la.aiEnabled && la.aiService != nil AND the AI call succeeds, ModelName /
 // Confidence / Probability / ExtractedSpan / Timestamp are populated on
 // the OverlaySpec. PromptHash + SourceDocHash stay empty string with a
-// TODO Phase 3 marker — today's ai.AnalyzeFootnote does not return prompt
-// or source-doc hashes; Phase 3 adds the hashing alongside view-
-// reconstruction work where the hashes are actually consumed for replay
-// determinism. Rule-based / AI-disabled / AI-failed paths set
-// OverlaySpec.AIProvenance = nil (only AI-derived overlays carry
-// provenance).
+// AI invariant (single call): when the AI gate is open (aiEnabled &&
+// aiService != nil && (FootnoteText != "" || totalContingent > 0)) Apply
+// invokes analyzeContingentLiabilityWithAI EXACTLY ONCE, capturing both
+// the probability-weighted amount AND the AIProvenance from the same
+// response. The pre-computed result is injected into the legacy
+// processContingentLiabilityAdjustment via preComputedAIResult so the
+// legacy path does NOT re-invoke AnalyzeFootnote. This closes the
+// pre-followup divergence where two separate AI calls could record
+// amount and provenance from different (non-deterministic) responses.
 //
-// Context propagation: this is the FIRST Apply method in PR-2/PR-3/PR-4
-// that genuinely uses `ctx` — the AI path threads it down to
-// ai.AnalyzeFootnote(ctx, ...) via the analyzeContingentLiabilityWithAI
-// helper. The helper still calls context.Background() today; PR-4 Task
-// 4.3 widens its signature to accept ctx and uses it (Phase 3 may further
-// thread the cleaner's root ctx if useful).
+// ctx propagation: the unified helper takes ctx as first parameter,
+// threading it to ai.AnalyzeFootnote so upstream cancellation propagates
+// to the AMOUNT-producing call (not only the provenance side as before
+// the followup).
 //
-// Implementation strategy: delegates to ProcessContingentLiabilityAdjustment
-// for the aggregation + probability-weighting math (including the AI vs.
-// rule-based decision branch) and translates the returned
-// *AdjustmentResult into the AdjusterOutput shape. To capture the AI
-// response fields needed for AIProvenance — which the legacy method
-// discards into a metadata map — Apply also performs a parallel AI call
-// when conditions are met, then merges the response into the OverlaySpec.
-// This duplicates ONE AI call per fired B3 invocation in the migration
-// window; Phase 3 collapses the duplication when the legacy method is
-// deleted.
+// AIProvenance contract: recorded ONLY on AI success. The recorded
+// amount and recorded provenance describe the SAME response. Rule-based,
+// AI-disabled, and AI-failed paths leave OverlaySpec.AIProvenance = nil
+// (only AI-derived overlays carry provenance).
+//
+// PromptHash + SourceDocHash are SHA-256 hex digests computed PRE-API-CALL
+// in the helper via internal/services/datacleaner/adjustments/hash.go, so
+// a network failure leaves no partial hash state. Both hashes are
+// deterministic functions of the request inputs, not of the LLM response
+// — a future model upgrade leaves hashes unchanged.
 //
 // Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"B3 routing correction"
-// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md §3.5 / §4 row B3 / §7 Task 4.3 / §10 Q4
+// Phase 3 §5.2: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md (PromptHash semantics: canonical-request fingerprint)
+// Followup spec: docs/refactoring/spec/dc1-phase-3-followup-spec.md §"HIGH-2 + HIGH-3"
 func (la *LiabilityAdjuster) ApplyB3Contingent(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
 	now := time.Now()
 
@@ -1689,7 +1691,7 @@ func (la *LiabilityAdjuster) analyzeContingentLiabilityWithAI(
 		return 0.0, nil, nil, fmt.Errorf("AI response missing contingent liability estimate")
 	}
 
-	prob, extractedSpan, parseErr := parseContingentLiabilityEstimate(extractedData, response.Confidence)
+	prob, extractedSpan, parseErr := parseContingentLiabilityEstimate(extractedData)
 	if parseErr != nil {
 		return 0.0, nil, nil, parseErr
 	}
@@ -1722,13 +1724,8 @@ func (la *LiabilityAdjuster) analyzeContingentLiabilityWithAI(
 // parseContingentLiabilityEstimate extracts the probability and supporting-
 // evidence span from a FootnoteAnalysisResponse's extracted-data slot.
 // Handles both the direct-struct form (MockAIService) and the map form
-// (HTTP-backed AI service); previously this branching lived twice (once
-// in analyzeContingentLiabilityWithAI, once in captureB3AIProvenance) and
-// the duplication was a maintenance hazard.
-//
-// fallbackConfidence is used when the map-form response lacks an explicit
-// confidence value on the estimate (it's set on the response itself).
-func parseContingentLiabilityEstimate(extractedData interface{}, fallbackConfidence float64) (prob float64, extractedSpan string, err error) {
+// (HTTP-backed AI service).
+func parseContingentLiabilityEstimate(extractedData interface{}) (prob float64, extractedSpan string, err error) {
 	switch est := extractedData.(type) {
 	case ai.ContingentLiabilityEstimate:
 		prob = est.ProbabilityPercent / 100.0
@@ -1747,7 +1744,6 @@ func parseContingentLiabilityEstimate(extractedData interface{}, fallbackConfide
 				extractedSpan = s
 			}
 		}
-		_ = fallbackConfidence // reserved for future map-shape callers
 		return prob, extractedSpan, nil
 	default:
 		return 0.0, "", fmt.Errorf("AI response has invalid format: expected ContingentLiabilityEstimate or map[string]interface{}, got %T", extractedData)
