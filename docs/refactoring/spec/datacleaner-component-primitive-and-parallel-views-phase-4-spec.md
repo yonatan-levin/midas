@@ -5,8 +5,8 @@
 **Parent spec:** [datacleaner-component-primitive-and-parallel-views-spec.md](datacleaner-component-primitive-and-parallel-views-spec.md) — §"Phasing & implementation sequence" row "Phase 4 — Consumer migration + WACC boundary" + §"Consumer migration map"
 **Phase 3 spec:** [datacleaner-component-primitive-and-parallel-views-phase-3-spec.md](datacleaner-component-primitive-and-parallel-views-phase-3-spec.md)
 **Phase 3 followup spec:** [dc1-phase-3-followup-spec.md](dc1-phase-3-followup-spec.md)
-**Phase 3 closeout:** [datacleaner-component-primitive-and-parallel-views-phase-3-closeout.md](../implementations/datacleaner-component-primitive-and-parallel-views-phase-3-closeout.md)
-**Phase 3 followup closeout:** [dc1-phase-3-followup-closeout.md](../implementations/dc1-phase-3-followup-closeout.md)
+**Phase 3 closeout:** [datacleaner-component-primitive-and-parallel-views-phase-3-closeout.md](../archive/datacleaner-component-primitive-and-parallel-views-phase-3-closeout.md)
+**Phase 3 followup closeout:** [dc1-phase-3-followup-closeout.md](../archive/dc1-phase-3-followup-closeout.md)
 **Implementer plan:** [datacleaner-component-primitive-and-parallel-views-phase-4-implementation-plan.md](../implementations/datacleaner-component-primitive-and-parallel-views-phase-4-implementation-plan.md)
 **Tracker:** [docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md](../../reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md)
 **Estimated effort:** 12–18 agent-hours (single PR with 5 commit clusters — see §11 PR strategy)

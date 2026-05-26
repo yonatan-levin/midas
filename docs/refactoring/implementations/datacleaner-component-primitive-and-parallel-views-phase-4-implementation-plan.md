@@ -42,9 +42,9 @@ The current `midas-dc1-phase-4-prep` worktree on branch `dc1-phase-4-prep` holds
 
 ### Tier 2 — Phase 4 spec + Phase 3 + followup ground truth
 4. **`docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-4-spec.md`** — THIS PHASE's authoritative spec. Focus on §4 (Architecture / Migration map / Plumbing), §7 (DDM bit-for-bit), §8 (Testing), §9 (DDM sub-plan), §11 (PR strategy), §13 (Acceptance criteria).
-5. **`docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md`** — Phase 3 spec, ESPECIALLY §3 Non-goals (now Phase 4 goals) and §"Phase 3 → Phase 4 gate."
-6. **`docs/refactoring/spec/dc1-phase-3-followup-spec.md`** — followup spec; ESPECIALLY §4.1 HIGH-1 (Option A pre-clean snapshot). Phase 4's HIGH-1 invariant preservation depends on understanding this.
-7. **`docs/refactoring/implementations/dc1-phase-3-followup-closeout.md`** — what's on master now.
+5. **`docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md`** — Phase 3 spec, ESPECIALLY §3 Non-goals (now Phase 4 goals) and §"Phase 3 → Phase 4 gate."
+6. **`docs/refactoring/archive/dc1-phase-3-followup-spec.md`** — followup spec; ESPECIALLY §4.1 HIGH-1 (Option A pre-clean snapshot). Phase 4's HIGH-1 invariant preservation depends on understanding this.
+7. **`docs/refactoring/archive/dc1-phase-3-followup-closeout.md`** — what's on master now.
 8. **`docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md`** — parent spec; re-read §"Consumer migration map" (the 13 read sites) + §"Phasing & implementation sequence" Phase 4 row + the new Phase 5 row.
 
 ### Tier 3 — Code Phase 4 builds on (read with the spec open)

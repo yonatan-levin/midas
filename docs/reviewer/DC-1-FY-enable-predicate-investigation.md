@@ -1,9 +1,9 @@
 # DC-1 FY-NULL — Why FY periods do not emit the A1-A5 paired CA-down / TA-up divergence pattern
 
 **Status:** OPEN (read-only investigation) — disposition is **NOT A BUG**; this is the natural consequence of SEC XBRL's FY-vs-Q Revenue reporting convention interacting with A5's quarterly-tuned obsolescence heuristic. No production behavior change recommended for DC-1 Phase 2. Closure deferred to a Phase 4+ heuristic-review pass (or to whenever the rule-engine refactor lands native FY-aware annualization).
-**Severity:** LOW — does not block Phase 2 close per `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md` Cluster A-FY-NULL disposition; the FY snapshots in the basket either A) correctly no-op A5 because inventory looks healthy on annual cadence, or B) silently underestimate inventory writedowns on FY filings of distressed slow-turn issuers. The B side is the only conceivable consumer impact but no live ticker in the basket presents that profile today.
+**Severity:** LOW — does not block Phase 2 close per `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md` Cluster A-FY-NULL disposition; the FY snapshots in the basket either A) correctly no-op A5 because inventory looks healthy on annual cadence, or B) silently underestimate inventory writedowns on FY filings of distressed slow-turn issuers. The B side is the only conceivable consumer impact but no live ticker in the basket presents that profile today.
 **Filed:** 2026-05-22 by DC-1 Phase 2 PR-2 Task 2.7 (read-only investigator role).
-**Phase context:** Spawned from `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md`'s Cluster A-FY-NULL section (line 160). Phase 1 shadow-analysis recorded the empirical FY-NULL pattern and tagged it "needs further investigation, low priority". This tracker is that investigation.
+**Phase context:** Spawned from `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md`'s Cluster A-FY-NULL section (line 160). Phase 1 shadow-analysis recorded the empirical FY-NULL pattern and tagged it "needs further investigation, low priority". This tracker is that investigation.
 **Owner:** DC-1 Phase 2 ARCH (filing) — disposition is "close with caveat" or "punt to Phase 4 heuristic-review subtask"; no owner pickup required for PR-2.
 **Blocks:** Nothing. Read-only finding.
 
@@ -206,7 +206,7 @@ If experiment 1 or 2 confirms, change this tracker's status to RESOLVED-NOT-A-BU
 
 ## Cross-references
 
-- **Phase 1 shadow analysis Cluster A-FY-NULL section:** `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md` lines 160-167 (the empirical observation this tracker investigates).
+- **Phase 1 shadow analysis Cluster A-FY-NULL section:** `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md` lines 160-167 (the empirical observation this tracker investigates).
 - **Phase 1 shadow analysis MXL deep-dive:** same file lines 216-228 (the canonical $34.34M A5 inventory writedown case).
 - **Affected JSON snapshots (committed at PR-1 base):**
   - `internal/integration/testdata/recompute-shadow/MXL.json` — 8 Qx periods with CA/TA pair, 3 FY periods TL-only.

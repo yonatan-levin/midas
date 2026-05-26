@@ -26,7 +26,7 @@ import (
 // internal/integration/testdata/recompute-shadow/<TICKER>.json (filed by
 // Phase 1's basket-recording test) plus the cluster-mapping enumerated in
 // the Phase 1 shadow analysis report
-// (docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md).
+// (docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md).
 // The 7-cluster punch list maps every observed (ticker, period, umbrella)
 // divergence to a known cleaner-side adjuster signature. We invert that
 // mapping here: per-ticker we know which adjusters MUST have fired (or at
