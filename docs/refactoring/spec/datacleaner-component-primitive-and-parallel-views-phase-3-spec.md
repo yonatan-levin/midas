@@ -12,7 +12,7 @@
 
 ## 1. Phase context
 
-Phase 2 closed on 2026-05-23 with the full 4-PR stack on `dc1-phase-2-pr-4` (PR-1 `39cf0fa`, PR-2 `2e8f83b`, PR-3 `207f41a`, PR-4 final tip after Task 4.7; awaiting HUMAN merge to master). All 17 cleaner-side adjusters now implement the `Adjuster` interface natively across four role flavors (OverlayEmitter, Restater, Restater+TaxShieldDTA, FlagEmitter); PR-1's `shimLedgerEntriesFromLegacy*` helpers are FULLY deleted; `data.AdjustmentLedger` + `data.Overlays` are populated natively by every adjuster; dual-write is preserved at the dispatcher level. `SchemaVersion["FinancialData"]` is at 8.
+Phase 2 closed on 2026-05-23 with the full 4-PR stack on `dc1-phase-2-pr-4` (PR-1 `39cf0fa`, PR-2 `2e8f83b`, PR-3 `207f41a`, PR-4 final tip after Task 4.7; MERGED to master 2026-05-24 as `3238d61`). All 17 cleaner-side adjusters now implement the `Adjuster` interface natively across four role flavors (OverlayEmitter, Restater, Restater+TaxShieldDTA, FlagEmitter); PR-1's `shimLedgerEntriesFromLegacy*` helpers are FULLY deleted; `data.AdjustmentLedger` + `data.Overlays` are populated natively by every adjuster; dual-write is preserved at the dispatcher level. `SchemaVersion["FinancialData"]` is at 8.
 
 **Phase 3 is the first consumer-visible *capability* change since Phase 0** — it introduces the three-view accessor surface (`AsReported`/`Restated`/`InvestedCapital`) that consumes the Phase 2 ledger + overlays. Phase 3 itself ships zero downstream behavior change because no consumer migrates yet; Phase 4 is the consumer-migration gate that flips read sites and deletes the dual-write.
 

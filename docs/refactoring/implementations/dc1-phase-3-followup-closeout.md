@@ -2,7 +2,7 @@
 
 **Phase:** Phase 3 followup (cross-model review fixes — 9 findings)
 **Status:** SHIPPED 2026-05-25
-**Branch at close:** `dc1-phase-3-followup` (single PR, 10 commits; awaiting HUMAN merge to master)
+**Branch at close:** `dc1-phase-3-followup` (single PR, 12 commits — ARCH spec + F.1-F.10 implementer tasks + F.11 REVIEWER-nits cleanup) — **MERGED to master 2026-05-26 as `3490227`**
 **Anchored on:** master `46e84b1` (DC-1 Phase 3 merge commit)
 **Spec:** [dc1-phase-3-followup-spec.md](../spec/dc1-phase-3-followup-spec.md)
 **Plan:** [dc1-phase-3-followup-implementation-plan.md](./dc1-phase-3-followup-implementation-plan.md)
