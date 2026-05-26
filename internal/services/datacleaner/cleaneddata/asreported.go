@@ -7,18 +7,23 @@ import "github.com/midas/dcf-valuation-api/internal/core/entities"
 // the filer disclosed, even if the parser missed a tag (e.g. AMD/KO
 // TotalLiabilities=0 stays zero per T2-BS-3 Option B carve-out).
 //
+// Phase 3 followup (HIGH-1 fix): reads from the PRE-CLEAN snapshot captured
+// by CleanFinancialDataWithViews before any dispatcher dual-write. This
+// makes AsReported a faithful reflection of the filer-disclosed numbers
+// independent of the cleaner's mutations.
+//
 // First-call cost: O(field count). Subsequent calls: O(1) cached.
 func (c *CleanedFinancialData) AsReported() *FinancialDataView {
 	if c == nil {
 		return zeroView(AsReportedView)
 	}
-	if c.asReported != nil {
-		return c.asReported
+	if c.asReportedView != nil {
+		return c.asReportedView
 	}
-	v := identityCopy(c.raw)
+	v := identityCopy(c.asReportedSnapshot)
 	v.ViewKind = AsReportedView
-	c.asReported = &v
-	return c.asReported
+	c.asReportedView = &v
+	return c.asReportedView
 }
 
 // identityCopy projects the consumed subset of *entities.FinancialData

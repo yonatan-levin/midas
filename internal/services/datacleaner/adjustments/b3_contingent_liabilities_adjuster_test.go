@@ -642,7 +642,7 @@ func TestB3ContingentLiabilityAdjuster_LegacyDirectInvocation(t *testing.T) {
 
 	// Direct invocation bypasses the dispatcher's switch arm — must still
 	// return a populated legacy result.
-	result := la.ProcessContingentLiabilityAdjustment(data, rule, cleaningCtx)
+	result := la.ProcessContingentLiabilityAdjustment(context.Background(), data, rule, cleaningCtx)
 	require.NotNil(t, result)
 	assert.True(t, result.Applied)
 	assert.InDelta(t, 72_000.0, result.Amount, 1e-9,
@@ -654,27 +654,14 @@ func TestB3ContingentLiabilityAdjuster_LegacyDirectInvocation(t *testing.T) {
 		"ProcessContingentLiabilityAdjustment does not mutate data — only the dispatcher does")
 }
 
-// TestCaptureB3AIProvenance_DefensiveBranches directly exercises the
-// defensive branches inside captureB3AIProvenance that the higher-level
-// Apply path cannot reach. The legacy `analyzeContingentLiabilityWithAI`
-// runs FIRST inside ApplyB3Contingent → ProcessContingentLiabilityAdjustment;
-// it has its own non-defensive nil-deref on `response.Error` (liabilities.go
-// :1669) so the AI-returns-nil-response path crashes the legacy call before
-// captureB3AIProvenance is reached. Direct unit-testing on the private
-// helper is the only way to validate the defensive guards remain wired
-// correctly — without these tests, a future edit removing the guards would
-// not be caught by any end-to-end coverage.
-//
-// Coverage contract: this test, together with the AI-failure /
-// AI-disabled / nil-AI-service subtests on Apply, brings
-// captureB3AIProvenance coverage from 69.2% toward 80%+ by hitting:
-//   - `if response == nil` (nilResponseAIService)
-//   - `if response.Error != ""` (errorFieldAIService)
-//   - `case map[string]interface{}:` decoder arm (mapFormAIService, also
-//     covered end-to-end via Apply)
-//
-// `if ctx == nil` is exercised by passing a nil context directly.
-func TestCaptureB3AIProvenance_DefensiveBranches(t *testing.T) {
+// TestAnalyzeContingentLiabilityWithAI_DefensiveBranches directly exercises
+// the defensive branches inside analyzeContingentLiabilityWithAI — the
+// Phase 3 followup unified helper that replaced the previous split
+// (analyzeContingentLiabilityWithAI for amount + captureB3AIProvenance for
+// provenance). Direct unit-testing on the private helper is the only way
+// to validate the defensive guards remain wired correctly across the
+// nil-response / structured-error / map-form / nil-ctx paths.
+func TestAnalyzeContingentLiabilityWithAI_DefensiveBranches(t *testing.T) {
 	baseData := &entities.FinancialData{
 		Ticker:                   "DEFENSIVE",
 		ContingentLiabilities:    100_000.0,
@@ -692,7 +679,7 @@ func TestCaptureB3AIProvenance_DefensiveBranches(t *testing.T) {
 
 	t.Run("AI returns nil response yields error and nil provenance", func(t *testing.T) {
 		la := NewLiabilityAdjuster(&nilResponseAIService{}, nil).WithAI(true)
-		prov, err := la.captureB3AIProvenance(context.Background(), baseData, baseCleaningCtx, now)
+		_, prov, _, err := la.analyzeContingentLiabilityWithAI(context.Background(), baseData, baseCleaningCtx, now)
 		require.Error(t, err, "nil-response branch must surface a descriptive error")
 		assert.Contains(t, err.Error(), "nil response",
 			"error message must identify the defensive nil-response branch for diagnostics")
@@ -701,7 +688,7 @@ func TestCaptureB3AIProvenance_DefensiveBranches(t *testing.T) {
 
 	t.Run("AI response with populated Error field yields error and nil provenance", func(t *testing.T) {
 		la := NewLiabilityAdjuster(&errorFieldAIService{}, nil).WithAI(true)
-		prov, err := la.captureB3AIProvenance(context.Background(), baseData, baseCleaningCtx, now)
+		_, prov, _, err := la.analyzeContingentLiabilityWithAI(context.Background(), baseData, baseCleaningCtx, now)
 		require.Error(t, err, "Error-field branch must surface a descriptive error")
 		assert.Contains(t, err.Error(), "upstream model returned structured error",
 			"error message must surface the AI service's Error field verbatim for diagnostics")
@@ -715,7 +702,7 @@ func TestCaptureB3AIProvenance_DefensiveBranches(t *testing.T) {
 			supportingEvidence: []interface{}{"Direct-unit map-form decoder evidence"},
 		}
 		la := NewLiabilityAdjuster(mapAI, nil).WithAI(true)
-		prov, err := la.captureB3AIProvenance(context.Background(), baseData, baseCleaningCtx, now)
+		_, prov, _, err := la.analyzeContingentLiabilityWithAI(context.Background(), baseData, baseCleaningCtx, now)
 		require.NoError(t, err)
 		require.NotNil(t, prov)
 		assert.Equal(t, b3AIModelName, prov.ModelName)
@@ -727,15 +714,13 @@ func TestCaptureB3AIProvenance_DefensiveBranches(t *testing.T) {
 	})
 
 	t.Run("nil ctx is promoted to context.Background", func(t *testing.T) {
-		// Defensive-branch coverage for `if ctx == nil`. The legacy
-		// dispatcher signature does not accept ctx today (PR-4 TODO at
-		// liabilities.go:204) so the production call site at line 1091
-		// passes ctx through unchanged — which could be nil. The guard
+		// Defensive-branch coverage for `if ctx == nil`. Test callers may
+		// invoke the unexported helper directly without a ctx; the guard
 		// promotes it so MockAIService.AnalyzeFootnote (which calls
 		// ctx.Err()) does not nil-deref.
 		la := NewLiabilityAdjuster(&mockAIService{}, nil).WithAI(true)
 		//nolint:staticcheck // SA1012: intentional nil ctx to exercise defensive guard
-		prov, err := la.captureB3AIProvenance(nil, baseData, baseCleaningCtx, now)
+		_, prov, _, err := la.analyzeContingentLiabilityWithAI(nil, baseData, baseCleaningCtx, now)
 		require.NoError(t, err, "nil-ctx must be promoted to Background, not surfaced as error")
 		require.NotNil(t, prov, "with valid mockAIService the provenance must be populated even on nil-ctx entry")
 	})

@@ -308,7 +308,19 @@ func (m *MockDataCleanerService) CleanFinancialData(ctx context.Context, data *e
 // DataCleanerService. The mock delegates to CleanFinancialData and wraps
 // the result in cleaneddata.New so test fixtures that don't explicitly
 // set up the views path still surface the wrapper consumers expect.
+//
+// Phase 3 followup (HIGH-1 fix): the production service captures a pre-
+// clean snapshot of the input. The mock passes the (likely-unmutated)
+// input as the AsReported snapshot and result.CleanedData as the
+// post-clean entity. This is sufficient fidelity for mock-driven tests
+// where the upstream cleaner is stubbed out — the mock's CleanFinancialData
+// usually returns CleanedData == data anyway.
 func (m *MockDataCleanerService) CleanFinancialDataWithViews(ctx context.Context, data *entities.FinancialData) (*entities.CleaningResult, *cleaneddata.CleanedFinancialData, error) {
+	var snapshot *entities.FinancialData
+	if data != nil {
+		copy := *data
+		snapshot = &copy
+	}
 	result, err := m.CleanFinancialData(ctx, data)
 	if err != nil {
 		return nil, nil, err
@@ -316,7 +328,7 @@ func (m *MockDataCleanerService) CleanFinancialDataWithViews(ctx context.Context
 	if result == nil {
 		return nil, nil, nil
 	}
-	return result, cleaneddata.New(result.CleanedData), nil
+	return result, cleaneddata.New(snapshot, result.CleanedData), nil
 }
 
 func (m *MockDataCleanerService) GetIndustryRules(industryCode string) ([]entities.CleaningRule, error) {

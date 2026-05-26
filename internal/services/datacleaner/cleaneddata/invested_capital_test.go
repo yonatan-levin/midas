@@ -72,7 +72,7 @@ func TestCleanedFinancialData_InvestedCapital_AppliesOverlays(t *testing.T) {
 		},
 	}
 
-	ic := New(raw).InvestedCapital()
+	ic := New(raw, raw).InvestedCapital()
 	require.NotNil(t, ic)
 
 	assert.Equal(t, InvestedCapitalView, ic.ViewKind)
@@ -101,7 +101,7 @@ func TestCleanedFinancialData_InvestedCapital_EmptyOverlaysEqualsRestated(t *tes
 		TotalDebt:              15,
 	}
 
-	c := New(raw)
+	c := New(raw, raw)
 	restated := c.Restated()
 	ic := c.InvestedCapital()
 	require.NotNil(t, ic)
@@ -135,7 +135,7 @@ func TestCleanedFinancialData_InvestedCapital_UnknownFieldSilentlySkipped(t *tes
 		},
 	}
 
-	ic := New(raw).InvestedCapital()
+	ic := New(raw, raw).InvestedCapital()
 	require.NotNil(t, ic)
 	assert.Equal(t, 0.0, ic.DebtLikeClaims, "unknown Field overlay produces no mutation")
 	assert.Equal(t, 100.0, ic.TotalDebt, "unknown Field overlay leaves TotalDebt untouched")
@@ -144,7 +144,8 @@ func TestCleanedFinancialData_InvestedCapital_UnknownFieldSilentlySkipped(t *tes
 // TestCleanedFinancialData_InvestedCapital_MemoizationIdempotent pins
 // pointer identity across repeated InvestedCapital() calls.
 func TestCleanedFinancialData_InvestedCapital_MemoizationIdempotent(t *testing.T) {
-	c := New(&entities.FinancialData{Ticker: "MEM"})
+	mem := &entities.FinancialData{Ticker: "MEM"}
+	c := New(mem, mem)
 	v1 := c.InvestedCapital()
 	v2 := c.InvestedCapital()
 	assert.Same(t, v1, v2)

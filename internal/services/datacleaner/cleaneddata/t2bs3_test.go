@@ -55,7 +55,7 @@ func TestCleanedFinancialData_AsReported_PreservesParserZeros_AMD_KO(t *testing.
 		TotalAssets:            59_600_000_000,
 	}
 
-	c := New(raw)
+	c := New(raw, raw)
 	asReported := c.AsReported()
 	restated := c.Restated()
 	require.NotNil(t, asReported)

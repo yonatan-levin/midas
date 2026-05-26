@@ -354,7 +354,7 @@ return AdjusterOutput{
 
 ### 5.2 Q4 — `AIProvenance` SHA-256 hash computation
 
-**Decision:** Compute SHA-256 hex strings at the B3 AI call site (`captureB3AIProvenance` or equivalent), populate `PromptHash` + `SourceDocHash` on the `AIProvenance` struct.
+**Decision:** Compute SHA-256 hex strings at the B3 AI call site (the unified `analyzeContingentLiabilityWithAI` post-followup), populate `PromptHash` + `SourceDocHash` on the `AIProvenance` struct.
 
 **Hashing strategy:**
 
@@ -370,37 +370,56 @@ func sha256Hex(s string) string {
 }
 
 // At the B3 AI call site (where ai.AnalyzeFootnote is invoked):
-prompt := buildB3Prompt(footnoteText, ...)   // the rendered prompt template
-sourceDoc := footnoteText                     // the raw footnote text passed in
+request := &ai.FootnoteAnalysisRequest{
+    Ticker:           data.Ticker,
+    FilingType:       data.FilingPeriod,
+    FootnoteText:     footnoteText,
+    AnalysisType:     ai.ContingentLiabilityAnalysis,
+    PriorityLevel:    ai.PriorityNormal,
+    RequestTimestamp: now,
+    Context:          map[string]interface{}{ /* industry_code, totals, revenue */ },
+}
+promptHash    := sha256HexPromptCanonical(request) // timestamp-free canonical fingerprint
+sourceDocHash := sha256Hex(footnoteText)           // raw footnote text
 
-aiResp, err := aiClient.AnalyzeFootnote(ctx, prompt, ...)
-if err != nil { /* fail-soft: provenance stays empty + log */ }
+aiResp, err := aiClient.AnalyzeFootnote(ctx, request)
+if err != nil { /* fail-soft: provenance stays nil + log */ }
 
 provenance := &entities.AIProvenance{
-    ModelName:     aiClient.ModelName(),                  // existing
-    PromptHash:    sha256Hex(prompt),                     // NEW (Q4)
-    SourceDocHash: sha256Hex(sourceDoc),                  // NEW (Q4)
-    ExtractedSpan: aiResp.ExtractedSpan,                  // existing if present, else ""
-    Probability:   aiResp.Probability,                    // existing
-    Confidence:    aiResp.Confidence,                     // existing
-    Timestamp:     time.Now().UTC(),                      // existing
+    ModelName:     aiClient.ModelName(),
+    PromptHash:    promptHash,        // Q4 — canonical-request fingerprint
+    SourceDocHash: sourceDocHash,     // Q4 — SHA-256 of footnote text
+    ExtractedSpan: aiResp.ExtractedSpan,
+    Probability:   aiResp.Probability,
+    Confidence:    aiResp.Confidence,
+    Timestamp:     now,
 }
 ```
 
-**What gets hashed:**
-- `PromptHash` = SHA-256 hex of the **rendered prompt** (after template substitution: ticker, period, footnote text inserted). This makes the hash a deterministic function of the inputs, NOT of the prompt template alone — replay reproducibility requires the prompt-as-sent.
+**What gets hashed (amended in Phase 3 followup, see `dc1-phase-3-followup-spec.md` §4.4):**
+
+- `PromptHash` = SHA-256 hex of a deterministic, timestamp-free canonical serialization of the `ai.FootnoteAnalysisRequest` fields:
+  `Ticker`, `FilingType`, `FootnoteText`, `AnalysisType`, `PriorityLevel`, and the `Context` map with alphabetically-sorted keys.
+  This is a **CANONICAL-REQUEST FINGERPRINT** — NOT the literal LLM prompt string. Two calls with structurally-equal request inputs produce identical `PromptHash` values regardless of (a) wall-clock (`RequestTimestamp` excluded), (b) Go map iteration order (keys sorted), or (c) LLM prompt-template version (template lives downstream of `ai.AnalyzeFootnote`; the hash captures the inputs that drive substitution, not the final rendered prompt string).
+  Prompt-template drift is captured separately by `AIProvenance.ModelName`, which records the model + template version that generated the response. `PromptHash` answers **"what inputs?"**; `ModelName` answers **"what model/template?"**.
+  Implementation: `internal/services/datacleaner/adjustments/hash.go::sha256HexPromptCanonical`.
+
 - `SourceDocHash` = SHA-256 hex of the **footnote text** (`footnoteText` as passed to `ai.AnalyzeFootnote`). Identical footnote → identical hash, regardless of model version.
 
 **Determinism guarantee:** Replay golden bundles stay reproducible because:
-1. Given the same `(footnoteText, prompt template version)`, the hashes are byte-identical across runs.
-2. Model upgrades change the AI **response** but NOT the **inputs** (hashes); a hash-mismatch under replay signals "input drift, not model drift" cleanly.
-3. The hash is computed pre-API-call so a network failure does not leave a partially-hashed AIProvenance.
+
+1. Given the same canonical-request inputs (ticker, filing type, footnote text, analysis type, priority, context map), the hashes are byte-identical across runs.
+2. Model upgrades change the AI **response** but NOT the **inputs** (hashes); a hash-mismatch under replay signals "input drift, not model drift" cleanly. `AIProvenance.ModelName` records which model + template version produced the response.
+3. The hashes are computed PRE-API-CALL so a network failure does not leave a partially-hashed AIProvenance.
 
 **Storage:** SHA-256 hex string (64 chars) in the existing `PromptHash` / `SourceDocHash` `string` fields on `entities.AIProvenance`. No struct schema change.
 
 **Backwards compatibility:** Phase 2 ships `PromptHash == ""` / `SourceDocHash == ""`. Phase 3 starts populating them; downstream consumers (currently none) reading these fields must treat empty string as "Phase 2 era, hash unavailable".
 
-**Test pin:** `TestQ4_AIProvenance_SHA256_Deterministic` — call B3 twice with identical footnote → assert hashes match (and equal known SHA-256 of the footnote text).
+**Test pins:**
+- `TestQ4_AIProvenance_SHA256_Deterministic` — call B3 twice with identical footnote → assert hashes match (and `SourceDocHash` equals known SHA-256 of the footnote text).
+- `TestSha256HexPromptCanonical_DeterministicOnSupportedTypes` (Phase 3 followup F.5) — insertion-order invariance on the `Context` map.
+- `TestSha256HexPromptCanonical_HandlesUnsupportedContextValues` (F.5) — typed `<unsupported:%T>` fallback for future context values that `encoding/json` cannot serialize.
 
 ### 5.3 `ctx context.Context` threading
 
@@ -615,3 +634,4 @@ Phase 4 inherits the standard reviewer-deferred questions (B3 WACC opt-in knob, 
 | 2026-05-23 | Initial spec authored by Phase 2 closeout ARCH. Covers `CleanedFinancialData` view reconstruction (`AsReported`/`Restated`/`InvestedCapital`), Q2 (A2 TaxShieldDTA), Q4 (AIProvenance SHA-256 hashes), `ctx` threading through `Process*Adjustments` signatures, translator-extraction decision (KEEP per-rule), and T2-BS-3 Option B carve-out reconstruction in `Restated()`. PR strategy: single PR recommended. Phase 3 → Phase 4 gate documented. Implementation plan filed alongside at `datacleaner-component-primitive-and-parallel-views-phase-3-implementation-plan.md`. |
 | 2026-05-24 | Phase 3 SHIPPED in single PR on branch `dc1-phase-3` (Option A). All 14 tasks landed across 8 implementation commits + 1 closeout/docs-sweep commit. `cleaneddata` package created with `AsReported` / `Restated` / `InvestedCapital` accessors + memoization + import-boundary test. `Service.CleanFinancialDataWithViews(ctx, data)` sibling added to `DataCleanerService` interface. Q2 + Q4 resolved with named tests (`TestQ2_A2TaxShieldDTA_Populated`, `TestQ4_AIProvenance_SHA256_Deterministic`). ctx threaded through `Process{Asset,Liability,Earnings}Adjustments`. `SchemaVersion["FinancialData"]` 8 → 9 atomic with the Q2 commit. T2-BS-3 acceptance signal LIVE — AMD 2023Q2 reconstructs to $9.679B, KO 2023Q2 to $60.912B against the 2026-05-19 baseline (`TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction`). All load-bearing invariants stayed GREEN at every commit. NON-goals honored (no consumer migration / no B3 routing flip / no dual-write deletion / no CalcVersion bump). Closeout: `datacleaner-component-primitive-and-parallel-views-phase-3-closeout.md`. |
 | 2026-05-25 | V/R/Q-driven cleanup commit `b997ce6` landed on `dc1-phase-3` (10th commit total). REVIEWER Tier-2: explicit `default:` clauses in `cleaneddata/restate.go` + `cleaneddata/invested_capital.go` switches; stale "Phase 3's planned ctx threading" narrative rewritten in `liabilities.go::captureB3AIProvenance` godoc to describe post-Phase-3 reality. VERIFIER docs-nit: spec + plan + handoff aligned to the production method name `CleanFinancialDataWithViews` (test name `TestCleanWithViews_ReturnsWrapper` preserved where it references the actual test in `service_cleanwithviews_test.go`); closeout commit-count framing clarified (8 implementation + 1 closeout + 1 cleanup = 10 total). No code semantics change. All load-bearing invariants stayed GREEN; full `go test ./...` 0 failures at `b997ce6`. |
+| 2026-05-25 | **§5.2 PromptHash semantics amended (Phase 3 followup MEDIUM-2 / F.4).** The hashed input is the timestamp-free canonical serialization of `ai.FootnoteAnalysisRequest` fields — a **canonical-request fingerprint**, NOT the literal LLM prompt-as-sent string. The AI client at this layer does not expose a rendered-prompt string; the canonical-request hash satisfies the intent (deterministic identification of the inputs that produced the response) and decouples replay determinism from prompt-template drift (the latter is captured by `AIProvenance.ModelName`). No code change — `sha256HexPromptCanonical`'s behavior is unchanged; the amendment aligns spec wording with implementation. Full Phase 3 followup spec at `docs/refactoring/spec/dc1-phase-3-followup-spec.md`. |

@@ -210,3 +210,26 @@ Phase 4 dispatch follows HUMAN merge. Phase 4 scope (parent spec §"Consumer mig
 | Date | Change |
 |---|---|
 | 2026-05-24 | Initial closeout filed by Phase 3 implementer. Covers the 8-commit ship on branch `dc1-phase-3` (Option A single PR). All 14 plan tasks landed. Q2 + Q4 resolved. `SchemaVersion["FinancialData"]` 8 → 9 atomic. T2-BS-3 acceptance signal LIVE on the 2026-05-19 baseline. All load-bearing invariants GREEN at every commit. NON-goals honored. Phase 4 (consumer migration + B3 routing flip + dual-write deletion + CalcVersion 4.2 → 4.3) is the next gate. |
+| 2026-05-25 | **Phase 3 followup PR landed on branch `dc1-phase-3-followup`** — see "Followup PR landed 2026-05-25" section below + the followup closeout at [dc1-phase-3-followup-closeout.md](./dc1-phase-3-followup-closeout.md). |
+
+---
+
+## Followup PR landed 2026-05-25
+
+The Phase 3 single-PR merge surfaced 9 follow-on findings via independent cross-model review (gpt-5.5 via `zen-mcp`). All 9 closed on branch `dc1-phase-3-followup` (10 commits — F.1 through F.10 per the plan).
+
+See [dc1-phase-3-followup-spec.md](../spec/dc1-phase-3-followup-spec.md) and [dc1-phase-3-followup-closeout.md](./dc1-phase-3-followup-closeout.md).
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| HIGH-1 — `Restated()` view-seed double-count | HIGH | SHIPPED (F.1) — pre-clean snapshot inside `CleanFinancialDataWithViews`; `cleaneddata.New(asReported, restated)` two-arg signature; reducer drives `EquityOffset + TaxShieldDTA` only; `applyLedgerEntryToView` DELETED |
+| HIGH-2 — B3 two-call audit divergence | HIGH | SHIPPED (F.2) — single `analyzeContingentLiabilityWithAI(ctx, ...)` call returning probability AND provenance; `captureB3AIProvenance` DELETED |
+| HIGH-3 — B3 amount-path ctx | HIGH | SHIPPED (F.2) — same commit as HIGH-2 |
+| MEDIUM-1 — B1 lease PV ctx threading | MED | SHIPPED (F.3) |
+| MEDIUM-2 — `PromptHash` naming/spec drift | MED | SHIPPED (F.4) — spec §5.2 amended (canonical-request fingerprint); no code change |
+| LOW-1 — `json.Marshal` swallowing in `hash.go` | LOW | SHIPPED (F.5) |
+| LOW-2 — cleaneddata mutex/Once | LOW | SHIPPED (F.6) — godoc warning; sync.Once retrofit deferred to Phase 5 |
+| LOW-3 — `identityCopy` coverage | LOW | SHIPPED (F.7) — reflection-based field-coverage test |
+| LOW-4 — `Raw()` mutable escape hatch | LOW | SHIPPED (F.8) — `TODO(phase-5)` + new Phase 5 row in parent spec |
+
+New load-bearing pin: `TestCleanFinancialDataWithViews_Restated_NoDoubleCount_OnRestaterFire`. NON-goals preserved across all 10 commits (no consumer migration, no B3 routing flip, no dual-write deletion, no CalcVersion / SchemaVersion bump, no changes to `recompute.go`). All load-bearing invariants stayed GREEN at every commit (`TestDDM_LegacyPath_BitForBit`, `TestRecomputeUmbrellas_NoMutation`, `TestOrchestrator_LedgerOrdering`, `TestLedger_BasketSnapshot_ClusterPrediction`, `TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction` — AMD/KO still reconstruct to $9.679B / $60.912B, shadow snapshots byte-identical).
