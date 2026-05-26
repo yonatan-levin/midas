@@ -1049,8 +1049,8 @@ func b2AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 // — a future model upgrade leaves hashes unchanged.
 //
 // Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md §"B3 routing correction"
-// Phase 3 §5.2: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md (PromptHash semantics: canonical-request fingerprint)
-// Followup spec: docs/refactoring/spec/dc1-phase-3-followup-spec.md §"HIGH-2 + HIGH-3"
+// Phase 3 §5.2: docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md (PromptHash semantics: canonical-request fingerprint)
+// Followup spec: docs/refactoring/archive/dc1-phase-3-followup-spec.md §"HIGH-2 + HIGH-3"
 func (la *LiabilityAdjuster) ApplyB3Contingent(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
 	now := time.Now()
 

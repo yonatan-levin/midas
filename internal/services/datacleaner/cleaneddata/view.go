@@ -8,8 +8,8 @@
 // a time. The package exists so Phase 4 can flip consumers without
 // further entity-shape changes.
 //
-// Spec: docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md
-// Plan: docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-3-implementation-plan.md
+// Spec: docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md
+// Plan: docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-3-implementation-plan.md
 package cleaneddata
 
 import "time"

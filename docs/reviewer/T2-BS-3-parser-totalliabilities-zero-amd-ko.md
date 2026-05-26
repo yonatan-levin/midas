@@ -94,7 +94,7 @@ curl -A "midas-dev contact@example.com" 'https://data.sec.gov/api/xbrl/companyfa
 
 ## Cross-references
 
-- DC-1 Phase 1 shadow-analysis report: `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md` (cluster `B1-PARSER-TL-ZERO` describes this same finding)
+- DC-1 Phase 1 shadow-analysis report: `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md` (cluster `B1-PARSER-TL-ZERO` describes this same finding)
 - DC-1 spec (Phase 2 view design): `docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md`
 - DC-1 tracker: `docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md`
 - Phase 0 closeout (`computePlugs` clamp behavior): `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-0-closeout.md`

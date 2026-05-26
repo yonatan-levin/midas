@@ -120,8 +120,8 @@ For a new session that wants to pick up Phase 4:
 4. **`docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md`** — parent spec (Phase 0 through Phase 5 phasing).
 5. **`docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-4-spec.md`** — Phase 4 spec (the design BACKEND consumes).
 6. **`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-4-implementation-plan.md`** — Phase 4 implementer plan (28 tasks across 5 commit clusters, acceptance signals, DDM sub-plan, gotchas).
-7. **`docs/refactoring/implementations/dc1-phase-3-followup-closeout.md`** — what just landed pre-Phase-4 (the inputs Phase 4 consumes).
-8. **`docs/refactoring/spec/dc1-phase-3-followup-spec.md`** — the HIGH-1 fix design (Option A pre-clean snapshot) since Phase 4 consumers will read from `Restated()` / `InvestedCapital()` whose behavior the followup corrected.
+7. **`docs/refactoring/archive/dc1-phase-3-followup-closeout.md`** — what just landed pre-Phase-4 (the inputs Phase 4 consumes).
+8. **`docs/refactoring/archive/dc1-phase-3-followup-spec.md`** — the HIGH-1 fix design (Option A pre-clean snapshot) since Phase 4 consumers will read from `Restated()` / `InvestedCapital()` whose behavior the followup corrected.
 9. **`docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md`** — DC-1 tracker (per-phase progress paragraphs).
 10. **`internal/services/datacleaner/cleaneddata/`** — the package Phase 4 consumers read from.
 11. **`internal/services/valuation/`** — the 13 consumer read sites (grep `data.TotalAssets|TotalDebt|StockholdersEquity|CurrentAssets|CurrentLiabilities|OperatingIncome|NormalizedOperatingIncome|InterestExpense|Goodwill|OtherIntangibles|Inventory|DeferredTaxAssets|TangibleAssets`).
@@ -295,11 +295,11 @@ AUTHORITATIVE DOCUMENTS (read in order, inside ../midas-dc1-phase-4/):
 4. docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md
    — parent spec (Phase 0 through Phase 5 phasing).
 
-5. docs/refactoring/implementations/dc1-phase-3-followup-closeout.md
+5. docs/refactoring/archive/dc1-phase-3-followup-closeout.md
    — Phase 3 followup closeout (the inputs Phase 4 consumes; HIGH-1 fix details;
    B3 routing intent recorded in OverlaySpec.Field:"DebtLikeClaims").
 
-6. docs/refactoring/spec/dc1-phase-3-followup-spec.md
+6. docs/refactoring/archive/dc1-phase-3-followup-spec.md
    — HIGH-1 fix design (Option A pre-clean snapshot); ARCH's reasoning for
    why the Restated() reducer applies ONLY EquityOffset + TaxShieldDTA.
 

@@ -248,7 +248,7 @@ lower-bound table (the `predictionRows` table). Truth source: the
 committed shadow snapshots at
 `internal/integration/testdata/recompute-shadow/<TICKER>.json` (filed
 by Phase 1's basket-recording test) plus the 7-cluster mapping in
-`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md`,
+`docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-1-shadow-analysis.md`,
 inverted via `service.go::checkRuleApplicability`. The assertion
 granularity is "considered, not fired" — the AdjusterID is populated
 on every LedgerEntry regardless of `Fired` state, so the test catches

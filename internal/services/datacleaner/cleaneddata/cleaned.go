@@ -37,7 +37,7 @@ import "github.com/midas/dcf-valuation-api/internal/core/entities"
 // for current use cases; a future parallel-read consumer (e.g., a batch
 // valuation endpoint) would need a sync.Once retrofit on the three
 // accessor methods. Tracked as a Phase 5 watch item — see
-// docs/refactoring/spec/dc1-phase-3-followup-spec.md §4.6.
+// docs/refactoring/archive/dc1-phase-3-followup-spec.md §4.6.
 //
 // Neither input *FinancialData is mutated by accessor calls. View
 // construction copies values into new FinancialDataView records.
