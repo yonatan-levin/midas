@@ -1,6 +1,7 @@
 # DC-1 Phase 4 — Closeout (Consumer Migration + B3 Routing Flip + Dual-Write Deletion)
 
-**Status:** IMPLEMENTED on branch `dc1-phase-4` (forked from master `9d745a9`) — awaiting REVIEWER + HUMAN merge. NOT yet merged to master.
+**Status:** IMPLEMENTED + FULLY REVIEWED on branch `dc1-phase-4` (forked from master `9d745a9`) — awaiting HUMAN merge. NOT yet merged to master.
+**Review rounds:** (1) `/execute` B-V-R-Q on the 6-commit base — 1 HIGH (NWC recomputed-umbrella drift on AMD) → fixed `e521c53`; (2) `/code-review` holistic high-effort → APPROVE_WITH_NITS; (3) zen-mcp **gpt-5.5** cross-model → 1 HIGH (`revenue_multiple` dropped `DebtLikeClaims`) → fixed `2ea9978`, 1 finding refuted (ROIC equity drift = intended Class-II per §5.2), doc nits; (4) `/execute` B-V-R-Q on `2ea9978` → VERIFIED / APPROVE / PASS. All load-bearing invariants GREEN at the tip.
 **Date:** 2026-05-27
 **Spec:** [datacleaner-component-primitive-and-parallel-views-phase-4-spec.md](../spec/datacleaner-component-primitive-and-parallel-views-phase-4-spec.md)
 **Plan:** [datacleaner-component-primitive-and-parallel-views-phase-4-implementation-plan.md](./datacleaner-component-primitive-and-parallel-views-phase-4-implementation-plan.md)
@@ -31,7 +32,9 @@ This is the FIRST consumer-visible numeric change since v0.10.0.
 | C-2 | `4f8a06c` | ROIC + NWC + `effectiveOI` → `Restated()`; **Graham → `AsReported()` (pulled forward from C-5 — see §7 judgment call)**; delete A2/A4/A5 asset dispatcher dual-writes via the new `applyLedgerComponentDeltas` helper. |
 | C-3 | `9bc885e` | NOPAT-fallback guard + negative-OI sentinel + cross-check + router OI + alt-model OI (revenue_multiple/ffo) → `Restated()`; DDM keeps `latestFinancialData` (branch on model type); delete C1/C2/C3/C5/C6 earnings dual-writes. |
 | C-4 | `7349a1e` | WACC inputs + EV→Equity bridge → `Restated()`/`InvestedCapital()`; B3 routing flip realized (new `dcf.CalculateEquityValueWithDebtLikeClaims`); delete A1 + B1/B2/B3 dual-writes; `CalculationVersion` 4.2 → 4.3. |
-| C-5 | (this commit) | Tangible value → `AsReported()` (see §7 judgment call); `currency.go` annotated (NO migration); vestigial-translator deletion DEFERRED to Phase 5 (still load-bearing); docs sweep; this closeout. DDM (`ddm.go`) confirmed untouched. |
+| C-5 | `ae9113a` | Tangible value → `AsReported()` (see §7 judgment call); `currency.go` annotated (NO migration); vestigial-translator deletion DEFERRED to Phase 5 (still load-bearing); docs sweep; this closeout. DDM (`ddm.go`) confirmed untouched. |
+| C-2.1 | `e521c53` | **Followup (REVIEWER HIGH):** `calculateNetWorkingCapitalChange` flipped from `Restated()` to `AsReported()` for `CurrentAssets`/`CurrentLiabilities` (latest + prior) — recomputed-umbrella drift on AMD-class plug shortfalls (see §7 #4). + `applyLedgerComponentDeltas` default-arm WARN. |
+| C-5.1 | `2ea9978` | **Followup (gpt-5.5 review HIGH):** `revenue_multiple` EV→Equity bridge now subtracts `InvestedCapital().DebtLikeClaims` (was silently dropping B1/B2/B3 after the dual-write deletion — see §7 #6). FFO unchanged; DDM=0. + 3 doc-comment fixes + `ledger_apply.go` `logctx.Or(ctx, zap.L())`. |
 
 ## 3. §8.2.1 Option A mechanism (the load-bearing dispatcher contract change)
 
@@ -247,6 +250,28 @@ a fresh `4.2`/config-current baseline, which needs live SEC/market capture
    Restater-touched, so the alt-model `ModelInput.CashAndCashEquivalents` + the
    EV-bridge cash term read `latestFinancialData.CashAndCashEquivalents`
    directly. Spec §4.2.5/§4.2.13's "restated.CashAndCashEquivalents" is moot.
+6. **`revenue_multiple` subtracts `DebtLikeClaims` (gpt-5.5 review HIGH; commit
+   `2ea9978`) — deliberate expansion beyond spec §4.2.13's original alt-model
+   scoping.** The spec originally scoped alt-model `DebtLikeClaims` subtraction
+   OUT ("alt models don't have a B-rule story today"). The gpt-5.5 cross-model
+   review found this was correct for `ffo` but WRONG for `revenue_multiple`,
+   which computes a GENUINE enterprise value (`EV = revenue × EV/Revenue
+   multiple`) and bridges `EV − InterestBearingDebt + Cash`. Pre-Phase-4 the
+   B1/B2/B3 amounts were folded into `InterestBearingDebt` (via the dual-write)
+   and thus subtracted; Phase 4's dual-write deletion + the flip to B-rule-free
+   `restated.InterestBearingDebt` SILENTLY DROPPED them → equity overstated for
+   B-rule-firing `revenue_multiple` tickers (esp. B1 lease firers). The fix
+   threads `ModelInput.DebtLikeClaims` (from `investedCapitalOr(...).DebtLikeClaims`,
+   non-DDM only) and subtracts it in BOTH `revenue_multiple` bridges (trailing +
+   forward), mirroring the DCF path. `ffo` is correctly left unchanged — FFO
+   equity is multiple-derived (`valuePerShare × shares`); `InterestBearingDebt`
+   only back-derives the reported EV, so subtracting `DebtLikeClaims` there would
+   double-count. DDM gets `DebtLikeClaims = 0` (bit-for-bit). This introduces NEW
+   intended drift for `revenue_multiple` + B-rule-firing tickers (equity
+   DECREASES — same accuracy-correction class as the DCF B3 flip, §5.3). Pinned
+   by `TestRevenueMultiple_SubtractsDebtLikeClaims` (trailing + zero-claims
+   backward-compat) + `TestRevenueMultiple_Forward_SubtractsDebtLikeClaims`.
+   Spec §4.2.5 + §4.2.13 amended to match the shipped behavior.
 
 ## 8. DDM migration deferred to Phase 5
 
@@ -281,7 +306,7 @@ every commit.
 |---|---|---|
 | `TestDDM_ConsumerPath_UnaffectedByPhase4` | `models/ddm_phase4_invariance_test.go` | C-1 |
 | `TestPerformValuation_RestatedReadsAtROIC` | `valuation/phase4_consumer_migration_test.go` | C-2 |
-| `TestPerformValuation_NWCChangeUsesRestated` | same | C-2 |
+| `TestPerformValuation_NWCChangeUsesAsReported` (renamed from `...UsesRestated` in `e521c53`) | same | C-2 / C-2.1 |
 | `TestEffectiveOI_ReadsView` | same | C-2 |
 | `TestDispatcherDualWriteDeleted_Assets` | `adjustments/dispatcher_dualwrite_deleted_test.go` | C-2 |
 | `TestPerformValuation_CrossCheckReadsRestated` | `valuation/phase4_consumer_migration_test.go` | C-3 |
@@ -293,6 +318,8 @@ every commit.
 | `TestCalculateEquityValueWithDebtLikeClaims` | `pkg/finance/dcf/dcf_test.go` | C-4 |
 | `TestPerformValuation_GrahamUsesAsReported` | `valuation/phase4_consumer_migration_test.go` | C-2/C-5 |
 | `TestCalculateTangibleValuePerShare_UsesView` | same | C-5 |
+| `TestRevenueMultiple_SubtractsDebtLikeClaims` | `models/revenue_multiple_test.go` | C-5.1 (followup) |
+| `TestRevenueMultiple_Forward_SubtractsDebtLikeClaims` | same | C-5.1 (followup) |
 
 Existing dispatcher emission tests (A1/A2/A4/A5/B1/B2/B3 + ActiveWorkflow +
 baseline B3 + integration debt + the 5 `CalculationVersion` assertions) were
