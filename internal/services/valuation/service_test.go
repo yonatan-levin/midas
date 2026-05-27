@@ -880,7 +880,7 @@ func TestService_performValuation_MinorityInterestPreferredEquity_BridgeDelta(t 
 
 	// Baseline: MI = PE = 0 (legacy behavior).
 	baseSvc, baseHist, baseMkt, baseMac := makeService()
-	baseResult, err := baseSvc.performValuation(context.Background(), baseHist, baseMkt, baseMac, nil)
+	baseResult, err := baseSvc.performValuation(context.Background(), baseHist, baseMkt, baseMac, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, baseResult)
 	require.Greater(t, baseResult.DCFValuePerShare, 0.0)
@@ -893,7 +893,7 @@ func TestService_performValuation_MinorityInterestPreferredEquity_BridgeDelta(t 
 		period.MinorityInterest = miAmount
 		period.PreferredEquity = peAmount
 	}
-	miResult, err := miSvc.performValuation(context.Background(), miHist, miMkt, miMac, nil)
+	miResult, err := miSvc.performValuation(context.Background(), miHist, miMkt, miMac, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, miResult)
 
@@ -952,7 +952,7 @@ func TestService_performValuation(t *testing.T) {
 	historicalData, marketData, macroData := createTestData()
 
 	t.Run("successful valuation with good data", func(t *testing.T) {
-		result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -976,7 +976,7 @@ func TestService_performValuation(t *testing.T) {
 			},
 		}
 
-		result, err := service.performValuation(context.Background(), singlePeriodData, marketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), singlePeriodData, marketData, macroData, nil, nil)
 
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
@@ -992,7 +992,7 @@ func TestService_performValuation(t *testing.T) {
 			Data:   map[string]*entities.FinancialData{},
 		}
 
-		result, err := service.performValuation(context.Background(), emptyData, marketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), emptyData, marketData, macroData, nil, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -1007,7 +1007,7 @@ func TestService_performValuation(t *testing.T) {
 			SharePrice: 0, // Missing price
 		}
 
-		result, err := service.performValuation(context.Background(), historicalData, incompleteMarketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), historicalData, incompleteMarketData, macroData, nil, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -1021,7 +1021,7 @@ func TestService_performValuation(t *testing.T) {
 			RiskFreeRate: 0, // Missing risk-free rate
 		}
 
-		result, err := service.performValuation(context.Background(), historicalData, marketData, incompleteMacroData, nil)
+		result, err := service.performValuation(context.Background(), historicalData, marketData, incompleteMacroData, nil, nil)
 
 		assert.Error(t, err)
 		assert.Nil(t, result)
@@ -1758,12 +1758,12 @@ func TestService_CalculateValuation_OverrideBeta(t *testing.T) {
 
 	// Low beta (0.5) should produce a lower WACC
 	lowBeta := 0.5
-	resultLow, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &lowBeta})
+	resultLow, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &lowBeta}, nil)
 	require.NoError(t, err)
 
 	// High beta (2.0) should produce a higher WACC
 	highBeta := 2.0
-	resultHigh, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &highBeta})
+	resultHigh, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &highBeta}, nil)
 	require.NoError(t, err)
 
 	// Assert that different betas produce different WACCs
@@ -1795,12 +1795,12 @@ func TestService_CalculateValuation_OverrideRiskFree(t *testing.T) {
 
 	// Low risk-free rate (1%) should produce a lower WACC
 	lowRF := 0.01
-	resultLow, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &lowRF})
+	resultLow, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &lowRF}, nil)
 	require.NoError(t, err)
 
 	// High risk-free rate (8%) should produce a higher WACC
 	highRF := 0.08
-	resultHigh, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &highRF})
+	resultHigh, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &highRF}, nil)
 	require.NoError(t, err)
 
 	assert.NotEqual(t, resultLow.WACC, resultHigh.WACC,
@@ -1830,10 +1830,10 @@ func TestService_CalculateValuation_NilOptsDefaultBehavior(t *testing.T) {
 	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop(), newTestCalcEmitter(), nil)
 
 	// Two calls with nil opts should produce identical WACCs
-	result1, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+	result1, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 	require.NoError(t, err)
 
-	result2, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+	result2, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, result1.WACC, result2.WACC, "nil opts should produce deterministic WACC")
@@ -1891,7 +1891,7 @@ func TestService_performValuation_InsufficientDataSentinel(t *testing.T) {
 		Data:   map[string]*entities.FinancialData{},
 	}
 
-	_, err := service.performValuation(context.Background(), emptyData, marketData, macroData, nil)
+	_, err := service.performValuation(context.Background(), emptyData, marketData, macroData, nil, nil)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrInsufficientData, "empty data must return ErrInsufficientData sentinel")
 }
@@ -2099,7 +2099,7 @@ func TestService_performValuation_WACCFailure(t *testing.T) {
 
 	// Use a negative beta override to trigger WACC validation failure
 	negativeBeta := -1.0
-	result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &negativeBeta})
+	result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &negativeBeta}, nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, result)
@@ -2165,7 +2165,7 @@ func TestService_performValuation_SharesFallback(t *testing.T) {
 			},
 		}
 
-		result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		assert.Greater(t, result.DCFValuePerShare, 0.0)
@@ -2211,7 +2211,7 @@ func TestService_performValuation_SharesFallback(t *testing.T) {
 			},
 		}
 
-		result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+		result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		// Should use marketData.SharesOutstanding = 15744231000
@@ -2420,7 +2420,7 @@ func TestService_performValuation_NegativeOperatingIncome(t *testing.T) {
 	}
 	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, newTestCalcEmitter(), nil)
 
-	result, err := svc.performValuation(context.Background(), negativeOI, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), negativeOI, marketData, macroData, nil, nil)
 	// Phase 3: negative OI now routes to revenue_multiple model instead of failing
 	assert.NoError(t, err, "Negative OI should route to revenue multiple model")
 	assert.NotNil(t, result, "Should return a result from revenue multiple model")
@@ -2463,7 +2463,7 @@ func TestService_performValuation_TrueFCF(t *testing.T) {
 	}
 	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, newTestCalcEmitter(), nil)
 
-	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Greater(t, result.DCFValuePerShare, 0.0)
@@ -2524,7 +2524,7 @@ func TestService_performValuation_GrowthCapping(t *testing.T) {
 		},
 	}
 
-	result, err := svc.performValuation(context.Background(), extremeGrowth, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), extremeGrowth, marketData, macroData, nil, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	// Growth should be capped to 30% (config max), not the raw ~124% CAGR
@@ -2917,7 +2917,7 @@ func TestService_performValuation_FINZeroDPS_FallbackToDCF(t *testing.T) {
 	}
 	svc := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, newTestCalcEmitter(), nil)
 
-	result, err := svc.performValuation(context.Background(), finData, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), finData, marketData, macroData, nil, nil)
 
 	// DDM should fail (zero DPS) but positive OI triggers DCF fallback
 	assert.NoError(t, err, "FIN company with zero DPS but positive OI should fall back to DCF")
@@ -3000,7 +3000,7 @@ func TestService_performValuation_FINNegativeOI_FallbackToRevMultiple(t *testing
 		},
 	}
 
-	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 
 	assert.NoError(t, err, "FIN with negative OI should fall back to revenue_multiple, not error")
 	assert.NotNil(t, result)
@@ -3278,7 +3278,7 @@ func TestService_performValuation_NegativeOI_ErrModelNotApplicable(t *testing.T)
 		},
 	}
 
-	_, err := service.performValuation(context.Background(), negOIData, marketData, macroData, nil)
+	_, err := service.performValuation(context.Background(), negOIData, marketData, macroData, nil, nil)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, ErrModelNotApplicable,
 		"negative OI with no revenue_multiple model should return ErrModelNotApplicable")
@@ -3318,7 +3318,7 @@ func TestService_performValuation_WithExitMultiple(t *testing.T) {
 
 	historicalData, marketData, macroData := createTestData()
 
-	result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+	result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3396,7 +3396,7 @@ func TestService_performValuation_DDMFallbackToDCF(t *testing.T) {
 		},
 	}
 
-	result, err := service.performValuation(context.Background(), finData, marketData, macroData, nil)
+	result, err := service.performValuation(context.Background(), finData, marketData, macroData, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3643,7 +3643,7 @@ func TestService_DCF_HorizonFromProfile_MatureLargeScale_3y(t *testing.T) {
 	svc := buildP2TestService(t, reg)
 	historicalData, marketData, macroData := createTestData()
 
-	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3669,7 +3669,7 @@ func TestService_DCF_HorizonFromProfile_HypergrowthProfitable_10y(t *testing.T) 
 	svc := buildP2TestService(t, reg)
 	historicalData, marketData, macroData := createTestData()
 
-	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3687,7 +3687,7 @@ func TestService_DCF_TerminalDominanceWarning_FlaggedWhenExceedsThreshold(t *tes
 	svc := buildP2TestService(t, reg)
 	historicalData, marketData, macroData := createTestData()
 
-	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
@@ -3715,7 +3715,7 @@ func TestService_DCF_NoProfile_PreservesLegacy7y(t *testing.T) {
 	svc := buildP2TestService(t, nil) // nil registry
 	historicalData, marketData, macroData := createTestData()
 
-	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil)
+	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 

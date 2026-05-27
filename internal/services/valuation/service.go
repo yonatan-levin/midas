@@ -18,6 +18,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	growthsvc "github.com/midas/dcf-valuation-api/internal/services/growth"
@@ -469,13 +470,22 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 		)
 	}
 
-	// Apply data cleaning if service is available
+	// Apply data cleaning if service is available.
+	//
+	// DC-1 Phase 4 (C-1 plumbing): capture the *cleaneddata.CleanedFinancialData
+	// view wrapper alongside the legacy CleaningResult. `cleaned` is threaded
+	// through performValuation so C-2..C-5 can migrate individual consumer
+	// read sites to the AsReported() / Restated() / InvestedCapital() accessors
+	// one cluster at a time. It is nil when no cleaner is wired or cleaning
+	// failed; every downstream reader nil-guards and falls back to the legacy
+	// latestFinancialData.X direct read.
 	var cleaningResult *entities.CleaningResult
+	var cleaned *cleaneddata.CleanedFinancialData
 	if s.dataCleaner != nil {
 		latest, latestPeriod := historicalData.GetLatestPeriod()
 		if latest != nil {
 			var err error
-			cleaningResult, err = s.dataCleaner.CleanFinancialData(ctx, latest)
+			cleaningResult, cleaned, err = s.dataCleaner.CleanFinancialDataWithViews(ctx, latest)
 			if err != nil {
 				s.log(ctx).Warn("Data cleaning failed, using original data",
 					zap.Error(err),
@@ -484,7 +494,9 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 				s.log(ctx).Info("Data cleaning applied successfully",
 					zap.String("ticker", ticker),
 					zap.Float64("quality_score", cleaningResult.QualityScore))
-				// Update historical data with cleaned data
+				// Update historical data with cleaned data. The legacy slot
+				// stays populated for the DDM consumer's GetLatestPeriod()
+				// read path (DDM migration deferred to Phase 5 per spec §7).
 				historicalData.Data[latestPeriod] = cleaningResult.CleanedData
 			}
 		}
@@ -493,7 +505,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	}
 
 	// Calculate valuation using potentially cleaned data, applying any user overrides
-	result, err := s.performValuation(ctx, historicalData, marketData, macroData, opts)
+	result, err := s.performValuation(ctx, historicalData, marketData, macroData, opts, cleaned)
 	if err != nil {
 		s.metricsService.RecordValuationRequest(ticker, "single", "error", time.Since(start))
 		s.metricsService.RecordValuationError(ticker, "calculation_failed")
@@ -561,12 +573,20 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 
 // performValuation executes the valuation calculation logic.
 // opts may be nil; when provided, its fields override data-source values in the WACC calculation.
+//
+// DC-1 Phase 4: cleaned carries the three-view accessor surface
+// (AsReported / Restated / InvestedCapital) over the post-clean latest-period
+// *FinancialData. It may be nil (no cleaner wired, cleaning failed, or a test
+// path that doesn't stub it); every read site nil-guards and falls back to the
+// legacy latestFinancialData.X direct read. Consumer reads migrate to the
+// views one cluster at a time (C-2..C-5).
 func (s *Service) performValuation(
 	ctx context.Context,
 	historicalData *entities.HistoricalFinancialData,
 	marketData *entities.MarketData,
 	macroData *entities.MacroData,
 	opts *ValuationOptions,
+	cleaned *cleaneddata.CleanedFinancialData,
 ) (*entities.ValuationResult, error) {
 
 	// Validate minimum data requirements — need at least 1 annual period with revenue or OI
@@ -994,7 +1014,7 @@ func (s *Service) performValuation(
 			ctx, selectedModel, historicalData, marketData, macroData,
 			growthEstimate, waccResult, latestFinancialData, latestPeriod,
 			tangibleValuePerShare, sharesOutstanding, industryCode,
-			resolvedProfile,
+			resolvedProfile, cleaned,
 		)
 		if errors.Is(altErr, errFallbackToDCF) {
 			s.log(ctx).Info("Falling back to standard DCF after alternative model failure",
@@ -1435,6 +1455,7 @@ func (s *Service) performAlternativeValuation(
 	sharesOutstanding float64,
 	industryCode string,
 	resolvedProfile *profile.ResolvedProfile,
+	cleaned *cleaneddata.CleanedFinancialData,
 ) (*entities.ValuationResult, error) {
 
 	s.log(ctx).Info("Using alternative valuation model",
