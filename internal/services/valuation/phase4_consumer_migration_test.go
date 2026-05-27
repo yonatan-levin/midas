@@ -134,6 +134,46 @@ func TestEffectiveOI_ReadsView(t *testing.T) {
 		"effectiveOI falls back to OperatingIncome when normalized is non-positive")
 }
 
+// TestPerformValuation_CrossCheckReadsRestated pins that the DCF cross-check +
+// the alt-model OI routing read the Restated view (DC-1 Phase 4 C-3 §4.2.6 +
+// §4.2.2). A C1-style restructuring add-back raises Restated
+// NormalizedOperatingIncome above the as-reported value; the migrated reads
+// (cross-check EBITDA via OperatingIncome, NOPAT-fallback guard,
+// effectiveOI, router OI) must all see the restated figure.
+func TestPerformValuation_CrossCheckReadsRestated(t *testing.T) {
+	const reportedOI = 100_000_000.0
+	const reportedNOI = 100_000_000.0
+	const addBack = 30_000_000.0 // C1 restructuring add-back
+
+	// Post-clean entity: the dispatcher (via the generic component-delta
+	// helper) has already raised NormalizedOperatingIncome by the add-back and
+	// the ledger carries the fired entry. OperatingIncome is identity-copied.
+	postClean := &entities.FinancialData{
+		OperatingIncome:           reportedOI,
+		NormalizedOperatingIncome: reportedNOI + addBack,
+		NetIncome:                 80_000_000,
+		AdjustmentLedger: entities.AdjustmentLedger{
+			firedRestaterEntry("NormalizedOperatingIncome", addBack, addBack),
+		},
+	}
+	asReported := &entities.FinancialData{
+		OperatingIncome:           reportedOI,
+		NormalizedOperatingIncome: reportedNOI,
+		NetIncome:                 80_000_000,
+	}
+	cleaned := cleaneddata.New(asReported, postClean)
+
+	view := restatedViewOr(cleaned, asReported)
+	assert.InDelta(t, reportedNOI+addBack, view.NormalizedOperatingIncome, 1e-6,
+		"cross-check / NOPAT-guard / router OI must read Restated().NormalizedOperatingIncome (add-back applied)")
+	// effectiveOI prefers the (now restated) normalized OI.
+	assert.InDelta(t, reportedNOI+addBack, effectiveOI(view), 1e-6,
+		"effectiveOI must reflect the restated normalized OI")
+	// NetIncome (used by the cross-check EPS/FCF) is not Restater-touched today
+	// but is read via the view for coherence.
+	assert.InDelta(t, 80_000_000.0, view.NetIncome, 1e-6)
+}
+
 // TestPerformValuation_GrahamUsesAsReported pins that the Graham consumer reads
 // the AsReported() view, NOT Restated() (DC-1 Phase 4 §4.2.9). The fixture
 // makes the post-clean (restated) entity's CurrentAssets components diverge

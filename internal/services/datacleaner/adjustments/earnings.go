@@ -1371,14 +1371,12 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// perform the dual-write mutation that ApplyC1Restructuring
 			// intentionally omitted.
 			result = c1AdjusterOutputToLegacyResult(out, rule, originalRestructuring)
-			if result.Applied {
-				// Dual-write: today's downstream consumers still read
-				// data.NormalizedOperatingIncome in place. Phase 4 deletes
-				// these mutations once Phase 3's CleanedFinancialData views
-				// replace direct reads. The add-back amount is the
-				// LedgerEntry DeltaAmount (positive — C1 is an add-back).
-				data.NormalizedOperatingIncome += result.Amount
-			}
+
+			// DC-1 Phase 4 (C-3, §8.2.1 Option A): the dispatcher applies the
+			// fired LedgerEntry's COMPONENT delta (NormalizedOperatingIncome,
+			// positive add-back for C1) to data via the generic helper. No
+			// umbrella mutation. Consumers read Restated().NormalizedOperatingIncome.
+			applyLedgerComponentDeltas(applyCtx, data, out)
 
 			// Record native emissions for the orchestrator. Even when the rule
 			// does not "fire" (Applied=false), the AdjusterOutput carries a
@@ -1401,11 +1399,12 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			}
 
 			result = c2AdjusterOutputToLegacyResult(out, rule, originalGains, originalRevenue)
-			if result.Applied {
-				// Dual-write: subtraction, NOT add-back. Legacy code:
-				// data.NormalizedOperatingIncome -= data.AssetSaleGains
-				data.NormalizedOperatingIncome -= result.Amount
-			}
+
+			// DC-1 Phase 4 (C-3, §8.2.1 Option A): the helper applies the C2
+			// LedgerEntry's signed COMPONENT delta (DeltaAmount = -gains, i.e.
+			// a subtraction) to data.NormalizedOperatingIncome. No umbrella
+			// mutation.
+			applyLedgerComponentDeltas(applyCtx, data, out)
 
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
@@ -1421,11 +1420,12 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			}
 
 			result = c3AdjusterOutputToLegacyResult(out, rule, originalRevenue)
-			if result.Applied {
-				// Dual-write: legacy code adds LitigationSettlements to
-				// NormalizedOperatingIncome.
-				data.NormalizedOperatingIncome += result.Amount
-			}
+
+			// DC-1 Phase 4 (C-3, §8.2.1 Option A): the helper applies the C3
+			// LedgerEntry's COMPONENT delta (positive add-back of
+			// LitigationSettlements) to data.NormalizedOperatingIncome. No
+			// umbrella mutation.
+			applyLedgerComponentDeltas(applyCtx, data, out)
 
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
@@ -1477,21 +1477,13 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			}
 
 			result = c5AdjusterOutputToLegacyResult(out, rule, originalRevenue)
-			if result.Applied {
-				// Dual-write: read the SIGNED DeltaAmount off the native
-				// LedgerEntry (the translator absolute-magnitudes for legacy
-				// Amount field — sign is lost there). Locating the fired
-				// entry: there is exactly ONE per fire (load-bearing — see
-				// ApplyC5DerivativeGainsLosses godoc).
-				for _, entry := range out.LedgerEntries {
-					if entry.AdjusterID == adjusterIDC5DerivativeGainsLosses && entry.Fired {
-						// Legacy: data.NormalizedOperatingIncome -= rawAmount
-						// Equivalent:                              += -rawAmount = += DeltaAmount.
-						data.NormalizedOperatingIncome += entry.DeltaAmount
-						break
-					}
-				}
-			}
+
+			// DC-1 Phase 4 (C-3, §8.2.1 Option A): the generic helper applies
+			// the SIGNED COMPONENT DeltaAmount (negative on the gain branch,
+			// positive on the loss branch) to data.NormalizedOperatingIncome —
+			// exactly the per-entry `+= DeltaAmount` the old hand-rolled loop
+			// did. No umbrella mutation.
+			applyLedgerComponentDeltas(applyCtx, data, out)
 
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
@@ -1518,11 +1510,15 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			}
 
 			result = c6AdjusterOutputToLegacyResult(out, rule, originalCapitalizedInterest, originalRevenue)
-			if result.Applied {
-				// Dual-write: legacy code:
-				//   data.InterestExpense += data.CapitalizedInterest
-				data.InterestExpense += result.Amount
-			}
+
+			// DC-1 Phase 4 (C-3, §8.2.1 Option A): the helper applies the C6
+			// LedgerEntry's COMPONENT delta to data.InterestExpense (NOT
+			// NormalizedOperatingIncome — different field). C6's EquityOffset
+			// stays 0 (LOAD-BEARING: capitalized-interest reclassification is
+			// between income-statement lines, not an equity event), which the
+			// helper respects by touching only the component field. No umbrella
+			// mutation.
+			applyLedgerComponentDeltas(applyCtx, data, out)
 
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)

@@ -353,13 +353,23 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 	// Income. Informational only — does not change the primary P/FFO valuation.
 	// Cap rate is looked up by subsector (VAL-3 P4) so e.g. data center REITs
 	// use 4.0% and retail REITs use 8.5% rather than the blended 6% default.
+	//
+	// DC-1 Phase 4 (C-3): the NOI proxy reads the Restated OperatingIncome via
+	// ModelInput.LatestRestatedView so the cross-check reflects restated
+	// earnings. Falls back to the latest entity read when the view is unwired
+	// (test/no-cleaner paths). Not Restater-touched for REITs today (no C-rule
+	// fires) — zero numeric drift; migrated for coherence.
+	noiProxy := latest.OperatingIncome
+	if input.LatestRestatedView != nil {
+		noiProxy = input.LatestRestatedView.OperatingIncome
+	}
 	capRate := m.getCapRate(input.Industry)
-	if capRate > 0 && latest.OperatingIncome > 0 && valuePerShare > 0 {
-		nav := latest.OperatingIncome / capRate
+	if capRate > 0 && noiProxy > 0 && valuePerShare > 0 {
+		nav := noiProxy / capRate
 		navPerShare := nav / shares
 
 		logctx.Or(ctx, m.logger).Debug("NAV cross-check",
-			zap.Float64("noi_proxy", latest.OperatingIncome),
+			zap.Float64("noi_proxy", noiProxy),
 			zap.Float64("cap_rate", capRate),
 			zap.Float64("nav_per_share", navPerShare),
 			zap.Float64("pffo_value_per_share", valuePerShare))

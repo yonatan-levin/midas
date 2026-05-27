@@ -84,3 +84,60 @@ func TestDispatcherDualWriteDeleted_Assets(t *testing.T) {
 			"A5 dispatcher must NOT mutate data.TotalAssets (Phase 4 §8.2.1 Option A)")
 	})
 }
+
+// TestDispatcherDualWriteDeleted_Earnings pins the DC-1 Phase 4 §8.2.1 Option A
+// contract for the earnings-side Restaters (C1 restructuring add-back, C6
+// capitalized-interest reclassification). The generic apply-component-delta
+// helper still mutates the COMPONENT field (NormalizedOperatingIncome /
+// InterestExpense) exactly as the deleted per-rule dual-writes did — C-rules
+// never touched an umbrella, so there is nothing to leave untouched; the test
+// pins that the component mutation magnitude is unchanged under the new
+// mechanism.
+func TestDispatcherDualWriteDeleted_Earnings(t *testing.T) {
+	t.Run("C1 restructuring add-back still lands on NormalizedOperatingIncome", func(t *testing.T) {
+		ea := NewEarningsAdjuster()
+		data := &entities.FinancialData{
+			Ticker:                    "TEST",
+			Revenue:                   1_000_000_000,
+			RestructuringCharges:      30_000_000, // 3% of revenue — fires C1
+			NormalizedOperatingIncome: 150_000_000,
+		}
+		rules := []*entities.CleaningRule{productionRestructuringRule()}
+
+		result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
+		require.NotNil(t, result)
+		require.True(t, result.Applied)
+
+		// 150M + 30M add-back = 180M, applied by the generic helper.
+		assert.InDelta(t, 180_000_000.0, data.NormalizedOperatingIncome, 1e-6,
+			"C1 component add-back must still land on data.NormalizedOperatingIncome via the helper")
+		assert.Equal(t, 30_000_000.0, data.RestructuringCharges,
+			"C1 must not mutate its source field")
+	})
+
+	t.Run("C6 capitalized interest still lands on InterestExpense with EquityOffset 0", func(t *testing.T) {
+		ea := NewEarningsAdjuster()
+		data := &entities.FinancialData{
+			Ticker:              "TEST",
+			Revenue:             1_000_000_000,
+			CapitalizedInterest: 20_000_000,
+			InterestExpense:     50_000_000,
+		}
+		rules := []*entities.CleaningRule{productionCapitalizedInterestRule()}
+
+		result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
+		require.NotNil(t, result)
+		require.True(t, result.Applied)
+
+		// 50M + 20M = 70M, applied by the helper to InterestExpense.
+		assert.InDelta(t, 70_000_000.0, data.InterestExpense, 1e-6,
+			"C6 component delta must still land on data.InterestExpense via the helper")
+
+		// LOAD-BEARING: C6 native LedgerEntry carries EquityOffset 0 — the
+		// helper touches the component only and the Restated() reducer never
+		// flows C6 into equity.
+		require.Len(t, result.NativeLedgerEntries, 1)
+		assert.Zero(t, result.NativeLedgerEntries[0].EquityOffset,
+			"C6 EquityOffset must stay 0 (income-statement reclassification, not an equity event)")
+	})
+}

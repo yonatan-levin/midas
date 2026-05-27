@@ -941,13 +941,19 @@ func (s *Service) performValuation(
 		// (Revenue==0 AND OperatingIncome==0) gets Revenue=nil so the
 		// resolver's Stage-2 maturity bucketing falls through to the
 		// "no_revenue_signal" branch instead of misclassifying as ultra-mature.
+		// DC-1 Phase 4 (C-3): NOPAT-fallback guard + OI/NI facts read the
+		// Restated view (earnings restatements C1-C7 touch
+		// NormalizedOperatingIncome). Revenue is NOT Restater-touched and
+		// stays on the entity. NetIncome is not Restater-touched today either,
+		// but reads the view for coherence + forward-compatibility (§4.2.2).
+		factsRestated := restatedViewOr(cleaned, latestFinancialData)
 		var revenuePtr *float64
-		if !(latestFinancialData.Revenue == 0 && latestFinancialData.NormalizedOperatingIncome == 0) {
+		if !(latestFinancialData.Revenue == 0 && factsRestated.NormalizedOperatingIncome == 0) {
 			v := latestFinancialData.Revenue
 			revenuePtr = &v
 		}
-		oiVal := latestFinancialData.OperatingIncome
-		niVal := latestFinancialData.NetIncome
+		oiVal := factsRestated.OperatingIncome
+		niVal := factsRestated.NetIncome
 		facts := profile.Facts{
 			Industry:           industryCode,
 			IndustryNormalized: strings.ToUpper(strings.TrimSpace(industryCode)),
@@ -989,7 +995,9 @@ func (s *Service) performValuation(
 	// Select the appropriate valuation model based on industry and financials.
 	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace;
 	// ticker is threaded in so that trace entry carries it self-describingly (M-1a).
-	selectedModel := s.modelRouter.SelectModel(ctx, historicalData.Ticker, industryCode, latestFinancialData)
+	// DC-1 Phase 4 (C-3): the router's negative-OI routing reads the Restated
+	// view so model selection reflects restated earnings.
+	selectedModel := s.modelRouter.SelectModel(ctx, historicalData.Ticker, industryCode, restatedViewOr(cleaned, latestFinancialData))
 
 	// Tier-1 narrate: model.selected. Spec §5 row 14 fields. Reason is
 	// intentionally coarse — full reasoning lives in the calclog
@@ -1361,11 +1369,17 @@ func (s *Service) performValuation(
 	// Uses EPS, EBITDA, and FCF from financials to compute implied P/E, EV/EBITDA,
 	// and P/FCF, then compares against sector medians.
 	if s.industryMultiples != nil {
+		// DC-1 Phase 4 (C-3): cross-check EPS/EBITDA/FCF read the Restated view
+		// so the implied multiples stay coherent with the restated earnings the
+		// engine valued. D&A and CapEx are NOT Restater-touched today
+		// (Restated().X == entity.X) but read the view for coherence +
+		// forward-compatibility (§4.2.6).
+		ccRestated := restatedViewOr(cleaned, latestFinancialData)
 		eps := 0.0
-		if latestFinancialData.NetIncome > 0 && sharesOutstanding > 0 {
-			eps = latestFinancialData.NetIncome / sharesOutstanding
+		if ccRestated.NetIncome > 0 && sharesOutstanding > 0 {
+			eps = ccRestated.NetIncome / sharesOutstanding
 		}
-		ebitda := latestFinancialData.OperatingIncome + latestFinancialData.DepreciationAndAmortization
+		ebitda := ccRestated.OperatingIncome + ccRestated.DepreciationAndAmortization
 
 		// Calculate FCF per share for P/FCF cross-check.
 		// Simplified FCF = NetIncome + D&A - CapEx. This intentionally omits
@@ -1373,7 +1387,7 @@ func (s *Service) performValuation(
 		// "true FCF" definition), so ImpliedPFCF is a sanity-check proxy,
 		// not the same FCF number driving the DCF itself.
 		fcfPerShare := 0.0
-		fcf := latestFinancialData.NetIncome + latestFinancialData.DepreciationAndAmortization - latestFinancialData.CapitalExpenditures
+		fcf := ccRestated.NetIncome + ccRestated.DepreciationAndAmortization - ccRestated.CapitalExpenditures
 		if fcf > 0 && sharesOutstanding > 0 {
 			fcfPerShare = fcf / sharesOutstanding
 		}
@@ -1483,6 +1497,23 @@ func (s *Service) performAlternativeValuation(
 	// (RM-1.A: RevenueMultipleModel's staleness check). Replay binds
 	// the Clock to manifest.started_at, so the staleness threshold is
 	// evaluated deterministically against captured bundle time.
+	// DC-1 Phase 4 (C-3, §4.2.13): revenue_multiple + ffo read the Restated
+	// InterestBearingDebt for their EV→Equity bridges. DDM EXPLICITLY keeps the
+	// legacy latestFinancialData read to preserve the JPM/BAC/WFC bit-for-bit
+	// invariant (§7 / §9) — DDM consumer migration is deferred to Phase 5.
+	// Branch on the model type. InterestBearingDebt is not Restater-touched
+	// today (Restated().InterestBearingDebt == entity value), so
+	// revenue_multiple/ffo see zero numeric drift now; the migration is for
+	// coherence + forward-compatibility. CashAndCashEquivalents is NOT a
+	// FinancialDataView field (never Restater-touched) and stays on the entity
+	// read for every model.
+	modelIBD := latestFinancialData.InterestBearingDebt
+	modelCash := latestFinancialData.CashAndCashEquivalents
+	if model.ModelType() != "ddm" {
+		mr := restatedViewOr(cleaned, latestFinancialData)
+		modelIBD = mr.InterestBearingDebt
+	}
+
 	modelInput := &models.ModelInput{
 		HistoricalData:         historicalData,
 		MarketData:             marketData,
@@ -1493,9 +1524,17 @@ func (s *Service) performAlternativeValuation(
 		CostOfEquity:           waccResult.CostOfEquity,
 		TaxRate:                latestFinancialData.TaxRate,
 		SharesOutstanding:      sharesOutstanding,
-		InterestBearingDebt:    latestFinancialData.InterestBearingDebt,
-		CashAndCashEquivalents: latestFinancialData.CashAndCashEquivalents,
-		Now:                    s.clock.Now,
+		InterestBearingDebt:    modelIBD,
+		CashAndCashEquivalents: modelCash,
+		// DC-1 Phase 4 (C-3): Restated view of the latest period for the FFO
+		// NAV NOI proxy. nil for DDM (deferred) to avoid any non-legacy read.
+		LatestRestatedView: func() *cleaneddata.FinancialDataView {
+			if model.ModelType() == "ddm" {
+				return nil
+			}
+			return restatedViewOr(cleaned, latestFinancialData)
+		}(),
+		Now: s.clock.Now,
 		// Tier 2 P0b: thread the resolved AssumptionProfile into ModelInput.
 		// P0b downstream consumers are nil-safe NO-OPs; P1/P3/P4 will read
 		// calibration values (horizon, caps, terminal method, payout path).
