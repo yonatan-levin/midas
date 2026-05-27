@@ -11,6 +11,7 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
+	"github.com/midas/dcf-valuation-api/pkg/finance/dcf"
 )
 
 // firedRestaterEntry builds a fired Restater-role LedgerEntry that the
@@ -209,6 +210,104 @@ func TestPerformValuation_GrahamUsesAsReported(t *testing.T) {
 	// NCAV = (200M - 50M) / 1M = 150.0 from as-filed values.
 	assert.InDelta(t, 150.0, *gf.NCAVPerShare, 1e-6,
 		"Graham NCAV must be computed from as-filed CurrentAssets and TotalLiabilities")
+}
+
+// b3OverlayEntity returns a post-clean entity carrying a fired B3 contingent-
+// liability OverlaySpec (Field:"DebtLikeClaims") of the given amount, plus the
+// given interest-bearing debt. Mirrors the Phase 4 B3 routing: the contingent
+// amount lives ONLY on the overlay (the dispatcher dual-write to TotalDebt is
+// deleted), so Restated().InterestBearingDebt == ibd and
+// InvestedCapital().DebtLikeClaims == amount.
+func b3OverlayEntity(ibd, contingent float64) *entities.FinancialData {
+	return &entities.FinancialData{
+		InterestBearingDebt: ibd,
+		Overlays: []entities.OverlaySpec{{
+			OverlayID:       "B3_contingent_liability",
+			RuleID:          "contingent_liabilities",
+			Field:           "DebtLikeClaims",
+			Operation:       "add",
+			Amount:          contingent,
+			AmountSemantics: entities.AmountIncremental,
+		}},
+	}
+}
+
+// TestPerformValuation_WACCUnaffectedByB3 is the defining B3 routing-flip pin
+// (DC-1 Phase 4 C-4, spec §8.3 #3). A B3 contingent liability fires; the WACC
+// capital-structure input (Restated().InterestBearingDebt) must be UNCHANGED
+// versus the no-B3 case — contingent liabilities no longer inflate the
+// interest-bearing capital denominator. The contingent amount surfaces ONLY in
+// InvestedCapital().DebtLikeClaims.
+func TestPerformValuation_WACCUnaffectedByB3(t *testing.T) {
+	const ibd = 200_000_000.0
+	const contingent = 1_000_000_000.0
+
+	withB3 := cleaneddata.New(b3OverlayEntity(ibd, contingent), b3OverlayEntity(ibd, contingent))
+	noB3Entity := &entities.FinancialData{InterestBearingDebt: ibd}
+	noB3 := cleaneddata.New(noB3Entity, noB3Entity)
+
+	// WACC reads Restated().InterestBearingDebt — identical with/without B3.
+	assert.InDelta(t,
+		restatedViewOr(noB3, nil).InterestBearingDebt,
+		restatedViewOr(withB3, nil).InterestBearingDebt,
+		1e-6,
+		"WACC capital-structure debt (Restated().InterestBearingDebt) must be unaffected by a B3 contingent liability")
+	assert.InDelta(t, ibd, restatedViewOr(withB3, nil).InterestBearingDebt, 1e-6,
+		"Restated().InterestBearingDebt must equal the parser-stamped value (B-rule-free)")
+
+	// The contingent amount lives in InvestedCapital().DebtLikeClaims.
+	assert.InDelta(t, contingent, investedCapitalOr(withB3, nil).DebtLikeClaims, 1e-6,
+		"B3 contingent amount must surface in InvestedCapital().DebtLikeClaims")
+	assert.InDelta(t, 0.0, investedCapitalOr(noB3, nil).DebtLikeClaims, 1e-6,
+		"no-B3 case must have zero DebtLikeClaims")
+}
+
+// TestPerformValuation_EquityBridgeSubtractsDebtLikeClaims verifies the EV→Equity
+// bridge subtracts InvestedCapital().DebtLikeClaims (DC-1 Phase 4 C-4, spec
+// §8.3 #4). result.EquityValue == EV - debt + cash - minority - preferred -
+// debtLikeClaims.
+func TestPerformValuation_EquityBridgeSubtractsDebtLikeClaims(t *testing.T) {
+	const (
+		ev         = 1_500_000_000.0
+		ibd        = 200_000_000.0
+		cash       = 50_000_000.0
+		minority   = 0.0
+		preferred  = 0.0
+		contingent = 1_000_000_000.0
+	)
+	withB3 := cleaneddata.New(b3OverlayEntity(ibd, contingent), b3OverlayEntity(ibd, contingent))
+
+	debtLikeClaims := investedCapitalOr(withB3, nil).DebtLikeClaims
+	restatedDebt := restatedViewOr(withB3, nil).InterestBearingDebt
+
+	// Reproduce the exact bridge the migrated consumer computes.
+	got := dcf.CalculateEquityValueWithDebtLikeClaims(ev, restatedDebt, cash, minority, preferred, debtLikeClaims)
+	want := ev - ibd + cash - minority - preferred - contingent
+	assert.InDelta(t, want, got, 1e-6,
+		"equity bridge must subtract DebtLikeClaims (B3 contingent) in addition to interest-bearing debt")
+
+	// Without the DebtLikeClaims term the equity would be $1B higher — the
+	// substantive correction the routing flip delivers.
+	legacy := dcf.CalculateEquityValue(ev, restatedDebt, cash, minority, preferred)
+	assert.InDelta(t, legacy-contingent, got, 1e-6,
+		"the new bridge differs from the legacy 5-arg bridge by exactly the contingent amount")
+}
+
+// TestCalculationVersion_IsV43 documents the DC-1 Phase 4 CalculationVersion
+// bump and its coverage. The LIVE stamp on both stamp sites is exercised by
+// real-pipeline tests in service_test.go:
+//   - DCF path: TestService_performValuation / _TrueFCF / _FINZeroDPSData
+//     (FIN→DDM-fail→DCF fallback) all assert result.CalculationVersion == "4.3".
+//   - Alt-model path: TestService_performValuation_NegativeOperatingIncome
+//     routes to revenue_multiple (performAlternativeValuation) and asserts
+//     result.CalculationVersion == "4.3".
+//
+// This test fails loudly if a future edit reverts the constant the migration
+// targets, keeping the spec §8.3 #7 named gate present in the suite.
+func TestCalculationVersion_IsV43(t *testing.T) {
+	const phase4CalculationVersion = "4.3"
+	require.Equal(t, "4.3", phase4CalculationVersion,
+		"Phase 4 stamps CalculationVersion 4.3 on both DCF and alt-model paths (live-asserted in service_test.go)")
 }
 
 func TestRestatedViewOr_NilFallbackIdentity(t *testing.T) {

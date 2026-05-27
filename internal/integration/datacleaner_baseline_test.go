@@ -198,11 +198,23 @@ func TestDataCleaner_B3_ContingentLiabilities_BaselineNoAI(t *testing.T) {
 					"Flag severity should match expected baseline")
 			}
 
-			// Verify that debt was adjusted correctly if adjustments were applied
+			// DC-1 Phase 4 (C-4 / B3 routing flip): the B-rule debt dual-write
+			// is DELETED. The contingent-liability amount no longer flows into
+			// CleanedData.TotalDebt — it is recorded on a DebtLikeClaims
+			// OverlaySpec for InvestedCapital() to consume. Verify TotalDebt is
+			// UNCHANGED from the pre-clean input and the amount is captured on
+			// an overlay instead.
 			if tt.expectedApplied && len(liabilityAdjustments) > 0 {
-				expectedDebt := tt.data.TotalDebt + tt.expectedAdjustmentAmount
-				assert.InDelta(t, expectedDebt, result.CleanedData.TotalDebt, 0.01,
-					"Total debt should be increased by adjustment amount")
+				assert.InDelta(t, tt.data.TotalDebt, result.CleanedData.TotalDebt, 0.01,
+					"Phase 4: contingent amount must NOT inflate CleanedData.TotalDebt (routes to DebtLikeClaims)")
+				var overlayTotal float64
+				for _, o := range result.CleanedData.Overlays {
+					if o.RuleID == "contingent_liabilities" {
+						overlayTotal += o.Amount
+					}
+				}
+				assert.InDelta(t, tt.expectedAdjustmentAmount, overlayTotal, 0.01,
+					"Phase 4: contingent amount must be recorded on a DebtLikeClaims OverlaySpec")
 			}
 
 			// Critical baseline checks: Ensure no AI-specific fields or metadata

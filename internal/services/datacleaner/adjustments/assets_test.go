@@ -396,11 +396,14 @@ func TestAssetAdjuster_ProcessAssetAdjustments_ActiveWorkflow(t *testing.T) {
 				},
 			},
 			expectedOriginalGoodwill: 500000.0,
-			expectedFinalGoodwill:    0.0, // Should be zeroed out
-			expectedOriginalAssets:   1000000.0,
-			expectedFinalAssets:      500000.0, // Reduced by goodwill amount
-			expectedAdjustmentsMade:  1,
-			expectedFlagCount:        1, // Should flag significant goodwill
+			// DC-1 Phase 4 (C-4): A1's dispatcher dual-write is DELETED — the
+			// goodwill-exclusion effect moves to InvestedCapital(). The entity's
+			// Goodwill/TotalAssets stay as-reported.
+			expectedFinalGoodwill:   500000.0,
+			expectedOriginalAssets:  1000000.0,
+			expectedFinalAssets:     1000000.0,
+			expectedAdjustmentsMade: 1,
+			expectedFlagCount:       1, // Should flag significant goodwill
 		},
 		{
 			name: "multiple asset adjustments - intangibles and goodwill",
@@ -425,16 +428,14 @@ func TestAssetAdjuster_ProcessAssetAdjustments_ActiveWorkflow(t *testing.T) {
 				},
 			},
 			expectedOriginalGoodwill: 300000.0,
-			expectedFinalGoodwill:    0.0, // Should be zeroed out
 			expectedOriginalAssets:   1000000.0,
-			// DC-1 Phase 4 (C-2): A2's umbrella dual-write is DELETED, so only
-			// A1 (goodwill, still dual-writes in C-2 — its deletion is C-4)
-			// reduces data.TotalAssets: 1_000_000 - 300_000 = 700_000. A2's
-			// intangible writedown now lands on the component (OtherIntangibles)
-			// only; the TotalAssets umbrella recomputes at the view level via
-			// Restated(). (C-4 will delete A1's dual-write too, after which this
-			// becomes 1_000_000 — tracked in the C-4 test update.)
-			expectedFinalAssets:     700000.0,
+			// DC-1 Phase 4 (C-4): BOTH A1 (goodwill) and A2 (intangible)
+			// umbrella dual-writes are now DELETED — A1's effect moves to
+			// InvestedCapital(), A2's writedown lands on the OtherIntangibles
+			// component only. The data.TotalAssets umbrella + data.Goodwill stay
+			// as-reported; view accessors recompute/exclude downstream.
+			expectedFinalGoodwill:   300000.0,
+			expectedFinalAssets:     1000000.0,
 			expectedAdjustmentsMade: 2, // Both goodwill and intangible adjustments
 			expectedFlagCount:       2, // Flags for both adjustments
 		},

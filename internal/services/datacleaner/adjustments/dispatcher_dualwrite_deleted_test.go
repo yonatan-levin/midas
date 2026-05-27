@@ -141,3 +141,38 @@ func TestDispatcherDualWriteDeleted_Earnings(t *testing.T) {
 			"C6 EquityOffset must stay 0 (income-statement reclassification, not an equity event)")
 	})
 }
+
+// TestDispatcherDualWriteDeleted_Liabilities pins the DC-1 Phase 4 §8.2.1
+// Option A + B3 routing-flip contract for the liability-side OverlayEmitters
+// (B1 lease, B2 pension): the dispatcher no longer mutates data.TotalDebt /
+// data.InterestBearingDebt. Each B-rule's amount flows ONLY through its
+// OverlaySpec (drained into NativeOverlays) for InvestedCapital().DebtLikeClaims
+// to consume. (B3's dedicated routing-flip pin lives in
+// b3_contingent_liabilities_adjuster_test.go.)
+func TestDispatcherDualWriteDeleted_Liabilities(t *testing.T) {
+	t.Run("B1 operating leases leave TotalDebt + InterestBearingDebt untouched", func(t *testing.T) {
+		la := NewLiabilityAdjuster(&mockAIService{}, nil)
+		const origTotalDebt = 150_000.0
+		const origIBD = 150_000.0
+		data := &entities.FinancialData{
+			Ticker:                  "RETAIL",
+			OperatingLeaseLiability: 200_000.0,
+			TotalAssets:             1_000_000.0,
+			Revenue:                 500_000.0,
+			TotalDebt:               origTotalDebt,
+			InterestBearingDebt:     origIBD,
+		}
+		rules := []*entities.CleaningRule{productionOperatingLeasesRule()}
+
+		result := la.ProcessLiabilityAdjustments(context.Background(), data, rules, &entities.CleaningContext{IndustryCode: "44"})
+		require.NotNil(t, result)
+		require.True(t, result.Applied)
+		require.Len(t, result.NativeOverlays, 1)
+		require.Greater(t, result.NativeOverlays[0].Amount, 0.0)
+
+		assert.Equal(t, origTotalDebt, data.TotalDebt,
+			"Phase 4: B1 must NOT mutate data.TotalDebt (effect → InvestedCapital().DebtLikeClaims)")
+		assert.Equal(t, origIBD, data.InterestBearingDebt,
+			"Phase 4: B1 must NOT mutate data.InterestBearingDebt")
+	})
+}

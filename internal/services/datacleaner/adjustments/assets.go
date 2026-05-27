@@ -1382,34 +1382,34 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(ctx context.Context, data *enti
 		case "goodwill_exclusion":
 			// DC-1 Phase 2 PR-2 Task 2.1: route A1 through the new
 			// Adjuster-shaped ApplyA1Goodwill. ApplyA1Goodwill does NOT
-			// mutate data — we perform the dual-write mutation here so
-			// the legacy *AdjustmentResult callers stay byte-identical
-			// AND the AdjusterOutput's LedgerEntries / Overlays / Flags
-			// reach the cleaner orchestrator.
+			// mutate data — it emits a Fired LedgerEntry (empty Component) plus
+			// an OverlaySpec (Field:"TotalAssets") carrying the goodwill amount.
 			out, err := aa.ApplyA1Goodwill(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
 				// Adjuster.Apply errors are not yet a defined surface in
 				// Phase 2; today's ApplyA1Goodwill never returns one.
 				// Falling back to the legacy path on hypothetical future
-				// errors preserves the dual-write contract.
+				// errors preserves behavior.
 				result = aa.ProcessGoodwillAdjustment(data, rule)
 				break
 			}
 
 			// Translate the AdjusterOutput into the legacy *AdjustmentResult
 			// shape so the existing tangible-asset recompute + audit-trail
-			// accounting keeps working, AND perform the dual-write
-			// mutation that ApplyA1Goodwill intentionally omitted.
+			// accounting keeps working.
 			result = a1AdjusterOutputToLegacyResult(out, rule)
-			if result.Applied {
-				// Dual-write: today's downstream consumers still read
-				// data.Goodwill / data.TotalAssets in place. Phase 4
-				// deletes these mutations once Phase 3's
-				// CleanedFinancialData views replace direct reads.
-				originalGoodwill := data.Goodwill
-				data.Goodwill = 0.0
-				data.TotalAssets -= originalGoodwill
-			}
+
+			// DC-1 Phase 4 (C-4, §8.2.1 Option A): A1 is an OverlayEmitter — its
+			// goodwill-exclusion effect is realized at the view level by
+			// InvestedCapital() (subtracts the OverlaySpec amount from
+			// TotalAssets, zeroes Goodwill per Damodaran). The legacy dispatcher
+			// dual-write (data.Goodwill = 0; data.TotalAssets -= goodwill) is
+			// DELETED. The generic helper skips A1's empty-Component LedgerEntry.
+			// Net effect: Restated().TotalAssets stays goodwill-INCLUDED;
+			// InvestedCapital().TotalAssets excludes it (consumed by the WACC /
+			// bridge path). The cross-check reads Restated() (goodwill-included)
+			// — Class IV drift for A1-firing tickers is expected per spec §5.4.
+			applyLedgerComponentDeltas(applyCtx, data, out)
 
 			// Record native emissions for the orchestrator. Even when the
 			// rule does not "fire" in the legacy sense (Applied=false),

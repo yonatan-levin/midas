@@ -230,9 +230,19 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA1Emission(t *testing.T) {
 	assert.True(t, result.NativelyEmittedRuleIDs["goodwill_exclusion"],
 		"goodwill_exclusion must appear in NativelyEmittedRuleIDs so the shim skips it")
 
-	// Dual-write preserved — data was mutated as before.
-	assert.Equal(t, 0.0, data.Goodwill, "dispatcher must zero data.Goodwill (dual-write)")
-	assert.Equal(t, 500_000.0, data.TotalAssets, "dispatcher must subtract original goodwill from TotalAssets (dual-write)")
+	// DC-1 Phase 4 (C-4, §8.2.1 Option A): A1 is an OverlayEmitter — its
+	// dispatcher dual-write (data.Goodwill=0; data.TotalAssets-=goodwill) is
+	// DELETED. The goodwill-exclusion effect is realized at the view level by
+	// InvestedCapital(); the entity's Goodwill/TotalAssets stay as-reported.
+	// The OverlaySpec carries the goodwill amount for the view to consume.
+	assert.Equal(t, 500_000.0, data.Goodwill,
+		"Phase 4 §8.2.1 Option A: dispatcher must NOT zero data.Goodwill (effect moves to InvestedCapital())")
+	assert.Equal(t, 1_000_000.0, data.TotalAssets,
+		"Phase 4 §8.2.1 Option A: dispatcher must NOT mutate data.TotalAssets")
+	assert.InDelta(t, 500_000.0, result.NativeOverlays[0].Amount, 1e-6,
+		"A1 OverlaySpec carries the goodwill amount for InvestedCapital() to subtract")
+	assert.Equal(t, "TotalAssets", result.NativeOverlays[0].Field,
+		"A1 overlay targets TotalAssets (Damodaran goodwill exclusion)")
 }
 
 // TestAssetAdjuster_ProcessAssetAdjustments_NativeA1SkipPath confirms that

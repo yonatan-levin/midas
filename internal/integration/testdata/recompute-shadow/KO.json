@@ -9,8 +9,8 @@
       "period": "2023FY",
       "umbrella": "TotalLiabilities",
       "reported": 0,
-      "recomputed": 62440000000,
-      "delta": 62440000000,
+      "recomputed": 61078000000,
+      "delta": 61078000000,
       "plug": 0,
       "clamp_suspected": true
     },
@@ -54,8 +54,8 @@
       "period": "2024FY",
       "umbrella": "TotalLiabilities",
       "reported": 0,
-      "recomputed": 68837000000,
-      "delta": 68837000000,
+      "recomputed": 67624000000,
+      "delta": 67624000000,
       "plug": 0,
       "clamp_suspected": true
     },
@@ -117,8 +117,8 @@
       "period": "2025FY",
       "umbrella": "TotalLiabilities",
       "reported": 0,
-      "recomputed": 65122000000,
-      "delta": 65122000000,
+      "recomputed": 63400000000,
+      "delta": 63400000000,
       "plug": 0,
       "clamp_suspected": true
     },

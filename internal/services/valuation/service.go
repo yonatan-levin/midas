@@ -704,9 +704,20 @@ func (s *Service) performValuation(
 	// Unlever beta to remove capital structure effect, then relever at current D/E.
 	// For a single company this is near-identity, but it normalizes extreme D/E betas
 	// and prepares the pipeline for industry-average beta comparison.
+	// DC-1 Phase 4 (C-4 / B3 routing flip): WACC capital-structure inputs read
+	// Restated().InterestBearingDebt + Restated().InterestExpense. After C-4
+	// deletes the B1/B2/B3 dispatcher dual-writes (below),
+	// Restated().InterestBearingDebt is the parser-stamped value with NO B-rule
+	// inflation — B1+B2+B3 amounts flow ONLY into InvestedCapital().DebtLikeClaims
+	// (the EV→Equity bridge), NOT into the capital-structure denominator. This
+	// is the substantive accuracy correction: contingent/lease/pension claims
+	// are shareholder claims, not interest-bearing capital. C6 capitalized
+	// interest restates InterestExpense via the Restated view. TaxRate is not
+	// Restater-touched (and not a view field) and stays on the entity.
+	waccRestated := restatedViewOr(cleaned, latestFinancialData)
 	marketEquity := marketData.CalculateMarketValue()
-	if marketEquity > 0 && latestFinancialData.InterestBearingDebt > 0 {
-		debtEquityRatio := latestFinancialData.InterestBearingDebt / marketEquity
+	if marketEquity > 0 && waccRestated.InterestBearingDebt > 0 {
+		debtEquityRatio := waccRestated.InterestBearingDebt / marketEquity
 		unleveredBeta = wacc.UnleveredBeta(blumeBeta, latestFinancialData.TaxRate, debtEquityRatio)
 		releveredBeta = wacc.RelleveredBeta(unleveredBeta, latestFinancialData.TaxRate, debtEquityRatio)
 		beta = releveredBeta
@@ -735,8 +746,8 @@ func (s *Service) performValuation(
 		Beta:                beta,
 		CountryRiskPremium:  countryRiskPremium,
 		MarketValueOfEquity: marketData.CalculateMarketValue(),
-		MarketValueOfDebt:   latestFinancialData.InterestBearingDebt,
-		InterestExpense:     latestFinancialData.InterestExpense,
+		MarketValueOfDebt:   waccRestated.InterestBearingDebt, // B-rules NO LONGER feed this (B3 flip realized)
+		InterestExpense:     waccRestated.InterestExpense,     // C6 restater touches this
 		TaxRate:             latestFinancialData.TaxRate,
 	}
 
@@ -1225,18 +1236,28 @@ func (s *Service) performValuation(
 		)
 	}
 
-	// Equity value bridge: EV - Debt + Cash - MinorityInterest - PreferredEquity = Equity Value
+	// Equity value bridge: EV - Debt + Cash - MinorityInterest - PreferredEquity
+	//                       - DebtLikeClaims = Equity Value
 	// M-1d: minority interest and preferred equity are subtracted to produce
-	// common-shareholder claim only. Both are zero for issuers without
-	// non-controlling interests or preferred stock outstanding, so the
-	// per-share output for those tickers is unchanged versus the prior
-	// 3-arg signature.
-	equityValue := dcf.CalculateEquityValue(
+	// common-shareholder claim only.
+	//
+	// DC-1 Phase 4 (C-4 / B3 routing flip): debt reads Restated().InterestBearingDebt
+	// (B-rule amounts no longer inflate it after the dispatcher dual-write
+	// deletion below). The NEW sixth term subtracts
+	// InvestedCapital().DebtLikeClaims — the B1 (lease) + B2 (pension) + B3
+	// (contingent) overlay amounts that compete with shareholders for cash
+	// flows. For tickers with no B-rule fires DebtLikeClaims == 0 and the
+	// bridge is unchanged. Cash / MinorityInterest / PreferredEquity are not
+	// Restater-touched and stay on the entity.
+	bridgeInvestedCap := investedCapitalOr(cleaned, latestFinancialData)
+	debtLikeClaims := bridgeInvestedCap.DebtLikeClaims
+	equityValue := dcf.CalculateEquityValueWithDebtLikeClaims(
 		dcfResult.EnterpriseValue,
-		latestFinancialData.InterestBearingDebt,
+		waccRestated.InterestBearingDebt,
 		latestFinancialData.CashAndCashEquivalents,
 		latestFinancialData.MinorityInterest,
 		latestFinancialData.PreferredEquity,
+		debtLikeClaims,
 	)
 	dcfValuePerShare := equityValue / sharesOutstanding
 
@@ -1246,9 +1267,10 @@ func (s *Service) performValuation(
 		s.calcEmitter.Emit(ctx, "equity_bridge",
 			zap.String("ticker", historicalData.Ticker),
 			zap.Float64("cash", latestFinancialData.CashAndCashEquivalents),
-			zap.Float64("debt", latestFinancialData.InterestBearingDebt),
+			zap.Float64("debt", waccRestated.InterestBearingDebt),
 			zap.Float64("minority_interest", latestFinancialData.MinorityInterest),
 			zap.Float64("preferred", latestFinancialData.PreferredEquity),
+			zap.Float64("debt_like_claims", debtLikeClaims),
 			zap.Float64("equity_value", equityValue),
 			zap.Float64("diluted_shares", sharesOutstanding),
 			zap.Float64("per_share", dcfValuePerShare),
@@ -1295,7 +1317,7 @@ func (s *Service) performValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     "multi_stage_dcf",
-		CalculationVersion:    "4.2",
+		CalculationVersion:    "4.3", // DC-1 Phase 4: B3 routing flip + B1/B2 reroute + A1 overlay → consumer-visible drift
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -1597,7 +1619,7 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     modelResult.ModelType,
-		CalculationVersion:    "4.2",
+		CalculationVersion:    "4.3", // DC-1 Phase 4: B3 routing flip + B1/B2 reroute + A1 overlay → consumer-visible drift
 		Warnings:              modelResult.Warnings,
 	}
 
@@ -1748,6 +1770,18 @@ func asReportedViewOr(cleaned *cleaneddata.CleanedFinancialData, fallback *entit
 		return cleaned.AsReported()
 	}
 	return cleaneddata.New(fallback, fallback).AsReported()
+}
+
+// investedCapitalOr returns cleaned.InvestedCapital() when cleaned is non-nil,
+// otherwise a one-shot InvestedCapital view synthesized from the fallback
+// entity. Used by the EV→Equity bridge (C-4) for the DebtLikeClaims term
+// (B1+B2+B3 overlays). On the nil-cleaned fallback path the entity has no
+// Overlays, so DebtLikeClaims == 0 and the bridge is unchanged.
+func investedCapitalOr(cleaned *cleaneddata.CleanedFinancialData, fallback *entities.FinancialData) *cleaneddata.FinancialDataView {
+	if cleaned != nil {
+		return cleaned.InvestedCapital()
+	}
+	return cleaneddata.New(fallback, fallback).InvestedCapital()
 }
 
 func (s *Service) isFinancialDataIncomplete(data *entities.HistoricalFinancialData) bool {

@@ -1181,3 +1181,33 @@ func containsHelper(s, substr string) bool {
 	}
 	return false
 }
+
+// TestCalculateEquityValueWithDebtLikeClaims pins the DC-1 Phase 4 EV→Equity
+// bridge extension: Common Equity = EV - Debt + Cash - Minority - Preferred -
+// DebtLikeClaims, and the additive relationship to the legacy 5-arg form.
+func TestCalculateEquityValueWithDebtLikeClaims(t *testing.T) {
+	const (
+		ev        = 1_500_000_000.0
+		debt      = 200_000_000.0
+		cash      = 50_000_000.0
+		minority  = 10_000_000.0
+		preferred = 5_000_000.0
+	)
+
+	base := CalculateEquityValue(ev, debt, cash, minority, preferred)
+
+	t.Run("zero debt-like claims equals legacy 5-arg form", func(t *testing.T) {
+		got := CalculateEquityValueWithDebtLikeClaims(ev, debt, cash, minority, preferred, 0)
+		assert.InDelta(t, base, got, 1e-6,
+			"with zero DebtLikeClaims the 6-arg form must equal the legacy 5-arg form")
+	})
+
+	t.Run("debt-like claims subtract from equity", func(t *testing.T) {
+		const dlc = 500_000_000.0
+		got := CalculateEquityValueWithDebtLikeClaims(ev, debt, cash, minority, preferred, dlc)
+		assert.InDelta(t, base-dlc, got, 1e-6,
+			"DebtLikeClaims must be subtracted from the equity bridge")
+		// Explicit formula pin.
+		assert.InDelta(t, ev-debt+cash-minority-preferred-dlc, got, 1e-6)
+	})
+}
