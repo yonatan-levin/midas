@@ -36,9 +36,14 @@ import (
 // Flags and applied at the view level by InvestedCapital().
 //
 // ctx is threaded per the DC-1 Phase 3 ctx-threading contract and is used to
-// obtain the request-scoped logger via logctx.From(ctx) for the unknown-
-// Component guard below (logctx.From(nil) returns a no-op logger, so the
-// nil-context path is safe).
+// obtain the request-scoped logger via logctx.Or(ctx, zap.L()) for the
+// unknown-Component guard below. logctx.Or falls back to the global zap logger
+// when ctx carries no request-scoped logger (scheduler / watchlist paths use
+// context.Background()), so the loud guard survives non-request paths instead
+// of being silently swallowed by logctx.From's no-op logger. The global
+// fallback is acceptable here precisely because this is an unreachable
+// defensive branch — no injected logger is in scope on the AssetAdjuster /
+// EarningsAdjuster receivers.
 func applyLedgerComponentDeltas(ctx context.Context, working *entities.FinancialData, out AdjusterOutput) {
 	if working == nil {
 		return
@@ -65,7 +70,7 @@ func applyLedgerComponentDeltas(ctx context.Context, working *entities.Financial
 			// cleaneddata.Restated() would not see it). WARN so a future
 			// Restater that emits a new Component name surfaces loudly rather
 			// than corrupting valuations. Add the new case above when one lands.
-			logctx.From(ctx).Warn("applyLedgerComponentDeltas: fired Restater with unknown Component — delta dropped",
+			logctx.Or(ctx, zap.L()).Warn("applyLedgerComponentDeltas: fired Restater with unknown Component — delta dropped",
 				zap.String("adjuster_id", e.AdjusterID),
 				zap.String("rule_id", e.RuleID),
 				zap.String("component", e.Component),

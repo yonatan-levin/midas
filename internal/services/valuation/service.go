@@ -1534,9 +1534,18 @@ func (s *Service) performAlternativeValuation(
 	// read for every model.
 	modelIBD := latestFinancialData.InterestBearingDebt
 	modelCash := latestFinancialData.CashAndCashEquivalents
+	// modelDebtLikeClaims carries the B1 (lease) + B2 (pension) + B3 (contingent)
+	// overlay amounts that the EV→Equity bridge must subtract for non-DDM models.
+	// revenue_multiple subtracts it; FFO does NOT consume it (FFO's equity is
+	// derived directly from the P/FFO multiple — InterestBearingDebt only
+	// back-derives the reported EV — so subtracting DebtLikeClaims there would
+	// risk double-counting the REIT's lease-bearing cash flows). DDM keeps 0 to
+	// preserve the JPM/BAC/WFC bit-for-bit invariant (and never reads it anyway).
+	modelDebtLikeClaims := 0.0
 	if model.ModelType() != "ddm" {
 		mr := restatedViewOr(cleaned, latestFinancialData)
 		modelIBD = mr.InterestBearingDebt
+		modelDebtLikeClaims = investedCapitalOr(cleaned, latestFinancialData).DebtLikeClaims
 	}
 
 	modelInput := &models.ModelInput{
@@ -1551,6 +1560,7 @@ func (s *Service) performAlternativeValuation(
 		SharesOutstanding:      sharesOutstanding,
 		InterestBearingDebt:    modelIBD,
 		CashAndCashEquivalents: modelCash,
+		DebtLikeClaims:         modelDebtLikeClaims,
 		// DC-1 Phase 4 (C-3): Restated view of the latest period for the FFO
 		// NAV NOI proxy. nil for DDM (deferred) to avoid any non-legacy read.
 		LatestRestatedView: func() *cleaneddata.FinancialDataView {
@@ -1772,9 +1782,12 @@ func effectiveOI(fd *cleaneddata.FinancialDataView) float64 {
 // identity-copied earnings/equity/debt fields (NormalizedOperatingIncome,
 // StockholdersEquity, InterestBearingDebt, InterestExpense, NetIncome,
 // OperatingIncome, D&A, CapEx) are byte-identical to the entity's direct
-// reads. Recomputed umbrella fields (CurrentAssets/CurrentLiabilities/
-// TotalAssets/TotalLiabilities/TangibleAssets) reconstruct from the Phase 0
-// plug fields, which are designed to reproduce the parser-stamped umbrellas.
+// reads. The recomputed umbrella fields (CurrentAssets/CurrentLiabilities/
+// TotalAssets/TotalLiabilities/TangibleAssets) are ANALYTICAL reconstructions
+// (sum-of-components + Phase 0 plug) and are NOT guaranteed equal to the
+// parser-stamped tags — the plug can under-reconstruct (e.g. AMD CurrentAssets,
+// per the C-2 NWC fix). Drift-neutral consumers that need as-filed umbrellas
+// MUST read AsReported() instead.
 func restatedViewOr(cleaned *cleaneddata.CleanedFinancialData, fallback *entities.FinancialData) *cleaneddata.FinancialDataView {
 	if cleaned != nil {
 		return cleaned.Restated()

@@ -15,10 +15,11 @@ import "github.com/midas/dcf-valuation-api/internal/core/entities"
 // Delta is treated as incremental for additive fields. Phase 3 only sees
 // Incremental in practice.
 //
-// CRITICAL: result.TotalDebt stays UNCHANGED from Restated(). In Phase 4
-// the WACC consumer will read InvestedCapital.TotalDebt for the capital-
-// structure denominator and InvestedCapital.DebtLikeClaims separately for
-// the EV→Equity bridge. The two numbers MUST NEVER collapse.
+// CRITICAL: result.TotalDebt stays UNCHANGED from Restated(). The Phase 4
+// WACC consumer reads Restated().InterestBearingDebt for the capital-structure
+// denominator; DebtLikeClaims is consumed ONLY by the EV→Equity bridge (DCF +
+// revenue_multiple). The two numbers MUST NEVER collapse into one — folding
+// DebtLikeClaims into the WACC debt weight would double-count the B-rule claims.
 //
 // First-call cost: O(adjusters + fields). Subsequent calls: O(1) cached.
 func (c *CleanedFinancialData) InvestedCapital() *FinancialDataView {

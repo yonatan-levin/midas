@@ -48,6 +48,19 @@ type ModelInput struct {
 	InterestBearingDebt    float64
 	CashAndCashEquivalents float64
 
+	// DebtLikeClaims is the B1 (operating-lease) + B2 (pension underfunding) +
+	// B3 (contingent liability) overlay total from
+	// cleaneddata.InvestedCapital().DebtLikeClaims. It is subtracted in the
+	// EV→Equity bridge by revenue_multiple (mirroring the DCF path's
+	// dcf.CalculateEquityValueWithDebtLikeClaims), because after the DC-1
+	// Phase 4 dispatcher dual-write deletion the B-rule amounts no longer
+	// inflate InterestBearingDebt and would otherwise be silently dropped.
+	// 0 for DDM (bit-for-bit legacy path never reads it) and unused by FFO
+	// (FFO's equity is derived directly from the P/FFO multiple; IBD only
+	// back-derives the reported EV, so subtracting claims there would risk
+	// double-counting the REIT's lease-bearing cash flows).
+	DebtLikeClaims float64
+
 	// LatestRestatedView is the DC-1 Phase 4 (C-3) Restated() view of the
 	// latest period. The FFO model reads its OperatingIncome for the NAV NOI
 	// proxy so the cross-check reflects restated earnings. May be nil on

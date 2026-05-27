@@ -104,8 +104,12 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 	// Calculate enterprise value
 	enterpriseValue := revenue * multiple
 
-	// Equity bridge: EV - Debt + Cash
-	equityValue := enterpriseValue - input.InterestBearingDebt + input.CashAndCashEquivalents
+	// Equity bridge: EV - Debt + Cash - DebtLikeClaims
+	// DebtLikeClaims (B1 lease + B2 pension + B3 contingent overlays) competes
+	// with shareholders for cash flows; after the DC-1 Phase 4 dual-write
+	// deletion InterestBearingDebt no longer includes them, so they MUST be
+	// subtracted here (mirrors the DCF equity bridge). 0 when no B-rule fires.
+	equityValue := enterpriseValue - input.InterestBearingDebt + input.CashAndCashEquivalents - input.DebtLikeClaims
 
 	// Calculate per-share value
 	shares := input.SharesOutstanding
@@ -200,7 +204,9 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 				forwardEV /= discount
 			}
 
-			forwardEquity := forwardEV - input.InterestBearingDebt + input.CashAndCashEquivalents
+			// Forward equity bridge: same EV - Debt + Cash - DebtLikeClaims
+			// shape as the trailing path above.
+			forwardEquity := forwardEV - input.InterestBearingDebt + input.CashAndCashEquivalents - input.DebtLikeClaims
 			forwardValue = forwardEquity / shares
 			if forwardValue < 0 {
 				forwardValue = 0
