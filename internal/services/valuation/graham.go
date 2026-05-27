@@ -5,8 +5,8 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 )
 
 // grahamFloor holds the Graham-school per-share diagnostics returned by
@@ -35,22 +35,34 @@ type grahamFloor struct {
 // per-share values from balance-sheet inputs. The only side effect is a
 // WARN log on the derivation fallback path so operators can correlate
 // warnings against the cleaner asymmetry tracked in DC-1. The function
-// does NOT mutate fd.
+// does NOT mutate the view.
+//
+// DC-1 Phase 4 (C-2/C-5): reads the AsReported() view. NCAV is intentionally
+// a conservative as-filed metric (Graham's "two-thirds of NCAV" defensive
+// buy floor) — using Restated() would shift the floor upward for companies
+// with goodwill/inventory writedowns, defeating Graham's intent (§4.2.9).
+// AsReported is also IMMUNE to the Phase 4 §8.2.1 Option A transitional state
+// where the post-clean entity's umbrella fields (TotalAssets/TotalLiabilities)
+// become incoherent after dispatcher umbrella dual-writes are deleted — it
+// reads the pre-clean snapshot, so the derivation fallback below sees
+// parser-stamped values regardless of which dual-write cluster has landed.
+// This is why Graham migrates in C-2 (the first cluster that makes umbrellas
+// incoherent) rather than waiting for C-5.
 func calculateGrahamFloorMetrics(
 	ctx context.Context,
 	logger *zap.Logger,
 	ticker string,
-	fd *entities.FinancialData,
+	view *cleaneddata.FinancialDataView,
 	dilutedShares float64,
 	currentPrice float64,
 ) grahamFloor {
 	out := grahamFloor{}
 
-	if fd == nil || dilutedShares <= 0 {
+	if view == nil || dilutedShares <= 0 {
 		return out
 	}
 
-	totalLiabilities, ok := resolveTotalLiabilities(ctx, logger, ticker, fd)
+	totalLiabilities, ok := resolveTotalLiabilities(ctx, logger, ticker, view)
 	if !ok {
 		out.Warnings = []string{
 			"graham_floor: insufficient balance-sheet data (total_liabilities unresolved)",
@@ -58,10 +70,10 @@ func calculateGrahamFloorMetrics(
 		return out
 	}
 
-	caps := fd.CurrentAssets / dilutedShares
+	caps := view.CurrentAssets / dilutedShares
 	out.CurrentAssetsPerShare = &caps
 
-	ncav := (fd.CurrentAssets - totalLiabilities) / dilutedShares
+	ncav := (view.CurrentAssets - totalLiabilities) / dilutedShares
 	out.NCAVPerShare = &ncav
 
 	// Graham's "buy below" trigger: 2/3 of NCAV. Citation: Benjamin Graham,
@@ -101,19 +113,19 @@ func resolveTotalLiabilities(
 	ctx context.Context,
 	logger *zap.Logger,
 	ticker string,
-	fd *entities.FinancialData,
+	view *cleaneddata.FinancialDataView,
 ) (float64, bool) {
-	if fd.TotalLiabilities > 0 {
-		return fd.TotalLiabilities, true
+	if view.TotalLiabilities > 0 {
+		return view.TotalLiabilities, true
 	}
 
-	if fd.TotalAssets > 0 && fd.StockholdersEquity > 0 {
-		derived := fd.TotalAssets - fd.StockholdersEquity
+	if view.TotalAssets > 0 && view.StockholdersEquity > 0 {
+		derived := view.TotalAssets - view.StockholdersEquity
 		if derived > 0 {
 			logctx.Or(ctx, logger).Warn("graham_floor: derived total_liabilities from balance-sheet identity",
 				zap.String("ticker", ticker),
-				zap.Float64("total_assets", fd.TotalAssets),
-				zap.Float64("stockholders_equity", fd.StockholdersEquity),
+				zap.Float64("total_assets", view.TotalAssets),
+				zap.Float64("stockholders_equity", view.StockholdersEquity),
 				zap.Float64("derived_total_liabilities", derived),
 			)
 			return derived, true

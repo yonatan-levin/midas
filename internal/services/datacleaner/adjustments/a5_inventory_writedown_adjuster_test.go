@@ -328,12 +328,15 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA5Emission(t *testing.T) {
 	assert.InDelta(t, 160_000.0*0.21, nativeEntry.TaxShieldDTA, 1e-6,
 		"A5 TaxShieldDTA flows through the dispatcher path unchanged")
 
-	// Dual-write preserved — data was mutated as the legacy code did.
-	// adjustedInventory = originalInventory - writedown = 240_000.
+	// DC-1 Phase 4 (C-2, §8.2.1 Option A): the dispatcher applies the fired
+	// LedgerEntry's COMPONENT delta only. data.Inventory is reduced by the
+	// writedown (originalInventory 400_000 + DeltaAmount(-160_000) = 240_000).
+	// The legacy umbrella dual-write is DELETED, so data.TotalAssets stays at
+	// its pre-clean value; Restated() recomputes the umbrella from components.
 	assert.InDelta(t, 240_000.0, data.Inventory, 1e-6,
-		"dispatcher must reduce data.Inventory by the writedown amount (dual-write)")
-	assert.InDelta(t, 840_000.0, data.TotalAssets, 1e-6,
-		"dispatcher must subtract writedown from data.TotalAssets (dual-write)")
+		"dispatcher must apply the component delta to data.Inventory")
+	assert.InDelta(t, 1_000_000.0, data.TotalAssets, 1e-6,
+		"Phase 4 §8.2.1 Option A: dispatcher must NOT mutate the data.TotalAssets umbrella")
 }
 
 // TestAssetAdjuster_ProcessAssetAdjustments_NativeA5SkipPath confirms that

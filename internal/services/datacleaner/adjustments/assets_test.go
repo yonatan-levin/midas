@@ -427,9 +427,16 @@ func TestAssetAdjuster_ProcessAssetAdjustments_ActiveWorkflow(t *testing.T) {
 			expectedOriginalGoodwill: 300000.0,
 			expectedFinalGoodwill:    0.0, // Should be zeroed out
 			expectedOriginalAssets:   1000000.0,
-			expectedFinalAssets:      560000.0, // Complex calculation after both adjustments
-			expectedAdjustmentsMade:  2,        // Both goodwill and intangible adjustments
-			expectedFlagCount:        2,        // Flags for both adjustments
+			// DC-1 Phase 4 (C-2): A2's umbrella dual-write is DELETED, so only
+			// A1 (goodwill, still dual-writes in C-2 — its deletion is C-4)
+			// reduces data.TotalAssets: 1_000_000 - 300_000 = 700_000. A2's
+			// intangible writedown now lands on the component (OtherIntangibles)
+			// only; the TotalAssets umbrella recomputes at the view level via
+			// Restated(). (C-4 will delete A1's dual-write too, after which this
+			// becomes 1_000_000 — tracked in the C-4 test update.)
+			expectedFinalAssets:     700000.0,
+			expectedAdjustmentsMade: 2, // Both goodwill and intangible adjustments
+			expectedFlagCount:       2, // Flags for both adjustments
 		},
 		{
 			name: "no adjustments needed - clean company",

@@ -251,12 +251,17 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA2Emission(t *testing.T) {
 	assert.Zero(t, nativeEntry.TaxShieldDTA,
 		"this fixture's EffectiveTaxRate is unset (0); the Q2 populated path is exercised by a dedicated subtest")
 
-	// Dual-write preserved — data was mutated as the legacy code did.
-	// retainedAmount = 300_000 / 3 = 100_000; writedown = 200_000.
+	// DC-1 Phase 4 (C-2, §8.2.1 Option A): the dispatcher applies the fired
+	// LedgerEntry's COMPONENT delta only. data.OtherIntangibles is reduced
+	// to the retained amount (300_000 + DeltaAmount(-200_000) = 100_000); the
+	// legacy umbrella dual-write is DELETED, so data.TotalAssets stays at its
+	// pre-clean value (1_000_000). Umbrella coherence is restored at the view
+	// level by cleaneddata.Restated(), which recomputes TotalAssets from
+	// components.
 	assert.InDelta(t, 100_000.0, data.OtherIntangibles, 1e-6,
-		"dispatcher must set data.OtherIntangibles to retained amount (dual-write)")
-	assert.InDelta(t, 800_000.0, data.TotalAssets, 1e-6,
-		"dispatcher must subtract writedown from data.TotalAssets (dual-write)")
+		"dispatcher must apply the component delta to data.OtherIntangibles")
+	assert.InDelta(t, 1_000_000.0, data.TotalAssets, 1e-6,
+		"Phase 4 §8.2.1 Option A: dispatcher must NOT mutate the data.TotalAssets umbrella")
 }
 
 // TestAssetAdjuster_ProcessAssetAdjustments_NativeA2SkipPath confirms that

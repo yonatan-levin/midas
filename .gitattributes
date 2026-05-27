@@ -3,3 +3,12 @@
 # byte-equal comparison. Without this attribute, a Windows dev's git add
 # would silently CRLF-convert the fixtures, breaking CI.
 internal/observability/replay/testdata/golden/*.json text eol=lf
+
+# Lock recompute-shadow capture fixtures to LF for the same reason. The
+# TestDataCleanerRecompute_ShadowMode_TickerBasket capture regenerates these
+# on every run; the byte-identity gate (git diff --quiet) is meaningful only
+# when line endings are stable across Windows/Unix dev machines. (DC-1 Phase 4
+# regenerated these intentionally — the §8.2.1 Option A umbrella-dual-write
+# deletion makes the post-clean TotalAssets umbrella diverge further from its
+# components, which the shadow shim faithfully records.)
+internal/integration/testdata/recompute-shadow/*.json text eol=lf

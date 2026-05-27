@@ -2252,21 +2252,32 @@ func TestService_calculateNetWorkingCapitalChange(t *testing.T) {
 	service, _, _, _, _, _ := createTestService()
 
 	t.Run("valid two-period data", func(t *testing.T) {
+		// DC-1 Phase 4 (C-2): the working-capital reads now flow through the
+		// Restated() view, which reconstructs CurrentAssets/CurrentLiabilities
+		// from components + Phase 0 plug fields (Cash + Inventory +
+		// OtherCurrentAssets; OperatingLeaseLiabilityCurrent +
+		// OtherCurrentLiabilities). Production data has these plugs stamped by
+		// the SEC parser so the reconstruction reproduces the umbrella; the
+		// synthetic fixtures populate the plug fields to mirror that.
 		latest := &entities.FinancialData{
-			CurrentAssets:      500000,
-			CurrentLiabilities: 300000,
-			FilingDate:         time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+			CurrentAssets:           500000,
+			CurrentLiabilities:      300000,
+			OtherCurrentAssets:      500000,
+			OtherCurrentLiabilities: 300000,
+			FilingDate:              time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
 		}
 		historical := &entities.HistoricalFinancialData{
 			Ticker: "TEST",
 			Data: map[string]*entities.FinancialData{
 				"2023FY": {
-					CurrentAssets:      400000,
-					CurrentLiabilities: 250000,
-					FilingDate:         time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
-					Revenue:            1000000,
-					OperatingIncome:    100000,
-					SharesOutstanding:  1000,
+					CurrentAssets:           400000,
+					CurrentLiabilities:      250000,
+					OtherCurrentAssets:      400000,
+					OtherCurrentLiabilities: 250000,
+					FilingDate:              time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+					Revenue:                 1000000,
+					OperatingIncome:         100000,
+					SharesOutstanding:       1000,
 				},
 				"2024FY": latest,
 			},
@@ -2274,7 +2285,7 @@ func TestService_calculateNetWorkingCapitalChange(t *testing.T) {
 		// Latest NWC = 500000 - 300000 = 200000
 		// Prior NWC = 400000 - 250000 = 150000
 		// Delta = 200000 - 150000 = 50000 (cash consumed)
-		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		result := service.calculateNetWorkingCapitalChange(historical, latest, nil)
 		assert.InDelta(t, 50000.0, result, 0.01)
 	})
 
@@ -2291,7 +2302,7 @@ func TestService_calculateNetWorkingCapitalChange(t *testing.T) {
 			Ticker: "TEST",
 			Data:   map[string]*entities.FinancialData{"2024FY": latest},
 		}
-		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		result := service.calculateNetWorkingCapitalChange(historical, latest, nil)
 		assert.Equal(t, 0.0, result)
 	})
 
@@ -2301,7 +2312,7 @@ func TestService_calculateNetWorkingCapitalChange(t *testing.T) {
 			CurrentLiabilities: 300000,
 		}
 		historical := &entities.HistoricalFinancialData{Ticker: "TEST", Data: map[string]*entities.FinancialData{}}
-		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		result := service.calculateNetWorkingCapitalChange(historical, latest, nil)
 		assert.Equal(t, 0.0, result)
 	})
 
@@ -2311,7 +2322,7 @@ func TestService_calculateNetWorkingCapitalChange(t *testing.T) {
 			CurrentLiabilities: 0, // missing
 		}
 		historical := &entities.HistoricalFinancialData{Ticker: "TEST", Data: map[string]*entities.FinancialData{}}
-		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		result := service.calculateNetWorkingCapitalChange(historical, latest, nil)
 		assert.Equal(t, 0.0, result)
 	})
 
@@ -2335,26 +2346,32 @@ func TestService_calculateNetWorkingCapitalChange(t *testing.T) {
 				"2024FY": latest,
 			},
 		}
-		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		result := service.calculateNetWorkingCapitalChange(historical, latest, nil)
 		assert.Equal(t, 0.0, result)
 	})
 
 	t.Run("negative NWC change (cash released)", func(t *testing.T) {
+		// Plug fields populated to mirror parser-stamped production data so the
+		// Restated() umbrella reconstruction reproduces CurrentAssets/Liabilities.
 		latest := &entities.FinancialData{
-			CurrentAssets:      400000,
-			CurrentLiabilities: 350000,
-			FilingDate:         time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
+			CurrentAssets:           400000,
+			CurrentLiabilities:      350000,
+			OtherCurrentAssets:      400000,
+			OtherCurrentLiabilities: 350000,
+			FilingDate:              time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
 		}
 		historical := &entities.HistoricalFinancialData{
 			Ticker: "TEST",
 			Data: map[string]*entities.FinancialData{
 				"2023FY": {
-					CurrentAssets:      500000,
-					CurrentLiabilities: 300000,
-					FilingDate:         time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
-					Revenue:            1000000,
-					OperatingIncome:    100000,
-					SharesOutstanding:  1000,
+					CurrentAssets:           500000,
+					CurrentLiabilities:      300000,
+					OtherCurrentAssets:      500000,
+					OtherCurrentLiabilities: 300000,
+					FilingDate:              time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
+					Revenue:                 1000000,
+					OperatingIncome:         100000,
+					SharesOutstanding:       1000,
 				},
 				"2024FY": latest,
 			},
@@ -2362,7 +2379,7 @@ func TestService_calculateNetWorkingCapitalChange(t *testing.T) {
 		// Latest NWC = 400000 - 350000 = 50000
 		// Prior NWC = 500000 - 300000 = 200000
 		// Delta = 50000 - 200000 = -150000 (cash released)
-		result := service.calculateNetWorkingCapitalChange(historical, latest)
+		result := service.calculateNetWorkingCapitalChange(historical, latest, nil)
 		assert.InDelta(t, -150000.0, result, 0.01)
 	})
 }

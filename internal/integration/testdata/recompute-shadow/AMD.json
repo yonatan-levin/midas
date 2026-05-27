@@ -7,6 +7,15 @@
   "divergences": [
     {
       "period": "2023FY",
+      "umbrella": "TotalAssets",
+      "reported": 43623000000,
+      "recomputed": 29381000000,
+      "delta": -14242000000,
+      "plug": 2390000000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2023FY",
       "umbrella": "TotalLiabilities",
       "reported": 0,
       "recomputed": 9047000000,
@@ -26,9 +35,9 @@
     {
       "period": "2023Q2",
       "umbrella": "TotalAssets",
-      "reported": 26897866667,
+      "reported": 43790000000,
       "recomputed": 28724666667,
-      "delta": 1826800000,
+      "delta": -15065333333,
       "plug": 4619000000,
       "clamp_suspected": false
     },
@@ -53,9 +62,9 @@
     {
       "period": "2023Q3",
       "umbrella": "TotalAssets",
-      "reported": 27028666667,
+      "reported": 43440000000,
       "recomputed": 28806666667,
-      "delta": 1778000000,
+      "delta": -14633333333,
       "plug": 4726000000,
       "clamp_suspected": false
     },
@@ -67,6 +76,15 @@
       "delta": 9737000000,
       "plug": 0,
       "clamp_suspected": true
+    },
+    {
+      "period": "2024FY",
+      "umbrella": "TotalAssets",
+      "reported": 44387000000,
+      "recomputed": 31767000000,
+      "delta": -12620000000,
+      "plug": 1899000000,
+      "clamp_suspected": false
     },
     {
       "period": "2024FY",
@@ -89,9 +107,9 @@
     {
       "period": "2024Q1",
       "umbrella": "TotalAssets",
-      "reported": 27944866667,
+      "reported": 43633000000,
       "recomputed": 29805666667,
-      "delta": 1860800000,
+      "delta": -13827333333,
       "plug": 5375000000,
       "clamp_suspected": false
     },
@@ -116,9 +134,9 @@
     {
       "period": "2024Q2",
       "umbrella": "TotalAssets",
-      "reported": 28202266667,
+      "reported": 43624000000,
       "recomputed": 30198666667,
-      "delta": 1996400000,
+      "delta": -13425333333,
       "plug": 5404000000,
       "clamp_suspected": false
     },
@@ -143,9 +161,9 @@
     {
       "period": "2024Q3",
       "umbrella": "TotalAssets",
-      "reported": 29599400000,
+      "reported": 44797000000,
       "recomputed": 31749000000,
-      "delta": 2149600000,
+      "delta": -13048000000,
       "plug": 5307000000,
       "clamp_suspected": false
     },
@@ -157,6 +175,15 @@
       "delta": 9738000000,
       "plug": 0,
       "clamp_suspected": true
+    },
+    {
+      "period": "2025FY",
+      "umbrella": "TotalAssets",
+      "reported": 51800000000,
+      "recomputed": 40663333333,
+      "delta": -11136666667,
+      "plug": 3993000000,
+      "clamp_suspected": false
     },
     {
       "period": "2025FY",
@@ -179,9 +206,9 @@
     {
       "period": "2025Q1",
       "umbrella": "TotalAssets",
-      "reported": 31902600000,
+      "reported": 46711000000,
       "recomputed": 34469000000,
-      "delta": 2566400000,
+      "delta": -12242000000,
       "plug": 5908000000,
       "clamp_suspected": false
     },
@@ -206,9 +233,9 @@
     {
       "period": "2025Q2",
       "umbrella": "TotalAssets",
-      "reported": 35191533333,
+      "reported": 49737000000,
       "recomputed": 37862333333,
-      "delta": 2670800000,
+      "delta": -11874666667,
       "plug": 6546000000,
       "clamp_suspected": false
     },
@@ -233,9 +260,9 @@
     {
       "period": "2025Q3",
       "umbrella": "TotalAssets",
-      "reported": 37382800000,
+      "reported": 51808000000,
       "recomputed": 40308000000,
-      "delta": 2925200000,
+      "delta": -11500000000,
       "plug": 6925000000,
       "clamp_suspected": false
     },
@@ -260,9 +287,9 @@
     {
       "period": "2026Q1",
       "umbrella": "TotalAssets",
-      "reported": 40310666667,
+      "reported": 54298000000,
       "recomputed": 43528666667,
-      "delta": 3218000000,
+      "delta": -10769333333,
       "plug": 9040000000,
       "clamp_suspected": false
     },

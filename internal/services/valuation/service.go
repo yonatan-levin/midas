@@ -621,10 +621,20 @@ func (s *Service) performValuation(
 	sustainableGrowth := 0.0
 	latestForROIC, _ := historicalData.GetLatestPeriod()
 	if latestForROIC != nil {
-		nopat := latestForROIC.NormalizedOperatingIncome * (1 - latestForROIC.TaxRate)
+		// DC-1 Phase 4 (C-2): ROIC NOPAT numerator and invested-capital
+		// denominator both read the Restated() view so the ratio stays
+		// coherent under earnings/equity restatements (C1-C7 touch
+		// NormalizedOperatingIncome; A2/A4/A5 EquityOffsets touch
+		// StockholdersEquity). Mixing Restated NOPAT with as-reported equity
+		// would inflate ROIC for any company with impairments. TaxRate and
+		// CashAndCashEquivalents are NOT Restater-touched today and stay on
+		// the legacy entity read. cleaned may be nil on test/no-cleaner paths
+		// — fall back to the legacy direct reads then.
+		roicView := restatedViewOr(cleaned, latestForROIC)
+		nopat := roicView.NormalizedOperatingIncome * (1 - latestForROIC.TaxRate)
 		investedCapital := growth.CalculateInvestedCapital(
-			latestForROIC.StockholdersEquity,
-			latestForROIC.InterestBearingDebt,
+			roicView.StockholdersEquity,
+			roicView.InterestBearingDebt,
 			latestForROIC.CashAndCashEquivalents,
 		)
 		sustainableGrowth = growth.CalculateSustainableGrowth(nopat, investedCapital, s.growthEstimator.Config().DefaultPayoutRatio)
@@ -1048,13 +1058,18 @@ func (s *Service) performValuation(
 
 	// Guard: standard DCF requires positive operating income.
 	// Companies with negative OI are routed to revenue_multiple model above.
-	baseOI := effectiveOI(latestFinancialData)
+	//
+	// DC-1 Phase 4 (C-2 signature flip / C-3 read migration): effectiveOI and
+	// the negative-OI sentinel read the Restated view so the guard matches the
+	// OI the engine actually uses after earnings restatements (C1-C7).
+	dcfRestated := restatedViewOr(cleaned, latestFinancialData)
+	baseOI := effectiveOI(dcfRestated)
 	if baseOI <= 0 {
-		return nil, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, latestFinancialData.NormalizedOperatingIncome)
+		return nil, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, dcfRestated.NormalizedOperatingIncome)
 	}
 
 	// Calculate net working capital change from historical data if available
-	nwcChange := s.calculateNetWorkingCapitalChange(historicalData, latestFinancialData)
+	nwcChange := s.calculateNetWorkingCapitalChange(historicalData, latestFinancialData, cleaned)
 
 	// Perform DCF calculation with multi-stage growth rates.
 	//
@@ -1244,7 +1259,7 @@ func (s *Service) performValuation(
 	}
 
 	gf := calculateGrahamFloorMetrics(ctx, s.logger, historicalData.Ticker,
-		latestFinancialData, sharesOutstanding, marketData.SharePrice)
+		asReportedViewOr(cleaned, latestFinancialData), sharesOutstanding, marketData.SharePrice)
 
 	result := &entities.ValuationResult{
 		Ticker: historicalData.Ticker,
@@ -1496,8 +1511,9 @@ func (s *Service) performAlternativeValuation(
 			zap.String("ticker", historicalData.Ticker),
 			zap.Error(err))
 
-		// If company has positive OI, fall back to standard DCF path
-		if effectiveOI(latestFinancialData) > 0 {
+		// If company has positive OI, fall back to standard DCF path.
+		// DC-1 Phase 4 (C-2): read the Restated effective OI via the view.
+		if effectiveOI(restatedViewOr(cleaned, latestFinancialData)) > 0 {
 			return nil, errFallbackToDCF
 		}
 
@@ -1515,7 +1531,7 @@ func (s *Service) performAlternativeValuation(
 	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
 
 	gf := calculateGrahamFloorMetrics(ctx, s.logger, historicalData.Ticker,
-		latestFinancialData, sharesOutstanding, marketData.SharePrice)
+		asReportedViewOr(cleaned, latestFinancialData), sharesOutstanding, marketData.SharePrice)
 
 	// Convert ModelResult to ValuationResult
 	result := &entities.ValuationResult{
@@ -1651,11 +1667,48 @@ func (s *Service) averageCapExAndDA(historicalData *entities.HistoricalFinancial
 // critical FCF fields (D&A, CapEx, Cash). Returns true if ALL are zero/missing,
 // which indicates pre-Phase-1.2 data that should be re-fetched.
 // effectiveOI returns the best available operating income (normalized preferred, raw as fallback).
-func effectiveOI(fd *entities.FinancialData) float64 {
+//
+// DC-1 Phase 4 (C-2): the helper reads a *cleaneddata.FinancialDataView so the
+// effective-OI computation reflects the Restated NormalizedOperatingIncome
+// (after C1-C7 earnings restatements). Call sites pass the Restated view
+// (or a synthesized one on the no-cleaner path via restatedViewOr).
+func effectiveOI(fd *cleaneddata.FinancialDataView) float64 {
 	if fd.NormalizedOperatingIncome > 0 {
 		return fd.NormalizedOperatingIncome
 	}
 	return fd.OperatingIncome
+}
+
+// restatedViewOr returns cleaned.Restated() when cleaned is non-nil, otherwise
+// a one-shot Restated view synthesized from the fallback entity.
+//
+// DC-1 Phase 4 (C-2..C-4): the synthesized fallback path (cleaned == nil)
+// covers test paths and the no-cleaner / cleaning-failed branches. For an
+// entity with an empty AdjustmentLedger/Overlays the Restated reducer reduces
+// to an identity copy plus an umbrella recompute-from-components; the
+// identity-copied earnings/equity/debt fields (NormalizedOperatingIncome,
+// StockholdersEquity, InterestBearingDebt, InterestExpense, NetIncome,
+// OperatingIncome, D&A, CapEx) are byte-identical to the entity's direct
+// reads. Recomputed umbrella fields (CurrentAssets/CurrentLiabilities/
+// TotalAssets/TotalLiabilities/TangibleAssets) reconstruct from the Phase 0
+// plug fields, which are designed to reproduce the parser-stamped umbrellas.
+func restatedViewOr(cleaned *cleaneddata.CleanedFinancialData, fallback *entities.FinancialData) *cleaneddata.FinancialDataView {
+	if cleaned != nil {
+		return cleaned.Restated()
+	}
+	return cleaneddata.New(fallback, fallback).Restated()
+}
+
+// asReportedViewOr returns cleaned.AsReported() when cleaned is non-nil,
+// otherwise a one-shot AsReported view synthesized from the fallback entity.
+// AsReported is an identity projection (no umbrella recompute), so the
+// fallback path is byte-identical to direct entity reads. Used by the Graham
+// consumer (C-5), which intentionally reads as-filed values.
+func asReportedViewOr(cleaned *cleaneddata.CleanedFinancialData, fallback *entities.FinancialData) *cleaneddata.FinancialDataView {
+	if cleaned != nil {
+		return cleaned.AsReported()
+	}
+	return cleaneddata.New(fallback, fallback).AsReported()
 }
 
 func (s *Service) isFinancialDataIncomplete(data *entities.HistoricalFinancialData) bool {
@@ -1767,15 +1820,25 @@ func (s *Service) getAnalystEstimates(ctx context.Context, ticker string) *ports
 
 // calculateNetWorkingCapitalChange computes the change in net working capital
 // between the two most recent annual periods. Positive = cash consumed.
+//
+// DC-1 Phase 4 (C-2): the latest period reads working-capital fields from the
+// Restated() view (cleaned, or a synthesized fallback). The prior period is
+// never run through the cleaner — per spec §4.2.7 Option A it is wrapped in a
+// one-shot cleaneddata.New(prior, prior).Restated(), which reduces to an
+// umbrella recompute from components (empty ledger). This keeps the latest and
+// prior NWC reads on the same view basis and is forward-compatible with a
+// future working-capital Restater without rippling the call-site shape.
 func (s *Service) calculateNetWorkingCapitalChange(
 	historicalData *entities.HistoricalFinancialData,
 	latest *entities.FinancialData,
+	cleaned *cleaneddata.CleanedFinancialData,
 ) float64 {
-	if latest.CurrentAssets <= 0 || latest.CurrentLiabilities <= 0 {
+	latestView := restatedViewOr(cleaned, latest)
+	if latestView.CurrentAssets <= 0 || latestView.CurrentLiabilities <= 0 {
 		return 0 // data not available
 	}
 
-	latestNWC := latest.CurrentAssets - latest.CurrentLiabilities
+	latestNWC := latestView.CurrentAssets - latestView.CurrentLiabilities
 
 	// Find prior period to compute delta
 	recentYears := historicalData.GetRecentYears(2)
@@ -1783,12 +1846,15 @@ func (s *Service) calculateNetWorkingCapitalChange(
 		return 0 // not enough history for delta
 	}
 
-	// recentYears[0] is most recent, [1] is prior (sorted descending by GetRecentYears)
+	// recentYears[0] is most recent, [1] is prior (sorted descending by GetRecentYears).
+	// The prior period has no CleanedFinancialData wrapper — synthesize an
+	// identity-ledger view so latest and prior read on the same basis.
 	prior := recentYears[1]
-	if prior.CurrentAssets <= 0 || prior.CurrentLiabilities <= 0 {
+	priorView := cleaneddata.New(prior, prior).Restated()
+	if priorView.CurrentAssets <= 0 || priorView.CurrentLiabilities <= 0 {
 		return 0
 	}
 
-	priorNWC := prior.CurrentAssets - prior.CurrentLiabilities
+	priorNWC := priorView.CurrentAssets - priorView.CurrentLiabilities
 	return latestNWC - priorNWC
 }
