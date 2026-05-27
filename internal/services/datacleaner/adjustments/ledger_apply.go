@@ -3,7 +3,10 @@ package adjustments
 import (
 	"context"
 
+	"go.uber.org/zap"
+
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 )
 
 // applyLedgerComponentDeltas applies each fired Restater-role LedgerEntry's
@@ -32,11 +35,11 @@ import (
 // no monetary delta at all. Their effects are surfaced through Overlays /
 // Flags and applied at the view level by InvestedCapital().
 //
-// ctx is accepted as the first parameter per Go convention and the DC-1
-// Phase 3 ctx-threading contract; it is currently opaque (no deadline /
-// span read), matching the Apply* methods.
+// ctx is threaded per the DC-1 Phase 3 ctx-threading contract and is used to
+// obtain the request-scoped logger via logctx.From(ctx) for the unknown-
+// Component guard below (logctx.From(nil) returns a no-op logger, so the
+// nil-context path is safe).
 func applyLedgerComponentDeltas(ctx context.Context, working *entities.FinancialData, out AdjusterOutput) {
-	_ = ctx
 	if working == nil {
 		return
 	}
@@ -55,6 +58,19 @@ func applyLedgerComponentDeltas(ctx context.Context, working *entities.Financial
 			working.NormalizedOperatingIncome += e.DeltaAmount
 		case "InterestExpense":
 			working.InterestExpense += e.DeltaAmount
+		default:
+			// Silent-drop guard: a fired Restater carrying a Component name
+			// outside the known set would otherwise be a no-op here, silently
+			// losing its DeltaAmount (and the umbrella recompute in
+			// cleaneddata.Restated() would not see it). WARN so a future
+			// Restater that emits a new Component name surfaces loudly rather
+			// than corrupting valuations. Add the new case above when one lands.
+			logctx.From(ctx).Warn("applyLedgerComponentDeltas: fired Restater with unknown Component — delta dropped",
+				zap.String("adjuster_id", e.AdjusterID),
+				zap.String("rule_id", e.RuleID),
+				zap.String("component", e.Component),
+				zap.Float64("delta_amount", e.DeltaAmount),
+			)
 		}
 	}
 }

@@ -106,11 +106,14 @@ the reduction. After Phase 4 the umbrella dual-write is deleted (Option A), so
 DIFFERENT (larger or smaller) divergence. This is the documented "umbrella may
 be incoherent" outcome, not a behavior bug.
 
-Affected basket tickers (asset-Restater / A1 firers): AAPL, AMD, F, JNJ, KO,
-MXL, EQIX, MSFT, TSM saw shadow regeneration across C-2 (A2/A4/A5) and C-4
-(A1). BABA was unaffected. C-3 (C-rules, earnings-only) and C-5
-(consumer-only) produced NO shadow change because `recomputeUmbrellas` only
-recomputes balance-sheet umbrellas.
+Affected basket tickers (asset-Restater / A1 / B-rule firers): **all 10**
+basket tickers — AAPL, AMD, BABA, EQIX, F, JNJ, KO, MSFT, MXL, TSM — saw shadow
+regeneration across C-2 (A2/A4/A5) and C-4 (A1 + B1/B2/B3 liability dual-write
+deletions). BABA's record changed too: its three `TotalLiabilities` divergence
+entries (driven by the deleted B-rule liability-umbrella dual-write) collapsed
+to `divergences: []` once the umbrella mutation was removed. C-3 (C-rules,
+earnings-only) and C-5 (consumer-only) produced NO shadow change because
+`recomputeUmbrellas` only recomputes balance-sheet umbrellas.
 
 All SEMANTIC cleaner invariants stayed GREEN at every commit:
 `TestRecomputeUmbrellas_NoMutation`, `TestOrchestrator_LedgerOrdering`,
@@ -173,6 +176,20 @@ a fresh `4.2`/config-current baseline, which needs live SEC/market capture
   Grep confirms ZERO production/consumer `internal/` callers — the only
   reference is `service_cleanwithviews_test.go:45` (a contract test). The
   Phase 4 acceptance criterion (no dangling `Raw()` consumer) is satisfied.
+- **Dormant legacy-fallback umbrella mutations in `earnings.go`
+  (`ProcessRestructuringChargesAdjustment` / `ProcessAssetSaleGainsAdjustment` /
+  `ProcessLitigationSettlementsAdjustment` / capitalized-interest, lines
+  ~1611/1653/1713/1859): NOT deleted (Phase-5 cleanup).** These still perform a
+  direct `data.NormalizedOperatingIncome ±= X` (and `data.InterestExpense += X`)
+  mutation, but every dispatcher arm now calls them ONLY on the
+  `if err != nil { result = ea.ProcessX...; break }` fallback branch — i.e. the
+  never-fired error path of the corresponding `ApplyCx*` method (the Apply*
+  methods are pure component-delta computations that do not return errors in
+  practice). REVIEWER agreed leaving them is acceptable: they are unreachable in
+  the steady state and deleting them now would entangle the still-load-bearing
+  legacy `*AdjustmentResult` translator chain (above). Phase 5 deletes them
+  together with the vestigial translators once the legacy result structs are
+  retired.
 
 ## 7. Judgment calls / spec deviations
 
@@ -206,14 +223,25 @@ a fresh `4.2`/config-current baseline, which needs live SEC/market capture
    the whole A4 `if result.Applied {...}` block was deleted. The audit trail is
    preserved via the translated `*AdjustmentResult` + native LedgerEntry. The A4
    emission test was updated to `data.ValuationAllowance == 0`.
-4. **NWC test fixtures gained Phase-0 plug fields.** `Restated().CurrentAssets/
-   CurrentLiabilities` reconstruct from components+plugs. Synthetic unit
-   fixtures (which set the umbrella directly without plugs) were updated to
-   populate `OtherCurrentAssets`/`OtherCurrentLiabilities` to mirror
-   parser-stamped production data. This surfaces a real production assumption:
-   the parser's `computePlugs` must reproduce the umbrella for the Restated NWC
-   reads to be drift-free — validated by the integration suite + deferred to the
-   operator replay gate.
+4. **NWC reads `AsReported()`, not `Restated()` (REVIEWER-HIGH followup).** The
+   C-2 commit initially migrated `calculateNetWorkingCapitalChange` to
+   `Restated().CurrentAssets/.CurrentLiabilities`. But those are RECOMPUTED-
+   umbrella fields (`restate.go:68` rebuilds CA as
+   `Cash + Inventory + OtherCurrentAssets`), so for any ticker whose Phase-0 plug
+   UNDER-reconstructs the stamped umbrella — AMD: stamped 16,505M vs recomputed
+   14,678M, delta −1,827M, with ZERO Restaters firing; the per-period shortfall
+   grows so it does NOT cancel in the latest−prior delta — the Restated read
+   drifted `NetWorkingCapitalChange → FCF → dcf_value_per_share`, violating the
+   Class II zero-drift expectation (spec §5.1/§5.2). This is the SAME recomputed-
+   umbrella root cause already handled for `TangibleAssets` (judgment call #2);
+   NWC was the one read that slipped through. The followup commit flips BOTH the
+   latest and prior reads to `AsReported()` (identity-copied stamped umbrellas) ⇒
+   bit-for-bit identical to pre-Phase-4. Pinned by
+   `TestPerformValuation_NWCChangeUsesAsReported` (AMD-class fixture where
+   `sum(components)+plug ≠ stamped umbrella`). A FUTURE deliberate decision to
+   have NWC reflect current-asset Restaters (e.g. an A5 inventory writedown) may
+   flip `AsReported → Restated` WITH a documented drift expectation; Phase 4's
+   principle is "only the intended B3 routing flip drifts."
 5. **`CashAndCashEquivalents` stays on the entity read (not migrated).**
    `FinancialDataView` has no `CashAndCashEquivalents` field and Cash is never
    Restater-touched, so the alt-model `ModelInput.CashAndCashEquivalents` + the

@@ -1916,19 +1916,29 @@ func (s *Service) getAnalystEstimates(ctx context.Context, ticker string) *ports
 // calculateNetWorkingCapitalChange computes the change in net working capital
 // between the two most recent annual periods. Positive = cash consumed.
 //
-// DC-1 Phase 4 (C-2): the latest period reads working-capital fields from the
-// Restated() view (cleaned, or a synthesized fallback). The prior period is
-// never run through the cleaner — per spec §4.2.7 Option A it is wrapped in a
-// one-shot cleaneddata.New(prior, prior).Restated(), which reduces to an
-// umbrella recompute from components (empty ledger). This keeps the latest and
-// prior NWC reads on the same view basis and is forward-compatible with a
-// future working-capital Restater without rippling the call-site shape.
+// DC-1 Phase 4 (C-2, REVIEWER-HIGH followup): both the latest and prior periods
+// read CurrentAssets/CurrentLiabilities from the AsReported() view, NOT
+// Restated(). Restated() RECOMPUTES the current-asset/-liability umbrellas as
+// sum(components)+Phase-0 plug, which is NOT bit-for-bit equal to the
+// parser-stamped umbrella for tickers whose plug under-reconstructs it (e.g.
+// AMD: reported 16,505M vs recomputed 14,678M, delta −1,826M, even with ZERO
+// Restaters firing; deltas grow across periods so they do not cancel in the
+// latest−prior delta). Reading Restated() therefore drifted
+// NetWorkingCapitalChange → FCF → dcf_value_per_share, violating the Class II
+// zero-drift expectation (spec §5.1/§5.2). This is the SAME recomputed-umbrella
+// root cause already handled for TangibleAssets (calculateTangibleValuePerShare,
+// C-5) — NWC was the one read that slipped through. AsReported() is identity-
+// copied (parser umbrellas verbatim), so NWC change stays bit-for-bit identical
+// to pre-Phase-4. A future DELIBERATE decision to have NWC reflect current-asset
+// Restaters (e.g. an A5 inventory writedown) can flip AsReported→Restated WITH a
+// documented drift expectation; Phase 4's principle is "only the intended B3
+// routing flip drifts."
 func (s *Service) calculateNetWorkingCapitalChange(
 	historicalData *entities.HistoricalFinancialData,
 	latest *entities.FinancialData,
 	cleaned *cleaneddata.CleanedFinancialData,
 ) float64 {
-	latestView := restatedViewOr(cleaned, latest)
+	latestView := asReportedViewOr(cleaned, latest)
 	if latestView.CurrentAssets <= 0 || latestView.CurrentLiabilities <= 0 {
 		return 0 // data not available
 	}
@@ -1943,9 +1953,11 @@ func (s *Service) calculateNetWorkingCapitalChange(
 
 	// recentYears[0] is most recent, [1] is prior (sorted descending by GetRecentYears).
 	// The prior period has no CleanedFinancialData wrapper — synthesize an
-	// identity-ledger view so latest and prior read on the same basis.
+	// AsReported (identity-projection) view so latest and prior read on the same
+	// stamped-umbrella basis. AsReported does NOT recompute umbrellas, so this is
+	// byte-identical to reading prior.CurrentAssets/.CurrentLiabilities directly.
 	prior := recentYears[1]
-	priorView := cleaneddata.New(prior, prior).Restated()
+	priorView := cleaneddata.New(prior, prior).AsReported()
 	if priorView.CurrentAssets <= 0 || priorView.CurrentLiabilities <= 0 {
 		return 0
 	}

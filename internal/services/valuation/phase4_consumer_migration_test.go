@@ -2,6 +2,7 @@ package valuation
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -70,31 +71,50 @@ func TestPerformValuation_RestatedReadsAtROIC(t *testing.T) {
 		"nil-cleaned ROIC read must fall back to the entity's equity")
 }
 
-// TestPerformValuation_NWCChangeUsesRestated verifies calculateNetWorkingCapitalChange
-// reads the latest period's working-capital fields from the Restated() view
-// rather than the raw entity (DC-1 Phase 4 C-2 §4.2.7). The fixture gives the
-// raw `latest` arg a deliberately-wrong stamped CurrentAssets while the
-// post-clean entity's plug components reconstruct a different (correct) value;
-// the test proves the function used the reconstructed view value.
-func TestPerformValuation_NWCChangeUsesRestated(t *testing.T) {
+// TestPerformValuation_NWCChangeUsesAsReported verifies
+// calculateNetWorkingCapitalChange reads the latest AND prior periods'
+// working-capital umbrellas from the AsReported() view (the parser-stamped
+// CurrentAssets/CurrentLiabilities), NOT from Restated() (DC-1 Phase 4 C-2
+// REVIEWER-HIGH followup).
+//
+// REGRESSION GUARD: this fixture models the AMD-class case where the Phase-0
+// plug UNDER-reconstructs the umbrella — i.e. stamped CurrentAssets !=
+// Cash+Inventory+OtherCurrentAssets (and likewise for liabilities) — with ZERO
+// Restaters firing. Restated() recomputes CA as sum(components)+plug
+// (restate.go:68), so a Restated() read would silently drift NWC change → FCF →
+// dcf_value_per_share. AsReported() is the identity copy of the stamped
+// umbrella, so it stays bit-for-bit equal to pre-Phase-4. The latest/prior
+// numbers below are chosen so that the AsReported (stamped) delta and the
+// Restated (recomputed) delta are DIFFERENT — the assertion fails if the read
+// ever flips back to Restated().
+func TestPerformValuation_NWCChangeUsesAsReported(t *testing.T) {
 	svc := &Service{}
 
-	// Post-clean latest: plug components reconstruct CurrentAssets=500k,
-	// CurrentLiabilities=300k. The stamped umbrella fields are deliberately
-	// LEFT at a stale/incoherent value to prove the view (not the umbrella)
-	// drives the math.
+	// Latest: stamped umbrellas are the as-filed truth (CA=16,505 / CL=9,000).
+	// The plug components DELIBERATELY under-reconstruct: Cash+Inv+OtherCA =
+	// 14,678 (AMD's real −1,827 plug shortfall) and OtherCL = 8,000. With zero
+	// Restaters firing, Restated() would read 14,678 / 8,000 here.
 	postCleanLatest := &entities.FinancialData{
-		CurrentAssets:           999_999, // stale umbrella — must be ignored
-		CurrentLiabilities:      999_999, // stale umbrella — must be ignored
-		OtherCurrentAssets:      500_000,
-		OtherCurrentLiabilities: 300_000,
+		CurrentAssets:           16_505, // as-filed umbrella (AsReported truth)
+		CurrentLiabilities:      9_000,  // as-filed umbrella (AsReported truth)
+		CashAndCashEquivalents:  10_000,
+		Inventory:               4_000,
+		OtherCurrentAssets:      678,   // sum-of-components = 14,678 != 16,505 stamped
+		OtherCurrentLiabilities: 8_000, // recomputed CL = 8,000 != 9,000 stamped
 		FilingDate:              time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC),
 	}
 	cleaned := cleaneddata.New(postCleanLatest, postCleanLatest)
 
+	// Prior: same shape — stamped CA=14,000 / CL=8,000, but components
+	// under-reconstruct to 12,500 / 7,300. The cross-period plug shortfall
+	// grows, so AsReported and Restated deltas do NOT coincide.
 	prior := &entities.FinancialData{
-		OtherCurrentAssets:      400_000,
-		OtherCurrentLiabilities: 250_000,
+		CurrentAssets:           14_000, // as-filed umbrella
+		CurrentLiabilities:      8_000,  // as-filed umbrella
+		CashAndCashEquivalents:  9_000,
+		Inventory:               3_000,
+		OtherCurrentAssets:      500,   // sum-of-components = 12,500 != 14,000 stamped
+		OtherCurrentLiabilities: 7_300, // recomputed CL = 7,300 != 8,000 stamped
 		FilingDate:              time.Date(2023, 1, 15, 0, 0, 0, 0, time.UTC),
 		Revenue:                 1_000_000,
 		OperatingIncome:         100_000,
@@ -108,12 +128,23 @@ func TestPerformValuation_NWCChangeUsesRestated(t *testing.T) {
 		},
 	}
 
-	// Latest NWC (from Restated view) = 500_000 - 300_000 = 200_000
-	// Prior NWC (one-shot Restated)   = 400_000 - 250_000 = 150_000
-	// Delta = 50_000
+	// AsReported (CORRECT, pinned) basis:
+	//   latest NWC = 16,505 - 9,000 = 7,505
+	//   prior  NWC = 14,000 - 8,000 = 6,000
+	//   delta      = 1,505
+	const wantAsReportedDelta = 1_505.0
+
+	// Restated (WRONG, recomputed-umbrella) basis — what the bug produced:
+	//   latest NWC = (10,000+4,000+678) - 8,000 = 14,678 - 8,000 = 6,678
+	//   prior  NWC = (9,000+3,000+500) - 7,300  = 12,500 - 7,300 = 5,200
+	//   delta      = 1,478
+	const restatedDelta = 1_478.0
+
 	result := svc.calculateNetWorkingCapitalChange(historical, postCleanLatest, cleaned)
-	assert.InDelta(t, 50_000.0, result, 1e-6,
-		"NWC change must read CurrentAssets/CurrentLiabilities from the Restated view (reconstructed from plug components), not the stale stamped umbrella")
+	assert.InDelta(t, wantAsReportedDelta, result, 1e-6,
+		"NWC change must read the stamped (AsReported) CurrentAssets/CurrentLiabilities umbrellas, NOT the recomputed Restated umbrellas — otherwise the Phase-0 plug shortfall drifts FCF on AMD-class tickers")
+	assert.Greater(t, math.Abs(result-restatedDelta), 1.0,
+		"a Restated()-basis NWC delta (1,478) would mean the read regressed back to the recomputed umbrella")
 }
 
 // TestEffectiveOI_ReadsView pins the Phase 4 effectiveOI signature flip: the
