@@ -567,15 +567,18 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB3Emission(t *testi
 		"AI-enabled dispatcher path must propagate AIProvenance on the native overlay")
 	assert.Equal(t, b3AIModelName, overlay.AIProvenance.ModelName)
 
-	// Dual-write preserved — data.TotalDebt and data.InterestBearingDebt
-	// were mutated as before. This is the FIELD-vs-MUTATION mismatch
-	// documented in spec §"B3 routing correction" lines 181-189:
-	// OverlaySpec.Field is "DebtLikeClaims" but dispatcher still touches
-	// TotalDebt. Phase 4 deletes the dual-write.
-	assert.InDelta(t, origTotalDebt+expectedWeighted, data.TotalDebt, 1e-9,
-		"dispatcher must add weighted contingent amount to TotalDebt (Phase 2 dual-write, deleted in Phase 4)")
-	assert.InDelta(t, origInterestBearingDebt+expectedWeighted, data.InterestBearingDebt, 1e-9,
-		"dispatcher must add weighted contingent amount to InterestBearingDebt (Phase 2 dual-write)")
+	// DC-1 Phase 4 (C-4 / B3 ROUTING FLIP REALIZED, §8.2.1 Option A): the
+	// Phase 2 FIELD-vs-MUTATION mismatch is RESOLVED. The dispatcher dual-write
+	// to data.TotalDebt / data.InterestBearingDebt is DELETED; B3's contingent
+	// amount now flows ONLY through the OverlaySpec (Field:"DebtLikeClaims",
+	// verified above) into InvestedCapital().DebtLikeClaims, which the EV→Equity
+	// bridge subtracts. Contingent liabilities NO LONGER distort the WACC
+	// capital structure — the substantive accuracy correction.
+	require.Greater(t, expectedWeighted, 0.0)
+	assert.InDelta(t, origTotalDebt, data.TotalDebt, 1e-9,
+		"Phase 4 B3 routing flip: contingent amount must NOT mutate data.TotalDebt (routes to DebtLikeClaims)")
+	assert.InDelta(t, origInterestBearingDebt, data.InterestBearingDebt, 1e-9,
+		"Phase 4 B3 routing flip: contingent amount must NOT mutate data.InterestBearingDebt")
 }
 
 // TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB3SkipPath

@@ -402,15 +402,24 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments(t *testing.T) {
 	assert.Len(t, result.Adjustments, 3, "Should have adjustments for all categories")
 	assert.Greater(t, len(result.Flags), 0, "Should generate flags")
 
-	// Calculate expected debt increase:
-	// Operating leases: 150,000 (treated as debt)
-	// Pension underfunding: (400,000 - 250,000) + 75,000 = 225,000
-	// Contingent liabilities: (50,000 + 25,000) * 30% default probability = 22,500
-	expectedDebtIncrease := 150000 + 225000 + 22500    // Total: 397,500
-	expectedFinalDebt := 300000 + expectedDebtIncrease // 697,500
+	// Expected debt-like-claim increase from the three B-rules:
+	//   Operating leases: 150,000
+	//   Pension underfunding: (400,000 - 250,000) + 75,000 = 225,000
+	//   Contingent liabilities: (50,000 + 25,000) * 30% default probability = 22,500
+	expectedDebtIncrease := 150000 + 225000 + 22500 // Total: 397,500
 
-	// Verify debt was adjusted (allowing for small rounding differences)
-	assert.InDelta(t, expectedFinalDebt, data.TotalDebt, 1000, "Total debt should include liability adjustments")
+	// DC-1 Phase 4 (C-4 / B3 routing flip): the B-rule debt dual-write is
+	// DELETED. data.TotalDebt stays at its pre-clean value (300,000); the
+	// 397,500 of debt-like claims is recorded on the NativeOverlays for
+	// InvestedCapital().DebtLikeClaims to consume, NOT folded into TotalDebt.
+	assert.InDelta(t, 300000.0, data.TotalDebt, 1.0,
+		"Phase 4: data.TotalDebt must stay as-reported (B-rule amounts route to DebtLikeClaims)")
+	var overlayTotal float64
+	for _, o := range result.NativeOverlays {
+		overlayTotal += o.Amount
+	}
+	assert.InDelta(t, float64(expectedDebtIncrease), overlayTotal, 1000,
+		"B-rule debt-like-claim amounts must be captured on NativeOverlays")
 }
 
 func TestLiabilityAdjuster_IndustryThresholds(t *testing.T) {

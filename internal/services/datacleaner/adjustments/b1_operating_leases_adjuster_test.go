@@ -201,14 +201,17 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB1Emission(t *testi
 	assert.Equal(t, "TotalDebt", overlay.Field)
 	assert.Equal(t, "add", overlay.Operation)
 
-	// Dual-write preserved — data.TotalDebt and data.InterestBearingDebt
-	// were mutated as before (load-bearing for DDM JPM bit-for-bit
-	// invariant: DDM reads data.TotalDebt directly).
+	// DC-1 Phase 4 (C-4 / B3 routing flip, §8.2.1 Option A): the B-rule debt
+	// dual-write is DELETED. B1's lease amount flows through the OverlaySpec
+	// (above) into InvestedCapital().DebtLikeClaims at the view level; it no
+	// longer inflates data.TotalDebt / data.InterestBearingDebt. The WACC
+	// denominator reads Restated().InterestBearingDebt (B-rule-free).
 	leaseAmount := overlay.Amount
-	assert.Equal(t, origTotalDebt+leaseAmount, data.TotalDebt,
-		"dispatcher must add operating-lease amount to TotalDebt (dual-write)")
-	assert.Equal(t, origInterestBearingDebt+leaseAmount, data.InterestBearingDebt,
-		"dispatcher must add operating-lease amount to InterestBearingDebt (dual-write)")
+	require.Greater(t, leaseAmount, 0.0)
+	assert.Equal(t, origTotalDebt, data.TotalDebt,
+		"Phase 4 §8.2.1 Option A: B1 must NOT mutate data.TotalDebt (effect → InvestedCapital().DebtLikeClaims)")
+	assert.Equal(t, origInterestBearingDebt, data.InterestBearingDebt,
+		"Phase 4 §8.2.1 Option A: B1 must NOT mutate data.InterestBearingDebt")
 }
 
 // TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB1SkipPath confirms

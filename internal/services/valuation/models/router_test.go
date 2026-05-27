@@ -9,7 +9,18 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 )
+
+// restatedView wraps a synthetic entity in the Restated view SelectModel now
+// accepts (DC-1 Phase 4 C-3). OI/NOI are identity-copied by Restated(), so the
+// routing decision is byte-identical to the pre-Phase-4 entity reads.
+func restatedView(fd *entities.FinancialData) *cleaneddata.FinancialDataView {
+	if fd == nil {
+		return nil
+	}
+	return cleaneddata.New(fd, fd).Restated()
+}
 
 func testLogger() *zap.Logger {
 	logger, _ := zap.NewDevelopment()
@@ -156,7 +167,7 @@ func TestModelRouter_SelectModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			model := router.SelectModel(context.Background(), "TEST", tt.industry, tt.financials)
+			model := router.SelectModel(context.Background(), "TEST", tt.industry, restatedView(tt.financials))
 			require.NotNil(t, model, "model should not be nil")
 			assert.Equal(t, tt.expectedModel, model.ModelType())
 		})
@@ -167,9 +178,9 @@ func TestModelRouter_SelectModel(t *testing.T) {
 func TestModelRouter_SelectModel_NoModels(t *testing.T) {
 	router := NewModelRouter([]ValuationModel{}, testLogger(), nil)
 
-	model := router.SelectModel(context.Background(), "TEST", "TECH", &entities.FinancialData{
+	model := router.SelectModel(context.Background(), "TEST", "TECH", restatedView(&entities.FinancialData{
 		OperatingIncome: 1000,
-	})
+	}))
 
 	assert.Nil(t, model, "should return nil when no models are registered")
 }

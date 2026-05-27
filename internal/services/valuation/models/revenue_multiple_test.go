@@ -65,6 +65,139 @@ func TestRevenueMultipleModel_Calculate_StandardTech(t *testing.T) {
 	assertHasWarningPrefix(t, result.Warnings, "revenue_base: source=ANNUAL_FY")
 }
 
+// TestRevenueMultiple_SubtractsDebtLikeClaims is the DC-1 Phase 4 followup
+// regression: the EV→Equity bridge must subtract InvestedCapital().DebtLikeClaims
+// (B1 lease + B2 pension + B3 contingent overlay amounts) in BOTH the trailing
+// and forward paths. Pre-fix, the bridge read the B-rule-free
+// Restated().InterestBearingDebt but never re-subtracted DebtLikeClaims, so
+// those claims were silently dropped and equity was overstated for B-rule-
+// firing revenue_multiple tickers. Mirrors the DCF path's
+// dcf.CalculateEquityValueWithDebtLikeClaims.
+func TestRevenueMultiple_SubtractsDebtLikeClaims(t *testing.T) {
+	model := newTestRevenueMultipleModel()
+	ctx := context.Background()
+
+	const (
+		revenue    = 1_000_000_000.0 // 1B
+		multiple   = 5.0             // TECH
+		debt       = 100_000_000.0
+		cash       = 50_000_000.0
+		shares     = 100_000_000.0
+		claims     = 80_000_000.0 // B1+B2+B3 overlay total
+		enterprise = revenue * multiple
+	)
+
+	t.Run("trailing_bridge_subtracts_claims", func(t *testing.T) {
+		input := &ModelInput{
+			HistoricalData: &entities.HistoricalFinancialData{
+				Ticker: "B_RULE_TICKER",
+				Data: map[string]*entities.FinancialData{
+					"2023FY": {
+						Revenue:      revenue,
+						FilingDate:   time.Now(),
+						FilingPeriod: "2023FY",
+					},
+				},
+			},
+			Industry:               "TECH",
+			SharesOutstanding:      shares,
+			InterestBearingDebt:    debt,
+			CashAndCashEquivalents: cash,
+			DebtLikeClaims:         claims,
+		}
+
+		result, err := model.Calculate(ctx, input)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Equity = EV - Debt + Cash - DebtLikeClaims
+		//        = 5B - 100M + 50M - 80M = 4.87B
+		wantEquity := enterprise - debt + cash - claims
+		assert.InDelta(t, wantEquity, result.EquityValue, 1.0,
+			"equity bridge must subtract DebtLikeClaims")
+		assert.InDelta(t, wantEquity/shares, result.IntrinsicValuePerShare, 1e-6,
+			"per-share must reflect the DebtLikeClaims subtraction")
+	})
+
+	t.Run("zero_claims_unchanged_backward_compat", func(t *testing.T) {
+		input := &ModelInput{
+			HistoricalData: &entities.HistoricalFinancialData{
+				Ticker: "NO_B_RULE",
+				Data: map[string]*entities.FinancialData{
+					"2023FY": {
+						Revenue:      revenue,
+						FilingDate:   time.Now(),
+						FilingPeriod: "2023FY",
+					},
+				},
+			},
+			Industry:               "TECH",
+			SharesOutstanding:      shares,
+			InterestBearingDebt:    debt,
+			CashAndCashEquivalents: cash,
+			DebtLikeClaims:         0, // no B-rule fires → bridge unchanged
+		}
+
+		result, err := model.Calculate(ctx, input)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		// Equity = EV - Debt + Cash (legacy bridge, DebtLikeClaims=0).
+		wantEquity := enterprise - debt + cash
+		assert.InDelta(t, wantEquity, result.EquityValue, 1.0,
+			"DebtLikeClaims=0 must leave the bridge unchanged (backward compat)")
+	})
+}
+
+// TestRevenueMultiple_Forward_SubtractsDebtLikeClaims verifies the forward
+// (RM-3) bridge also subtracts DebtLikeClaims. Asserts the forward per-share
+// value drops by exactly DebtLikeClaims/shares relative to a zero-claims run
+// on the same fixture.
+func TestRevenueMultiple_Forward_SubtractsDebtLikeClaims(t *testing.T) {
+	const claims = 80_000_000.0
+
+	buildInput := func(t *testing.T, dlc float64) *ModelInput {
+		in := buildMXLLikeInput(t)
+		in.DebtLikeClaims = dlc
+		in.Profile = &profile.ResolvedProfile{
+			AssumptionProfile: profile.AssumptionProfile{
+				ProfileID:         "cyclical_trough:standard_growth",
+				Archetype:         profile.ArchetypeCyclicalTrough,
+				Maturity:          profile.MaturityStandardGrowth,
+				HorizonYears:      5,
+				CompoundGrowthCap: 3.0,
+				RevenueBaseMethod: profile.RevenueBaseMaxTTMOrFloor,
+				TerminalMultiple:  4.0,
+				TerminalMethod:    profile.TerminalExitMultiple,
+				DiscountMethod:    profile.DiscountCostOfEquity,
+			},
+		}
+		return in
+	}
+
+	rmMultiples := map[string]float64{
+		"default":  2.0,
+		"MFG_SEMI": 1.5,
+		"MFG":      1.5,
+	}
+
+	rm := NewRevenueMultipleModelWithMultiples(rmMultiples, testLogger())
+	withClaims, err := rm.Calculate(context.Background(), buildInput(t, claims))
+	require.NoError(t, err)
+	noClaims, err := rm.Calculate(context.Background(), buildInput(t, 0))
+	require.NoError(t, err)
+
+	shares := buildMXLLikeInput(t).SharesOutstanding
+	require.Greater(t, noClaims.ForwardValue, 0.0, "forward must be computed")
+	require.Greater(t, withClaims.ForwardValue, 0.0, "forward must be computed")
+
+	// Forward value with claims must be lower by exactly claims/shares
+	// (forward equity = forwardEV - debt + cash - DebtLikeClaims, then /shares).
+	wantDrop := claims / shares
+	assert.InDelta(t, wantDrop, noClaims.ForwardValue-withClaims.ForwardValue, 1e-6,
+		"forward per-share must drop by DebtLikeClaims/shares")
+}
+
 // assertHasWarningPrefix is a small helper used by RM-1 tests to verify
 // the revenue_base source line is emitted without coupling assertions to
 // the exact float formatting of the embedded revenue value.

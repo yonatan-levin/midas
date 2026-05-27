@@ -250,13 +250,14 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB2Emission(t *testi
 	assert.Equal(t, "add", overlay.Operation)
 	assert.Equal(t, 250_000.0, overlay.Amount)
 
-	// Dual-write preserved — data.TotalDebt and data.InterestBearingDebt
-	// were mutated as before (load-bearing for DDM JPM bit-for-bit
-	// invariant: DDM reads data.TotalDebt directly).
-	assert.Equal(t, origTotalDebt+250_000.0, data.TotalDebt,
-		"dispatcher must add pension obligation to TotalDebt (dual-write)")
-	assert.Equal(t, origInterestBearingDebt+250_000.0, data.InterestBearingDebt,
-		"dispatcher must add pension obligation to InterestBearingDebt (dual-write)")
+	// DC-1 Phase 4 (C-4, §8.2.1 Option A): the B-rule debt dual-write is
+	// DELETED. B2's pension underfunding flows through the OverlaySpec (above)
+	// into InvestedCapital().DebtLikeClaims; it no longer inflates
+	// data.TotalDebt / data.InterestBearingDebt.
+	assert.Equal(t, origTotalDebt, data.TotalDebt,
+		"Phase 4 §8.2.1 Option A: B2 must NOT mutate data.TotalDebt (effect → InvestedCapital().DebtLikeClaims)")
+	assert.Equal(t, origInterestBearingDebt, data.InterestBearingDebt,
+		"Phase 4 §8.2.1 Option A: B2 must NOT mutate data.InterestBearingDebt")
 }
 
 // TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB2SkipPath

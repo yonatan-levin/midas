@@ -11,11 +11,28 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 )
 
 const floatTol = 1e-6
 
 func ptrFloat(v float64) *float64 { return &v }
+
+// arView wraps a synthetic *entities.FinancialData in the AsReported view the
+// DC-1 Phase 4 Graham consumer now reads. AsReported is an identity projection
+// (no umbrella recompute), so the wrapped view's CurrentAssets / TotalAssets /
+// TotalLiabilities / StockholdersEquity are byte-identical to the entity's
+// stamped values — these tests' expectations are unchanged.
+func arView(fd *entities.FinancialData) *cleaneddata.FinancialDataView {
+	if fd == nil {
+		// Preserve the "nil financial data → nil view → sentinel" contract:
+		// the production caller (asReportedViewOr) never produces a nil view
+		// because latestFinancialData is non-nil by the time Graham runs, but
+		// the U4 test exercises the nil-view guard directly.
+		return nil
+	}
+	return cleaneddata.New(fd, fd).AsReported()
+}
 
 // assertPtrEq asserts both want and got are nil, or both are non-nil and
 // agree to floatTol. Used uniformly across all four pointer fields on
@@ -157,7 +174,7 @@ func TestCalculateGrahamFloorMetrics(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := calculateGrahamFloorMetrics(context.Background(), zap.NewNop(),
-				"TEST", tt.fd, tt.dilutedShares, tt.currentPrice)
+				"TEST", arView(tt.fd), tt.dilutedShares, tt.currentPrice)
 
 			if tt.wantSentinel {
 				assert.Equal(t, grahamFloor{}, got)
@@ -188,7 +205,7 @@ func TestCalculateGrahamFloorMetrics(t *testing.T) {
 func TestResolveTotalLiabilities(t *testing.T) {
 	t.Run("direct path: TotalLiabilities populated", func(t *testing.T) {
 		fd := &entities.FinancialData{TotalLiabilities: 1_000_000}
-		got, ok := resolveTotalLiabilities(context.Background(), zap.NewNop(), "T", fd)
+		got, ok := resolveTotalLiabilities(context.Background(), zap.NewNop(), "T", arView(fd))
 		assert.True(t, ok)
 		assert.Equal(t, 1_000_000.0, got)
 	})
@@ -198,7 +215,7 @@ func TestResolveTotalLiabilities(t *testing.T) {
 		logger := zap.New(core)
 		fd := &entities.FinancialData{TotalAssets: 2_000_000, StockholdersEquity: 1_500_000}
 
-		got, ok := resolveTotalLiabilities(context.Background(), logger, "T", fd)
+		got, ok := resolveTotalLiabilities(context.Background(), logger, "T", arView(fd))
 		assert.True(t, ok)
 		assert.Equal(t, 500_000.0, got)
 
@@ -212,21 +229,21 @@ func TestResolveTotalLiabilities(t *testing.T) {
 
 	t.Run("derived path: negative derivation (MXL signature) returns unresolved", func(t *testing.T) {
 		fd := &entities.FinancialData{TotalAssets: 387_402_066, StockholdersEquity: 454_191_000}
-		got, ok := resolveTotalLiabilities(context.Background(), zap.NewNop(), "T", fd)
+		got, ok := resolveTotalLiabilities(context.Background(), zap.NewNop(), "T", arView(fd))
 		assert.False(t, ok)
 		assert.Equal(t, 0.0, got)
 	})
 
 	t.Run("unresolved: all inputs zero", func(t *testing.T) {
 		fd := &entities.FinancialData{}
-		got, ok := resolveTotalLiabilities(context.Background(), zap.NewNop(), "T", fd)
+		got, ok := resolveTotalLiabilities(context.Background(), zap.NewNop(), "T", arView(fd))
 		assert.False(t, ok)
 		assert.Equal(t, 0.0, got)
 	})
 
 	t.Run("unresolved: only TotalAssets present", func(t *testing.T) {
 		fd := &entities.FinancialData{TotalAssets: 1_000_000}
-		got, ok := resolveTotalLiabilities(context.Background(), zap.NewNop(), "T", fd)
+		got, ok := resolveTotalLiabilities(context.Background(), zap.NewNop(), "T", arView(fd))
 		assert.False(t, ok)
 		assert.Equal(t, 0.0, got)
 	})
@@ -240,7 +257,7 @@ func TestGrahamFloor_Sheet2Example(t *testing.T) {
 		TotalLiabilities: 2_000_000_000,
 	}
 	gf := calculateGrahamFloorMetrics(context.Background(), zap.NewNop(),
-		"EXAMPLE", fd, 39_540_000, 73.64)
+		"EXAMPLE", arView(fd), 39_540_000, 73.64)
 
 	// Spec §5.2 reference values (rounded for human readability):
 	//   current_assets_per_share ≈ 55.13

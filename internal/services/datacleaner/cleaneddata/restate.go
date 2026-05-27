@@ -30,7 +30,11 @@ package cleaneddata
 // AsReported.TotalLiabilities==0, the recompute below reconstructs
 // TotalLiabilities from sum(components) using the post-clean
 // (already-recomputed by the dispatcher and recompute shim where
-// applicable) field values. The reconstruction is truthful.
+// applicable) field values. This reconstruction is the ANALYTICAL
+// sum-of-components view; it is NOT bit-for-bit equal to the parser-stamped
+// umbrella tag (which may differ or, as in T2-BS-3, be missing entirely).
+// That is exactly why drift-neutral consumers that need the as-filed umbrella
+// read AsReported() instead of Restated().
 //
 // First-call cost: O(adjusters + fields). Subsequent calls: O(1) cached.
 func (c *CleanedFinancialData) Restated() *FinancialDataView {

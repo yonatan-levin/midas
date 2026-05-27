@@ -149,7 +149,19 @@ func TestCompleteDataCleaningPipeline(t *testing.T) {
 
 			// Validate data integrity after both adjustments
 			assert.Greater(t, tt.data.TotalAssets, float64(0), "Total assets should remain positive")
-			assert.GreaterOrEqual(t, tt.data.TotalDebt, liabilityResult.TotalLiabilityAdjustment, "Debt should include liability adjustments")
+			// DC-1 Phase 4 (C-4): B-rule debt dual-write is DELETED. The
+			// liability adjustment amount no longer flows into data.TotalDebt —
+			// it is recorded on the NativeOverlays (DebtLikeClaims/TotalDebt
+			// fields) for InvestedCapital() to consume. Verify the adjustment
+			// magnitude is captured on the overlays rather than the umbrella.
+			if liabilityResult.TotalLiabilityAdjustment > 0 {
+				var overlayTotal float64
+				for _, o := range liabilityResult.NativeOverlays {
+					overlayTotal += o.Amount
+				}
+				assert.GreaterOrEqual(t, overlayTotal, liabilityResult.TotalLiabilityAdjustment-1.0,
+					"Phase 4: B-rule adjustments recorded on NativeOverlays (debt-like claims), not data.TotalDebt")
+			}
 		})
 	}
 }

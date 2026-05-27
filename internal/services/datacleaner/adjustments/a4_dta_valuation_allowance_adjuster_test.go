@@ -247,17 +247,21 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA4Emission(t *testing.T) {
 	assert.InDelta(t, -100_000.0, nativeEntry.EquityOffset, 1e-6)
 	assert.Zero(t, nativeEntry.TaxShieldDTA, "A4 TaxShieldDTA stays 0 on dispatcher path too")
 
-	// Dual-write preserved — data was mutated as the legacy code did.
-	// adjustedDTA = originalDTA - valuationAllowance = 100_000.
+	// DC-1 Phase 4 (C-2, §8.2.1 Option A): the dispatcher applies the fired
+	// LedgerEntry's COMPONENT delta only. data.DeferredTaxAssets is reduced by
+	// the valuation allowance (originalDTA 200_000 + DeltaAmount(-100_000) =
+	// 100_000). The legacy umbrella dual-write (data.TotalAssets) AND the
+	// auxiliary-aggregate dual-write (data.ValuationAllowance) are DELETED —
+	// neither is read by a Phase 4 consumer (TotalAssets recomputes in
+	// Restated(); ValuationAllowance is not a view field). The audit trail is
+	// preserved via result.Adjustments + the native LedgerEntry.
+	_ = originalDTA
 	assert.InDelta(t, 100_000.0, data.DeferredTaxAssets, 1e-6,
-		"dispatcher must reduce data.DeferredTaxAssets by the valuation allowance (dual-write)")
-	assert.InDelta(t, 900_000.0, data.TotalAssets, 1e-6,
-		"dispatcher must subtract valuation allowance from data.TotalAssets (dual-write)")
-	assert.InDelta(t, 100_000.0, data.ValuationAllowance, 1e-6,
-		"dispatcher must add valuation allowance into data.ValuationAllowance (dual-write)")
-	// Sanity: combined balance-sheet invariant — adjustedDTA + valuationAllowance == originalDTA.
-	assert.InDelta(t, originalDTA, data.DeferredTaxAssets+data.ValuationAllowance, 1e-6,
-		"DTA reduction + valuation allowance must equal original DTA (no value created/destroyed)")
+		"dispatcher must apply the component delta to data.DeferredTaxAssets")
+	assert.InDelta(t, 1_000_000.0, data.TotalAssets, 1e-6,
+		"Phase 4 §8.2.1 Option A: dispatcher must NOT mutate the data.TotalAssets umbrella")
+	assert.InDelta(t, 0.0, data.ValuationAllowance, 1e-6,
+		"Phase 4 §8.2.1 Option A: dispatcher no longer dual-writes data.ValuationAllowance")
 }
 
 // TestAssetAdjuster_ProcessAssetAdjustments_NativeA4SkipPath confirms that

@@ -18,6 +18,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	growthsvc "github.com/midas/dcf-valuation-api/internal/services/growth"
@@ -469,13 +470,22 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 		)
 	}
 
-	// Apply data cleaning if service is available
+	// Apply data cleaning if service is available.
+	//
+	// DC-1 Phase 4 (C-1 plumbing): capture the *cleaneddata.CleanedFinancialData
+	// view wrapper alongside the legacy CleaningResult. `cleaned` is threaded
+	// through performValuation so C-2..C-5 can migrate individual consumer
+	// read sites to the AsReported() / Restated() / InvestedCapital() accessors
+	// one cluster at a time. It is nil when no cleaner is wired or cleaning
+	// failed; every downstream reader nil-guards and falls back to the legacy
+	// latestFinancialData.X direct read.
 	var cleaningResult *entities.CleaningResult
+	var cleaned *cleaneddata.CleanedFinancialData
 	if s.dataCleaner != nil {
 		latest, latestPeriod := historicalData.GetLatestPeriod()
 		if latest != nil {
 			var err error
-			cleaningResult, err = s.dataCleaner.CleanFinancialData(ctx, latest)
+			cleaningResult, cleaned, err = s.dataCleaner.CleanFinancialDataWithViews(ctx, latest)
 			if err != nil {
 				s.log(ctx).Warn("Data cleaning failed, using original data",
 					zap.Error(err),
@@ -484,7 +494,9 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 				s.log(ctx).Info("Data cleaning applied successfully",
 					zap.String("ticker", ticker),
 					zap.Float64("quality_score", cleaningResult.QualityScore))
-				// Update historical data with cleaned data
+				// Update historical data with cleaned data. The legacy slot
+				// stays populated for the DDM consumer's GetLatestPeriod()
+				// read path (DDM migration deferred to Phase 5 per spec §7).
 				historicalData.Data[latestPeriod] = cleaningResult.CleanedData
 			}
 		}
@@ -493,7 +505,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	}
 
 	// Calculate valuation using potentially cleaned data, applying any user overrides
-	result, err := s.performValuation(ctx, historicalData, marketData, macroData, opts)
+	result, err := s.performValuation(ctx, historicalData, marketData, macroData, opts, cleaned)
 	if err != nil {
 		s.metricsService.RecordValuationRequest(ticker, "single", "error", time.Since(start))
 		s.metricsService.RecordValuationError(ticker, "calculation_failed")
@@ -561,12 +573,20 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 
 // performValuation executes the valuation calculation logic.
 // opts may be nil; when provided, its fields override data-source values in the WACC calculation.
+//
+// DC-1 Phase 4: cleaned carries the three-view accessor surface
+// (AsReported / Restated / InvestedCapital) over the post-clean latest-period
+// *FinancialData. It may be nil (no cleaner wired, cleaning failed, or a test
+// path that doesn't stub it); every read site nil-guards and falls back to the
+// legacy latestFinancialData.X direct read. Consumer reads migrate to the
+// views one cluster at a time (C-2..C-5).
 func (s *Service) performValuation(
 	ctx context.Context,
 	historicalData *entities.HistoricalFinancialData,
 	marketData *entities.MarketData,
 	macroData *entities.MacroData,
 	opts *ValuationOptions,
+	cleaned *cleaneddata.CleanedFinancialData,
 ) (*entities.ValuationResult, error) {
 
 	// Validate minimum data requirements — need at least 1 annual period with revenue or OI
@@ -601,10 +621,20 @@ func (s *Service) performValuation(
 	sustainableGrowth := 0.0
 	latestForROIC, _ := historicalData.GetLatestPeriod()
 	if latestForROIC != nil {
-		nopat := latestForROIC.NormalizedOperatingIncome * (1 - latestForROIC.TaxRate)
+		// DC-1 Phase 4 (C-2): ROIC NOPAT numerator and invested-capital
+		// denominator both read the Restated() view so the ratio stays
+		// coherent under earnings/equity restatements (C1-C7 touch
+		// NormalizedOperatingIncome; A2/A4/A5 EquityOffsets touch
+		// StockholdersEquity). Mixing Restated NOPAT with as-reported equity
+		// would inflate ROIC for any company with impairments. TaxRate and
+		// CashAndCashEquivalents are NOT Restater-touched today and stay on
+		// the legacy entity read. cleaned may be nil on test/no-cleaner paths
+		// — fall back to the legacy direct reads then.
+		roicView := restatedViewOr(cleaned, latestForROIC)
+		nopat := roicView.NormalizedOperatingIncome * (1 - latestForROIC.TaxRate)
 		investedCapital := growth.CalculateInvestedCapital(
-			latestForROIC.StockholdersEquity,
-			latestForROIC.InterestBearingDebt,
+			roicView.StockholdersEquity,
+			roicView.InterestBearingDebt,
 			latestForROIC.CashAndCashEquivalents,
 		)
 		sustainableGrowth = growth.CalculateSustainableGrowth(nopat, investedCapital, s.growthEstimator.Config().DefaultPayoutRatio)
@@ -649,7 +679,10 @@ func (s *Service) performValuation(
 	}
 
 	// Calculate tangible value per share
-	tangibleValuePerShare := s.calculateTangibleValuePerShare(latestFinancialData, marketData)
+	// DC-1 Phase 4 (C-5): tangible value reads the AsReported view's
+	// TangibleAssets (identity-copied parser value — see the helper's godoc for
+	// why AsReported, not Restated).
+	tangibleValuePerShare := s.calculateTangibleValuePerShare(asReportedViewOr(cleaned, latestFinancialData), marketData)
 
 	// Determine beta and risk-free rate, applying user overrides when provided
 	beta := marketData.GetEffectiveBeta()
@@ -674,9 +707,20 @@ func (s *Service) performValuation(
 	// Unlever beta to remove capital structure effect, then relever at current D/E.
 	// For a single company this is near-identity, but it normalizes extreme D/E betas
 	// and prepares the pipeline for industry-average beta comparison.
+	// DC-1 Phase 4 (C-4 / B3 routing flip): WACC capital-structure inputs read
+	// Restated().InterestBearingDebt + Restated().InterestExpense. After C-4
+	// deletes the B1/B2/B3 dispatcher dual-writes (below),
+	// Restated().InterestBearingDebt is the parser-stamped value with NO B-rule
+	// inflation — B1+B2+B3 amounts flow ONLY into InvestedCapital().DebtLikeClaims
+	// (the EV→Equity bridge), NOT into the capital-structure denominator. This
+	// is the substantive accuracy correction: contingent/lease/pension claims
+	// are shareholder claims, not interest-bearing capital. C6 capitalized
+	// interest restates InterestExpense via the Restated view. TaxRate is not
+	// Restater-touched (and not a view field) and stays on the entity.
+	waccRestated := restatedViewOr(cleaned, latestFinancialData)
 	marketEquity := marketData.CalculateMarketValue()
-	if marketEquity > 0 && latestFinancialData.InterestBearingDebt > 0 {
-		debtEquityRatio := latestFinancialData.InterestBearingDebt / marketEquity
+	if marketEquity > 0 && waccRestated.InterestBearingDebt > 0 {
+		debtEquityRatio := waccRestated.InterestBearingDebt / marketEquity
 		unleveredBeta = wacc.UnleveredBeta(blumeBeta, latestFinancialData.TaxRate, debtEquityRatio)
 		releveredBeta = wacc.RelleveredBeta(unleveredBeta, latestFinancialData.TaxRate, debtEquityRatio)
 		beta = releveredBeta
@@ -705,8 +749,8 @@ func (s *Service) performValuation(
 		Beta:                beta,
 		CountryRiskPremium:  countryRiskPremium,
 		MarketValueOfEquity: marketData.CalculateMarketValue(),
-		MarketValueOfDebt:   latestFinancialData.InterestBearingDebt,
-		InterestExpense:     latestFinancialData.InterestExpense,
+		MarketValueOfDebt:   waccRestated.InterestBearingDebt, // B-rules NO LONGER feed this (B3 flip realized)
+		InterestExpense:     waccRestated.InterestExpense,     // C6 restater touches this
 		TaxRate:             latestFinancialData.TaxRate,
 	}
 
@@ -911,13 +955,19 @@ func (s *Service) performValuation(
 		// (Revenue==0 AND OperatingIncome==0) gets Revenue=nil so the
 		// resolver's Stage-2 maturity bucketing falls through to the
 		// "no_revenue_signal" branch instead of misclassifying as ultra-mature.
+		// DC-1 Phase 4 (C-3): NOPAT-fallback guard + OI/NI facts read the
+		// Restated view (earnings restatements C1-C7 touch
+		// NormalizedOperatingIncome). Revenue is NOT Restater-touched and
+		// stays on the entity. NetIncome is not Restater-touched today either,
+		// but reads the view for coherence + forward-compatibility (§4.2.2).
+		factsRestated := restatedViewOr(cleaned, latestFinancialData)
 		var revenuePtr *float64
-		if !(latestFinancialData.Revenue == 0 && latestFinancialData.NormalizedOperatingIncome == 0) {
+		if !(latestFinancialData.Revenue == 0 && factsRestated.NormalizedOperatingIncome == 0) {
 			v := latestFinancialData.Revenue
 			revenuePtr = &v
 		}
-		oiVal := latestFinancialData.OperatingIncome
-		niVal := latestFinancialData.NetIncome
+		oiVal := factsRestated.OperatingIncome
+		niVal := factsRestated.NetIncome
 		facts := profile.Facts{
 			Industry:           industryCode,
 			IndustryNormalized: strings.ToUpper(strings.TrimSpace(industryCode)),
@@ -959,7 +1009,9 @@ func (s *Service) performValuation(
 	// Select the appropriate valuation model based on industry and financials.
 	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace;
 	// ticker is threaded in so that trace entry carries it self-describingly (M-1a).
-	selectedModel := s.modelRouter.SelectModel(ctx, historicalData.Ticker, industryCode, latestFinancialData)
+	// DC-1 Phase 4 (C-3): the router's negative-OI routing reads the Restated
+	// view so model selection reflects restated earnings.
+	selectedModel := s.modelRouter.SelectModel(ctx, historicalData.Ticker, industryCode, restatedViewOr(cleaned, latestFinancialData))
 
 	// Tier-1 narrate: model.selected. Spec §5 row 14 fields. Reason is
 	// intentionally coarse — full reasoning lives in the calclog
@@ -994,7 +1046,7 @@ func (s *Service) performValuation(
 			ctx, selectedModel, historicalData, marketData, macroData,
 			growthEstimate, waccResult, latestFinancialData, latestPeriod,
 			tangibleValuePerShare, sharesOutstanding, industryCode,
-			resolvedProfile,
+			resolvedProfile, cleaned,
 		)
 		if errors.Is(altErr, errFallbackToDCF) {
 			s.log(ctx).Info("Falling back to standard DCF after alternative model failure",
@@ -1028,13 +1080,18 @@ func (s *Service) performValuation(
 
 	// Guard: standard DCF requires positive operating income.
 	// Companies with negative OI are routed to revenue_multiple model above.
-	baseOI := effectiveOI(latestFinancialData)
+	//
+	// DC-1 Phase 4 (C-2 signature flip / C-3 read migration): effectiveOI and
+	// the negative-OI sentinel read the Restated view so the guard matches the
+	// OI the engine actually uses after earnings restatements (C1-C7).
+	dcfRestated := restatedViewOr(cleaned, latestFinancialData)
+	baseOI := effectiveOI(dcfRestated)
 	if baseOI <= 0 {
-		return nil, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, latestFinancialData.NormalizedOperatingIncome)
+		return nil, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, dcfRestated.NormalizedOperatingIncome)
 	}
 
 	// Calculate net working capital change from historical data if available
-	nwcChange := s.calculateNetWorkingCapitalChange(historicalData, latestFinancialData)
+	nwcChange := s.calculateNetWorkingCapitalChange(historicalData, latestFinancialData, cleaned)
 
 	// Perform DCF calculation with multi-stage growth rates.
 	//
@@ -1182,18 +1239,28 @@ func (s *Service) performValuation(
 		)
 	}
 
-	// Equity value bridge: EV - Debt + Cash - MinorityInterest - PreferredEquity = Equity Value
+	// Equity value bridge: EV - Debt + Cash - MinorityInterest - PreferredEquity
+	//                       - DebtLikeClaims = Equity Value
 	// M-1d: minority interest and preferred equity are subtracted to produce
-	// common-shareholder claim only. Both are zero for issuers without
-	// non-controlling interests or preferred stock outstanding, so the
-	// per-share output for those tickers is unchanged versus the prior
-	// 3-arg signature.
-	equityValue := dcf.CalculateEquityValue(
+	// common-shareholder claim only.
+	//
+	// DC-1 Phase 4 (C-4 / B3 routing flip): debt reads Restated().InterestBearingDebt
+	// (B-rule amounts no longer inflate it after the dispatcher dual-write
+	// deletion below). The NEW sixth term subtracts
+	// InvestedCapital().DebtLikeClaims — the B1 (lease) + B2 (pension) + B3
+	// (contingent) overlay amounts that compete with shareholders for cash
+	// flows. For tickers with no B-rule fires DebtLikeClaims == 0 and the
+	// bridge is unchanged. Cash / MinorityInterest / PreferredEquity are not
+	// Restater-touched and stay on the entity.
+	bridgeInvestedCap := investedCapitalOr(cleaned, latestFinancialData)
+	debtLikeClaims := bridgeInvestedCap.DebtLikeClaims
+	equityValue := dcf.CalculateEquityValueWithDebtLikeClaims(
 		dcfResult.EnterpriseValue,
-		latestFinancialData.InterestBearingDebt,
+		waccRestated.InterestBearingDebt,
 		latestFinancialData.CashAndCashEquivalents,
 		latestFinancialData.MinorityInterest,
 		latestFinancialData.PreferredEquity,
+		debtLikeClaims,
 	)
 	dcfValuePerShare := equityValue / sharesOutstanding
 
@@ -1203,9 +1270,10 @@ func (s *Service) performValuation(
 		s.calcEmitter.Emit(ctx, "equity_bridge",
 			zap.String("ticker", historicalData.Ticker),
 			zap.Float64("cash", latestFinancialData.CashAndCashEquivalents),
-			zap.Float64("debt", latestFinancialData.InterestBearingDebt),
+			zap.Float64("debt", waccRestated.InterestBearingDebt),
 			zap.Float64("minority_interest", latestFinancialData.MinorityInterest),
 			zap.Float64("preferred", latestFinancialData.PreferredEquity),
+			zap.Float64("debt_like_claims", debtLikeClaims),
 			zap.Float64("equity_value", equityValue),
 			zap.Float64("diluted_shares", sharesOutstanding),
 			zap.Float64("per_share", dcfValuePerShare),
@@ -1224,7 +1292,7 @@ func (s *Service) performValuation(
 	}
 
 	gf := calculateGrahamFloorMetrics(ctx, s.logger, historicalData.Ticker,
-		latestFinancialData, sharesOutstanding, marketData.SharePrice)
+		asReportedViewOr(cleaned, latestFinancialData), sharesOutstanding, marketData.SharePrice)
 
 	result := &entities.ValuationResult{
 		Ticker: historicalData.Ticker,
@@ -1252,7 +1320,7 @@ func (s *Service) performValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     "multi_stage_dcf",
-		CalculationVersion:    "4.2",
+		CalculationVersion:    "4.3", // DC-1 Phase 4: B3 routing flip + B1/B2 reroute + A1 overlay → consumer-visible drift
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -1326,11 +1394,17 @@ func (s *Service) performValuation(
 	// Uses EPS, EBITDA, and FCF from financials to compute implied P/E, EV/EBITDA,
 	// and P/FCF, then compares against sector medians.
 	if s.industryMultiples != nil {
+		// DC-1 Phase 4 (C-3): cross-check EPS/EBITDA/FCF read the Restated view
+		// so the implied multiples stay coherent with the restated earnings the
+		// engine valued. D&A and CapEx are NOT Restater-touched today
+		// (Restated().X == entity.X) but read the view for coherence +
+		// forward-compatibility (§4.2.6).
+		ccRestated := restatedViewOr(cleaned, latestFinancialData)
 		eps := 0.0
-		if latestFinancialData.NetIncome > 0 && sharesOutstanding > 0 {
-			eps = latestFinancialData.NetIncome / sharesOutstanding
+		if ccRestated.NetIncome > 0 && sharesOutstanding > 0 {
+			eps = ccRestated.NetIncome / sharesOutstanding
 		}
-		ebitda := latestFinancialData.OperatingIncome + latestFinancialData.DepreciationAndAmortization
+		ebitda := ccRestated.OperatingIncome + ccRestated.DepreciationAndAmortization
 
 		// Calculate FCF per share for P/FCF cross-check.
 		// Simplified FCF = NetIncome + D&A - CapEx. This intentionally omits
@@ -1338,7 +1412,7 @@ func (s *Service) performValuation(
 		// "true FCF" definition), so ImpliedPFCF is a sanity-check proxy,
 		// not the same FCF number driving the DCF itself.
 		fcfPerShare := 0.0
-		fcf := latestFinancialData.NetIncome + latestFinancialData.DepreciationAndAmortization - latestFinancialData.CapitalExpenditures
+		fcf := ccRestated.NetIncome + ccRestated.DepreciationAndAmortization - ccRestated.CapitalExpenditures
 		if fcf > 0 && sharesOutstanding > 0 {
 			fcfPerShare = fcf / sharesOutstanding
 		}
@@ -1435,6 +1509,7 @@ func (s *Service) performAlternativeValuation(
 	sharesOutstanding float64,
 	industryCode string,
 	resolvedProfile *profile.ResolvedProfile,
+	cleaned *cleaneddata.CleanedFinancialData,
 ) (*entities.ValuationResult, error) {
 
 	s.log(ctx).Info("Using alternative valuation model",
@@ -1447,6 +1522,32 @@ func (s *Service) performAlternativeValuation(
 	// (RM-1.A: RevenueMultipleModel's staleness check). Replay binds
 	// the Clock to manifest.started_at, so the staleness threshold is
 	// evaluated deterministically against captured bundle time.
+	// DC-1 Phase 4 (C-3, §4.2.13): revenue_multiple + ffo read the Restated
+	// InterestBearingDebt for their EV→Equity bridges. DDM EXPLICITLY keeps the
+	// legacy latestFinancialData read to preserve the JPM/BAC/WFC bit-for-bit
+	// invariant (§7 / §9) — DDM consumer migration is deferred to Phase 5.
+	// Branch on the model type. InterestBearingDebt is not Restater-touched
+	// today (Restated().InterestBearingDebt == entity value), so
+	// revenue_multiple/ffo see zero numeric drift now; the migration is for
+	// coherence + forward-compatibility. CashAndCashEquivalents is NOT a
+	// FinancialDataView field (never Restater-touched) and stays on the entity
+	// read for every model.
+	modelIBD := latestFinancialData.InterestBearingDebt
+	modelCash := latestFinancialData.CashAndCashEquivalents
+	// modelDebtLikeClaims carries the B1 (lease) + B2 (pension) + B3 (contingent)
+	// overlay amounts that the EV→Equity bridge must subtract for non-DDM models.
+	// revenue_multiple subtracts it; FFO does NOT consume it (FFO's equity is
+	// derived directly from the P/FFO multiple — InterestBearingDebt only
+	// back-derives the reported EV — so subtracting DebtLikeClaims there would
+	// risk double-counting the REIT's lease-bearing cash flows). DDM keeps 0 to
+	// preserve the JPM/BAC/WFC bit-for-bit invariant (and never reads it anyway).
+	modelDebtLikeClaims := 0.0
+	if model.ModelType() != "ddm" {
+		mr := restatedViewOr(cleaned, latestFinancialData)
+		modelIBD = mr.InterestBearingDebt
+		modelDebtLikeClaims = investedCapitalOr(cleaned, latestFinancialData).DebtLikeClaims
+	}
+
 	modelInput := &models.ModelInput{
 		HistoricalData:         historicalData,
 		MarketData:             marketData,
@@ -1457,9 +1558,18 @@ func (s *Service) performAlternativeValuation(
 		CostOfEquity:           waccResult.CostOfEquity,
 		TaxRate:                latestFinancialData.TaxRate,
 		SharesOutstanding:      sharesOutstanding,
-		InterestBearingDebt:    latestFinancialData.InterestBearingDebt,
-		CashAndCashEquivalents: latestFinancialData.CashAndCashEquivalents,
-		Now:                    s.clock.Now,
+		InterestBearingDebt:    modelIBD,
+		CashAndCashEquivalents: modelCash,
+		DebtLikeClaims:         modelDebtLikeClaims,
+		// DC-1 Phase 4 (C-3): Restated view of the latest period for the FFO
+		// NAV NOI proxy. nil for DDM (deferred) to avoid any non-legacy read.
+		LatestRestatedView: func() *cleaneddata.FinancialDataView {
+			if model.ModelType() == "ddm" {
+				return nil
+			}
+			return restatedViewOr(cleaned, latestFinancialData)
+		}(),
+		Now: s.clock.Now,
 		// Tier 2 P0b: thread the resolved AssumptionProfile into ModelInput.
 		// P0b downstream consumers are nil-safe NO-OPs; P1/P3/P4 will read
 		// calibration values (horizon, caps, terminal method, payout path).
@@ -1475,8 +1585,9 @@ func (s *Service) performAlternativeValuation(
 			zap.String("ticker", historicalData.Ticker),
 			zap.Error(err))
 
-		// If company has positive OI, fall back to standard DCF path
-		if effectiveOI(latestFinancialData) > 0 {
+		// If company has positive OI, fall back to standard DCF path.
+		// DC-1 Phase 4 (C-2): read the Restated effective OI via the view.
+		if effectiveOI(restatedViewOr(cleaned, latestFinancialData)) > 0 {
 			return nil, errFallbackToDCF
 		}
 
@@ -1494,7 +1605,7 @@ func (s *Service) performAlternativeValuation(
 	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
 
 	gf := calculateGrahamFloorMetrics(ctx, s.logger, historicalData.Ticker,
-		latestFinancialData, sharesOutstanding, marketData.SharePrice)
+		asReportedViewOr(cleaned, latestFinancialData), sharesOutstanding, marketData.SharePrice)
 
 	// Convert ModelResult to ValuationResult
 	result := &entities.ValuationResult{
@@ -1521,7 +1632,7 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     modelResult.ModelType,
-		CalculationVersion:    "4.2",
+		CalculationVersion:    "4.3", // DC-1 Phase 4: B3 routing flip + B1/B2 reroute + A1 overlay → consumer-visible drift
 		Warnings:              modelResult.Warnings,
 	}
 
@@ -1558,7 +1669,26 @@ func (s *Service) performAlternativeValuation(
 // option/RSU/convertible dilution (typical large-caps) and brings this field
 // into line with every other per-share number in the response (DCF, NCAV,
 // current_assets_per_share, graham_floor) which already use diluted shares.
-func (s *Service) calculateTangibleValuePerShare(financial *entities.FinancialData, market *entities.MarketData) float64 {
+//
+// DC-1 Phase 4 (C-5, §4.2.12): reads the AsReported() view's TangibleAssets.
+//
+// JUDGMENT CALL / spec deviation: §4.2.12 names Restated(), on the stated
+// premise that "Restated().TangibleAssets == AsReported().TangibleAssets for
+// every current ticker." That premise is INCORRECT — cleaneddata.Restated()
+// RECOMPUTES TangibleAssets as (TotalAssets - Goodwill - OtherIntangibles) from
+// components, which is NOT bit-for-bit equal to the parser-stamped
+// TangibleAssets value (the parser may stamp it from an independent XBRL tag).
+// Using Restated() would therefore introduce consumer-visible drift on
+// tangible_value_per_share — directly contradicting the spec's own "zero
+// numeric drift today" guarantee and the load-bearing
+// TestService_calculateTangibleValuePerShare_DilutedDenominator regression pin
+// (CLAUDE.md). AsReported() is identity-copied (parser value verbatim), so it
+// satisfies the spec's INTENT (zero drift) faithfully. No Restater touches
+// TangibleAssets today, so AsReported and the intended-Restated agree on the
+// economic value; AsReported is also the conservative as-filed reading.
+// Revisit if a future Restater touches intangibles (Phase 5+). The
+// diluted/basic share counts are identity-copied by the view either way.
+func (s *Service) calculateTangibleValuePerShare(financial *cleaneddata.FinancialDataView, market *entities.MarketData) float64 {
 	// Calculate tangible equity (total assets - intangibles - liabilities)
 	tangibleEquity := financial.TangibleAssets
 
@@ -1630,11 +1760,63 @@ func (s *Service) averageCapExAndDA(historicalData *entities.HistoricalFinancial
 // critical FCF fields (D&A, CapEx, Cash). Returns true if ALL are zero/missing,
 // which indicates pre-Phase-1.2 data that should be re-fetched.
 // effectiveOI returns the best available operating income (normalized preferred, raw as fallback).
-func effectiveOI(fd *entities.FinancialData) float64 {
+//
+// DC-1 Phase 4 (C-2): the helper reads a *cleaneddata.FinancialDataView so the
+// effective-OI computation reflects the Restated NormalizedOperatingIncome
+// (after C1-C7 earnings restatements). Call sites pass the Restated view
+// (or a synthesized one on the no-cleaner path via restatedViewOr).
+func effectiveOI(fd *cleaneddata.FinancialDataView) float64 {
 	if fd.NormalizedOperatingIncome > 0 {
 		return fd.NormalizedOperatingIncome
 	}
 	return fd.OperatingIncome
+}
+
+// restatedViewOr returns cleaned.Restated() when cleaned is non-nil, otherwise
+// a one-shot Restated view synthesized from the fallback entity.
+//
+// DC-1 Phase 4 (C-2..C-4): the synthesized fallback path (cleaned == nil)
+// covers test paths and the no-cleaner / cleaning-failed branches. For an
+// entity with an empty AdjustmentLedger/Overlays the Restated reducer reduces
+// to an identity copy plus an umbrella recompute-from-components; the
+// identity-copied earnings/equity/debt fields (NormalizedOperatingIncome,
+// StockholdersEquity, InterestBearingDebt, InterestExpense, NetIncome,
+// OperatingIncome, D&A, CapEx) are byte-identical to the entity's direct
+// reads. The recomputed umbrella fields (CurrentAssets/CurrentLiabilities/
+// TotalAssets/TotalLiabilities/TangibleAssets) are ANALYTICAL reconstructions
+// (sum-of-components + Phase 0 plug) and are NOT guaranteed equal to the
+// parser-stamped tags — the plug can under-reconstruct (e.g. AMD CurrentAssets,
+// per the C-2 NWC fix). Drift-neutral consumers that need as-filed umbrellas
+// MUST read AsReported() instead.
+func restatedViewOr(cleaned *cleaneddata.CleanedFinancialData, fallback *entities.FinancialData) *cleaneddata.FinancialDataView {
+	if cleaned != nil {
+		return cleaned.Restated()
+	}
+	return cleaneddata.New(fallback, fallback).Restated()
+}
+
+// asReportedViewOr returns cleaned.AsReported() when cleaned is non-nil,
+// otherwise a one-shot AsReported view synthesized from the fallback entity.
+// AsReported is an identity projection (no umbrella recompute), so the
+// fallback path is byte-identical to direct entity reads. Used by the Graham
+// consumer (C-5), which intentionally reads as-filed values.
+func asReportedViewOr(cleaned *cleaneddata.CleanedFinancialData, fallback *entities.FinancialData) *cleaneddata.FinancialDataView {
+	if cleaned != nil {
+		return cleaned.AsReported()
+	}
+	return cleaneddata.New(fallback, fallback).AsReported()
+}
+
+// investedCapitalOr returns cleaned.InvestedCapital() when cleaned is non-nil,
+// otherwise a one-shot InvestedCapital view synthesized from the fallback
+// entity. Used by the EV→Equity bridge (C-4) for the DebtLikeClaims term
+// (B1+B2+B3 overlays). On the nil-cleaned fallback path the entity has no
+// Overlays, so DebtLikeClaims == 0 and the bridge is unchanged.
+func investedCapitalOr(cleaned *cleaneddata.CleanedFinancialData, fallback *entities.FinancialData) *cleaneddata.FinancialDataView {
+	if cleaned != nil {
+		return cleaned.InvestedCapital()
+	}
+	return cleaneddata.New(fallback, fallback).InvestedCapital()
 }
 
 func (s *Service) isFinancialDataIncomplete(data *entities.HistoricalFinancialData) bool {
@@ -1746,15 +1928,35 @@ func (s *Service) getAnalystEstimates(ctx context.Context, ticker string) *ports
 
 // calculateNetWorkingCapitalChange computes the change in net working capital
 // between the two most recent annual periods. Positive = cash consumed.
+//
+// DC-1 Phase 4 (C-2, REVIEWER-HIGH followup): both the latest and prior periods
+// read CurrentAssets/CurrentLiabilities from the AsReported() view, NOT
+// Restated(). Restated() RECOMPUTES the current-asset/-liability umbrellas as
+// sum(components)+Phase-0 plug, which is NOT bit-for-bit equal to the
+// parser-stamped umbrella for tickers whose plug under-reconstructs it (e.g.
+// AMD: reported 16,505M vs recomputed 14,678M, delta −1,826M, even with ZERO
+// Restaters firing; deltas grow across periods so they do not cancel in the
+// latest−prior delta). Reading Restated() therefore drifted
+// NetWorkingCapitalChange → FCF → dcf_value_per_share, violating the Class II
+// zero-drift expectation (spec §5.1/§5.2). This is the SAME recomputed-umbrella
+// root cause already handled for TangibleAssets (calculateTangibleValuePerShare,
+// C-5) — NWC was the one read that slipped through. AsReported() is identity-
+// copied (parser umbrellas verbatim), so NWC change stays bit-for-bit identical
+// to pre-Phase-4. A future DELIBERATE decision to have NWC reflect current-asset
+// Restaters (e.g. an A5 inventory writedown) can flip AsReported→Restated WITH a
+// documented drift expectation; Phase 4's principle is "only the intended B3
+// routing flip drifts."
 func (s *Service) calculateNetWorkingCapitalChange(
 	historicalData *entities.HistoricalFinancialData,
 	latest *entities.FinancialData,
+	cleaned *cleaneddata.CleanedFinancialData,
 ) float64 {
-	if latest.CurrentAssets <= 0 || latest.CurrentLiabilities <= 0 {
+	latestView := asReportedViewOr(cleaned, latest)
+	if latestView.CurrentAssets <= 0 || latestView.CurrentLiabilities <= 0 {
 		return 0 // data not available
 	}
 
-	latestNWC := latest.CurrentAssets - latest.CurrentLiabilities
+	latestNWC := latestView.CurrentAssets - latestView.CurrentLiabilities
 
 	// Find prior period to compute delta
 	recentYears := historicalData.GetRecentYears(2)
@@ -1762,12 +1964,17 @@ func (s *Service) calculateNetWorkingCapitalChange(
 		return 0 // not enough history for delta
 	}
 
-	// recentYears[0] is most recent, [1] is prior (sorted descending by GetRecentYears)
+	// recentYears[0] is most recent, [1] is prior (sorted descending by GetRecentYears).
+	// The prior period has no CleanedFinancialData wrapper — synthesize an
+	// AsReported (identity-projection) view so latest and prior read on the same
+	// stamped-umbrella basis. AsReported does NOT recompute umbrellas, so this is
+	// byte-identical to reading prior.CurrentAssets/.CurrentLiabilities directly.
 	prior := recentYears[1]
-	if prior.CurrentAssets <= 0 || prior.CurrentLiabilities <= 0 {
+	priorView := cleaneddata.New(prior, prior).AsReported()
+	if priorView.CurrentAssets <= 0 || priorView.CurrentLiabilities <= 0 {
 		return 0
 	}
 
-	priorNWC := prior.CurrentAssets - prior.CurrentLiabilities
+	priorNWC := priorView.CurrentAssets - priorView.CurrentLiabilities
 	return latestNWC - priorNWC
 }

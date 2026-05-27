@@ -3,25 +3,6 @@
   "bundle_root": "artifacts/tier2-baseline/2026-05-19",
   "fixture_path": "artifacts/tier2-baseline/2026-05-19/TSM/req_d3d53267-2410-4241-9027-ae7bc893839d/05-fetch-sec.raw.json",
   "periods_processed": 2,
-  "periods_with_divergence": 2,
-  "divergences": [
-    {
-      "period": "2023FY",
-      "umbrella": "TotalLiabilities",
-      "reported": 2078330100000,
-      "recomputed": 2109822500000,
-      "delta": 31492400000,
-      "plug": 200951200000,
-      "clamp_suspected": false
-    },
-    {
-      "period": "2024FY",
-      "umbrella": "TotalLiabilities",
-      "reported": 2412493100000,
-      "recomputed": 2444297400000,
-      "delta": 31804300000,
-      "plug": 28402400000,
-      "clamp_suspected": false
-    }
-  ]
+  "periods_with_divergence": 0,
+  "divergences": []
 }

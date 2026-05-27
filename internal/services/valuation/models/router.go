@@ -10,6 +10,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
@@ -46,6 +47,27 @@ type ModelInput struct {
 	// Balance sheet items for equity bridge
 	InterestBearingDebt    float64
 	CashAndCashEquivalents float64
+
+	// DebtLikeClaims is the B1 (operating-lease) + B2 (pension underfunding) +
+	// B3 (contingent liability) overlay total from
+	// cleaneddata.InvestedCapital().DebtLikeClaims. It is subtracted in the
+	// EV→Equity bridge by revenue_multiple (mirroring the DCF path's
+	// dcf.CalculateEquityValueWithDebtLikeClaims), because after the DC-1
+	// Phase 4 dispatcher dual-write deletion the B-rule amounts no longer
+	// inflate InterestBearingDebt and would otherwise be silently dropped.
+	// 0 for DDM (bit-for-bit legacy path never reads it) and unused by FFO
+	// (FFO's equity is derived directly from the P/FFO multiple; IBD only
+	// back-derives the reported EV, so subtracting claims there would risk
+	// double-counting the REIT's lease-bearing cash flows).
+	DebtLikeClaims float64
+
+	// LatestRestatedView is the DC-1 Phase 4 (C-3) Restated() view of the
+	// latest period. The FFO model reads its OperatingIncome for the NAV NOI
+	// proxy so the cross-check reflects restated earnings. May be nil on
+	// test/no-cleaner paths; consumers MUST nil-check and fall back to the
+	// HistoricalData.GetLatestPeriod() entity read. Not Restater-touched for
+	// REIT tickers today (zero numeric drift); migrated for coherence.
+	LatestRestatedView *cleaneddata.FinancialDataView
 
 	// Now is the wall-clock seam used by consumers that need a current
 	// timestamp (e.g., RevenueMultipleModel's RM-1.A staleness check).
@@ -119,7 +141,11 @@ func NewModelRouter(models []ValuationModel, logger *zap.Logger, calcEmitter *ca
 //  4. Default -> Multi-stage DCF model
 //
 // If the selected model does not support the industry, falls back to DCF.
-func (r *ModelRouter) SelectModel(ctx context.Context, ticker, industry string, financials *entities.FinancialData) ValuationModel {
+//
+// DC-1 Phase 4 (C-3): financials is a *cleaneddata.FinancialDataView (Restated)
+// so the negative-OI routing decision (Rule 3) reflects the restated earnings
+// the engine values, not the as-reported OI. The view is also nil-safe.
+func (r *ModelRouter) SelectModel(ctx context.Context, ticker, industry string, financials *cleaneddata.FinancialDataView) ValuationModel {
 	upperIndustry := strings.ToUpper(industry)
 
 	// Rule 1: Financial companies use Dividend Discount Model

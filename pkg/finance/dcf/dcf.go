@@ -216,6 +216,28 @@ func CalculateEquityValue(enterpriseValue, debt, cash, minorityInterest, preferr
 	return enterpriseValue - debt + cash - minorityInterest - preferredEquity
 }
 
+// CalculateEquityValueWithDebtLikeClaims extends the EV → equity bridge with a
+// sixth term: debt-like claims that compete with shareholders for enterprise
+// cash flows but are not part of the interest-bearing capital structure
+// (DC-1 Phase 4 B3 routing flip + B1/B2 reroute):
+//
+//	Common Equity = EV - Debt + Cash - MinorityInterest - PreferredEquity - DebtLikeClaims
+//
+// debtLikeClaims is the sum of the B1 (capitalized operating lease), B2
+// (pension underfunding), and B3 (contingent liability) overlay amounts, read
+// from cleaneddata.InvestedCapital().DebtLikeClaims. Before Phase 4 those
+// amounts were (incorrectly) folded into the interest-bearing debt term AND
+// missing from this subtraction; Phase 4 corrects both — they are subtracted
+// here and excluded from the WACC capital-structure denominator.
+//
+// ADDITIVE to the legacy 5-arg CalculateEquityValue: the alt-model
+// revenue_multiple / ffo paths and existing tests keep the 5-arg signature
+// (they build equity differently and have no B-rule story today). When
+// debtLikeClaims == 0 (no B1/B2/B3 fired) this is identical to the 5-arg form.
+func CalculateEquityValueWithDebtLikeClaims(enterpriseValue, debt, cash, minorityInterest, preferredEquity, debtLikeClaims float64) float64 {
+	return CalculateEquityValue(enterpriseValue, debt, cash, minorityInterest, preferredEquity) - debtLikeClaims
+}
+
 // CalculateValuePerShare converts equity value to per-share value
 func CalculateValuePerShare(equityValue, sharesOutstanding float64) (float64, error) {
 	if sharesOutstanding <= 0 {

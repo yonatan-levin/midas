@@ -283,25 +283,23 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(ctx context.Context, da
 	// and ignored cancellation (HIGH-3 fix).
 	applyCtx := ctx
 
-	// Task 4.4 absorbed dual-write helper. Invoked at the tail of every
-	// per-rule switch arm so each arm owns its own mutation. The helper
-	// reads result.Amount (== out.Overlays[0].Amount for fired
-	// OverlayEmitter B-rules) and applies the uniform B-category
-	// dual-write contract:
-	//   - data.TotalDebt          += result.Amount
-	//   - data.InterestBearingDebt += result.Amount
-	// Both fields are mutated for ALL three B-rules (B1, B2, B3) — there
-	// is no per-rule conditional. B3 mutates InterestBearingDebt despite
-	// its OverlaySpec.Field being "DebtLikeClaims" (the Field/mutation
-	// mismatch is the Phase 4 routing intent per spec §"B3 routing
-	// correction"). Phase 4 deletes this helper when consumers read
-	// overlays/views.
+	// DC-1 Phase 4 (C-4 / B3 routing flip, §8.2.1 Option A): the B-rule debt
+	// dual-write is DELETED. B1 (lease) / B2 (pension) / B3 (contingent) are
+	// OverlayEmitters — their monetary effect lives on the OverlaySpec (drained
+	// into data.Overlays via NativeOverlays) and is realized at the view level
+	// by cleaneddata.InvestedCapital().DebtLikeClaims, which the EV→Equity
+	// bridge subtracts. They NO LONGER inflate data.TotalDebt /
+	// data.InterestBearingDebt (the WACC capital-structure denominator now reads
+	// Restated().InterestBearingDebt, B-rule-free). This is the substantive
+	// accuracy correction: contingent/lease/pension claims compete with
+	// shareholders for cash flows but are not interest-bearing capital.
+	//
+	// dualWrite is now a no-op retained ONLY so the per-arm call sites and the
+	// documented B1→B2→B3 firing-order comments survive review-by-diff; it
+	// performs no mutation. Phase 5 removes the closure + its call sites
+	// entirely alongside the legacy-result-struct cleanup.
 	dualWrite := func(result *AdjustmentResult) {
-		if result == nil || !result.Applied {
-			return
-		}
-		data.TotalDebt += result.Amount
-		data.InterestBearingDebt += result.Amount
+		_ = result // Phase 4: B-rule debt dual-write deleted; effect flows via InvestedCapital().DebtLikeClaims.
 	}
 
 	// Process each Category B rule
