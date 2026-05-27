@@ -294,6 +294,16 @@ func (m *MockCacheRepository) DeletePattern(ctx context.Context, pattern string)
 	return args.Error(0)
 }
 
+// tvpsView wraps a synthetic entity in the AsReported view that
+// calculateTangibleValuePerShare now accepts (DC-1 Phase 4 C-5). AsReported is
+// an identity projection (no umbrella/TangibleAssets recompute), so
+// TangibleAssets and the share counts pass through verbatim and these tests'
+// expectations are unchanged. (Restated() would RECOMPUTE TangibleAssets from
+// components — see calculateTangibleValuePerShare godoc for why AsReported.)
+func tvpsView(fd *entities.FinancialData) *cleaneddata.FinancialDataView {
+	return cleaneddata.New(fd, fd).AsReported()
+}
+
 // MockDataCleanerService for testing
 type MockDataCleanerService struct {
 	mock.Mock
@@ -1039,7 +1049,7 @@ func TestService_calculateTangibleValuePerShare(t *testing.T) {
 			InterestBearingDebt: 110000000000, // $110B
 		}
 
-		tangibleValue := service.calculateTangibleValuePerShare(financial, marketData)
+		tangibleValue := service.calculateTangibleValuePerShare(tvpsView(financial), marketData)
 
 		// Expected: 350B / 15.744B shares = ~22.23 (debt is not subtracted in this calculation)
 		expected := 350000000000 / 15744231000
@@ -1052,7 +1062,7 @@ func TestService_calculateTangibleValuePerShare(t *testing.T) {
 			InterestBearingDebt: 0,            // No debt
 		}
 
-		tangibleValue := service.calculateTangibleValuePerShare(financial, marketData)
+		tangibleValue := service.calculateTangibleValuePerShare(tvpsView(financial), marketData)
 
 		// Expected: 350B / 15.744B shares = ~22.23
 		expected := 350000000000 / 15744231000
@@ -1072,7 +1082,7 @@ func TestService_calculateTangibleValuePerShare(t *testing.T) {
 			SharesOutstanding: 0, // Zero shares in market data triggers fallback
 		}
 
-		tangibleValue := service.calculateTangibleValuePerShare(financial, zeroSharesMarket)
+		tangibleValue := service.calculateTangibleValuePerShare(tvpsView(financial), zeroSharesMarket)
 
 		// Expected: 350B / 1B shares = 350
 		expected := 350000000000.0 / 1000000000.0
@@ -1092,7 +1102,7 @@ func TestService_calculateTangibleValuePerShare(t *testing.T) {
 			SharesOutstanding: 0,
 		}
 
-		tangibleValue := service.calculateTangibleValuePerShare(financial, zeroSharesMarket)
+		tangibleValue := service.calculateTangibleValuePerShare(tvpsView(financial), zeroSharesMarket)
 
 		assert.Equal(t, 0.0, tangibleValue)
 	})
@@ -1110,7 +1120,7 @@ func TestService_calculateTangibleValuePerShare(t *testing.T) {
 			SharesOutstanding: -1, // Negative triggers fallback
 		}
 
-		tangibleValue := service.calculateTangibleValuePerShare(financial, negativeSharesMarket)
+		tangibleValue := service.calculateTangibleValuePerShare(tvpsView(financial), negativeSharesMarket)
 
 		// Expected: 100B / 500M shares = 200
 		expected := 100000000000.0 / 500000000.0
@@ -1208,7 +1218,7 @@ func TestService_calculateTangibleValuePerShare_DilutedDenominator(t *testing.T)
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := service.calculateTangibleValuePerShare(tc.financial, tc.market)
+			got := service.calculateTangibleValuePerShare(tvpsView(tc.financial), tc.market)
 			// Pin the math invariant directly: tangible_value_per_share must
 			// equal TangibleAssets / expectedShares. Surfacing expectedShares
 			// in the assertion (not just the format string) prevents the

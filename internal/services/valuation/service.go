@@ -679,7 +679,10 @@ func (s *Service) performValuation(
 	}
 
 	// Calculate tangible value per share
-	tangibleValuePerShare := s.calculateTangibleValuePerShare(latestFinancialData, marketData)
+	// DC-1 Phase 4 (C-5): tangible value reads the AsReported view's
+	// TangibleAssets (identity-copied parser value — see the helper's godoc for
+	// why AsReported, not Restated).
+	tangibleValuePerShare := s.calculateTangibleValuePerShare(asReportedViewOr(cleaned, latestFinancialData), marketData)
 
 	// Determine beta and risk-free rate, applying user overrides when provided
 	beta := marketData.GetEffectiveBeta()
@@ -1656,7 +1659,26 @@ func (s *Service) performAlternativeValuation(
 // option/RSU/convertible dilution (typical large-caps) and brings this field
 // into line with every other per-share number in the response (DCF, NCAV,
 // current_assets_per_share, graham_floor) which already use diluted shares.
-func (s *Service) calculateTangibleValuePerShare(financial *entities.FinancialData, market *entities.MarketData) float64 {
+//
+// DC-1 Phase 4 (C-5, §4.2.12): reads the AsReported() view's TangibleAssets.
+//
+// JUDGMENT CALL / spec deviation: §4.2.12 names Restated(), on the stated
+// premise that "Restated().TangibleAssets == AsReported().TangibleAssets for
+// every current ticker." That premise is INCORRECT — cleaneddata.Restated()
+// RECOMPUTES TangibleAssets as (TotalAssets - Goodwill - OtherIntangibles) from
+// components, which is NOT bit-for-bit equal to the parser-stamped
+// TangibleAssets value (the parser may stamp it from an independent XBRL tag).
+// Using Restated() would therefore introduce consumer-visible drift on
+// tangible_value_per_share — directly contradicting the spec's own "zero
+// numeric drift today" guarantee and the load-bearing
+// TestService_calculateTangibleValuePerShare_DilutedDenominator regression pin
+// (CLAUDE.md). AsReported() is identity-copied (parser value verbatim), so it
+// satisfies the spec's INTENT (zero drift) faithfully. No Restater touches
+// TangibleAssets today, so AsReported and the intended-Restated agree on the
+// economic value; AsReported is also the conservative as-filed reading.
+// Revisit if a future Restater touches intangibles (Phase 5+). The
+// diluted/basic share counts are identity-copied by the view either way.
+func (s *Service) calculateTangibleValuePerShare(financial *cleaneddata.FinancialDataView, market *entities.MarketData) float64 {
 	// Calculate tangible equity (total assets - intangibles - liabilities)
 	tangibleEquity := financial.TangibleAssets
 

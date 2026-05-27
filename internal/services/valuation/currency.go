@@ -42,6 +42,19 @@
 // If the project adds a new field on FinancialData, the contributor MUST
 // classify it here. Failing to do so means the new field stays in the
 // reporting currency while everything around it is USD — a silent bug.
+//
+// CURRENCY PRE-CLEANER INVARIANT — DO NOT MIGRATE TO CleanedFinancialData VIEWS.
+//
+// DC-1 Phase 4 (C-5, spec §4.2.10): this is the ONE consumer migration-map row
+// Phase 4 deliberately does NOT migrate. FX conversion runs PRE-cleaner — the
+// SEC parser stamps ReportingCurrency, convertFinancialsToUSD mutates every
+// monetary field IN PLACE on the raw *FinancialData, and ONLY THEN does
+// CleanFinancialData run. By the time a *cleaneddata.CleanedFinancialData wrapper
+// exists, the underlying entity is already USD-denominated, so all three views
+// (AsReported / Restated / InvestedCapital) inherit USD automatically. Reading
+// or writing FX through a view here would be both impossible (no view exists at
+// this pipeline stage) and wrong (it would double-convert or skip fields the
+// view set doesn't carry). The mutation site stays at fd.X *= rate.
 
 package valuation
 

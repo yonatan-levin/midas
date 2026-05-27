@@ -310,6 +310,27 @@ func TestCalculationVersion_IsV43(t *testing.T) {
 		"Phase 4 stamps CalculationVersion 4.3 on both DCF and alt-model paths (live-asserted in service_test.go)")
 }
 
+// TestCalculateTangibleValuePerShare_UsesView pins the DC-1 Phase 4 C-5
+// migration of calculateTangibleValuePerShare to a *cleaneddata.FinancialDataView
+// (spec §8.3 #11). It reads the view's TangibleAssets (AsReported — see the
+// helper godoc for the spec deviation rationale) and the view's diluted-first
+// share chain. Bit-for-bit equal to the pre-Phase-4 entity read because
+// AsReported is an identity projection.
+func TestCalculateTangibleValuePerShare_UsesView(t *testing.T) {
+	svc := &Service{}
+	fd := &entities.FinancialData{
+		TangibleAssets:           11_000_000_000,
+		DilutedSharesOutstanding: 110_000_000,
+		SharesOutstanding:        100_000_000, // decoy — diluted must win
+	}
+	market := &entities.MarketData{SharesOutstanding: 100_000_000}
+
+	view := cleaneddata.New(fd, fd).AsReported()
+	got := svc.calculateTangibleValuePerShare(view, market)
+	assert.InDelta(t, 100.0, got, 1e-6,
+		"tangible value reads the view's TangibleAssets / diluted shares (11B / 110M = 100)")
+}
+
 func TestRestatedViewOr_NilFallbackIdentity(t *testing.T) {
 	fd := &entities.FinancialData{
 		NormalizedOperatingIncome: 123_456,
