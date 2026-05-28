@@ -324,30 +324,25 @@ func TestPerformValuation_EquityBridgeSubtractsDebtLikeClaims(t *testing.T) {
 		"the new bridge differs from the legacy 5-arg bridge by exactly the contingent amount")
 }
 
-// TestCalculationVersion_IsV44 documents the DC-1 Phase 5 (P5-C1)
-// CalculationVersion bump 4.3 → 4.4 and its coverage. The LIVE stamp on both
-// stamp sites is exercised by real-pipeline tests in service_test.go:
-//   - DCF path: TestService_performValuation / _TrueFCF / _FINZeroDPSData
-//     (FIN→DDM-fail→DCF fallback) all assert result.CalculationVersion == "4.4".
-//   - Alt-model path: TestService_performValuation_NegativeOperatingIncome
-//     routes to revenue_multiple (performAlternativeValuation) and asserts
+// DC-1 Phase 5 P5-C1 CalculationVersion 4.3 → 4.4 LIVE-stamp coverage:
+//   - DCF path: service_test.go::TestService_performValuation,
+//     ::TestService_performValuation_TrueFCF, and
+//     ::TestService_performValuation_FINZeroDPS_FallbackToDCF
+//     (FIN → DDM-fail → DCF fallback) all assert
 //     result.CalculationVersion == "4.4".
+//   - Alt-model path: service_test.go::TestService_performValuation_NegativeOperatingIncome
+//     routes to revenue_multiple (performAlternativeValuation) and
+//     asserts result.CalculationVersion == "4.4".
 //
-// Phase 5 P5-C1 corrects DDM's EV bridge to add DebtLikeClaims (the DDM analog
-// of the Phase 4 revenue_multiple finding). DDM's IntrinsicValuePerShare and
-// EquityValue are unaffected (dividend-derived); only EnterpriseValue drifts —
-// for B-rule-firing banks only.
-//
-// This test fails loudly if a future edit reverts the constant the migration
-// targets, keeping the spec §8.3 #7 named gate present in the suite. The
-// previous Phase-4 incarnation was TestCalculationVersion_IsV43; renaming
-// preserves a single canonical version gate while keeping the historical
-// progression visible in git history.
-func TestCalculationVersion_IsV44(t *testing.T) {
-	const phase5CalculationVersion = "4.4"
-	require.Equal(t, "4.4", phase5CalculationVersion,
-		"Phase 5 P5-C1 stamps CalculationVersion 4.4 on both DCF and alt-model paths (live-asserted in service_test.go)")
-}
+// The previous incarnation of this gate was a self-referential
+// TestCalculationVersion_IsV43/_IsV44 in this file; gpt-5.5 review
+// (P5 post-merge MEDIUM-3) flagged it as non-behavioral (it asserted
+// `require.Equal(t, "4.4", "4.4")` against a local constant — no
+// production code path was exercised). DELETED in favor of the four
+// live pins above, which DO exercise the stamp through performValuation /
+// performAlternativeValuation. Updating those four pins (and the two
+// inline service.go stamp comments at lines 1323 + 1635) is the canonical
+// way to track future CalculationVersion bumps.
 
 // TestCalculateTangibleValuePerShare_UsesView pins the DC-1 Phase 4 C-5
 // migration of calculateTangibleValuePerShare to a *cleaneddata.FinancialDataView

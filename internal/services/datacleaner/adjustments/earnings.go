@@ -51,7 +51,14 @@ const (
 // Tasks 3.2-3.6 widen NativelyEmittedRuleIDs as more C-rules migrate; Task 3.8
 // deletes the shim earnings branch entirely.
 type EarningsAdjustmentResult struct {
-	Amount      float64               `json:"amount"`
+	Amount float64 `json:"amount"`
+	// Deprecated: DC-1 Phase 5 P5-C3 stopped reading this field from the
+	// orchestrator (datacleaner/service.go::applyActiveAdjustments now uses
+	// nativeFired(NativeLedgerEntries, NativeOverlays, Flags) which filters
+	// Fired:false skip-diagnostic entries). The legacy translator stack still
+	// SETS this field; P5-C4 (deferred) will delete the translators + this
+	// field together. Do NOT add new readers — use nativeFired() or read the
+	// NativeLedgerEntries / NativeOverlays / Flags slices directly.
 	Applied     bool                  `json:"applied"`
 	Adjustments []entities.Adjustment `json:"adjustments"`
 	Flags       []entities.Flag       `json:"flags"`

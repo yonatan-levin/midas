@@ -2090,6 +2090,13 @@ func (aa *AssetAdjuster) ProcessCapitalizedSoftwareReview(data *entities.Financi
 // already pin a public contract — exposing them under AssetAdjustmentResult
 // would create a second source of truth.
 type AssetAdjustmentResult struct {
+	// Deprecated: DC-1 Phase 5 P5-C3 stopped reading this field from the
+	// orchestrator (datacleaner/service.go::applyActiveAdjustments now uses
+	// nativeFired(NativeLedgerEntries, NativeOverlays, Flags) which filters
+	// Fired:false skip-diagnostic entries). The legacy translator stack still
+	// SETS this field; P5-C4 (deferred) will delete the translators + this
+	// field together. Do NOT add new readers — use nativeFired() or read the
+	// NativeLedgerEntries / NativeOverlays / Flags slices directly.
 	Applied                bool                   `json:"applied"`
 	TotalAssetAdjustment   float64                `json:"total_asset_adjustment"`
 	AdjustedTangibleAssets float64                `json:"adjusted_tangible_assets"`

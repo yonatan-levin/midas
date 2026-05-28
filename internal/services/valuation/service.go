@@ -494,25 +494,10 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 				s.log(ctx).Info("Data cleaning applied successfully",
 					zap.String("ticker", ticker),
 					zap.Float64("quality_score", cleaningResult.QualityScore))
-				// Update historical data with cleaned data. The slot stays
-				// populated post-DC-1-Phase-5 because every alt-model
-				// (DDM, FFO, revenue_multiple) still reads
-				// input.HistoricalData.GetLatestPeriod() for nil-guards,
-				// DPS, and the per-period base for component reads that
-				// the FinancialDataView surface does not include
-				// (CashAndCashEquivalents, SharesOutstanding lookups,
-				// FilingDate). The Phase-5 consumer migration moved the
-				// view-eligible fields (StockholdersEquity / NetIncome /
-				// DividendsPerShare) to input.LatestRestatedView but did
-				// NOT eliminate the entity read. Stopping slot population
-				// would silently revert those entity-side reads to the
-				// PRE-CLEAN parser-stamped values, drifting any consumer
-				// that mixes view + entity reads (the GetRecentYears DPS-
-				// CAGR walk in DDM also relies on the slot being the
-				// latest cleaned period). Spec §3.7 — "verify-then-decide":
-				// the grep found 6 remaining GetLatestPeriod() consumers,
-				// so the recommended action is KEEP.
-				historicalData.Data[latestPeriod] = cleaningResult.CleanedData
+				// Slot stays populated post-DC-1-Phase-5 — see
+				// keepLatestCleanedSlot godoc for the verify-then-decide
+				// rationale (six remaining GetLatestPeriod() consumers).
+				keepLatestCleanedSlot(historicalData, latestPeriod, cleaningResult.CleanedData)
 			}
 		}
 	} else {
@@ -1537,16 +1522,23 @@ func (s *Service) performAlternativeValuation(
 	// (RM-1.A: RevenueMultipleModel's staleness check). Replay binds
 	// the Clock to manifest.started_at, so the staleness threshold is
 	// evaluated deterministically against captured bundle time.
-	// DC-1 Phase 4 (C-3, §4.2.13): revenue_multiple + ffo read the Restated
-	// InterestBearingDebt for their EV→Equity bridges. DDM EXPLICITLY keeps the
-	// legacy latestFinancialData read to preserve the JPM/BAC/WFC bit-for-bit
-	// invariant (§7 / §9) — DDM consumer migration is deferred to Phase 5.
-	// Branch on the model type. InterestBearingDebt is not Restater-touched
-	// today (Restated().InterestBearingDebt == entity value), so
-	// revenue_multiple/ffo see zero numeric drift now; the migration is for
-	// coherence + forward-compatibility. CashAndCashEquivalents is NOT a
-	// FinancialDataView field (never Restater-touched) and stays on the entity
-	// read for every model.
+	//
+	// DC-1 Phase 4 (C-3, §4.2.13): revenue_multiple + ffo read the
+	// Restated InterestBearingDebt for their EV→Equity bridges.
+	// DC-1 Phase 5 (P5-C1, P5-C2): DDM's eligible SE/NI/DPS reads now
+	// consume input.LatestRestatedView via the migrated runDividendDiagnostics
+	// / estimateDividendGrowth helpers (see ddm.go::calculateLegacyGordon
+	// godoc for the bit-for-bit safety argument). DDM's modelIBD,
+	// however, STILL reads latestFinancialData.InterestBearingDebt
+	// rather than the Restated view — keeping the bit-for-bit surface
+	// minimal in the P5-C1 EV-correction commit. Flipping DDM's IBD
+	// read to the Restated view is bit-for-bit safe (IBD is not
+	// Restater-touched today; Restated().InterestBearingDebt == entity
+	// value) but is deferred to a future tidy-up; the branch below
+	// captures the current state.
+	//
+	// CashAndCashEquivalents is NOT a FinancialDataView field (never
+	// Restater-touched) and stays on the entity read for every model.
 	modelIBD := latestFinancialData.InterestBearingDebt
 	modelCash := latestFinancialData.CashAndCashEquivalents
 	// modelDebtLikeClaims carries the B1 (lease) + B2 (pension) + B3 (contingent)
@@ -1792,6 +1784,27 @@ func effectiveOI(fd *cleaneddata.FinancialDataView) float64 {
 		return fd.NormalizedOperatingIncome
 	}
 	return fd.OperatingIncome
+}
+
+// keepLatestCleanedSlot writes the post-clean entity into the
+// HistoricalFinancialData latest-period slot. DC-1 Phase 5 P5-C5
+// verify-then-decide outcome (spec §3.7): the slot stays populated
+// because every alt-model (DDM, FFO, revenue_multiple) plus currency.go
+// + the datafetcher coordinator still read
+// input.HistoricalData.GetLatestPeriod() for nil-guards, DPS, FilingDate,
+// CashAndCashEquivalents, SharesOutstanding lookups, and other per-period
+// fields that the FinancialDataView surface does not include. The DDM
+// estimateDividendGrowth helper's GetRecentYears DPS-CAGR walk also
+// relies on the slot being the latest CLEANED period — stopping slot
+// population would silently revert these entity-side reads to the
+// PRE-CLEAN parser-stamped values, drifting any consumer that mixes
+// view + entity reads. The Phase-5 consumer migration moved view-eligible
+// fields (StockholdersEquity / NetIncome / DividendsPerShare) onto
+// input.LatestRestatedView but did NOT eliminate the entity read. Spec
+// §3.7 grep evidence: 6 non-test GetLatestPeriod() consumers across
+// internal/ — the recommended action is KEEP.
+func keepLatestCleanedSlot(historicalData *entities.HistoricalFinancialData, latestPeriod string, cleaned *entities.FinancialData) {
+	historicalData.Data[latestPeriod] = cleaned
 }
 
 // restatedViewOr returns cleaned.Restated() when cleaned is non-nil, otherwise

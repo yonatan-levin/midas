@@ -79,6 +79,13 @@ const b3AIModelName = "footnote_analysis"
 // (PR-3 Task 3.1). PR-4 Task 4.4 absorbs the dispatcher's dual-write into the
 // Adjuster path and Task 4.5 deletes the shim's liability branch.
 type LiabilityAdjustmentResult struct {
+	// Deprecated: DC-1 Phase 5 P5-C3 stopped reading this field from the
+	// orchestrator (datacleaner/service.go::applyActiveAdjustments now uses
+	// nativeFired(NativeLedgerEntries, NativeOverlays, Flags) which filters
+	// Fired:false skip-diagnostic entries). The legacy translator stack still
+	// SETS this field; P5-C4 (deferred) will delete the translators + this
+	// field together. Do NOT add new readers — use nativeFired() or read the
+	// NativeLedgerEntries / NativeOverlays / Flags slices directly.
 	Applied                  bool                   `json:"applied"`
 	TotalLiabilityAdjustment float64                `json:"total_liability_adjustment"`
 	AdjustedTotalDebt        float64                `json:"adjusted_total_debt"`

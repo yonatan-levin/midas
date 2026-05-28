@@ -75,11 +75,30 @@ func (m *DDMModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 	return m.calculateMultiStage(ctx, input)
 }
 
-// calculateLegacyGordon is the verbatim pre-Tier-2 DDM body. DO NOT MODIFY
-// — every statement, comment, and whitespace character must match the
-// master HEAD 0324057 Calculate body. The lift from Calculate to this
-// sibling is a rename + cut+paste; nothing else. Bit-for-bit pinned via
-// TestDDM_LegacyPath_BitForBit. Spec §7.1.
+// calculateLegacyGordon is the load-bearing single-stage Gordon path.
+// Originally a verbatim lift of the pre-Tier-2 master HEAD 0324057
+// Calculate body; the JPM/BAC/WFC bit-for-bit invariant
+// (TestDDM_LegacyPath_BitForBit) is pinned via Float64bits equality on
+// IntrinsicValuePerShare / EquityValue / EnterpriseValue + Warnings +
+// Confidence — that property remains the load-bearing contract, NOT
+// literal byte-identity of the function body.
+//
+// Sanctioned Phase 5 deviations from the pre-Tier-2 body (all
+// bit-for-bit safe under the fixtures' DebtLikeClaims=0 +
+// view-equals-entity properties):
+//   - DC-1 Phase 5 P5-C1: +DebtLikeClaims term in the EV bridge. Safe
+//     because the golden fixtures deserialize input.DebtLikeClaims=0
+//     (TestDDM_GoldenFixtures_ZeroDebtLikeClaims pins this), so the
+//     +0 term preserves EnterpriseValue bits.
+//   - DC-1 Phase 5 P5-C2: runDividendDiagnostics call site gained the
+//     input.LatestRestatedView parameter. Safe because Restated()
+//     identity-copies SE/NI/DPS when no Restater fires
+//     (TestDDM_ConsumerPath_RestatedViewParity pins this on the
+//     fixtures), so the migrated reads produce identical Float64 bits.
+//
+// Any future edit to this function must re-prove the bit-for-bit
+// invariant; a failure means REVERT, never update the goldens
+// (CLAUDE.md DDM gotcha). Spec §7.1.
 //
 // Uses the Gordon Growth Model for a single-stage DDM.
 // Falls back to P/E based approach if DPS is not available but the company is a dividend payer.
