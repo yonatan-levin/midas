@@ -12,6 +12,8 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/models"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile/testhelpers"
 )
 
 // TestDDM_EVBridge_AddsDebtLikeClaims pins the DC-1 Phase 5 (P5-C1) EV-bridge
@@ -102,22 +104,76 @@ func TestDDM_EVBridge_AddsDebtLikeClaims(t *testing.T) {
 			withClaims.EquityValue, ibd, debtLikeClaims, cash)
 	})
 
-	t.Run("multistage_via_payout_path", func(t *testing.T) {
-		// The multi-stage branch fires only when Profile.PayoutPath is
-		// populated with a positive horizon. Without a Profile (Profile=nil),
-		// the dispatcher falls through to calculateLegacyGordon and the EV
-		// math is the same code path covered by legacy_gordon above. We pin
-		// the legacy path explicitly here (the subtest documents that the
-		// EV correction lands in calculateLegacyGordon's bridge for the
-		// default non-Profile execution); a dedicated multi-stage fixture
-		// would require building a ResolvedProfile and is exercised by the
-		// multi-stage suite (ddm_multistage_test.go) for non-bridge math.
-		input := makeInput(debtLikeClaims)
-		result, err := ddm.Calculate(ctx, input)
+	t.Run("multistage_real", func(t *testing.T) {
+		// Real multi-stage exercise: AAPLish fixture +
+		// ArchetypeMaturingTechDividend profile with DividendForecastHorizon=10
+		// → dispatcher routes to calculateMultiStage (NOT legacy Gordon).
+		// Pins the EV-bridge correction on the OTHER DDM code path
+		// (ddm.go::calculateMultiStage line ~412) — without this subtest
+		// the multi-stage bridge has no direct DebtLikeClaims coverage.
+		//
+		// Closes the gpt-5.5 MEDIUM-2 review finding: the prior
+		// "multistage_via_payout_path" subtest was misnamed — it had no
+		// Profile set, so the dispatcher fell through to legacy Gordon
+		// and exercised the SAME path as legacy_gordon above.
+		buildAAPLishInput := func(debtLikeClaims float64) *models.ModelInput {
+			in := testhelpers.BuildSyntheticAAPLishModelInput(t)
+			testhelpers.PatchFilingDatesFromAsOf(in)
+			in.Profile = &profile.ResolvedProfile{
+				AssumptionProfile: profile.AssumptionProfile{
+					ProfileID:               "maturing_tech_first_dividend:standard_growth",
+					Archetype:               profile.ArchetypeMaturingTechDividend,
+					Maturity:                profile.MaturityStandardGrowth,
+					DividendForecastHorizon: 10,
+					PayoutPath:              []float64{0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.52, 0.54, 0.56, 0.58},
+					DPSGrowthCap:            0.25,
+					StableDividendGrowth:    0.035,
+				},
+			}
+			in.DebtLikeClaims = debtLikeClaims
+			return in
+		}
+
+		zero, err := ddm.Calculate(ctx, buildAAPLishInput(0))
 		require.NoError(t, err)
-		require.Equal(t, "ddm", result.ModelType)
-		assert.Greater(t, result.EnterpriseValue, result.EquityValue,
-			"EV should exceed equity when debt+claims > cash")
+		// HorizonSelected is the multi-stage path's tell — proves we did
+		// NOT fall through to legacy Gordon (which leaves it at 0).
+		require.Equal(t, 10, zero.HorizonSelected,
+			"baseline run must take multi-stage path; HorizonSelected==10 confirms")
+
+		const aaplDebtLikeClaims = 5_000_000_000.0
+		withClaims, err := ddm.Calculate(ctx, buildAAPLishInput(aaplDebtLikeClaims))
+		require.NoError(t, err)
+		require.Equal(t, 10, withClaims.HorizonSelected,
+			"with-claims run must also take multi-stage path")
+
+		// IntrinsicValuePerShare + EquityValue must be UNCHANGED on the
+		// multi-stage path too — equity is dividend-derived.
+		assert.Equal(t,
+			math.Float64bits(zero.IntrinsicValuePerShare),
+			math.Float64bits(withClaims.IntrinsicValuePerShare),
+			"multi-stage IntrinsicValuePerShare must be invariant to DebtLikeClaims")
+		assert.Equal(t,
+			math.Float64bits(zero.EquityValue),
+			math.Float64bits(withClaims.EquityValue),
+			"multi-stage EquityValue must be invariant to DebtLikeClaims")
+
+		// EV identity on multi-stage: EV = equity + IBD + claims − cash.
+		// Pull IBD + Cash from the same fixture so we compare apples-to-apples.
+		fixtureForLookup := testhelpers.BuildSyntheticAAPLishModelInput(t)
+		ibd := fixtureForLookup.InterestBearingDebt
+		cash := fixtureForLookup.CashAndCashEquivalents
+
+		gotDelta := withClaims.EnterpriseValue - zero.EnterpriseValue
+		assert.InDelta(t, aaplDebtLikeClaims, gotDelta, 0.5,
+			"multi-stage EnterpriseValue must increase by DebtLikeClaims (got delta=%g, want=%g)",
+			gotDelta, aaplDebtLikeClaims)
+
+		wantEV := withClaims.EquityValue + ibd + aaplDebtLikeClaims - cash
+		assert.InDelta(t, wantEV, withClaims.EnterpriseValue, 0.5,
+			"multi-stage EV identity violated: got=%g want=%g (equity=%g IBD=%g claims=%g cash=%g)",
+			withClaims.EnterpriseValue, wantEV,
+			withClaims.EquityValue, ibd, aaplDebtLikeClaims, cash)
 	})
 }
 
