@@ -51,11 +51,11 @@ go test ./... -count=1
 | P5-C1.2 | In `ddm.go`, change BOTH EV bridges to add `DebtLikeClaims`: `enterpriseValue := equityValue + input.InterestBearingDebt + input.DebtLikeClaims - input.CashAndCashEquivalents` (legacy Gordon `:127`; multi-stage `:399`). | `internal/services/valuation/models/ddm.go:127,399` |
 | P5-C1.3 | Bump `CalculationVersion` `"4.3"` → `"4.4"` at BOTH stamp sites (DCF path + alt-model path); update the inline comment to cite DC-1 Phase 5 DDM EV-bridge DebtLikeClaims correction. | `internal/services/valuation/service.go:1323,1635` |
 | P5-C1.4 | Update `ModelInput.DebtLikeClaims` godoc (`router.go:51-62`): DDM now READS it in the EV bridge (it's no longer "0 for DDM / never read"). Note DDM ADDS it (EV-from-equity direction) vs revenue_multiple SUBTRACTS it (equity-from-EV direction). | `internal/services/valuation/models/router.go:51-62` |
-| P5-C1.5 | Add `TestDDM_EVBridge_SubtractsDebtLikeClaims` (despite the name, asserts the `+DebtLikeClaims` EV identity for DDM) + `TestDDM_EVBridge_ZeroClaims_Unchanged`. Cover both legacy-Gordon AND multi-stage paths. Assert `IntrinsicValuePerShare`/`EquityValue` UNCHANGED vs zero-claims; assert `EnterpriseValue` increases by exactly `DebtLikeClaims`. | `internal/services/valuation/models/ddm_test.go` (or sibling) |
+| P5-C1.5 | Add `TestDDM_EVBridge_AddsDebtLikeClaims` (shipped under this name — the parallel with `TestRevenueMultiple_SubtractsDebtLikeClaims` is by PURPOSE, not by sign) + `TestDDM_EVBridge_ZeroClaims_Unchanged` + `TestDDM_EVBridge_AddsDebtLikeClaims/multistage_real` subtest (post-review MEDIUM-2 fix). Cover both legacy-Gordon AND multi-stage paths. Assert `IntrinsicValuePerShare`/`EquityValue` UNCHANGED vs zero-claims; assert `EnterpriseValue` increases by exactly `DebtLikeClaims`. | `internal/services/valuation/models/ddm_phase5_evbridge_test.go` |
 
 ### Acceptance signals
 
-- `TestDDM_EVBridge_SubtractsDebtLikeClaims` + `TestDDM_EVBridge_ZeroClaims_Unchanged` GREEN.
+- `TestDDM_EVBridge_AddsDebtLikeClaims` (incl. `multistage_real` subtest) + `TestDDM_EVBridge_ZeroClaims_Unchanged` + `TestDDM_GoldenFixtures_ZeroDebtLikeClaims` GREEN.
 - `TestDDM_LegacyPath_BitForBit` GREEN (DebtLikeClaims=0 for JPM/BAC/WFC ⇒ EV term `+0` ⇒ byte-identical EnterpriseValue).
 - `TestDDM_ConsumerPath_UnaffectedByPhase4` GREEN (pins EnterpriseValue bits — unchanged for fixtures).
 - Replay hermetic basket: zero numeric drift (no DDM ticker fires B-rules in the basket); `CalculationVersion 4.3 → 4.4` field text only.
