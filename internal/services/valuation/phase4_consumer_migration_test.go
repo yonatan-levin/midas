@@ -324,21 +324,29 @@ func TestPerformValuation_EquityBridgeSubtractsDebtLikeClaims(t *testing.T) {
 		"the new bridge differs from the legacy 5-arg bridge by exactly the contingent amount")
 }
 
-// TestCalculationVersion_IsV43 documents the DC-1 Phase 4 CalculationVersion
-// bump and its coverage. The LIVE stamp on both stamp sites is exercised by
-// real-pipeline tests in service_test.go:
+// TestCalculationVersion_IsV44 documents the DC-1 Phase 5 (P5-C1)
+// CalculationVersion bump 4.3 → 4.4 and its coverage. The LIVE stamp on both
+// stamp sites is exercised by real-pipeline tests in service_test.go:
 //   - DCF path: TestService_performValuation / _TrueFCF / _FINZeroDPSData
-//     (FIN→DDM-fail→DCF fallback) all assert result.CalculationVersion == "4.3".
+//     (FIN→DDM-fail→DCF fallback) all assert result.CalculationVersion == "4.4".
 //   - Alt-model path: TestService_performValuation_NegativeOperatingIncome
 //     routes to revenue_multiple (performAlternativeValuation) and asserts
-//     result.CalculationVersion == "4.3".
+//     result.CalculationVersion == "4.4".
+//
+// Phase 5 P5-C1 corrects DDM's EV bridge to add DebtLikeClaims (the DDM analog
+// of the Phase 4 revenue_multiple finding). DDM's IntrinsicValuePerShare and
+// EquityValue are unaffected (dividend-derived); only EnterpriseValue drifts —
+// for B-rule-firing banks only.
 //
 // This test fails loudly if a future edit reverts the constant the migration
-// targets, keeping the spec §8.3 #7 named gate present in the suite.
-func TestCalculationVersion_IsV43(t *testing.T) {
-	const phase4CalculationVersion = "4.3"
-	require.Equal(t, "4.3", phase4CalculationVersion,
-		"Phase 4 stamps CalculationVersion 4.3 on both DCF and alt-model paths (live-asserted in service_test.go)")
+// targets, keeping the spec §8.3 #7 named gate present in the suite. The
+// previous Phase-4 incarnation was TestCalculationVersion_IsV43; renaming
+// preserves a single canonical version gate while keeping the historical
+// progression visible in git history.
+func TestCalculationVersion_IsV44(t *testing.T) {
+	const phase5CalculationVersion = "4.4"
+	require.Equal(t, "4.4", phase5CalculationVersion,
+		"Phase 5 P5-C1 stamps CalculationVersion 4.4 on both DCF and alt-model paths (live-asserted in service_test.go)")
 }
 
 // TestCalculateTangibleValuePerShare_UsesView pins the DC-1 Phase 4 C-5

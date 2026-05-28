@@ -1320,7 +1320,7 @@ func (s *Service) performValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     "multi_stage_dcf",
-		CalculationVersion:    "4.3", // DC-1 Phase 4: B3 routing flip + B1/B2 reroute + A1 overlay → consumer-visible drift
+		CalculationVersion:    "4.4", // DC-1 Phase 5 (P5-C1): DDM EV-bridge DebtLikeClaims correction (+B-rule overlays for DDM EnterpriseValue). DCF/revenue_multiple/FFO numerics unaffected; only DDM EnterpriseValue drifts for B-rule-firing banks.
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -1535,17 +1535,24 @@ func (s *Service) performAlternativeValuation(
 	modelIBD := latestFinancialData.InterestBearingDebt
 	modelCash := latestFinancialData.CashAndCashEquivalents
 	// modelDebtLikeClaims carries the B1 (lease) + B2 (pension) + B3 (contingent)
-	// overlay amounts that the EV→Equity bridge must subtract for non-DDM models.
-	// revenue_multiple subtracts it; FFO does NOT consume it (FFO's equity is
-	// derived directly from the P/FFO multiple — InterestBearingDebt only
-	// back-derives the reported EV — so subtracting DebtLikeClaims there would
-	// risk double-counting the REIT's lease-bearing cash flows). DDM keeps 0 to
-	// preserve the JPM/BAC/WFC bit-for-bit invariant (and never reads it anyway).
-	modelDebtLikeClaims := 0.0
+	// overlay amounts that the EV↔Equity bridge respects per model:
+	//   - DCF / revenue_multiple SUBTRACT it (they derive equity FROM EV).
+	//   - DDM ADDS it (it derives equity FIRST, then EV = equity + debt + claims − cash).
+	//   - FFO does NOT consume it — FFO's equity is derived directly from the
+	//     P/FFO multiple (InterestBearingDebt only back-derives the reported EV),
+	//     so subtracting claims there would risk double-counting the REIT's
+	//     lease-bearing cash flows.
+	// DC-1 Phase 5 (P5-C1): DDM now receives DebtLikeClaims from
+	// InvestedCapital().DebtLikeClaims — the EV-bridge correction (spec §3.2)
+	// closing the DDM analog of the Phase 4 revenue_multiple finding. The
+	// JPM/BAC/WFC bit-for-bit invariant is preserved because those fixtures
+	// fire no B-rules ⇒ DebtLikeClaims=0 ⇒ +0 term ⇒ EnterpriseValue bits
+	// unchanged. modelIBD stays on the legacy entity read for DDM until P5-C2
+	// migrates DDM's other reads (minimizes the bit-for-bit surface here).
+	modelDebtLikeClaims := investedCapitalOr(cleaned, latestFinancialData).DebtLikeClaims
 	if model.ModelType() != "ddm" {
 		mr := restatedViewOr(cleaned, latestFinancialData)
 		modelIBD = mr.InterestBearingDebt
-		modelDebtLikeClaims = investedCapitalOr(cleaned, latestFinancialData).DebtLikeClaims
 	}
 
 	modelInput := &models.ModelInput{
@@ -1632,7 +1639,7 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     modelResult.ModelType,
-		CalculationVersion:    "4.3", // DC-1 Phase 4: B3 routing flip + B1/B2 reroute + A1 overlay → consumer-visible drift
+		CalculationVersion:    "4.4", // DC-1 Phase 5 (P5-C1): DDM EV-bridge DebtLikeClaims correction (+B-rule overlays for DDM EnterpriseValue). DCF/revenue_multiple/FFO numerics unaffected; only DDM EnterpriseValue drifts for B-rule-firing banks.
 		Warnings:              modelResult.Warnings,
 	}
 

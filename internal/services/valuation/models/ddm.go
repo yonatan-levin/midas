@@ -122,9 +122,20 @@ func (m *DDMModel) calculateLegacyGordon(ctx context.Context, input *ModelInput)
 
 	valuePerShare := dps * (1 + dividendGrowth) / denominator
 
-	// Calculate implied equity and enterprise values
+	// Calculate implied equity and enterprise values.
+	//
+	// DC-1 Phase 5 (P5-C1): the EV↔equity bridge adds DebtLikeClaims (B1
+	// operating-lease + B2 pension + B3 contingent overlays) so B-rule-firing
+	// banks do not silently drop those claims from the reported EnterpriseValue.
+	// DDM derives equity FROM dividends and then derives EV FROM equity
+	// (EV = equity + debt − cash), so DebtLikeClaims are ADDED — the opposite
+	// sign from the DCF / revenue_multiple bridges which derive equity FROM EV
+	// and therefore SUBTRACT DebtLikeClaims. DDM's IntrinsicValuePerShare +
+	// EquityValue are unaffected by this correction (they are dividend-derived,
+	// independent of debt terms). For the JPM/BAC/WFC bit-for-bit fixtures
+	// DebtLikeClaims=0 ⇒ the +0 term preserves EnterpriseValue bits. Spec §3.2.
 	equityValue := valuePerShare * input.SharesOutstanding
-	enterpriseValue := equityValue + input.InterestBearingDebt - input.CashAndCashEquivalents
+	enterpriseValue := equityValue + input.InterestBearingDebt + input.DebtLikeClaims - input.CashAndCashEquivalents
 
 	warnings, confidence := m.runDividendDiagnostics(ctx, latest, input, dps, dividendGrowth, costOfEquity, valuePerShare, nil)
 
@@ -396,7 +407,9 @@ func (m *DDMModel) calculateMultiStage(ctx context.Context, input *ModelInput) (
 
 	valuePerShare := explicitPV + terminalPV
 	equityValue := valuePerShare * input.SharesOutstanding
-	enterpriseValue := equityValue + input.InterestBearingDebt - input.CashAndCashEquivalents
+	// DC-1 Phase 5 (P5-C1): see calculateLegacyGordon for the sign rationale.
+	// Multi-stage DDM uses the same EV=equity+debt+DebtLikeClaims−cash bridge.
+	enterpriseValue := equityValue + input.InterestBearingDebt + input.DebtLikeClaims - input.CashAndCashEquivalents
 
 	// Per T2-P4-W2 item 5, the multi-stage path uses the same shared
 	// dividend-diagnostics helper as the legacy path so the two branches
