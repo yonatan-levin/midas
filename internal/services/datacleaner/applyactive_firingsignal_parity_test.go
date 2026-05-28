@@ -14,13 +14,24 @@ import (
 // TestApplyActiveAdjustments_FiringSignalParity pins the DC-1 Phase 5
 // (P5-C3) native firing-signal migration: the orchestrator's three
 // category arms in applyActiveAdjustments switched their `if XResult.Applied`
-// guards to a native equivalent
-// (`len(XResult.NativeLedgerEntries) > 0 || len(XResult.NativeOverlays) > 0
-// || len(XResult.Flags) > 0`).
+// guards to `nativeFired(XResult.NativeLedgerEntries, XResult.NativeOverlays,
+// XResult.Flags)` (defined at firing_signal.go).
 //
-// The native signal is equivalent to the legacy `Applied` bool because
-// every fired rule emits at least ONE of:
-//   - a Restater-shaped LedgerEntry (A2/A4/A5/C1/C2/C3/C5/C6),
+// IMPORTANT: the helper is NOT the naive `len(NativeLedgerEntries) > 0 ||
+// len(NativeOverlays) > 0 || len(Flags) > 0` predicate that initially
+// shipped under P5-C3 (commit 586c370) — that inline form was a HIGH-1
+// review finding (gpt-5.5) because skip paths emit Fired:false LedgerEntries
+// for diagnostic observability and the naive predicate over-counted
+// RulesApplied on the rules-pass-applicability-but-Apply-skips path.
+// nativeFired filters LedgerEntries on `e.Fired==true` while treating
+// any OverlaySpec or Flag as an unconditional fire signal (those
+// streams are skip-free by their role contract). See the
+// _A1ApplicableButSkipped regression test below for the failure mode
+// the post-fix helper prevents.
+//
+// The helper is equivalent to the legacy `Applied` bool because every
+// fired rule emits at least ONE of:
+//   - a Fired:true Restater LedgerEntry (A2/A4/A5/C1/C2/C3/C5/C6),
 //   - an OverlaySpec (A1/B1/B2/B3 OverlayEmitters), or
 //   - a Flag (C4/C7 FlagEmitters + the two PR-2 A-flag reviews).
 //
