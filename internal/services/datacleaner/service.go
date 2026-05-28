@@ -521,15 +521,15 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 	if len(assetRules) > 0 {
 		assetResult := s.assetAdjuster.ProcessAssetAdjustments(ctx, data, assetRules, cleaningCtx)
 		// DC-1 Phase 5 (P5-C3): firing signal migrated from assetResult.Applied
-		// (legacy translator-set bool) to a native equivalent (len of any
-		// AdjusterOutput-derived slice). Adjustments / Flags slices STILL
-		// flow through the legacy translator path until P5-C4 retires the
-		// translators with an explicit ledger-based projection. The native
-		// signal is equivalent because every fired rule emits at least one
-		// LedgerEntry or Overlay or Flag (FlagEmitter convention) — pinned
-		// by TestApplyActiveAdjustments_FiringSignalParity.
-		fired := len(assetResult.NativeLedgerEntries) > 0 || len(assetResult.NativeOverlays) > 0 || len(assetResult.Flags) > 0
-		if fired {
+		// (legacy translator-set bool) to a native equivalent. Adjustments /
+		// Flags slices STILL flow through the legacy translator path until
+		// P5-C4 retires the translators with an explicit ledger-based
+		// projection. The native signal is computed by nativeFired, which
+		// filters LedgerEntry.Fired==true (skip paths emit Fired:false
+		// diagnostic entries that MUST NOT count as fired). Pinned by
+		// TestApplyActiveAdjustments_FiringSignalParity_* (incl. the
+		// applicability-passes-but-Apply-skips regression fixture).
+		if nativeFired(assetResult.NativeLedgerEntries, assetResult.NativeOverlays, assetResult.Flags) {
 			allAdjustments = append(allAdjustments, assetResult.Adjustments...)
 			allFlags = append(allFlags, assetResult.Flags...)
 			totalRulesApplied += len(assetRules)
@@ -562,8 +562,7 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 	if len(liabilityRules) > 0 {
 		liabilityResult := s.liabilityAdjuster.ProcessLiabilityAdjustments(ctx, data, liabilityRules, cleaningCtx)
 		// DC-1 Phase 5 (P5-C3): see Category A native firing-signal comment.
-		fired := len(liabilityResult.NativeLedgerEntries) > 0 || len(liabilityResult.NativeOverlays) > 0 || len(liabilityResult.Flags) > 0
-		if fired {
+		if nativeFired(liabilityResult.NativeLedgerEntries, liabilityResult.NativeOverlays, liabilityResult.Flags) {
 			allAdjustments = append(allAdjustments, liabilityResult.Adjustments...)
 			allFlags = append(allFlags, liabilityResult.Flags...)
 			totalRulesApplied += len(liabilityRules)
@@ -603,8 +602,7 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 	if len(earningsRules) > 0 {
 		earningsResult := s.earningsAdjuster.ProcessEarningsAdjustments(ctx, data, earningsRules, cleaningCtx)
 		// DC-1 Phase 5 (P5-C3): see Category A native firing-signal comment.
-		fired := len(earningsResult.NativeLedgerEntries) > 0 || len(earningsResult.NativeOverlays) > 0 || len(earningsResult.Flags) > 0
-		if fired {
+		if nativeFired(earningsResult.NativeLedgerEntries, earningsResult.NativeOverlays, earningsResult.Flags) {
 			allAdjustments = append(allAdjustments, earningsResult.Adjustments...)
 			allFlags = append(allFlags, earningsResult.Flags...)
 			totalRulesApplied += len(earningsRules)

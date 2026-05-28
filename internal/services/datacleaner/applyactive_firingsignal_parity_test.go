@@ -132,3 +132,80 @@ func TestApplyActiveAdjustments_FiringSignalParity_EmptyFixture(t *testing.T) {
 				"otherwise the native firing-signal is over-detecting")
 	}
 }
+
+// TestApplyActiveAdjustments_FiringSignalParity_A1ApplicableButSkipped
+// is the regression pin for the gpt-5.5 HIGH-1 finding against the
+// initial P5-C3 shipping. When an adjuster's outer applicability check
+// (s.checkRuleApplicability) passes but the inner Apply skips (e.g. A1
+// goodwill is present but BELOW the 5% materiality threshold), the
+// dispatcher emits a single Fired:false diagnostic LedgerEntry per the
+// spec's observability contract. The PRE-fix native firing-signal
+// `len(NativeLedgerEntries) > 0 || ...` incorrectly returned true on
+// this path, inflating totalRulesApplied → result.RulesApplied →
+// pipeline summary.TotalRulesApplied (a public observable).
+//
+// The fix introduces nativeFired() which filters LedgerEntries on
+// e.Fired==true (overlays + flags are skip-free by their role contract,
+// so they remain unconditional firing signals).
+//
+// This fixture exercises the exact failure path:
+//   - Goodwill = 3% of TotalAssets → s.checkRuleApplicability returns
+//     true (data.Goodwill > 0) AND ApplyA1Goodwill skips at the 5%
+//     threshold, emitting one Fired:false LedgerEntry with SkipMetrics.
+//   - No other A/B/C rule fires (no intangibles, no inventory, no DTA,
+//     no leases, no pension, no contingent liabilities, no restructuring).
+//
+// Pre-fix expectation (what THIS test would FAIL under): RulesApplied
+// inflated by len(assetRules) because the inline predicate would treat
+// the Fired:false diagnostic entry as a category fire.
+// Post-fix expectation: RulesApplied == 0 (the legacy Applied=false
+// semantics, preserved).
+func TestApplyActiveAdjustments_FiringSignalParity_A1ApplicableButSkipped(t *testing.T) {
+	cfg := createTestConfig()
+	ctx := context.Background()
+	svc, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
+	require.NoError(t, err)
+
+	// Goodwill at 3% of TotalAssets — A1 applicability is "data.Goodwill > 0"
+	// (passes), but ApplyA1Goodwill's internal threshold is 5% (skips).
+	// The skip path emits one Fired:false NativeLedgerEntry with
+	// SkipMetrics["goodwill_ratio"] = 0.03 — confirmed by the A1 adjuster's
+	// own test at a1_goodwill_adjuster_test.go.
+	data := &entities.FinancialData{
+		Ticker:            "A1_BELOW_THRESHOLD",
+		ReportingCurrency: "USD",
+		FilingPeriod:      "2024FY",
+		FilingDate:        time.Now(),
+		TotalAssets:       1_000_000_000,
+		Goodwill:          30_000_000, // 3% of TotalAssets — passes applicability, skips Apply
+		SharesOutstanding: 100_000_000,
+		Revenue:           500_000_000,
+		NetIncome:         50_000_000,
+	}
+
+	result, err := svc.CleanFinancialData(ctx, data)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// The orchestrator's three A-arm assertions:
+	assert.Empty(t, result.Adjustments,
+		"A1 skipped → translator emits no Adjustment → result.Adjustments must be empty")
+	assert.Equal(t, 0, result.RulesApplied,
+		"applicability-passed-but-Apply-skipped path must NOT increment RulesApplied "+
+			"(pre-fix inline predicate inflated this count via the diagnostic "+
+			"Fired:false LedgerEntry — the nativeFired helper filters those out)")
+
+	// Verify the diagnostic Fired:false entry is still on the ledger
+	// (its observability purpose is preserved — only its inflation
+	// of RulesApplied is fixed).
+	foundSkipEntry := false
+	for _, entry := range result.CleanedData.AdjustmentLedger {
+		if entry.AdjusterID == "A1_goodwill_exclusion" && !entry.Fired {
+			foundSkipEntry = true
+			break
+		}
+	}
+	assert.True(t, foundSkipEntry,
+		"A1 skip diagnostic LedgerEntry must still land on data.AdjustmentLedger — "+
+			"the fix removes the count inflation but preserves the observability surface")
+}
