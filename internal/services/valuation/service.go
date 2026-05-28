@@ -494,9 +494,24 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 				s.log(ctx).Info("Data cleaning applied successfully",
 					zap.String("ticker", ticker),
 					zap.Float64("quality_score", cleaningResult.QualityScore))
-				// Update historical data with cleaned data. The legacy slot
-				// stays populated for the DDM consumer's GetLatestPeriod()
-				// read path (DDM migration deferred to Phase 5 per spec §7).
+				// Update historical data with cleaned data. The slot stays
+				// populated post-DC-1-Phase-5 because every alt-model
+				// (DDM, FFO, revenue_multiple) still reads
+				// input.HistoricalData.GetLatestPeriod() for nil-guards,
+				// DPS, and the per-period base for component reads that
+				// the FinancialDataView surface does not include
+				// (CashAndCashEquivalents, SharesOutstanding lookups,
+				// FilingDate). The Phase-5 consumer migration moved the
+				// view-eligible fields (StockholdersEquity / NetIncome /
+				// DividendsPerShare) to input.LatestRestatedView but did
+				// NOT eliminate the entity read. Stopping slot population
+				// would silently revert those entity-side reads to the
+				// PRE-CLEAN parser-stamped values, drifting any consumer
+				// that mixes view + entity reads (the GetRecentYears DPS-
+				// CAGR walk in DDM also relies on the slot being the
+				// latest cleaned period). Spec §3.7 — "verify-then-decide":
+				// the grep found 6 remaining GetLatestPeriod() consumers,
+				// so the recommended action is KEEP.
 				historicalData.Data[latestPeriod] = cleaningResult.CleanedData
 			}
 		}
