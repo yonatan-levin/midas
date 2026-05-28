@@ -1568,15 +1568,15 @@ func (s *Service) performAlternativeValuation(
 		InterestBearingDebt:    modelIBD,
 		CashAndCashEquivalents: modelCash,
 		DebtLikeClaims:         modelDebtLikeClaims,
-		// DC-1 Phase 4 (C-3): Restated view of the latest period for the FFO
-		// NAV NOI proxy. nil for DDM (deferred) to avoid any non-legacy read.
-		LatestRestatedView: func() *cleaneddata.FinancialDataView {
-			if model.ModelType() == "ddm" {
-				return nil
-			}
-			return restatedViewOr(cleaned, latestFinancialData)
-		}(),
-		Now: s.clock.Now,
+		// DC-1 Phase 5 (P5-C2): Restated view of the latest period is now
+		// populated for ALL alt-models including DDM. Phase 4 nil-for-DDM
+		// branch removed — DDM's consumed fields (StockholdersEquity /
+		// NetIncome / DividendsPerShare) are carried (SE = identity +
+		// EquityOffset; NI / DPS identity-copied) in Restated(), so for
+		// the JPM/BAC/WFC bit-for-bit fixtures view.X == latest.X exactly
+		// (no Restater fires for the pinned banks). Spec §3.3 + §7.
+		LatestRestatedView: restatedViewOr(cleaned, latestFinancialData),
+		Now:                s.clock.Now,
 		// Tier 2 P0b: thread the resolved AssumptionProfile into ModelInput.
 		// P0b downstream consumers are nil-safe NO-OPs; P1/P3/P4 will read
 		// calibration values (horizon, caps, terminal method, payout path).

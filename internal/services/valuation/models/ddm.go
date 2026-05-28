@@ -9,6 +9,7 @@ import (
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
+	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/thresholds"
 )
 
@@ -137,7 +138,7 @@ func (m *DDMModel) calculateLegacyGordon(ctx context.Context, input *ModelInput)
 	equityValue := valuePerShare * input.SharesOutstanding
 	enterpriseValue := equityValue + input.InterestBearingDebt + input.DebtLikeClaims - input.CashAndCashEquivalents
 
-	warnings, confidence := m.runDividendDiagnostics(ctx, latest, input, dps, dividendGrowth, costOfEquity, valuePerShare, nil)
+	warnings, confidence := m.runDividendDiagnostics(ctx, latest, input.LatestRestatedView, input, dps, dividendGrowth, costOfEquity, valuePerShare, nil)
 
 	logctx.Or(ctx, m.logger).Info("DDM valuation completed",
 		zap.Float64("dps", dps),
@@ -164,11 +165,24 @@ func (m *DDMModel) calculateLegacyGordon(ctx context.Context, input *ModelInput)
 // Path discipline: the legacy single-stage Gordon path's bit-for-bit
 // invariant (TestDDM_LegacyPath_BitForBit) asserts equality on
 // ModelResult.Warnings (slice content + order) and Confidence in addition
-// to the three load-bearing floats. This helper's body is the verbatim
-// pre-extraction body of calculateLegacyGordon's diagnostics block —
-// warning strings, append order, and confidence ladder are unchanged from
-// pre-Tier-2 master HEAD 0324057. Modifying the strings or reordering the
-// appends here will trip the bit-for-bit test.
+// to the three load-bearing floats. The warning STRINGS, append order, and
+// confidence ladder are unchanged from pre-Tier-2 master HEAD 0324057.
+// Modifying the strings or reordering the appends here will trip the
+// bit-for-bit test.
+//
+// DC-1 Phase 5 (P5-C2): the StockholdersEquity / NetIncome reads are
+// migrated from `latest.X` (the entity field via GetLatestPeriod()) to the
+// `view.X` (cleaneddata.Restated() view) when `view` is non-nil. Bit-for-bit
+// safety: these fields are CARRIED in Restated() — SE = identityCopy + Σ
+// EquityOffset (sum is zero when no Restater fires; identity bits otherwise),
+// NI is pure identity-copy. So on the JPM/BAC/WFC fixtures (zero Restaters
+// fire) view.X == latest.X bit-for-bit ⇒ the / and > operations produce
+// identical Float64 bits ⇒ ROE, warning order, P/BV crosscheck, and
+// confidence ladder are byte-identical. Spec §3.3 + §7.
+//
+// The `view` may be nil on test / no-cleaner paths; callers MUST still
+// supply `latest` for the nil-fallback. When view is nil the helper
+// reads the entity (pre-P5-C2 behavior).
 //
 // The initialWarnings slice lets callers seed the diagnostics with a
 // preamble (e.g. the multi-stage path's "DDM multi-stage: ..." note);
@@ -176,6 +190,7 @@ func (m *DDMModel) calculateLegacyGordon(ctx context.Context, input *ModelInput)
 func (m *DDMModel) runDividendDiagnostics(
 	ctx context.Context,
 	latest *entities.FinancialData,
+	view *cleaneddata.FinancialDataView,
 	input *ModelInput,
 	dps, dividendGrowth, costOfEquity, valuePerShare float64,
 	initialWarnings []string,
@@ -185,11 +200,22 @@ func (m *DDMModel) runDividendDiagnostics(
 		warnings = []string{}
 	}
 
+	// DC-1 Phase 5 (P5-C2): select view fields when populated, else fall
+	// back to entity. Assignment preserves Float64 bits exactly, so the
+	// downstream comparisons / divisions produce identical bits when
+	// view.X == latest.X (the bit-for-bit safety case for JPM/BAC/WFC).
+	effSE := latest.StockholdersEquity
+	effNI := latest.NetIncome
+	if view != nil {
+		effSE = view.StockholdersEquity
+		effNI = view.NetIncome
+	}
+
 	// Compute ROE once — reused by the ROE sanity check and the P/BV cross-check (V4.1-N7).
-	hasROE := latest.StockholdersEquity > 0 && latest.NetIncome > 0
+	hasROE := effSE > 0 && effNI > 0
 	var roe float64
 	if hasROE {
-		roe = latest.NetIncome / latest.StockholdersEquity
+		roe = effNI / effSE
 	}
 
 	// Validate ROE reasonableness for financials
@@ -203,8 +229,8 @@ func (m *DDMModel) runDividendDiagnostics(
 	}
 
 	// Payout ratio check
-	if latest.NetIncome > 0 && input.SharesOutstanding > 0 {
-		eps := latest.NetIncome / input.SharesOutstanding
+	if effNI > 0 && input.SharesOutstanding > 0 {
+		eps := effNI / input.SharesOutstanding
 		if eps > 0 {
 			payoutRatio := dps / eps
 			if payoutRatio > 0.9 {
@@ -221,7 +247,7 @@ func (m *DDMModel) runDividendDiagnostics(
 		if !hasROE || input.SharesOutstanding <= 0 {
 			return
 		}
-		bookValuePerShare := latest.StockholdersEquity / input.SharesOutstanding
+		bookValuePerShare := effSE / input.SharesOutstanding
 		if bookValuePerShare <= 0 {
 			return
 		}
@@ -297,25 +323,39 @@ func (m *DDMModel) estimateDividendGrowth(input *ModelInput) float64 {
 		}
 	}
 
-	// Fallback: sustainable growth = ROE * retention ratio
+	// Fallback: sustainable growth = ROE * retention ratio.
+	//
+	// DC-1 Phase 5 (P5-C2): SE/NI/DPS reads migrated from latest.X to the
+	// Restated view (input.LatestRestatedView) when populated, with nil-
+	// fallback to the entity for test/no-cleaner paths. All three fields are
+	// carried (identity + EquityOffset for SE; identity-copied for NI/DPS)
+	// in Restated() — so on the JPM/BAC/WFC bit-for-bit fixtures
+	// view.X == latest.X exactly. Assignment to local scalars preserves
+	// Float64 bits, so divisions/comparisons produce identical bits.
 	latest, _ := input.HistoricalData.GetLatestPeriod()
-	if latest != nil && latest.StockholdersEquity > 0 && latest.NetIncome > 0 {
-		roe := latest.NetIncome / latest.StockholdersEquity
-		// Estimate retention ratio from payout ratio
-		retentionRatio := 0.5 // default 50% retention
-		if latest.DividendsPerShare > 0 && input.SharesOutstanding > 0 {
-			eps := latest.NetIncome / input.SharesOutstanding
-			if eps > 0 {
-				payoutRatio := latest.DividendsPerShare / eps
-				retentionRatio = 1 - payoutRatio
-				if retentionRatio < 0 {
-					retentionRatio = 0
+	if latest != nil {
+		effSE, effNI, effDPS := latest.StockholdersEquity, latest.NetIncome, latest.DividendsPerShare
+		if v := input.LatestRestatedView; v != nil {
+			effSE, effNI, effDPS = v.StockholdersEquity, v.NetIncome, v.DividendsPerShare
+		}
+		if effSE > 0 && effNI > 0 {
+			roe := effNI / effSE
+			// Estimate retention ratio from payout ratio
+			retentionRatio := 0.5 // default 50% retention
+			if effDPS > 0 && input.SharesOutstanding > 0 {
+				eps := effNI / input.SharesOutstanding
+				if eps > 0 {
+					payoutRatio := effDPS / eps
+					retentionRatio = 1 - payoutRatio
+					if retentionRatio < 0 {
+						retentionRatio = 0
+					}
 				}
 			}
-		}
-		sustainableGrowth := roe * retentionRatio
-		if sustainableGrowth > 0 && sustainableGrowth < 0.15 {
-			return sustainableGrowth
+			sustainableGrowth := roe * retentionRatio
+			if sustainableGrowth > 0 && sustainableGrowth < 0.15 {
+				return sustainableGrowth
+			}
 		}
 	}
 
@@ -423,7 +463,7 @@ func (m *DDMModel) calculateMultiStage(ctx context.Context, input *ModelInput) (
 	// resulting value, just as it does in the legacy single-stage path.
 	preamble := []string{fmt.Sprintf("DDM multi-stage: %dy explicit + Gordon terminal (g=%.1f%%)",
 		horizon, terminalGrowth*100)}
-	warnings, confidence := m.runDividendDiagnostics(ctx, latest, input, dps, terminalGrowth, costOfEquity, valuePerShare, preamble)
+	warnings, confidence := m.runDividendDiagnostics(ctx, latest, input.LatestRestatedView, input, dps, terminalGrowth, costOfEquity, valuePerShare, preamble)
 
 	logctx.Or(ctx, m.logger).Info("DDM multi-stage valuation completed",
 		zap.Float64("dps", dps),
