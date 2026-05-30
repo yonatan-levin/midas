@@ -110,7 +110,7 @@ W-1..W-5 and S-2/S-3/S-5 were resolved in earlier commits (`4d46142`, `01f4db0`)
 
 ## In Flight
 
-_No initiatives currently in flight._
+- **DC-1 datacleaner refactor — Phase 5 PARTIAL on branch `dc1-phase-5` (tip `e6418e4`; 10 commits; NOT yet merged to master).** Ships DDM EV-bridge DebtLikeClaims correction (ADDED for DDM since equity is dividend-derived; CalcVersion 4.3→4.4) + DDM consumer migration to `Restated()` view + orchestrator firing-signal `nativeFired(...)` helper + `cleaneddata.Raw()` deletion. STILL DEFERRED to a follow-up session: P5-C3-full Adjustments-projection (needs ARCH `Adjustment.Percentage` decision before BACKEND dispatch) + P5-C4 translator/struct/dormant-fallback deletion + DC-1 tracker archive + replay verification + fresh CalcVersion-4.4 baseline capture. Translator stack still load-bearing for `result.Adjustments` aggregation (orchestrator read still flows through per-rule translators; only firing-signal moved to native). See the DC-1 row in §"Strategic Thesis" + `docs/refactoring/implementations/dc1-phase-5-next-session-handoff.md` for full follow-up scope.
 
 ## Next Candidate Work (Ranked)
 

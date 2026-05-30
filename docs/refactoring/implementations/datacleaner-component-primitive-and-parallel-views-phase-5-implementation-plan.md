@@ -57,7 +57,7 @@ go test ./... -count=1
 
 - `TestDDM_EVBridge_AddsDebtLikeClaims` (incl. `multistage_real` subtest) + `TestDDM_EVBridge_ZeroClaims_Unchanged` + `TestDDM_GoldenFixtures_ZeroDebtLikeClaims` GREEN.
 - `TestDDM_LegacyPath_BitForBit` GREEN (DebtLikeClaims=0 for JPM/BAC/WFC ⇒ EV term `+0` ⇒ byte-identical EnterpriseValue).
-- `TestDDM_ConsumerPath_UnaffectedByPhase4` GREEN (pins EnterpriseValue bits — unchanged for fixtures).
+- `TestDDM_ConsumerPath_RestatedViewParity` GREEN (renamed from `TestDDM_ConsumerPath_UnaffectedByPhase4` in P5-C2 — superset pin: output bits == goldens AND view fields == entity fields on JPM/BAC/WFC fixtures).
 - Replay hermetic basket: zero numeric drift (no DDM ticker fires B-rules in the basket); `CalculationVersion 4.3 → 4.4` field text only.
 - Full `go test ./... -count=1` GREEN.
 
