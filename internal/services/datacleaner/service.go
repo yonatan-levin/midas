@@ -477,7 +477,6 @@ func (s *service) loadIndustryRules(industryCode string) error {
 
 // applyActiveAdjustments applies Category A and B adjustments using dedicated adjusters
 func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.FinancialData, cleaningCtx *entities.CleaningContext) ([]entities.Adjustment, []entities.Flag, int, error) {
-	var allAdjustments []entities.Adjustment
 	var allFlags []entities.Flag
 	totalRulesApplied := 0
 
@@ -506,87 +505,54 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 		}
 	}
 
-	// DC-1 Phase 2 PR-1 SHIM (Task 1.4 / plan §7).
+	// DC-1 Phase 5 P5-C3-full (DC-1 follow-up): result.Adjustments is now
+	// derived from the native LedgerEntry + OverlaySpec emissions via
+	// adjustmentsFromLedger AFTER all three category dispatchers have run.
+	// The legacy *Result.Adjustments slices still exist (the translator
+	// stack is the basket-parity source of truth for the golden capture)
+	// but the orchestrator NO LONGER reads them — P5-C4 then deletes the
+	// translators alongside the dispatcher-side `original*` capture
+	// variables.
 	//
-	// Each category's Process* call STILL runs unchanged (dual-write invariant);
-	// after it returns, we mechanically translate the legacy []entities.Adjustment
-	// slice and the set of rules that were considered into LedgerEntry records
-	// appended onto data.AdjustmentLedger. The shim's three branches (assets,
-	// liabilities, earnings) are deletion order: PR-2 deletes the asset branch
-	// when A-rules implement Adjuster.Apply natively, PR-3 deletes the earnings
-	// branch, PR-4 deletes the liability branch. PR-1 ships zero adjuster code
-	// changes, so this shim is the ONLY ledger producer in PR-1.
+	// Firing signal (totalRulesApplied + Flags drain) stays on
+	// nativeFired() per P5-C3-scoped — that migration shipped in the
+	// previous PR and is unchanged here.
 
 	// Apply Category A (Asset Quality) adjustments
 	if len(assetRules) > 0 {
 		assetResult := s.assetAdjuster.ProcessAssetAdjustments(ctx, data, assetRules, cleaningCtx)
-		// DC-1 Phase 5 (P5-C3): firing signal migrated from assetResult.Applied
-		// (legacy translator-set bool) to a native equivalent. Adjustments /
-		// Flags slices STILL flow through the legacy translator path until
-		// P5-C4 retires the translators with an explicit ledger-based
-		// projection. The native signal is computed by nativeFired, which
-		// filters LedgerEntry.Fired==true (skip paths emit Fired:false
-		// diagnostic entries that MUST NOT count as fired). Pinned by
-		// TestApplyActiveAdjustments_FiringSignalParity_* (incl. the
-		// applicability-passes-but-Apply-skips regression fixture).
+		// Firing signal: native nativeFired() filters LedgerEntry.Fired==true.
+		// Pinned by TestApplyActiveAdjustments_FiringSignalParity_*.
 		if nativeFired(assetResult.NativeLedgerEntries, assetResult.NativeOverlays, assetResult.Flags) {
-			allAdjustments = append(allAdjustments, assetResult.Adjustments...)
 			allFlags = append(allFlags, assetResult.Flags...)
 			totalRulesApplied += len(assetRules)
 		}
 
-		// DC-1 Phase 2 PR-2 Task 2.1: drain native Adjuster output so
-		// migrated rules' LedgerEntries / Overlays land in rule-iteration
-		// order on data.AdjustmentLedger / data.Overlays.
+		// Drain native Adjuster emissions onto data.AdjustmentLedger /
+		// data.Overlays in rule-iteration order. The post-loop projection
+		// at the end of this function reads these slices.
 		if len(assetResult.NativeLedgerEntries) > 0 {
 			data.AdjustmentLedger = append(data.AdjustmentLedger, assetResult.NativeLedgerEntries...)
 		}
 		if len(assetResult.NativeOverlays) > 0 {
 			data.Overlays = append(data.Overlays, assetResult.NativeOverlays...)
 		}
-
-		// DC-1 Phase 2 PR-2 Task 2.6: asset-side shim deleted — all A-rules
-		// (A1 goodwill_exclusion, A2 intangible_adjustment, A4
-		// deferred_tax_assets, A5 obsolete_inventory, plus the two
-		// FlagEmitter reviews rd_capitalization_review and
-		// capitalized_software) emit LedgerEntries natively via the
-		// dispatcher in ProcessAssetAdjustments, drained at the
-		// NativeLedgerEntries / NativeOverlays appends immediately above.
-		// PR-3 Task 3.8 deleted the earnings shim branch; PR-4 Task 4.5
-		// deleted the liability shim branch AND removed both shim helpers
-		// (shimLedgerEntriesFromLegacy / shimLedgerEntriesFromLegacyExcluding)
-		// — PR-1's shim is fully gone.
 	}
 
 	// Apply Category B (Liability Completeness) adjustments
 	if len(liabilityRules) > 0 {
 		liabilityResult := s.liabilityAdjuster.ProcessLiabilityAdjustments(ctx, data, liabilityRules, cleaningCtx)
-		// DC-1 Phase 5 (P5-C3): see Category A native firing-signal comment.
 		if nativeFired(liabilityResult.NativeLedgerEntries, liabilityResult.NativeOverlays, liabilityResult.Flags) {
-			allAdjustments = append(allAdjustments, liabilityResult.Adjustments...)
 			allFlags = append(allFlags, liabilityResult.Flags...)
 			totalRulesApplied += len(liabilityRules)
 		}
 
-		// DC-1 Phase 2 PR-4 Task 4.1: drain native Adjuster output so
-		// migrated B-rules' LedgerEntries / Overlays land in rule-
-		// iteration order on data.AdjustmentLedger / data.Overlays.
-		// Mirrors the asset drain shipped in PR-2 Task 2.1 and the
-		// earnings drain shipped in PR-3 Task 3.1.
 		if len(liabilityResult.NativeLedgerEntries) > 0 {
 			data.AdjustmentLedger = append(data.AdjustmentLedger, liabilityResult.NativeLedgerEntries...)
 		}
 		if len(liabilityResult.NativeOverlays) > 0 {
 			data.Overlays = append(data.Overlays, liabilityResult.NativeOverlays...)
 		}
-
-		// DC-1 Phase 2 PR-4 Task 4.5: liability-side shim deleted — all B-rules
-		// (B1/B2/B3 OverlayEmitters) emit OverlaySpecs natively via the
-		// dispatcher in ProcessLiabilityAdjustments, drained at the
-		// NativeLedgerEntries / NativeOverlays appends immediately above.
-		// PR-1's shim is now FULLY removed; helpers shimLedgerEntriesFromLegacy
-		// + shimLedgerEntriesFromLegacyExcluding deleted below in this same
-		// commit (no remaining callers across A/B/C categories).
 	}
 
 	// Apply Category C (Earnings Normalization) adjustments
@@ -601,32 +567,24 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 
 	if len(earningsRules) > 0 {
 		earningsResult := s.earningsAdjuster.ProcessEarningsAdjustments(ctx, data, earningsRules, cleaningCtx)
-		// DC-1 Phase 5 (P5-C3): see Category A native firing-signal comment.
 		if nativeFired(earningsResult.NativeLedgerEntries, earningsResult.NativeOverlays, earningsResult.Flags) {
-			allAdjustments = append(allAdjustments, earningsResult.Adjustments...)
 			allFlags = append(allFlags, earningsResult.Flags...)
 			totalRulesApplied += len(earningsRules)
 		}
 
-		// DC-1 Phase 2 PR-3 Task 3.1: drain native Adjuster output so migrated
-		// C-rules' LedgerEntries / Overlays land in rule-iteration order on
-		// data.AdjustmentLedger / data.Overlays. Mirrors the asset drain
-		// shipped in PR-2 Task 2.1.
 		if len(earningsResult.NativeLedgerEntries) > 0 {
 			data.AdjustmentLedger = append(data.AdjustmentLedger, earningsResult.NativeLedgerEntries...)
 		}
 		if len(earningsResult.NativeOverlays) > 0 {
 			data.Overlays = append(data.Overlays, earningsResult.NativeOverlays...)
 		}
-
-		// DC-1 Phase 2 PR-3 Task 3.8: earnings-side shim deleted — all C-rules
-		// (C1/C2/C3/C5/C6 Restaters + C4/C7 FlagEmitters) emit LedgerEntries
-		// natively via the dispatcher in ProcessEarningsAdjustments, drained at
-		// the NativeLedgerEntries / NativeOverlays appends immediately above.
-		// PR-4 Task 4.5 then deleted the liability-side shim branch AND removed
-		// both shim helpers (shimLedgerEntriesFromLegacy /
-		// shimLedgerEntriesFromLegacyExcluding) — PR-1's shim is fully gone.
 	}
+
+	// DC-1 Phase 5 P5-C3-full: project the native LedgerEntry +
+	// OverlaySpec emissions into the public entities.Adjustment audit
+	// trail. The legacy translator chain (per-category XResult.Adjustments)
+	// is unread from here on — P5-C4 deletes it.
+	allAdjustments := adjustmentsFromLedger(data.AdjustmentLedger, data.Overlays, perRuleAdjustmentMeta)
 
 	return allAdjustments, allFlags, totalRulesApplied, nil
 }
