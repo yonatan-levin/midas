@@ -107,13 +107,12 @@ Copy-paste this into a fresh session:
 I'm continuing DC-1 Phase 5 follow-up work AFTER the Phase 5 PARTIAL merge to master (merge commit e816fcc, 2026-05-31). The remaining deferred chunks (P5-C3-full Adjustments-projection + P5-C4 translator/struct deletion + DC-1 tracker archive + replay verification) are next-session scope.
 
 WORKTREE-FIRST WORKFLOW (mandatory per feedback_worktree_first_workflow MEMORY):
-Main midas/ stays on master (currently e816fcc post-Phase-5-PARTIAL merge).
-Create a sibling worktree for the next chunk of work:
+Main midas/ stays on master (currently f45278e post-Phase-5-PARTIAL merge +
+post-merge handoff refresh). The pre-merge dc1-phase-5 branch + worktree have
+already been cleaned up. Create a fresh sibling worktree for the next chunk:
 
   cd "/c/Users/Yonatan Levin/Documents/Programming/Projects/FinTech/Strade/midas"
-  git worktree list                              # confirm main midas on master e816fcc
-  git worktree remove --force ../midas-dc1-phase-5    # optional cleanup of the merged worktree
-  git branch -d dc1-phase-5                            # optional cleanup of the merged branch
+  git worktree list                              # confirm only main midas on master
   git worktree add ../midas-dc1-phase-5-followup -b dc1-phase-5-followup master
   cd ../midas-dc1-phase-5-followup
 
@@ -229,3 +228,4 @@ bugs the inline self-review misses).
 | 2026-05-27 | Initial filing post Phase 4 merge to master (`ce94f70`). |
 | 2026-05-30 | REWRITTEN to reflect Phase 5 PARTIAL shipped on `dc1-phase-5` (tip `e6418e4`, 10 commits). Documents: (a) the 5 substantive commits (P5-C1 / P5-C2 / P5-C5-partial / P5-C3-scoped / closeout); (b) the 5 post-review fix commits (HIGH-1 + MEDIUM-2/3/4 + LOW-5..9 + 2 follow-up doc fixes) closing all 9 gpt-5.5 cross-model review findings; (c) the full `/execute` B-V-R-Q with VERIFIER/REVIEWER/QA subagents + gpt-5.5 Q-pass on the fixes; (d) the DEFERRED chunks (P5-C3-full + P5-C4 + DDM IBD flip + DC-1 close docs + tracker archive + replay verification) with the ARCH Percentage decision as the blocker before next-session BACKEND dispatch. |
 | 2026-05-31 | POST-MERGE REFRESH. Phase 5 PARTIAL merged to master as `e816fcc` (no-ff merge of the 14-commit `dc1-phase-5` ladder). TL;DR + status updated to reflect post-merge state. Bootstrap prompt expanded to: (a) instruct fresh-worktree creation from new master (`../midas-dc1-phase-5-followup/`); (b) reference the new `dc1-phase-5-followup` branch name; (c) cite docs/FEEDBACK-LOG.md 2026-05-30 entry as MANDATORY pattern for /execute B-V-R-Q subagent dispatch; (d) full task ladder for the 5 deferred chunks + ARCH decision blocker; (e) load-bearing invariants list. Operator workflow: ARCH decision note first → BACKEND P5-C3-full + P5-C4 with full B-V-R-Q + gpt-5.5 Q-pass per FEEDBACK-LOG rule. |
+| 2026-05-31 | Post-merge cleanup: removed worktree `../midas-dc1-phase-5/` + deleted merged branch `dc1-phase-5` (safe `-d`, both confirmed fully merged into master `e816fcc`). Bootstrap prompt updated to drop the now-stale "optional cleanup" steps. Master at `f45278e` (handoff refresh) + cleanup tip filed in this same change-log entry. |
