@@ -1,14 +1,15 @@
-# DC-1 Phase 5 — Next-Session Handoff (REFRESHED 2026-05-30)
+# DC-1 Phase 5 — Next-Session Handoff (REFRESHED 2026-05-31, POST-MERGE)
 
-**Status:** Phase 5 PARTIAL on branch `dc1-phase-5` (10 commits; NOT yet merged to master). Awaiting HUMAN merge decision OR a follow-up session to complete the deferred chunks (P5-C3-full + P5-C4 + DC-1 tracker archive + replay verification).
-**Branch tip:** `e6418e4`. Master `b0239ed` (the `dc1-phase-5-prep` spec/plan/handoff merge).
-**Worktree path:** `C:/Users/Yonatan Levin/Documents/Programming/Projects/FinTech/Strade/midas-dc1-phase-5/`.
+**Status:** Phase 5 PARTIAL **MERGED TO MASTER** as merge commit `e816fcc` (2026-05-31). The 14-commit `dc1-phase-5` branch ladder is now on master. Next session picks up the still-deferred chunks (P5-C3-full + P5-C4 + DC-1 tracker archive + replay verification) on a FRESH branch from the new master.
+**Master tip:** `e816fcc` (merge commit) on top of the 14-commit `dc1-phase-5` ladder. The pre-merge branch `dc1-phase-5` is now merged + can be safely deleted; the worktree at `../midas-dc1-phase-5/` is functionally equivalent to the new master and can be cleaned up.
 
 ---
 
 ## TL;DR for the next session
 
-DC-1 Phase 5 SHIPPED PARTIAL on `dc1-phase-5`. Two highest-risk commits (DDM EV-bridge DebtLikeClaims correction + DDM consumer migration to `Restated()` view) are done with the cross-Tier-2 `TestDDM_LegacyPath_BitForBit` invariant preserved. Orchestrator firing-signal migrated to a `nativeFired` helper (HIGH-1 bug from initial scoped ship found by gpt-5.5 and fixed). `cleaneddata.Raw()` deleted. **Full `/execute` B-V-R-Q with subagents** ran on the post-review fix commits — all four roles (VERIFIER + REVIEWER + QA + gpt-5.5 Q-pass) returned clean verdicts.
+DC-1 Phase 5 PARTIAL is **merged to master** as `e816fcc`. Two highest-risk commits (DDM EV-bridge DebtLikeClaims correction + DDM consumer migration to `Restated()` view) shipped with the cross-Tier-2 `TestDDM_LegacyPath_BitForBit` invariant preserved. Orchestrator firing-signal migrated to a `nativeFired` helper (HIGH-1 bug from the initial scoped ship caught by gpt-5.5 cross-model review and fixed). `cleaneddata.Raw()` deleted. **Full `/execute` B-V-R-Q with subagents** ran on the post-review fix commits — VERIFIER + REVIEWER + QA + gpt-5.5 Q-pass all returned clean verdicts. Docs swept across CLAUDE.md / AGENTS / THESIS / parent spec / impl plan / closeout / tracker / TESTING.md / FEEDBACK-LOG.
+
+**Next session's work** picks up the 5 deferred chunks — see §"DEFERRED to a future session" below. The ARCH `Adjustment.Percentage` decision is the BLOCKER before next-session BACKEND dispatch.
 
 **What's left for THIS branch to become DC-1 close:**
 1. **P5-C3-full Adjustments-projection** — needs ARCH decision on `Adjustment.Percentage` handling BEFORE BACKEND can build the projection.
@@ -100,31 +101,110 @@ Once ARCH decides Percentage handling:
 
 ## Bootstrap prompt for the next session
 
-````
-I'm continuing DC-1 Phase 5 follow-up work after a partial ship + post-review fix cycle on branch `dc1-phase-5` (tip e6418e4).
+Copy-paste this into a fresh session:
 
-WORKTREE: continue inside ../midas-dc1-phase-5/ (already exists; main midas stays
-on master). Confirm before EVERY commit:
-  git rev-parse --abbrev-ref HEAD                # dc1-phase-5
-  git worktree list                              # main midas on master + dc1-phase-5
+````
+I'm continuing DC-1 Phase 5 follow-up work AFTER the Phase 5 PARTIAL merge to master (merge commit e816fcc, 2026-05-31). The remaining deferred chunks (P5-C3-full Adjustments-projection + P5-C4 translator/struct deletion + DC-1 tracker archive + replay verification) are next-session scope.
+
+WORKTREE-FIRST WORKFLOW (mandatory per feedback_worktree_first_workflow MEMORY):
+Main midas/ stays on master (currently e816fcc post-Phase-5-PARTIAL merge).
+Create a sibling worktree for the next chunk of work:
+
+  cd "/c/Users/Yonatan Levin/Documents/Programming/Projects/FinTech/Strade/midas"
+  git worktree list                              # confirm main midas on master e816fcc
+  git worktree remove --force ../midas-dc1-phase-5    # optional cleanup of the merged worktree
+  git branch -d dc1-phase-5                            # optional cleanup of the merged branch
+  git worktree add ../midas-dc1-phase-5-followup -b dc1-phase-5-followup master
+  cd ../midas-dc1-phase-5-followup
+
+All subsequent commits MUST run inside ../midas-dc1-phase-5-followup/.
+Confirm before EVERY git commit:
+  git rev-parse --abbrev-ref HEAD                # dc1-phase-5-followup
+  git worktree list                              # main midas on master + followup worktree
 
 STATUS:
-- Phase 5 PARTIAL is shipped (10 commits; all 9 prior-review findings closed;
-  load-bearing DDM bit-for-bit invariant preserved; full suite EXIT=0).
-- Remaining work: P5-C3-full Adjustments-projection + P5-C4 translator/struct
-  deletion + DC-1 close docs sweep + tracker archive. Estimated 4-7 agent-hours.
+- Phase 5 PARTIAL merged to master 2026-05-31 as e816fcc (14 commits: 10
+  substantive Phase 5 + 4 docs sweep).
+- All 9 prior gpt-5.5 cross-model review findings closed.
+- Full /execute B-V-R-Q with VERIFIER/REVIEWER/QA subagents + gpt-5.5 Q-pass
+  validated the fixes.
+- Load-bearing DDM bit-for-bit invariant preserved at every commit.
+- Full go test ./... -count=1 EXIT=0 on master.
+- Remaining work: 5 deferred chunks; estimated 4-7 agent-hours.
 
 READ FIRST (in order):
 1. docs/refactoring/implementations/dc1-phase-5-next-session-handoff.md (THIS doc)
-2. docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-5-closeout.md §6 (DEFERRED work + recommended next-session task ladder)
+2. docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-5-closeout.md §6 (DEFERRED work + recommended task ladder)
 3. docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-5-spec.md §3.4 (translator retirement design)
-4. CLAUDE.md DC-1 Phase 5 PARTIAL bullet
+4. CLAUDE.md DC-1 Phase 5 PARTIAL bullet (post-merge state documented)
+5. docs/FEEDBACK-LOG.md 2026-05-30 entry on /execute B-V-R-Q subagent dispatch (MANDATORY pattern for this work)
 
 BLOCKER BEFORE BACKEND DISPATCH:
-ARCH decision on Adjustment.Percentage handling — path (a) preserve via
-LedgerEntry.SkipMetrics["original_X"] (modifies 5 Restater adjusters; closeout
-§6.1 recommends this) OR path (b) accept Percentage=0 (lossy projection; needs
-explicit ARCH approval for the API-contract reduction). Pick before dispatching.
+ARCH must produce a small decision note on Adjustment.Percentage handling:
+  (a) preserve via LedgerEntry.SkipMetrics["original_X"] — modifies ~5
+      Restater adjusters (A2 originalIntangibles, A4 originalDTA, A5
+      originalInventory, plus C1/C2 if they carry pre-state). Preserves
+      Percentage byte-for-byte in the projected entities.Adjustment.
+      Closeout §6.1 recommends this path.
+  (b) accept Percentage=0 in the projection — lossy. Silent API-contract
+      reduction on the public ValuationResult.CleaningAdjustments JSON
+      field. Needs explicit ARCH approval for the API-contract impact.
+Pick (a) or (b) before BACKEND dispatch. WITHOUT this decision, BACKEND
+cannot build the per-AdjusterID metadata table for adjustmentsFromLedger.
+
+DEFERRED CHUNKS (next-session task ladder):
+1. P5-C3-full Adjustments-projection — build adjustmentsFromLedger(ledger,
+   overlays, perRuleMeta) []entities.Adjustment with 16-entry metadata
+   table. Basket-parity golden test (10-ticker basket; assert byte-
+   identical Adjustments content excl. ID/Timestamp). Replace orchestrator
+   XResult.Adjustments reads with the new helper.
+2. P5-C4 translator + struct + dormant-fallback deletion — gated on (1).
+   Delete 16 *AdjusterOutputToLegacyResult translators + 3 category
+   *AdjustmentResult structs + dormant earnings.go legacy-fallback
+   helpers + dead entities.{Asset,Liability}AdjustmentResult duplicates.
+   Re-point ~20 adjustments/*_test.go assertions to the slim native carrier.
+3. DDM modelIBD view flip — trivial; bit-for-bit safe per spec §3.2 NOTE.
+   Optional sequencing: ride with P5-C3 or P5-C4.
+4. DC-1 close docs sweep — gated on (2). Archive
+   docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md
+   to docs/reviewer/archive/; retire CLAUDE.md "translator-still-load-
+   bearing" gotcha; flip AGENTS row 17b + THESIS row 42 from "in flight"
+   to "COMPLETE"; update CLAUDE.md DC-1 Phase 5 bullet from PARTIAL to
+   SHIPPED with final commit ladder.
+5. Replay verification + fresh CalcVersion-4.4 baseline capture —
+   operator follow-up. Existing artifacts/tier2-baseline/2026-05-19/ is
+   calc_version 4.1, drift confounded across phases.
+
+LOAD-BEARING INVARIANTS (must stay GREEN at every commit):
+- TestDDM_LegacyPath_BitForBit (JPM/BAC/WFC math.Float64bits) — REVERT,
+  never update goldens, if this fails (CLAUDE.md DDM gotcha).
+- TestDDM_ConsumerPath_RestatedViewParity (renamed superset pin)
+- TestApplyActiveAdjustments_FiringSignalParity_* (incl. the new
+  A1ApplicableButSkipped regression pin)
+- TestRecomputeUmbrellas_NoMutation, TestOrchestrator_LedgerOrdering
+- TestLedger_BasketSnapshot_ClusterPrediction (10/10) +
+  T2BS3_RestatedReconstruction (AMD $9.679B / KO $60.912B)
+- TestCleanFinancialDataWithViews_Restated_NoDoubleCount_OnRestaterFire +
+  _OnEarningsFire
+- Shadow snapshots byte-identical (git diff --quiet
+  internal/integration/testdata/recompute-shadow/ exits 0)
+- Full go test ./... -count=1 EXIT=0
+
+MANDATORY for this work (per docs/FEEDBACK-LOG.md 2026-05-30 entry):
+- /execute Phase 2 B-V-R-Q dispatches VERIFIER + REVIEWER + QA subagents
+  via the Agent tool in parallel (3 calls in a single message — independent).
+  Do NOT roll into inline self-validation.
+- After subagent cycle returns: run mcp__zen-mcp__codereview with gpt-5.5
+  as the Q step (external validation, two-step workflow).
+- If subagents/Q surface NITs, address in follow-up commits BEFORE HUMAN
+  handoff — the prior Phase 5 partial cycle showed Q catches what inline
+  misses.
+
+When ready, dispatch the ARCH role first to produce the Adjustment.Percentage
+decision note (small spec addendum under docs/refactoring/spec/), then dispatch
+BACKEND for P5-C3-full + P5-C4 with full B-V-R-Q + gpt-5.5 Q-pass per the rule
+above.
+````
 
 LOAD-BEARING INVARIANTS (GREEN at every commit):
 - TestDDM_LegacyPath_BitForBit, TestDDM_ConsumerPath_RestatedViewParity
@@ -148,3 +228,4 @@ bugs the inline self-review misses).
 |---|---|
 | 2026-05-27 | Initial filing post Phase 4 merge to master (`ce94f70`). |
 | 2026-05-30 | REWRITTEN to reflect Phase 5 PARTIAL shipped on `dc1-phase-5` (tip `e6418e4`, 10 commits). Documents: (a) the 5 substantive commits (P5-C1 / P5-C2 / P5-C5-partial / P5-C3-scoped / closeout); (b) the 5 post-review fix commits (HIGH-1 + MEDIUM-2/3/4 + LOW-5..9 + 2 follow-up doc fixes) closing all 9 gpt-5.5 cross-model review findings; (c) the full `/execute` B-V-R-Q with VERIFIER/REVIEWER/QA subagents + gpt-5.5 Q-pass on the fixes; (d) the DEFERRED chunks (P5-C3-full + P5-C4 + DDM IBD flip + DC-1 close docs + tracker archive + replay verification) with the ARCH Percentage decision as the blocker before next-session BACKEND dispatch. |
+| 2026-05-31 | POST-MERGE REFRESH. Phase 5 PARTIAL merged to master as `e816fcc` (no-ff merge of the 14-commit `dc1-phase-5` ladder). TL;DR + status updated to reflect post-merge state. Bootstrap prompt expanded to: (a) instruct fresh-worktree creation from new master (`../midas-dc1-phase-5-followup/`); (b) reference the new `dc1-phase-5-followup` branch name; (c) cite docs/FEEDBACK-LOG.md 2026-05-30 entry as MANDATORY pattern for /execute B-V-R-Q subagent dispatch; (d) full task ladder for the 5 deferred chunks + ARCH decision blocker; (e) load-bearing invariants list. Operator workflow: ARCH decision note first → BACKEND P5-C3-full + P5-C4 with full B-V-R-Q + gpt-5.5 Q-pass per FEEDBACK-LOG rule. |
