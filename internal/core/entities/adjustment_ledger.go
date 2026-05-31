@@ -37,7 +37,13 @@ type LedgerEntry struct {
 	EquityOffset float64 `json:"equity_offset,omitempty"`
 	TaxShieldDTA float64 `json:"tax_shield_dta,omitempty"`
 
-	// Populated when Fired=false.
+	// Populated when Fired=false (diagnostic "why did this rule skip?")
+	// or, since DC-1 P5-followup, when Fired=true to carry pre-state
+	// scalars consumed by the LedgerEntry → Adjustment projection (see
+	// internal/services/datacleaner/adjustment_projection.go). The
+	// "original_<Field>" key convention (e.g. "original_Revenue",
+	// "original_OtherIntangibles") names the canonical entity field
+	// snapshotted at the adjuster's Apply* entry.
 	SkipReason  string             `json:"skip_reason,omitempty"`
 	SkipMetrics map[string]float64 `json:"skip_metrics,omitempty"`
 

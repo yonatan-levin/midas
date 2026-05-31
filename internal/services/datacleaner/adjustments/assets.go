@@ -520,6 +520,12 @@ func (aa *AssetAdjuster) ApplyA2Intangible(ctx context.Context, working *entitie
 			DeltaAmount:  -writedownAmount,
 			EquityOffset: -writedownAmount,
 			TaxShieldDTA: taxShieldDTA,
+			// DC-1 P5-followup §4.2: capture pre-state OtherIntangibles
+			// so the LedgerEntry → Adjustment projection (P5-C3-full /
+			// A4 below) can recompute Percentage = writedown / original
+			// × 100 without dispatcher-side capture. Replaces the legacy
+			// `originalIntangibles` thread into c2AdjusterOutputToLegacyResult.
+			SkipMetrics: map[string]float64{"original_OtherIntangibles": originalIntangibles},
 		}},
 	}
 

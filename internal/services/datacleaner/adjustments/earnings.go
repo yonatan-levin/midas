@@ -376,6 +376,12 @@ func (ea *EarningsAdjuster) ApplyC2AssetSaleGains(ctx context.Context, working *
 			DeltaAmount:  -gains,
 			EquityOffset: -gains,
 			TaxShieldDTA: 0, // Q2 deferral (plan §10): C2 does not compute tax shield in Phase 2.
+			// DC-1 P5-followup §4.2: capture pre-state Revenue so the
+			// LedgerEntry → Adjustment projection (P5-C3-full / A4
+			// below) can recompute Percentage = gains / originalRevenue
+			// × 100 without dispatcher-side capture. Same convention
+			// as A2/C3/C4/C5/C6.
+			SkipMetrics: map[string]float64{"original_Revenue": working.Revenue},
 		}},
 	}, nil
 }
@@ -544,6 +550,9 @@ func (ea *EarningsAdjuster) ApplyC3Litigation(ctx context.Context, working *enti
 			DeltaAmount:  settlements,
 			EquityOffset: settlements,
 			TaxShieldDTA: 0, // Q2 deferral (plan §10).
+			// DC-1 P5-followup §4.2: capture pre-state Revenue for the
+			// LedgerEntry → Adjustment projection (P5-C3-full / A4).
+			SkipMetrics: map[string]float64{"original_Revenue": working.Revenue},
 		}},
 	}, nil
 }
@@ -697,6 +706,9 @@ func (ea *EarningsAdjuster) ApplyC5DerivativeGainsLosses(ctx context.Context, wo
 			DeltaAmount:  -rawAmount,
 			EquityOffset: -rawAmount,
 			TaxShieldDTA: 0, // Q2 deferral (plan §10).
+			// DC-1 P5-followup §4.2: capture pre-state Revenue for the
+			// LedgerEntry → Adjustment projection (P5-C3-full / A4).
+			SkipMetrics: map[string]float64{"original_Revenue": working.Revenue},
 		}},
 	}, nil
 }
@@ -854,6 +866,9 @@ func (ea *EarningsAdjuster) ApplyC6CapitalizedInterest(ctx context.Context, work
 			DeltaAmount:  capInterest,       // POSITIVE — add back to interest expense.
 			EquityOffset: 0,                 // LOAD-BEARING: reclassification between IS lines, NOT an equity-flowing event.
 			TaxShieldDTA: 0,                 // Q2 deferral (plan §10).
+			// DC-1 P5-followup §4.2: capture pre-state Revenue for the
+			// LedgerEntry → Adjustment projection (P5-C3-full / A4).
+			SkipMetrics: map[string]float64{"original_Revenue": working.Revenue},
 		}},
 	}, nil
 }
@@ -1026,8 +1041,9 @@ func (ea *EarningsAdjuster) ApplyC4StockCompensation(ctx context.Context, workin
 			Reasoning:  fmt.Sprintf("Stock-based compensation adjustment: Reclassified $%.1fM (%.1f%% of revenue) for dilution analysis", sbcAmount/1000000, sbcRatio*100),
 			SkipReason: "flag-only review; no balance-sheet adjustment",
 			SkipMetrics: map[string]float64{
-				"sbc_amount": sbcAmount,
-				"sbc_ratio":  sbcRatio,
+				"sbc_amount":       sbcAmount,
+				"sbc_ratio":        sbcRatio,
+				"original_Revenue": working.Revenue, // P5-followup §4.2 — pre-state for projection.
 			},
 		}},
 	}
