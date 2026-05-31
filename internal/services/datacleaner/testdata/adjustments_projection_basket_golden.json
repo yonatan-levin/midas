@@ -1,0 +1,208 @@
+{
+  "FIRES_ALL_C_RULES": [
+    {
+      "rule_id": "asset_sale_gains",
+      "category": "earnings_normalization",
+      "type": "exclude",
+      "amount": 30000000,
+      "from_account": "AssetSaleGains",
+      "to_account": "NormalizedOperatingIncome",
+      "percentage": 1.5,
+      "reasoning": "Excluded asset sale gains of $30.0M from operating income",
+      "applied": true
+    },
+    {
+      "rule_id": "capitalized_interest",
+      "category": "earnings_normalization",
+      "type": "reclassify",
+      "amount": 16000000,
+      "from_account": "CapitalizedInterest",
+      "to_account": "InterestExpense",
+      "percentage": 0.8,
+      "reasoning": "Reclassified capitalized interest of $16.0M to interest expense",
+      "applied": true
+    },
+    {
+      "rule_id": "derivative_gains_losses",
+      "category": "earnings_normalization",
+      "type": "exclude",
+      "amount": 25000000,
+      "from_account": "DerivativeGainsLosses",
+      "to_account": "NormalizedOperatingIncome",
+      "percentage": 1.25,
+      "reasoning": "Excluded derivative gains/losses of $25.0M from operating income",
+      "applied": true
+    },
+    {
+      "rule_id": "litigation_settlements",
+      "category": "earnings_normalization",
+      "type": "exclude",
+      "amount": 40000000,
+      "from_account": "LitigationSettlements",
+      "to_account": "NormalizedOperatingIncome",
+      "percentage": 2,
+      "reasoning": "Excluded litigation settlements of $40.0M (2.0% of revenue)",
+      "applied": true
+    },
+    {
+      "rule_id": "restructuring_charges",
+      "category": "earnings_normalization",
+      "type": "exclude",
+      "amount": 100000000,
+      "from_account": "RestructuringCharges",
+      "to_account": "NormalizedOperatingIncome",
+      "reasoning": "Restructuring charges adjustment: Excluded $100.0M (5.0% of revenue) from normalized operating income",
+      "applied": true
+    },
+    {
+      "rule_id": "stock_compensation",
+      "category": "earnings_normalization",
+      "type": "reclassify",
+      "amount": 80000000,
+      "from_account": "StockBasedCompensation",
+      "to_account": "OperatingExpenses",
+      "percentage": 4,
+      "reasoning": "Reclassified stock-based compensation of $80.0M for dilution analysis",
+      "applied": true
+    }
+  ],
+  "HEAVY_INTANGIBLES": [
+    {
+      "rule_id": "asset_sale_gains",
+      "category": "earnings_normalization",
+      "type": "exclude",
+      "amount": 15000000,
+      "from_account": "AssetSaleGains",
+      "to_account": "NormalizedOperatingIncome",
+      "percentage": 1.5,
+      "reasoning": "Excluded asset sale gains of $15.0M from operating income",
+      "applied": true
+    },
+    {
+      "rule_id": "capitalized_interest",
+      "category": "earnings_normalization",
+      "type": "reclassify",
+      "amount": 8000000,
+      "from_account": "CapitalizedInterest",
+      "to_account": "InterestExpense",
+      "percentage": 0.8,
+      "reasoning": "Reclassified capitalized interest of $8.0M to interest expense",
+      "applied": true
+    },
+    {
+      "rule_id": "contingent_liabilities",
+      "category": "liability_completeness",
+      "type": "probability_weighted",
+      "amount": 21000000,
+      "from_account": "ContingentLiabilities",
+      "to_account": "EstimatedLiabilities",
+      "reasoning": "contingent_liabilities: Conservative applied 70% probability weighting to contingent liabilities (3.0% of revenue) per B3 rule",
+      "applied": true
+    },
+    {
+      "rule_id": "derivative_gains_losses",
+      "category": "earnings_normalization",
+      "type": "exclude",
+      "amount": 12000000,
+      "from_account": "DerivativeGainsLosses",
+      "to_account": "NormalizedOperatingIncome",
+      "percentage": 1.2,
+      "reasoning": "Excluded derivative gains/losses of $12.0M from operating income",
+      "applied": true
+    },
+    {
+      "rule_id": "goodwill_exclusion",
+      "category": "asset_quality",
+      "type": "exclude",
+      "amount": 500000000,
+      "from_account": "Goodwill",
+      "reasoning": "goodwill_exclusion: Excluded 500000000 goodwill (25.0% of assets) per A1 rule",
+      "applied": true
+    },
+    {
+      "rule_id": "intangible_adjustment",
+      "category": "asset_quality",
+      "type": "writedown",
+      "amount": 266666666.6666667,
+      "from_account": "IntangibleAssets",
+      "to_account": "IntangibleWritedown",
+      "percentage": 66.66666666666667,
+      "reasoning": "intangible_writedown: Applied 67% writedown to indefinite-lived intangibles (20.0% of assets) per A2 rule",
+      "applied": true
+    },
+    {
+      "rule_id": "litigation_settlements",
+      "category": "earnings_normalization",
+      "type": "exclude",
+      "amount": 20000000,
+      "from_account": "LitigationSettlements",
+      "to_account": "NormalizedOperatingIncome",
+      "percentage": 2,
+      "reasoning": "Excluded litigation settlements of $20.0M (2.0% of revenue)",
+      "applied": true
+    },
+    {
+      "rule_id": "obsolete_inventory",
+      "category": "asset_quality",
+      "type": "writedown",
+      "amount": 280000000,
+      "from_account": "Inventory",
+      "to_account": "InventoryWritedown",
+      "percentage": 40,
+      "reasoning": "inventory_writedown: Applied 40% writedown to obsolete inventory per A5 rule",
+      "applied": true
+    },
+    {
+      "rule_id": "operating_leases",
+      "category": "liability_completeness",
+      "type": "treat_as_debt",
+      "amount": 50000000,
+      "from_account": "OperatingLeaseCommitments",
+      "to_account": "InterestBearingDebt",
+      "reasoning": "operating_lease_adj: Present value of operating lease commitments (2.5% of assets) calculated using simplified_liability_based method with 5.7% discount rate over 10 years",
+      "applied": true
+    },
+    {
+      "rule_id": "restructuring_charges",
+      "category": "earnings_normalization",
+      "type": "exclude",
+      "amount": 30000000,
+      "from_account": "RestructuringCharges",
+      "to_account": "NormalizedOperatingIncome",
+      "reasoning": "Restructuring charges adjustment: Excluded $30.0M (3.0% of revenue) from normalized operating income",
+      "applied": true
+    },
+    {
+      "rule_id": "stock_compensation",
+      "category": "earnings_normalization",
+      "type": "reclassify",
+      "amount": 40000000,
+      "from_account": "StockBasedCompensation",
+      "to_account": "OperatingExpenses",
+      "percentage": 4,
+      "reasoning": "Reclassified stock-based compensation of $40.0M for dilution analysis",
+      "applied": true
+    }
+  ],
+  "MINIMAL_SKIPS": [
+    {
+      "rule_id": "goodwill_exclusion",
+      "category": "asset_quality",
+      "type": "exclude",
+      "amount": 200000000,
+      "from_account": "Goodwill",
+      "reasoning": "goodwill_exclusion: Excluded 200000000 goodwill (20.0% of assets) per A1 rule",
+      "applied": true
+    },
+    {
+      "rule_id": "operating_leases",
+      "category": "liability_completeness",
+      "type": "treat_as_debt",
+      "amount": 10000000,
+      "from_account": "OperatingLeaseCommitments",
+      "to_account": "InterestBearingDebt",
+      "reasoning": "operating_lease_adj: Present value of operating lease commitments (1.0% of assets) calculated using simplified_liability_based method with 4.2% discount rate over 10 years",
+      "applied": true
+    }
+  ]
+}
