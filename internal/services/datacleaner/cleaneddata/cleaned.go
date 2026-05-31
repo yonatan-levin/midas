@@ -29,15 +29,31 @@ import "github.com/midas/dcf-valuation-api/internal/core/entities"
 // yet. The accessor surface exists so Phase 4 can migrate one consumer at
 // a time without further entity-shape changes.
 //
-// GOROUTINE-SAFETY: NOT goroutine-safe. The accessor methods (AsReported,
-// Restated, InvestedCapital) lazily populate cached *FinancialDataView
-// pointers without locking. Do NOT share a single *CleanedFinancialData
-// across goroutines without external synchronization. Phase 3 / Phase 4
-// consumers all run on a single request goroutine, which is sufficient
-// for current use cases; a future parallel-read consumer (e.g., a batch
-// valuation endpoint) would need a sync.Once retrofit on the three
-// accessor methods. Tracked as a Phase 5 watch item — see
-// docs/refactoring/archive/dc1-phase-3-followup-spec.md §4.6.
+// GOROUTINE-SAFETY (hard contract — formalized in DC-1 Phase 5 P5-C5):
+//
+// A *CleanedFinancialData is REQUEST-LOCAL and READ-ONLY-via-views. Do NOT
+// share a single instance across goroutines. The three accessor methods
+// (AsReported, Restated, InvestedCapital) lazily populate cached
+// *FinancialDataView pointers without locking; concurrent calls from
+// multiple goroutines on the same *CleanedFinancialData would race on
+// these caches.
+//
+// Why no sync.Once retrofit (Phase 5 spec §3.6): every current consumer
+// runs on a single request goroutine. Adding sync.Once to the accessors
+// would only make INITIALIZATION race-free — the accessors return a
+// shared mutable *FinancialDataView pointer, so a sync.Once does not
+// prevent a future caller from reading inconsistent state if they
+// mutated the returned view. The real contract that must hold is
+// "callers treat the returned view as read-only and do not share a
+// *CleanedFinancialData across goroutines." This contract is documented
+// here and at every accessor.
+//
+// If/when a parallel-read batch consumer lands (e.g., a batch valuation
+// endpoint with fan-out across multiple tickers), that consumer is
+// responsible for either: (a) constructing a SEPARATE
+// *CleanedFinancialData per goroutine, OR (b) retrofitting sync.Once on
+// the accessors AND adding immutability enforcement on the returned
+// views. Choose (a) unless a benchmark demonstrates (b) is necessary.
 //
 // Neither input *FinancialData is mutated by accessor calls. View
 // construction copies values into new FinancialDataView records.
@@ -74,23 +90,4 @@ func New(asReported, restated *entities.FinancialData) *CleanedFinancialData {
 		asReportedSnapshot: asReported,
 		restated:           restated,
 	}
-}
-
-// Raw returns the underlying post-clean *entities.FinancialData. Intended
-// for the migration window only — Phase 4 consumers will read views
-// directly. Returning the entity rather than a copy keeps the migration
-// cheap; callers MUST treat it as read-only.
-//
-// TODO(phase-5): delete after Phase 4 consumer migration completes. The
-// "read-only" contract is documented but not enforced; once all 13
-// data.* read sites in internal/services/valuation/ flip to view-based
-// reads, this escape hatch has no callers and should be removed. See
-// docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md
-// (Phase 5 row in "Phasing & implementation sequence") for the planned
-// removal.
-func (c *CleanedFinancialData) Raw() *entities.FinancialData {
-	if c == nil {
-		return nil
-	}
-	return c.restated
 }

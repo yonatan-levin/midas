@@ -494,10 +494,10 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 				s.log(ctx).Info("Data cleaning applied successfully",
 					zap.String("ticker", ticker),
 					zap.Float64("quality_score", cleaningResult.QualityScore))
-				// Update historical data with cleaned data. The legacy slot
-				// stays populated for the DDM consumer's GetLatestPeriod()
-				// read path (DDM migration deferred to Phase 5 per spec §7).
-				historicalData.Data[latestPeriod] = cleaningResult.CleanedData
+				// Slot stays populated post-DC-1-Phase-5 — see
+				// keepLatestCleanedSlot godoc for the verify-then-decide
+				// rationale (six remaining GetLatestPeriod() consumers).
+				keepLatestCleanedSlot(historicalData, latestPeriod, cleaningResult.CleanedData)
 			}
 		}
 	} else {
@@ -1320,7 +1320,7 @@ func (s *Service) performValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     "multi_stage_dcf",
-		CalculationVersion:    "4.3", // DC-1 Phase 4: B3 routing flip + B1/B2 reroute + A1 overlay → consumer-visible drift
+		CalculationVersion:    "4.4", // DC-1 Phase 5 (P5-C1): DDM EV-bridge DebtLikeClaims correction (+B-rule overlays for DDM EnterpriseValue). DCF/revenue_multiple/FFO numerics unaffected; only DDM EnterpriseValue drifts for B-rule-firing banks.
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -1522,30 +1522,44 @@ func (s *Service) performAlternativeValuation(
 	// (RM-1.A: RevenueMultipleModel's staleness check). Replay binds
 	// the Clock to manifest.started_at, so the staleness threshold is
 	// evaluated deterministically against captured bundle time.
-	// DC-1 Phase 4 (C-3, §4.2.13): revenue_multiple + ffo read the Restated
-	// InterestBearingDebt for their EV→Equity bridges. DDM EXPLICITLY keeps the
-	// legacy latestFinancialData read to preserve the JPM/BAC/WFC bit-for-bit
-	// invariant (§7 / §9) — DDM consumer migration is deferred to Phase 5.
-	// Branch on the model type. InterestBearingDebt is not Restater-touched
-	// today (Restated().InterestBearingDebt == entity value), so
-	// revenue_multiple/ffo see zero numeric drift now; the migration is for
-	// coherence + forward-compatibility. CashAndCashEquivalents is NOT a
-	// FinancialDataView field (never Restater-touched) and stays on the entity
-	// read for every model.
+	//
+	// DC-1 Phase 4 (C-3, §4.2.13): revenue_multiple + ffo read the
+	// Restated InterestBearingDebt for their EV→Equity bridges.
+	// DC-1 Phase 5 (P5-C1, P5-C2): DDM's eligible SE/NI/DPS reads now
+	// consume input.LatestRestatedView via the migrated runDividendDiagnostics
+	// / estimateDividendGrowth helpers (see ddm.go::calculateLegacyGordon
+	// godoc for the bit-for-bit safety argument). DDM's modelIBD,
+	// however, STILL reads latestFinancialData.InterestBearingDebt
+	// rather than the Restated view — keeping the bit-for-bit surface
+	// minimal in the P5-C1 EV-correction commit. Flipping DDM's IBD
+	// read to the Restated view is bit-for-bit safe (IBD is not
+	// Restater-touched today; Restated().InterestBearingDebt == entity
+	// value) but is deferred to a future tidy-up; the branch below
+	// captures the current state.
+	//
+	// CashAndCashEquivalents is NOT a FinancialDataView field (never
+	// Restater-touched) and stays on the entity read for every model.
 	modelIBD := latestFinancialData.InterestBearingDebt
 	modelCash := latestFinancialData.CashAndCashEquivalents
 	// modelDebtLikeClaims carries the B1 (lease) + B2 (pension) + B3 (contingent)
-	// overlay amounts that the EV→Equity bridge must subtract for non-DDM models.
-	// revenue_multiple subtracts it; FFO does NOT consume it (FFO's equity is
-	// derived directly from the P/FFO multiple — InterestBearingDebt only
-	// back-derives the reported EV — so subtracting DebtLikeClaims there would
-	// risk double-counting the REIT's lease-bearing cash flows). DDM keeps 0 to
-	// preserve the JPM/BAC/WFC bit-for-bit invariant (and never reads it anyway).
-	modelDebtLikeClaims := 0.0
+	// overlay amounts that the EV↔Equity bridge respects per model:
+	//   - DCF / revenue_multiple SUBTRACT it (they derive equity FROM EV).
+	//   - DDM ADDS it (it derives equity FIRST, then EV = equity + debt + claims − cash).
+	//   - FFO does NOT consume it — FFO's equity is derived directly from the
+	//     P/FFO multiple (InterestBearingDebt only back-derives the reported EV),
+	//     so subtracting claims there would risk double-counting the REIT's
+	//     lease-bearing cash flows.
+	// DC-1 Phase 5 (P5-C1): DDM now receives DebtLikeClaims from
+	// InvestedCapital().DebtLikeClaims — the EV-bridge correction (spec §3.2)
+	// closing the DDM analog of the Phase 4 revenue_multiple finding. The
+	// JPM/BAC/WFC bit-for-bit invariant is preserved because those fixtures
+	// fire no B-rules ⇒ DebtLikeClaims=0 ⇒ +0 term ⇒ EnterpriseValue bits
+	// unchanged. modelIBD stays on the legacy entity read for DDM until P5-C2
+	// migrates DDM's other reads (minimizes the bit-for-bit surface here).
+	modelDebtLikeClaims := investedCapitalOr(cleaned, latestFinancialData).DebtLikeClaims
 	if model.ModelType() != "ddm" {
 		mr := restatedViewOr(cleaned, latestFinancialData)
 		modelIBD = mr.InterestBearingDebt
-		modelDebtLikeClaims = investedCapitalOr(cleaned, latestFinancialData).DebtLikeClaims
 	}
 
 	modelInput := &models.ModelInput{
@@ -1561,15 +1575,15 @@ func (s *Service) performAlternativeValuation(
 		InterestBearingDebt:    modelIBD,
 		CashAndCashEquivalents: modelCash,
 		DebtLikeClaims:         modelDebtLikeClaims,
-		// DC-1 Phase 4 (C-3): Restated view of the latest period for the FFO
-		// NAV NOI proxy. nil for DDM (deferred) to avoid any non-legacy read.
-		LatestRestatedView: func() *cleaneddata.FinancialDataView {
-			if model.ModelType() == "ddm" {
-				return nil
-			}
-			return restatedViewOr(cleaned, latestFinancialData)
-		}(),
-		Now: s.clock.Now,
+		// DC-1 Phase 5 (P5-C2): Restated view of the latest period is now
+		// populated for ALL alt-models including DDM. Phase 4 nil-for-DDM
+		// branch removed — DDM's consumed fields (StockholdersEquity /
+		// NetIncome / DividendsPerShare) are carried (SE = identity +
+		// EquityOffset; NI / DPS identity-copied) in Restated(), so for
+		// the JPM/BAC/WFC bit-for-bit fixtures view.X == latest.X exactly
+		// (no Restater fires for the pinned banks). Spec §3.3 + §7.
+		LatestRestatedView: restatedViewOr(cleaned, latestFinancialData),
+		Now:                s.clock.Now,
 		// Tier 2 P0b: thread the resolved AssumptionProfile into ModelInput.
 		// P0b downstream consumers are nil-safe NO-OPs; P1/P3/P4 will read
 		// calibration values (horizon, caps, terminal method, payout path).
@@ -1632,7 +1646,7 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     modelResult.ModelType,
-		CalculationVersion:    "4.3", // DC-1 Phase 4: B3 routing flip + B1/B2 reroute + A1 overlay → consumer-visible drift
+		CalculationVersion:    "4.4", // DC-1 Phase 5 (P5-C1): DDM EV-bridge DebtLikeClaims correction (+B-rule overlays for DDM EnterpriseValue). DCF/revenue_multiple/FFO numerics unaffected; only DDM EnterpriseValue drifts for B-rule-firing banks.
 		Warnings:              modelResult.Warnings,
 	}
 
@@ -1770,6 +1784,27 @@ func effectiveOI(fd *cleaneddata.FinancialDataView) float64 {
 		return fd.NormalizedOperatingIncome
 	}
 	return fd.OperatingIncome
+}
+
+// keepLatestCleanedSlot writes the post-clean entity into the
+// HistoricalFinancialData latest-period slot. DC-1 Phase 5 P5-C5
+// verify-then-decide outcome (spec §3.7): the slot stays populated
+// because every alt-model (DDM, FFO, revenue_multiple) plus currency.go
+// + the datafetcher coordinator still read
+// input.HistoricalData.GetLatestPeriod() for nil-guards, DPS, FilingDate,
+// CashAndCashEquivalents, SharesOutstanding lookups, and other per-period
+// fields that the FinancialDataView surface does not include. The DDM
+// estimateDividendGrowth helper's GetRecentYears DPS-CAGR walk also
+// relies on the slot being the latest CLEANED period — stopping slot
+// population would silently revert these entity-side reads to the
+// PRE-CLEAN parser-stamped values, drifting any consumer that mixes
+// view + entity reads. The Phase-5 consumer migration moved view-eligible
+// fields (StockholdersEquity / NetIncome / DividendsPerShare) onto
+// input.LatestRestatedView but did NOT eliminate the entity read. Spec
+// §3.7 grep evidence: 6 non-test GetLatestPeriod() consumers across
+// internal/ — the recommended action is KEEP.
+func keepLatestCleanedSlot(historicalData *entities.HistoricalFinancialData, latestPeriod string, cleaned *entities.FinancialData) {
+	historicalData.Data[latestPeriod] = cleaned
 }
 
 // restatedViewOr returns cleaned.Restated() when cleaned is non-nil, otherwise

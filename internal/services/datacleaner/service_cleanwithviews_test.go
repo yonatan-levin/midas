@@ -10,19 +10,24 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
 )
 
-// TestCleanWithViews_ReturnsWrapper pins that the new Phase 3
-// CleanFinancialDataWithViews method:
+// TestCleanWithViews_ReturnsWrapper pins the CleanFinancialDataWithViews
+// contract:
 //
 //  1. returns a non-nil *CleaningResult whose CleanedData matches what
 //     CleanFinancialData would return for the same input;
-//  2. returns a non-nil *cleaneddata.CleanedFinancialData whose Raw()
-//     points at the same *FinancialData as result.CleanedData;
+//  2. returns a non-nil *cleaneddata.CleanedFinancialData whose accessors
+//     are functional;
 //  3. that calling AsReported() on the wrapper produces a view whose
 //     Ticker matches the underlying entity.
 //
-// The wrapper is a thin pass-through (Phase 3 contract) — no extra side
-// effects, no duplicated state. Phase 4 consumers grep for this method
-// to enumerate migration progress.
+// DC-1 Phase 5 (P5-C5): the historical "wrapper Raw() returns the same
+// pointer as result.CleanedData" assertion was DELETED alongside
+// cleaneddata.Raw() itself — Phase 4 closed the migration window by
+// migrating every internal/ consumer to view accessors (zero remaining
+// Raw() callers per `grep -rn '.Raw()' internal/`). Phase 5 deletes the
+// escape hatch entirely; the test now exercises the view-only surface
+// that survives DC-1 close. Phase 4 consumers grep for this method to
+// enumerate migration progress.
 func TestCleanWithViews_ReturnsWrapper(t *testing.T) {
 	cfg := createTestConfig()
 	ctx := context.Background()
@@ -40,12 +45,9 @@ func TestCleanWithViews_ReturnsWrapper(t *testing.T) {
 	assert.True(t, result.Success, "cleaning must succeed on the standard fixture")
 	require.NotNil(t, result.CleanedData)
 
-	// Wrapper holds the same *FinancialData pointer as result.CleanedData;
-	// Phase 4 consumers may rely on this for migration audits.
-	assert.Same(t, result.CleanedData, views.Raw(),
-		"wrapper Raw() must return the same *FinancialData held by result.CleanedData")
-
-	// Sanity: the view kind tag matches; the ticker round-trips.
+	// Sanity: the view kind tag matches; the ticker round-trips through
+	// the view-only surface (the Phase-3 pointer-identity check is no
+	// longer applicable post-Raw()-deletion).
 	view := views.AsReported()
 	require.NotNil(t, view)
 	assert.Equal(t, cleaneddata.AsReportedView, view.ViewKind)

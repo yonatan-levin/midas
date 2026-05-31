@@ -324,22 +324,25 @@ func TestPerformValuation_EquityBridgeSubtractsDebtLikeClaims(t *testing.T) {
 		"the new bridge differs from the legacy 5-arg bridge by exactly the contingent amount")
 }
 
-// TestCalculationVersion_IsV43 documents the DC-1 Phase 4 CalculationVersion
-// bump and its coverage. The LIVE stamp on both stamp sites is exercised by
-// real-pipeline tests in service_test.go:
-//   - DCF path: TestService_performValuation / _TrueFCF / _FINZeroDPSData
-//     (FIN→DDM-fail→DCF fallback) all assert result.CalculationVersion == "4.3".
-//   - Alt-model path: TestService_performValuation_NegativeOperatingIncome
-//     routes to revenue_multiple (performAlternativeValuation) and asserts
-//     result.CalculationVersion == "4.3".
+// DC-1 Phase 5 P5-C1 CalculationVersion 4.3 → 4.4 LIVE-stamp coverage:
+//   - DCF path: service_test.go::TestService_performValuation,
+//     ::TestService_performValuation_TrueFCF, and
+//     ::TestService_performValuation_FINZeroDPS_FallbackToDCF
+//     (FIN → DDM-fail → DCF fallback) all assert
+//     result.CalculationVersion == "4.4".
+//   - Alt-model path: service_test.go::TestService_performValuation_NegativeOperatingIncome
+//     routes to revenue_multiple (performAlternativeValuation) and
+//     asserts result.CalculationVersion == "4.4".
 //
-// This test fails loudly if a future edit reverts the constant the migration
-// targets, keeping the spec §8.3 #7 named gate present in the suite.
-func TestCalculationVersion_IsV43(t *testing.T) {
-	const phase4CalculationVersion = "4.3"
-	require.Equal(t, "4.3", phase4CalculationVersion,
-		"Phase 4 stamps CalculationVersion 4.3 on both DCF and alt-model paths (live-asserted in service_test.go)")
-}
+// The previous incarnation of this gate was a self-referential
+// TestCalculationVersion_IsV43/_IsV44 in this file; gpt-5.5 review
+// (P5 post-merge MEDIUM-3) flagged it as non-behavioral (it asserted
+// `require.Equal(t, "4.4", "4.4")` against a local constant — no
+// production code path was exercised). DELETED in favor of the four
+// live pins above, which DO exercise the stamp through performValuation /
+// performAlternativeValuation. Updating those four pins (and the two
+// inline service.go stamp comments at lines 1323 + 1635) is the canonical
+// way to track future CalculationVersion bumps.
 
 // TestCalculateTangibleValuePerShare_UsesView pins the DC-1 Phase 4 C-5
 // migration of calculateTangibleValuePerShare to a *cleaneddata.FinancialDataView

@@ -1,192 +1,143 @@
-# DC-1 Phase 5 — Next-Session Handoff
+# DC-1 Phase 5 — Next-Session Handoff (REFRESHED 2026-05-30)
 
-**Date:** 2026-05-27
-**Status:** READY FOR PHASE 5 BACKEND DISPATCH
-**Master tip:** `ce94f70` (DC-1 Phase 4 merge). Phase 5 spec + implementer plan + this handoff await on branch `dc1-phase-5-prep` (commit `caa227e` ARCH spec+plan; the docs-update + this handoff land alongside).
+**Status:** Phase 5 PARTIAL on branch `dc1-phase-5` (10 commits; NOT yet merged to master). Awaiting HUMAN merge decision OR a follow-up session to complete the deferred chunks (P5-C3-full + P5-C4 + DC-1 tracker archive + replay verification).
+**Branch tip:** `e6418e4`. Master `b0239ed` (the `dc1-phase-5-prep` spec/plan/handoff merge).
+**Worktree path:** `C:/Users/Yonatan Levin/Documents/Programming/Projects/FinTech/Strade/midas-dc1-phase-5/`.
 
 ---
 
 ## TL;DR for the next session
 
-DC-1 **Phase 4 is MERGED to master** (`ce94f70`, 2026-05-27). It migrated 13 valuation consumer read sites onto the `cleaneddata` views, realized the B3 routing flip, deleted the dispatcher dual-writes (§8.2.1 Option A), and bumped `CalculationVersion` 4.2 → 4.3. It was reviewed across **4 rounds** (`/execute` B-V-R-Q + holistic `/code-review` + zen-mcp **gpt-5.5** cross-model + a second B-V-R-Q on the fix), which caught and fixed **two correctness regressions**: `e521c53` (NWC `Restated()` → `AsReported()` — recomputed-umbrella drift) and `2ea9978` (`revenue_multiple` now subtracts `InvestedCapital().DebtLikeClaims`).
+DC-1 Phase 5 SHIPPED PARTIAL on `dc1-phase-5`. Two highest-risk commits (DDM EV-bridge DebtLikeClaims correction + DDM consumer migration to `Restated()` view) are done with the cross-Tier-2 `TestDDM_LegacyPath_BitForBit` invariant preserved. Orchestrator firing-signal migrated to a `nativeFired` helper (HIGH-1 bug from initial scoped ship found by gpt-5.5 and fixed). `cleaneddata.Raw()` deleted. **Full `/execute` B-V-R-Q with subagents** ran on the post-review fix commits — all four roles (VERIFIER + REVIEWER + QA + gpt-5.5 Q-pass) returned clean verdicts.
 
-**Phase 5 is the DC-1 closeout phase.** ARCH has filed the spec + implementer plan. The next session's job: HUMAN-approve the spec (or merge the prep branch), then BACKEND-dispatch the 5-commit-cluster implementation per the plan.
+**What's left for THIS branch to become DC-1 close:**
+1. **P5-C3-full Adjustments-projection** — needs ARCH decision on `Adjustment.Percentage` handling BEFORE BACKEND can build the projection.
+2. **P5-C4 translator + struct + dormant-fallback deletion** — gated on (1).
+3. **DDM `modelIBD` view-migration flip** — bit-for-bit safe; deferred to minimize EV-correction commit's surface.
+4. **DC-1 tracker archive** (`docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md` → `docs/reviewer/archive/`) — gated on FULL DC-1 closure.
+5. **Replay verification + fresh CalcVersion-4.4 baseline capture** — operator follow-up.
 
-**ARCH spec:** `docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-5-spec.md` (424 lines).
-**ARCH implementer plan:** `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-5-implementation-plan.md` (230 lines).
-
----
-
-## What's on master right now (verified post-merge)
-
-- Master tip: `ce94f70` (the Phase 4 merge). `go build ./...` exit 0; full `go test ./...` exit 0.
-- `cleaneddata` views are the canonical consumer read path; dispatcher dual-writes deleted (umbrellas recomputed in `Restated()`).
-- `CalculationVersion` at `"4.3"` (two inline literals in `internal/services/valuation/service.go`).
-- **DDM (`ddm.go`) UNTOUCHED** — still reads `latest.StockholdersEquity` / `.NetIncome` / `.DividendsPerShare` via `GetLatestPeriod()`; `ModelInput.LatestRestatedView` is nil for DDM; `ModelInput.DebtLikeClaims` is non-DDM-only (0 for DDM). `TestDDM_LegacyPath_BitForBit` (JPM/BAC/WFC `math.Float64bits`) + `TestDDM_ConsumerPath_UnaffectedByPhase4` GREEN.
-- `cleaneddata.Raw()` survives with a `TODO(phase-5)` marker — zero production `internal/` callers (only a contract test).
-- Per-rule translators + `{Asset,Liability,Earnings}AdjustmentResult` structs survive — STILL load-bearing (orchestrator `applyActiveAdjustments` reads `result.Applied/.Adjustments/.Flags` for flag aggregation + quality scoring).
-- Dormant legacy-fallback umbrella mutations in `earnings.go` (`ProcessRestructuringChargesAdjustment` etc.) survive — reachable only on the never-fired `Apply* err != nil` branch.
+The HUMAN can ALSO merge `dc1-phase-5` to master as-is (the 10 commits are coherent, all invariants GREEN, 9/9 review findings closed) and defer (1)-(5) to a separate "DC-1 close" branch/PR.
 
 ---
 
-## Phase 5 scope (per ARCH spec + plan — single PR, 5 commit clusters)
+## What shipped on `dc1-phase-5` (10 commits)
 
-| Cluster | Scope | Risk |
+| SHA | Cluster | Description |
 |---|---|---|
-| **P5-C1** | **DDM DebtLikeClaims correction** — thread `ModelInput.DebtLikeClaims` into DDM's EV bridge. The only numeric-drift commit; **bumps `CalculationVersion` 4.3 → 4.4.** | HIGH |
-| **P5-C2** | **DDM view migration** — migrate `ddm.go` StockholdersEquity/NetIncome/DividendsPerShare reads to `Restated()` via a now-populated `LatestRestatedView`. The load-bearing centerpiece — `TestDDM_LegacyPath_BitForBit` must stay bit-for-bit. 4-step re-proof (shadow re-run → temp parallel-write `TestDDM_RestatedView_BitForBit` → migrate reads → delete temps). | HIGHEST |
-| **P5-C3** | **Orchestrator native-slice aggregation** — migrate `applyActiveAdjustments`' `result.Applied/.Adjustments/.Flags` reads onto the native ledger/overlays/flags. Behavior-preserving, gated by a basket parity golden. MUST land BEFORE any translator deletion. | MEDIUM |
-| **P5-C4** | **Translator + struct + dormant-fallback deletion** (gated on C3) — delete the 16 per-rule `*AdjusterOutputToLegacyResult` translators, the `{Asset,Liability,Earnings}AdjustmentResult` structs, and the dormant `earnings.go` legacy-fallback umbrella mutations. | MEDIUM |
-| **P5-C5** | **`Raw()` deletion + cleanup + closeout** — delete `cleaneddata.Raw()`; formalize the accessor request-local contract (no `sync.Once`); verify-then-decide on the legacy `historicalData` slot; docs sweep + DC-1 close. | LOW |
-
-### ARCH's key decisions (the calls BACKEND inherits)
-1. **DDM bit-for-bit is safe to migrate.** The DDM-consumed fields are carried-through (StockholdersEquity = identity + `EquityOffset`; NetIncome/DividendsPerShare = identity-copied) — NOT recomputed-umbrella fields. So `Restated().X == latest.X` when no Restater fires, and the JPM/BAC/WFC fixtures fire none. **DDM migrates NONE of the recomputed-umbrella fields** (CurrentAssets/CurrentLiabilities/TotalAssets/TotalLiabilities/TangibleAssets) that Phase 4 had to keep on `AsReported()`.
-2. **DDM DebtLikeClaims is ADDED, not subtracted.** DDM derives EV *from* equity (`EV = equity + debt − cash`) — the opposite direction from the DCF/revenue_multiple bridge. So the headline dividend-derived `IntrinsicValuePerShare`/`EquityValue` (what the endpoint surfaces) are UNAFFECTED; only the derived, reported `EnterpriseValue` drifts for B-rule-firing banks. **ARCH recommends bundling this into P5-C1, NOT a standalone Phase-4.x hotfix** (it doesn't corrupt the headline value, unlike the revenue_multiple bug that warranted the in-window `2ea9978` fix).
-3. **`CalculationVersion` 4.3 → 4.4** atomic with P5-C1; **no `SchemaVersion` bump** (FinancialData stays 9, ValuationResult stays 2).
-4. **Cluster ordering** isolates the riskiest first (C1 numeric drift, C2 bit-for-bit) and sequences consumer-migration-BEFORE-deletion (C3 then C4).
-
-### Open questions ARCH surfaced for HUMAN (all have recommendations)
-1. Phase-4.x hotfix vs bundle the DDM DebtLikeClaims → ARCH recommends **bundle (P5-C1)**.
-2. `result.Adjustments` audit-trail projection shape (P5-C3) → resolve empirically at impl time; prefer ≤1 shared `adjustmentsFromLedger` projection over 16 per-rule translators.
-3. Accessor `sync.Once` → ARCH recommends **formalize the request-local contract in godoc, do NOT add locking** (revisit when a parallel-read batch consumer lands).
-4. Stop populating the legacy `historicalData` slot → **verify-then-decide** (keep unless grep proves zero latest-period readers after P5-C2; DPS-CAGR `GetRecentYears` still needs prior periods).
+| `d76be69` | P5-C1 | DDM EV-bridge `+DebtLikeClaims` (legacy Gordon `ddm.go:158` + multi-stage `:471`). DDM-specific ADDED sign (opposite of DCF/revenue_multiple SUBTRACT) because DDM derives equity FROM dividends and THEN EV from equity. `modelDebtLikeClaims` populated for DDM in `service.go::performAlternativeValuation`. `CalculationVersion 4.3 → 4.4` both stamp sites. New `TestDDM_EVBridge_AddsDebtLikeClaims` (legacy_gordon + multistage_real subtests) + `_ZeroClaims_Unchanged` + `_GoldenFixtures_ZeroDebtLikeClaims`. Four `service_test.go::result.CalculationVersion=="4.4"` pins updated. |
+| `0535fc5` | P5-C2 | DDM consumer migration: `ddm.go::runDividendDiagnostics` + `estimateDividendGrowth` migrated SE/NI/DPS reads from `latest.X` to `view.X` (via `input.LatestRestatedView`). `service.go` populates `LatestRestatedView` for DDM (nil-branch deleted). 4-step in-commit bit-for-bit re-proof executed (temp tests added → verified → DELETED). `ddm_phase4_invariance_test.go` renamed → `ddm_phase5_invariance_test.go`; `TestDDM_ConsumerPath_UnaffectedByPhase4` → `TestDDM_ConsumerPath_RestatedViewParity` superset pin. **DDM's `modelIBD` deliberately still on legacy `latestFinancialData.InterestBearingDebt`** to minimize bit-for-bit surface — IBD view flip deferred. |
+| `b617407` | P5-C5 (partial) | `cleaneddata.CleanedFinancialData.Raw()` + its `TODO(phase-5)` marker DELETED (`cleaned.go:79-96`). Contract-test `views.Raw()` assertion deleted. `cleaned.go` godoc strengthened to a HARD request-local invariant per spec §3.6 (explicit "do NOT retrofit `sync.Once`" rationale). `historicalData.Data[latestPeriod]` slot population KEPT (verify-then-decide per spec §3.7 → KEEP) — extracted to new `keepLatestCleanedSlot` helper with grep-evidence rationale documenting 6 remaining `GetLatestPeriod()` consumers. |
+| `586c370` | P5-C3 (scoped) | Orchestrator `XResult.Applied` reads at 3 sites in `applyActiveAdjustments` replaced with native firing-signal. Initially shipped as inline `len(NativeLedgerEntries) > 0 \|\| len(NativeOverlays) > 0 \|\| len(Flags) > 0` — this predicate was the **HIGH-1 bug** subsequently fixed in `83e6cb2`. |
+| `2a18a20` | docs | Phase 5 partial closeout doc filed at `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-5-closeout.md`. |
+| `83e6cb2` | HIGH-1 fix | **gpt-5.5 cross-model review HIGH** (zen-mcp continuation `22fbf842`) — the inline predicate over-counted RulesApplied on rules-pass-applicability-but-Apply-skips path (skip emits `Fired:false` LedgerEntry per the spec's diagnostic-tracking contract). Fix: new `nativeFired(entries, overlays, flags)` helper at `internal/services/datacleaner/firing_signal.go` filters `e.Fired==true` (overlays + flags are skip-free by their role contract — OverlaySpecs only emitted on fire by A1/B1/B2/B3; Flags only on fire by C4/C7 + 2 A-flag reviews). 3 orchestrator call sites migrated. New `TestApplyActiveAdjustments_FiringSignalParity_A1ApplicableButSkipped` regression pin: Goodwill=3% of TotalAssets passes A1 applicability but skips at the 5% threshold (verifier-side simulation confirmed pre-fix predicate returned `true` while `nativeFired` correctly returns `false`). |
+| `e4ea146` | MEDIUM-2 + MEDIUM-3 | MEDIUM-2: replaced misnamed `TestDDM_EVBridge_AddsDebtLikeClaims/multistage_via_payout_path` (had no Profile → fell through to legacy Gordon, multi-stage EV bridge uncovered) with `multistage_real` using `testhelpers.BuildSyntheticAAPLishModelInput` + `ResolvedProfile{ArchetypeMaturingTechDividend, DividendForecastHorizon:10}`. Asserts `HorizonSelected==10` to PROVE multi-stage dispatch (single setter at `ddm.go:500`). MEDIUM-3: new `TestFFO_IgnoresDebtLikeClaims` using `math.Float64bits` equality on all 3 output fields. |
+| `b12a870` | MEDIUM-4 + LOW-5..9 | MEDIUM-4: spec §3.2 sign-clarity sweep (5 lines updated). LOW-5: `calculateLegacyGordon` "verbatim" godoc rewritten to enumerate sanctioned Phase 5 deviations + reiterate REVERT-don't-update-goldens rule. LOW-6: `service.go::performAlternativeValuation` "deferred to Phase 5" comment refreshed to current state. LOW-7: 18-line inline historicalData slot KEEP rationale extracted to `keepLatestCleanedSlot` helper. LOW-8: self-referential `TestCalculationVersion_IsV44` deleted (navigational comment lists 4 live `service_test.go` pins). LOW-9: `// Deprecated:` annotations on 3 category-level `*AdjustmentResult.Applied` fields (per-rule `AdjustmentResult.Applied` at `assets.go:284` correctly NOT annotated — still load-bearing in translators). |
+| `de1a456` | REVIEWER LOW | Phase 5 implementer plan test-name drift at lines 54+58 updated to match shipped `AddsDebtLikeClaims` name (REVIEWER subagent caught the impl-plan vs spec drift). |
+| `e6418e4` | gpt-5.5 Q-pass LOW | gpt-5.5 Q-pass (zen-mcp continuation `bea446b5`) caught a stale test docstring at `applyactive_firingsignal_parity_test.go:14-19` still describing the pre-HIGH-1-fix inline predicate. Refreshed to describe the post-fix `nativeFired` helper + its filter logic + the HIGH-1 history (so future maintainers don't "clean up" the helper back to the buggy inline form). |
 
 ---
 
-## Load-bearing invariants (must stay GREEN at every Phase 5 commit)
+## Load-bearing invariants — GREEN at every commit
 
-| Invariant | Why |
-|---|---|
-| `TestDDM_LegacyPath_BitForBit` (JPM/BAC/WFC) | Cross-Tier-2 contract; `math.Float64bits` equality. **Most at-risk in Phase 5** (DDM is migrating). A failure = REVERT, never update goldens. |
-| `TestDDM_ConsumerPath_UnaffectedByPhase4` | Rename/retire appropriately once DDM migrates (the plan specifies `…RestatedViewParity`). |
-| `TestRecomputeUmbrellas_NoMutation` | Recompute shim stays read-only. |
-| `TestOrchestrator_LedgerOrdering` | Asset → liability → earnings partition (critical for the C3/C4 translator retirement). |
-| Shadow snapshots byte-identical | `git diff --quiet internal/integration/testdata/recompute-shadow/` exits 0. |
-| `TestLedger_BasketSnapshot_ClusterPrediction` (10/10) | Per-ticker AdjusterID sets unchanged. |
-| `TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction` | AMD $9.679B / KO $60.912B exact. |
-| `TestCleanFinancialDataWithViews_Restated_NoDoubleCount_*` | HIGH-1 regression pins. |
-| Full `go test ./...` exit 0 | At every commit. |
+- `TestDDM_LegacyPath_BitForBit` (JPM/BAC/WFC `math.Float64bits` equality on IntrinsicValuePerShare/EquityValue/EnterpriseValue + Warnings + Confidence) — the cross-Tier-2 contract preserved across BOTH P5-C1's `+DebtLikeClaims` term and P5-C2's view migration.
+- `TestDDM_ConsumerPath_RestatedViewParity` (renamed superset pin — output bits + view-equals-entity property for SE/NI/DPS on fixtures).
+- `TestRecomputeUmbrellas_NoMutation`, `TestOrchestrator_LedgerOrdering`.
+- `TestCleanFinancialDataWithViews_Restated_NoDoubleCount_OnRestaterFire` / `_OnEarningsFire`.
+- `TestCleanedFinancialData_Restated_C6EquityOffsetZero`.
+- `TestLedger_BasketSnapshot_ClusterPrediction` (10/10) + `…_T2BS3_RestatedReconstruction` (AMD $9.679B / KO $60.912B).
+- Shadow snapshots byte-identical (`git diff --quiet internal/integration/testdata/recompute-shadow/` exits 0).
+- Full `go test ./... -count=1` EXIT=0 (46 packages, 0 FAIL).
 
 ---
 
-## Worktree workflow for Phase 5
+## DEFERRED to a future session
 
-Per the `feedback_worktree_first_workflow` memory:
-- Main `midas/` stays on `master` (currently `ce94f70`).
-- Phase 5 work in a sibling worktree at `../midas-dc1-phase-5/` branched off master.
+### (1) ARCH decision REQUIRED before BACKEND dispatch
 
-```bash
-# First merge the prep branch (it holds the spec + plan + this handoff + the Phase-4 docs-update):
-cd "/c/Users/Yonatan Levin/Documents/Programming/Projects/FinTech/Strade/midas"
-git merge --no-ff dc1-phase-5-prep -m "Merge dc1-phase-5-prep — Phase 5 spec + plan + handoff + Phase-4 docs sweep"
-git worktree remove --force ../midas-dc1-phase-5-prep
-git branch -d dc1-phase-5-prep
+**`Adjustment.Percentage` handling in the P5-C3-full projection.** The 16 per-rule translators today compute Percentage from pre-state captured at the dispatcher BEFORE `Apply*` runs (e.g., A2's `originalIntangibles`, A4's `originalDTA`, A5's `originalInventory`). The `LedgerEntry` does NOT preserve this pre-state.
 
-# Then create the Phase 5 implementation worktree from updated master:
-git worktree add ../midas-dc1-phase-5 -b dc1-phase-5 master
-cd ../midas-dc1-phase-5
+- **Path (a) — preserve Percentage byte-for-byte.** Modify ~5 Restater adjusters to capture pre-state into `LedgerEntry.SkipMetrics["original_<field>"]` (or a new field). Threading the data through to the projection requires touching each Restater's `Apply*` method. Closeout doc §6.1 recommends this.
+- **Path (b) — accept `Percentage=0` in the projection.** Lossy projection. Silent API-contract reduction on the public `ValuationResult.CleaningAdjustments` JSON field. Simpler diff; needs explicit ARCH approval.
 
-# Verify before EVERY commit:
-git rev-parse --abbrev-ref HEAD        # dc1-phase-5
-git worktree list                      # main midas at master + midas-dc1-phase-5
-```
+**Recommend ARCH writes a small decision note before next-session BACKEND dispatch.**
 
----
+### (2) P5-C3-full Adjustments-projection
 
-## Acceptance gates (run before every commit)
+Once ARCH decides Percentage handling:
+- Walk all 16 `*AdjusterOutputToLegacyResult` translators in `internal/services/datacleaner/adjustments/{assets,liabilities,earnings}.go` and extract `Category` / `Type` / `FromAccount` / `ToAccount` into a per-AdjusterID metadata table.
+- Build `func adjustmentsFromLedger(ledger entities.AdjustmentLedger, overlays []entities.OverlaySpec, perRuleMeta map[string]ruleMeta) []entities.Adjustment` (in a new file, e.g., `internal/services/datacleaner/adjustment_projection.go`).
+- Add basket-parity golden test: capture pre-rewrite `result.Adjustments` for 10-ticker basket as a golden, then assert byte-identical content (excluding non-deterministic ID + Timestamp fields).
+- Replace orchestrator's `XResult.Adjustments` reads with `adjustmentsFromLedger(data.AdjustmentLedger, data.Overlays, perRuleAdjustmentMeta)`.
 
-```bash
-go build ./...
-go test ./internal/services/valuation/models/ -run 'TestDDM_LegacyPath_BitForBit|TestDDM_RestatedView_BitForBit' -count=1   # bit-for-bit — most consequential
-go test ./internal/services/datacleaner/... -count=1
-go test ./internal/integration/... -run 'TestLedger_BasketSnapshot|TestDataCleanerRecompute_ShadowMode' -count=1
-git diff --quiet internal/integration/testdata/recompute-shadow/    # MUST exit 0
-go test ./... -count=1   # full suite
-```
+### (3) P5-C4 — translator + struct + dormant-fallback deletion (gated on (2))
 
-For closeout: replay against AAPL/MSFT/JPM bundles + a live API spot-check (DDM ticker — confirm headline IntrinsicValue unchanged, EnterpriseValue corrected for B-firing banks) + capture a fresh `artifacts/tier2-baseline/` snapshot. **Note the inherited operator follow-up from Phase 4:** the `2026-05-19` baseline is `calc_version 4.1`, so a fresh `4.2`/`4.3`-current baseline must be captured (needs live SEC/market capture) before clean per-cluster drift attribution is possible.
+- Delete the 16 `*AdjusterOutputToLegacyResult` translators.
+- Delete the 3 category-level `*AdjustmentResult` structs (`AssetAdjustmentResult` `assets.go:2092`, `LiabilityAdjustmentResult` `liabilities.go:81`, `EarningsAdjustmentResult` `earnings.go:53`).
+- Delete dormant `earnings.go` legacy-fallback helpers: `ProcessRestructuringChargesAdjustment` (1574), `ProcessAssetSaleGainsAdjustment` (1641), `ProcessLitigationSettlementsAdjustment` (1683), capitalized-interest helper. Remove the `if err != nil { result = ea.ProcessX...; break }` fallback arms in `ProcessEarningsAdjustments`.
+- Verify-then-delete `entities.AssetAdjustmentResult` / `entities.LiabilityAdjustmentResult` at `core/entities/data_cleaning.go:468-485` (grep-confirmed dead in this session).
+- Re-point ~20 `adjustments/*_test.go` assertions away from `result.Adjustments[0].Amount/FromAccount/ToAccount/Type` onto the slim native carrier.
+- Change `Process{Asset,Liability,Earnings}Adjustments` return types to drop the legacy `*AdjustmentResult` (return slim native carrier).
 
----
+### (4) Optional small follow-ups
 
-## Stack ladder (read in this order to bootstrap)
+- **DDM `modelIBD` view flip** — `service.go::performAlternativeValuation` currently keeps DDM on `latestFinancialData.InterestBearingDebt`. Bit-for-bit safe to flip to `restatedViewOr(...).InterestBearingDebt` per spec §3.2 NOTE. Trivial.
+- **FFO Profile-forward branch test coverage** (gpt-5.5 LOW from the Q-pass): add a `profile_forward_path` subtest to `TestFFO_IgnoresDebtLikeClaims` exercising `Profile{HorizonYears:5} + GrowthEstimate.ProjectedGrowthRates`. Theoretical guard (grep is conclusive today).
 
-1. `CLAUDE.md` DC-1 Phase 2/3/followup/Phase-4 SHIPPED bullets (the Phase-4 bullet now says MERGED `ce94f70`).
-2. `AGENTS.md` row 17b — DC-1 entry (Phase 4 MERGED).
-3. `docs/THESIS.md` DC-1 row.
-4. **`docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-5-spec.md`** — the design BACKEND consumes.
-5. **`docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-5-implementation-plan.md`** — 5 clusters, file paths, acceptance signals, agent-hour estimates.
-6. `docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-4-closeout.md` — what Phase 4 left for Phase 5 (§6 translator/Raw() status, §8 DDM migration sub-plan, §7 judgment calls).
-7. `docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md` — parent spec, Phase 5 row.
-8. `internal/services/valuation/models/ddm.go` — the 5 read sites + the EV↔equity bridge (127/399).
-9. `internal/services/datacleaner/cleaneddata/{restate.go,asreported.go,invested_capital.go}` — which fields recompute vs carry.
-10. `internal/services/valuation/service.go::applyActiveAdjustments` (~523/555/594) — the legacy `*AdjustmentResult` reads C3 migrates.
+### (5) DC-1 close docs sweep (gated on FULL DC-1 closure = P5-C4 done)
+
+- Archive `docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md` → `docs/reviewer/archive/`.
+- Retire CLAUDE.md "Common Gotchas" entries for "translator stack still load-bearing" + single-view notes.
+- Update CLAUDE.md DC-1 Phase 5 bullet from "PARTIAL" to "SHIPPED" + add Phase 5 final commit ladder.
+- Update AGENTS row 17b "in flight" → "COMPLETE".
+- Update THESIS row 42 to reflect DC-1 closed.
+
+### (6) Replay verification (operator)
+
+`artifacts/tier2-baseline/2026-05-19/` is `calculation_version 4.1` — pre-Phases 2/3/4. A clean Phase 5 attribution requires a fresh `4.3` baseline captured at master's pre-Phase-5 tip via live SEC/market capture (cache-bypass). Then replay the Phase 5 final tip against that fresh baseline.
 
 ---
 
 ## Bootstrap prompt for the next session
 
-Copy-paste the block below into a fresh session to bootstrap directly into Phase 5 BACKEND dispatch:
-
 ````
-I'm starting Phase 5 of the DC-1 datacleaner refactor (DDM migration + DebtLikeClaims correction + translator retirement + Raw() deletion — the DC-1 closeout phase).
+I'm continuing DC-1 Phase 5 follow-up work after a partial ship + post-review fix cycle on branch `dc1-phase-5` (tip e6418e4).
 
-WORKTREE-FIRST WORKFLOW (mandatory per the feedback_worktree_first_workflow memory):
-The main midas/ directory STAYS on master. Phase 5 work happens in a sibling worktree.
+WORKTREE: continue inside ../midas-dc1-phase-5/ (already exists; main midas stays
+on master). Confirm before EVERY commit:
+  git rev-parse --abbrev-ref HEAD                # dc1-phase-5
+  git worktree list                              # main midas on master + dc1-phase-5
 
-  1. First merge dc1-phase-5-prep into master (it holds ARCH's spec + plan + this
-     handoff + the Phase-4 docs sweep):
-       cd "/c/Users/Yonatan Levin/Documents/Programming/Projects/FinTech/Strade/midas"
-       git merge --no-ff dc1-phase-5-prep -m "Merge dc1-phase-5-prep — Phase 5 spec + plan + handoff"
-       git worktree remove --force ../midas-dc1-phase-5-prep
-       git branch -d dc1-phase-5-prep
-
-  2. Create the Phase 5 implementation worktree from updated master:
-       git worktree add ../midas-dc1-phase-5 -b dc1-phase-5 master
-       cd ../midas-dc1-phase-5
-
-All subsequent Phase 5 commands MUST run inside ../midas-dc1-phase-5/.
-Before EVERY git commit: verify `git rev-parse --abbrev-ref HEAD` prints dc1-phase-5
-and `git worktree list` shows the main midas at master.
-
-CONTEXT:
-DC-1 Phase 4 MERGED to master as `ce94f70` (consumer migration + B3 routing flip +
-dual-write deletion + CalcVersion 4.3). Phase 5 is the closeout phase.
+STATUS:
+- Phase 5 PARTIAL is shipped (10 commits; all 9 prior-review findings closed;
+  load-bearing DDM bit-for-bit invariant preserved; full suite EXIT=0).
+- Remaining work: P5-C3-full Adjustments-projection + P5-C4 translator/struct
+  deletion + DC-1 close docs sweep + tracker archive. Estimated 4-7 agent-hours.
 
 READ FIRST (in order):
-1. docs/refactoring/implementations/dc1-phase-5-next-session-handoff.md (THIS doc — state of world, ARCH calls, gates, open questions)
-2. docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-5-spec.md
-3. docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-5-implementation-plan.md
-4. docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-4-closeout.md (§6 translator/Raw() status, §8 DDM sub-plan, §7 judgment calls)
-5. CLAUDE.md DC-1 Phase 4 SHIPPED bullet
+1. docs/refactoring/implementations/dc1-phase-5-next-session-handoff.md (THIS doc)
+2. docs/refactoring/implementations/datacleaner-component-primitive-and-parallel-views-phase-5-closeout.md §6 (DEFERRED work + recommended next-session task ladder)
+3. docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-5-spec.md §3.4 (translator retirement design)
+4. CLAUDE.md DC-1 Phase 5 PARTIAL bullet
 
-PHASE 5 SCOPE (single PR, 5 commit clusters):
-- P5-C1: DDM DebtLikeClaims correction (ADDED not subtracted — DDM derives EV from
-  equity); bumps CalculationVersion 4.3 → 4.4. Only numeric-drift commit.
-- P5-C2: DDM view migration (ddm.go reads → Restated() via LatestRestatedView) with
-  the 4-step bit-for-bit re-proof. THE load-bearing centerpiece.
-- P5-C3: migrate orchestrator off result.Applied/.Adjustments/.Flags onto native
-  ledger/overlays/flags (behavior-preserving, parity-gated) — BEFORE any deletion.
-- P5-C4: delete the 16 per-rule translators + {Asset,Liability,Earnings}AdjustmentResult
-  structs + dormant earnings.go legacy-fallback umbrella mutations (gated on C3).
-- P5-C5: delete cleaneddata.Raw(); formalize accessor request-local contract; verify-
-  then-decide on the legacy historicalData slot; docs sweep + DC-1 closeout doc.
+BLOCKER BEFORE BACKEND DISPATCH:
+ARCH decision on Adjustment.Percentage handling — path (a) preserve via
+LedgerEntry.SkipMetrics["original_X"] (modifies 5 Restater adjusters; closeout
+§6.1 recommends this) OR path (b) accept Percentage=0 (lossy projection; needs
+explicit ARCH approval for the API-contract reduction). Pick before dispatching.
 
 LOAD-BEARING INVARIANTS (GREEN at every commit):
-- TestDDM_LegacyPath_BitForBit (JPM/BAC/WFC math.Float64bits) — MOST at-risk (DDM is
-  migrating). Failure = REVERT, never update goldens.
-- TestRecomputeUmbrellas_NoMutation, TestOrchestrator_LedgerOrdering, shadow byte-
-  identity, TestLedger_BasketSnapshot_ClusterPrediction (10/10),
-  TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction, the NoDoubleCount pins.
+- TestDDM_LegacyPath_BitForBit, TestDDM_ConsumerPath_RestatedViewParity
+- TestRecomputeUmbrellas_NoMutation, TestOrchestrator_LedgerOrdering
+- TestLedger_BasketSnapshot_ClusterPrediction (10/10) + T2BS3_RestatedReconstruction
+- Shadow snapshots byte-identical
+- NEW: TestApplyActiveAdjustments_FiringSignalParity_A1ApplicableButSkipped
+       (HIGH-1 regression pin — would have failed on the pre-fix inline predicate)
+- Full go test ./... -count=1 EXIT=0
 
-OPEN QUESTIONS (ARCH recommendations in the spec §Open questions):
-1. DDM DebtLikeClaims hotfix-vs-bundle → bundle into P5-C1.
-2. Audit-trail projection shape → resolve at impl time (prefer 1 shared projection).
-3. Accessor sync.Once → formalize contract, don't add locking.
-4. Stop populating legacy historicalData slot → verify-then-decide.
-
-Please proceed with Phase 5 BACKEND dispatch per the implementer plan, with a full
-B-V-R-Q cycle per cluster (and a gpt-5.5 cross-model code-review pass before merge —
-it caught real regressions in both the Phase 4 base and the revenue_multiple fix).
+FULL /execute B-V-R-Q with VERIFIER + REVIEWER + QA SUBAGENTS + gpt-5.5 Q-pass
+on the eventual fix commits (the prior session's cycle proved this catches real
+bugs the inline self-review misses).
 ````
 
 ---
@@ -195,4 +146,5 @@ it caught real regressions in both the Phase 4 base and the revenue_multiple fix
 
 | Date | Change |
 |---|---|
-| 2026-05-27 | Initial filing post Phase 4 merge to master (`ce94f70`). Documents the Phase 4 merge + 4 review rounds + 2 regression fixes (`e521c53` NWC, `2ea9978` revenue_multiple), ARCH's Phase 5 spec + plan (`caa227e`), the 5-cluster scope, ARCH's architectural calls (DDM bit-for-bit safety, DDM DebtLikeClaims ADDED-not-subtracted + bundle recommendation, CalcVersion 4.4), the 4 open questions, and a copy-ready bootstrap prompt. |
+| 2026-05-27 | Initial filing post Phase 4 merge to master (`ce94f70`). |
+| 2026-05-30 | REWRITTEN to reflect Phase 5 PARTIAL shipped on `dc1-phase-5` (tip `e6418e4`, 10 commits). Documents: (a) the 5 substantive commits (P5-C1 / P5-C2 / P5-C5-partial / P5-C3-scoped / closeout); (b) the 5 post-review fix commits (HIGH-1 + MEDIUM-2/3/4 + LOW-5..9 + 2 follow-up doc fixes) closing all 9 gpt-5.5 cross-model review findings; (c) the full `/execute` B-V-R-Q with VERIFIER/REVIEWER/QA subagents + gpt-5.5 Q-pass on the fixes; (d) the DEFERRED chunks (P5-C3-full + P5-C4 + DDM IBD flip + DC-1 close docs + tracker archive + replay verification) with the ARCH Percentage decision as the blocker before next-session BACKEND dispatch. |

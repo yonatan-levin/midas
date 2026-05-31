@@ -50,15 +50,22 @@ type ModelInput struct {
 
 	// DebtLikeClaims is the B1 (operating-lease) + B2 (pension underfunding) +
 	// B3 (contingent liability) overlay total from
-	// cleaneddata.InvestedCapital().DebtLikeClaims. It is subtracted in the
-	// EV→Equity bridge by revenue_multiple (mirroring the DCF path's
-	// dcf.CalculateEquityValueWithDebtLikeClaims), because after the DC-1
-	// Phase 4 dispatcher dual-write deletion the B-rule amounts no longer
-	// inflate InterestBearingDebt and would otherwise be silently dropped.
-	// 0 for DDM (bit-for-bit legacy path never reads it) and unused by FFO
-	// (FFO's equity is derived directly from the P/FFO multiple; IBD only
-	// back-derives the reported EV, so subtracting claims there would risk
-	// double-counting the REIT's lease-bearing cash flows).
+	// cleaneddata.InvestedCapital().DebtLikeClaims. It is consumed in the
+	// EV↔Equity bridge with model-direction-dependent SIGN:
+	//   - DCF and revenue_multiple SUBTRACT it (they derive equity FROM EV).
+	//     See dcf.CalculateEquityValueWithDebtLikeClaims for the DCF path.
+	//   - DDM ADDS it (DDM derives equity FROM dividends FIRST, then derives
+	//     EV = equity + debt + DebtLikeClaims − cash). See DC-1 Phase 5 spec
+	//     §3.2 — adding rather than subtracting closes the DDM analog of the
+	//     Phase 4 revenue_multiple finding for B-rule-firing banks. DDM's
+	//     IntrinsicValuePerShare and EquityValue are unaffected (dividend-
+	//     derived); only EnterpriseValue is corrected.
+	//   - FFO does NOT consume it (FFO's equity is derived directly from the
+	//     P/FFO multiple; InterestBearingDebt only back-derives the reported
+	//     EV, so subtracting claims there would risk double-counting the
+	//     REIT's lease-bearing cash flows).
+	// After the DC-1 Phase 4 dispatcher dual-write deletion the B-rule amounts
+	// no longer inflate InterestBearingDebt and must be threaded explicitly.
 	DebtLikeClaims float64
 
 	// LatestRestatedView is the DC-1 Phase 4 (C-3) Restated() view of the
