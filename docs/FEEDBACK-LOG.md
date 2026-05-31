@@ -73,6 +73,21 @@ Lead with the rule. The **Why** lets future sessions judge edge cases. The **How
 
 **Source:** Live QA run 2026-04-24, part of the Industry-in-response feature verification.
 
+### 2026-05-30 — `/execute` B-V-R-Q must dispatch VERIFIER/REVIEWER/QA subagents, not roll into self-validation
+
+**Rule:** When running the `/execute` skill's Phase-2 validation cycle, dispatch the VERIFIER, REVIEWER, and QA subagents via the `Agent` tool — do NOT roll all four lenses into inline self-validation (running tests + self-reviewing the diff + self-summarizing spec conformance). For the Q (cross-model query) step, use `mcp__zen-mcp__codereview` with `gpt-5.5` (or the named model) as a separate independent pass after the subagent cycle.
+
+**Why:** Surfaced 2026-05-30 — user explicitly asked "per /execute plan did you ran B V R Q on the fix? with the rlevant sub agents?" after I had completed 3 atomic fix commits + inline tests + self-review. I had rolled all four cycle lenses into self-validation, skipping the subagent dispatch entirely. This violates the `/execute` skill's Critical Rule 2 ("Never skip validation gates"). When I subsequently dispatched the proper subagent cycle on the same commits, the REVIEWER subagent caught a stale impl-plan test-name drift the inline self-review missed, and the gpt-5.5 Q-pass caught a parent-spec sign-drift ("DDM subtracts" vs the shipped "DDM adds") that BOTH inline review AND the REVIEWER+QA subagents had missed because the subagents were scoped to the immediate fix commits, not the cross-cutting parent spec. Subagents bring genuinely independent perspective; gpt-5.5 widens the lens beyond the immediate diff.
+
+**How to apply:**
+- ALWAYS in `/execute` Phase 2: dispatch VERIFIER + REVIEWER + QA subagents in parallel via 3 `Agent` tool calls in a single message (they're independent — don't sequence them). Each prompt must be self-contained (branch + commits + spec context + what to check + output format).
+- After subagent cycle returns: run `mcp__zen-mcp__codereview` with `gpt-5.5` (or named model) as the Q step. Use external validation (`review_validation_type: "external"`, two-step workflow).
+- If subagents/Q surface NITs, address them in follow-up commits BEFORE HUMAN handoff — the prior Phase 5 partial cycle showed Q catches what inline misses.
+- Inline self-validation (running `go test ./...` + reading the diff) is necessary but NOT sufficient. It satisfies the B (Build) and V (Verify) steps' MECHANICS but does not satisfy the R (Review) and Q (Query) steps' INDEPENDENCE requirement.
+- Hotfix path (CRITICAL urgency only, explicit HUMAN approval) defers QA — but VERIFIER + REVIEWER subagent dispatch stays mandatory.
+
+**Source:** User callout during DC-1 Phase 5 post-review-fix execution, 2026-05-30 session. Validated by the immediate subsequent cycle catching real bugs (REVIEWER LOW + Q MEDIUM) that inline self-validation had missed.
+
 ---
 
 ## Archive (Promoted to MEMORY.md or Obsolete)

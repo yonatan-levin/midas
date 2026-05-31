@@ -268,6 +268,38 @@ IS the firing signal. The convention is pinned by subtests that assert
 shape from both the standard skip path (Fired:false + Flags empty) and the
 Restater fired path (Fired:true + Component/DeltaAmount populated).
 
+**Firing-signal regression-pin pattern (DC-1 Phase 5 P5-C3 follow-up).** When
+the orchestrator's firing predicate is rewritten (e.g., legacy `.Applied` bool
+→ native `nativeFired(LedgerEntries, Overlays, Flags)` helper), the regression
+test MUST exercise the path where outer applicability passes but the inner
+`Apply*` skips — because skip paths emit `Fired:false` diagnostic LedgerEntries
+that a naive `len(NativeLedgerEntries) > 0` predicate over-counts.
+`TestApplyActiveAdjustments_FiringSignalParity_A1ApplicableButSkipped` at
+`internal/services/datacleaner/applyactive_firingsignal_parity_test.go` is the
+canonical example: Goodwill at 3% of TotalAssets passes A1's `data.Goodwill > 0`
+applicability check but skips at the 5% materiality threshold, emitting one
+`Fired:false` LedgerEntry. The test asserts `result.RulesApplied == 0` AND the
+diagnostic LedgerEntry survives on `data.AdjustmentLedger` — proving the
+firing-signal correctly filters skip diagnostics WITHOUT losing the
+observability surface. Pattern applies any time a `len(slice) > 0` predicate
+is the firing signal and the slice can contain diagnostic non-firing entries.
+
+**Ignore-guard pattern (DC-1 Phase 5 P5-C1 follow-up).** When a model contract
+states "model X must IGNORE input field Y" (e.g., `router.go` ModelInput godoc:
+"FFO does not consume input.DebtLikeClaims"), pin the contract with a
+`math.Float64bits` equality assertion across DIFFERENT non-zero values of the
+ignored field. `TestFFO_IgnoresDebtLikeClaims` at
+`internal/services/valuation/models/ffo_phase5_debtlikeclaims_test.go` is the
+canonical example: runs FFO with `DebtLikeClaims=0` and `DebtLikeClaims=$250M`
+against the same fixture; asserts Float64bits equality on
+`IntrinsicValuePerShare`, `EquityValue`, AND `EnterpriseValue`. A future edit
+that accidentally adds a `DebtLikeClaims` term to FFO's EV bridge would fail
+the third assertion immediately. Pattern applies any time a load-bearing
+"model ignores X" contract exists in production code without a regression test —
+the bit-equality assertion is the strongest possible guard because ANY arithmetic
+involving the field would surface as bit drift, even if the resulting value
+rounds back to the original via float coincidence.
+
 ### 3. Mock-Based Tests (Service Layer)
 
 Using `testify/mock` for interface dependencies:
