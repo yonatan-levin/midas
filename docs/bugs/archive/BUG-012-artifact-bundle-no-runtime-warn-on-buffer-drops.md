@@ -5,7 +5,7 @@
 | **ID** | BUG-012 |
 | **Title** | `*Bundle` increments `dropped` / `writeErrors` / `oversizeLines` silently — operator only learns of an incomplete bundle by reading `00-manifest.json` after the fact |
 | **Severity** | MINOR (operator-visibility) |
-| **Status** | Fixed (pending HUMAN acceptance) — 2026-05-31 |
+| **Status** | Resolved 2026-06-01 (merge `06aa4ae`) — HUMAN-accepted after live VERIFIER reproduction |
 | **Component** | `internal/observability/artifact/bundle.go` |
 | **Reported** | 2026-04-29 (Phase 2.B QA pass) |
 | **Affects** | Phase 2.A on_error trigger AND Phase 2.B on_quality_flag trigger; does NOT affect manual `?trace=1` correctness |
