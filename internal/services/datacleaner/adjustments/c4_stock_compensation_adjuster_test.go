@@ -198,18 +198,12 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC4FiresFlag(t *testin
 	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied=true (matches the legacy
-	// ProcessStockCompensationAdjustment return shape), Adjustments carries
-	// the Reclassify record, Flags carries the dilution flag.
-	assert.True(t, result.Applied,
-		"C4 legacy parity: Applied:true on fire (NOT Applied:false like asset-side FlagEmitters)")
-	require.Len(t, result.Adjustments, 1)
-	assert.Equal(t, "StockBasedCompensation", result.Adjustments[0].FromAccount)
-	assert.Equal(t, "OperatingExpenses", result.Adjustments[0].ToAccount)
-	assert.Equal(t, entities.Reclassify, result.Adjustments[0].Type,
-		"C4 Adjustment.Type must be Reclassify (between-line move, no mutation)")
-	assert.InDelta(t, 200_000_000.0, result.Adjustments[0].Amount, 1e-6)
-	assert.InDelta(t, 4.0, result.Adjustments[0].Percentage, 1e-9)
+	// DC-1 Phase 5 P5-C4: the legacy Applied / Adjustments fields were
+	// deleted. C4's firing signal is the dilution Flag (the slim native
+	// carrier keeps Flags); the Reclassify record's amount (sbc_amount) +
+	// 4% Percentage + StockBasedCompensation→OperatingExpenses accounts are
+	// now produced by adjustmentsFromLedger from SkipMetrics["sbc_amount"]
+	// (covered end-to-end by the basket-parity golden).
 	require.Len(t, result.Flags, 1)
 	assert.Equal(t, "earnings_quality", result.Flags[0].Type)
 
@@ -258,8 +252,8 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC4SkipPath(t *testing
 	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
-	assert.False(t, result.Applied)
-	assert.Empty(t, result.Adjustments)
+	// DC-1 Phase 5 P5-C4: skip contract asserted via result.Flags (no flag
+	// on the no-SBC path) + the native Fired:false LedgerEntry below.
 	assert.Empty(t, result.Flags)
 
 	require.Len(t, result.NativeLedgerEntries, 1)

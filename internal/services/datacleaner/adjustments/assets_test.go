@@ -489,20 +489,18 @@ func TestAssetAdjuster_ProcessAssetAdjustments_ActiveWorkflow(t *testing.T) {
 			assert.Equal(t, tt.expectedFinalGoodwill, tt.financialData.Goodwill, "Final goodwill should be modified")
 			assert.Equal(t, tt.expectedFinalAssets, tt.financialData.TotalAssets, "Final assets should be modified")
 
-			// Verify adjustment results
-			assert.Equal(t, tt.expectedAdjustmentsMade > 0, result.Applied, "Applied flag should match expectations")
-			assert.Len(t, result.Adjustments, tt.expectedAdjustmentsMade, "Should have expected number of adjustments")
+			// Verify adjustment results. DC-1 Phase 5 P5-C4: the legacy
+			// result.Applied / .Adjustments / .AuditTrail fields were deleted;
+			// the per-rule audit-trail count is now derived from the native
+			// fired emissions (a fired writedown LedgerEntry or a goodwill
+			// overlay). The projected entities.Adjustment audit content is
+			// covered end-to-end by the basket-parity golden.
+			assert.Equal(t, tt.expectedAdjustmentsMade, countFiredAssetEmissions(result), "Fired emission count should match expectations")
 			assert.Len(t, result.Flags, tt.expectedFlagCount, "Should have expected number of flags")
 
 			// Verify tangible assets were recalculated correctly
 			expectedTangibleAssets := tt.financialData.TotalAssets - tt.financialData.Goodwill - tt.financialData.OtherIntangibles
 			assert.InDelta(t, expectedTangibleAssets, tt.financialData.TangibleAssets, 1000.0, "Tangible assets should be recalculated correctly")
-
-			// Verify audit trail
-			if tt.expectedAdjustmentsMade > 0 {
-				assert.Contains(t, result.AuditTrail, "writedowns", "Audit trail should mention writedowns")
-				assert.Contains(t, result.AuditTrail, "adjusted from", "Audit trail should show before/after values")
-			}
 		})
 	}
 }

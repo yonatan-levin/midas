@@ -14,184 +14,6 @@ func TestNewEarningsAdjuster(t *testing.T) {
 	assert.NotNil(t, adjuster)
 }
 
-func TestProcessRestructuringChargesAdjustment(t *testing.T) {
-	tests := []struct {
-		name            string
-		data            *entities.FinancialData
-		rule            *entities.CleaningRule
-		expectedAmount  float64
-		expectedApplied bool
-		expectedReason  string
-	}{
-		{
-			name: "significant_restructuring_charges",
-			data: &entities.FinancialData{
-				Ticker:                    "TEST",
-				Revenue:                   1000000000, // $1B revenue
-				OperatingIncome:           150000000,  // $150M operating income
-				NormalizedOperatingIncome: 150000000,  // Will be adjusted
-				// Assume 3% of revenue in restructuring charges
-			},
-			rule: &entities.CleaningRule{
-				ID:          "restructuring_charges",
-				Name:        "Restructuring and Integration Charges",
-				Description: "Strip recurring restructuring charges from EBITDA",
-				Category:    entities.EarningsNormalization,
-				Adjustment:  entities.Exclude,
-				Threshold: &entities.ThresholdConfig{
-					PercentageOfRevenue: floatPtr(0.02), // 2% threshold
-				},
-				Severity: entities.Info,
-			},
-			expectedAmount:  30000000, // 3% of $1B = $30M (above 2% threshold)
-			expectedApplied: true,
-			expectedReason:  "Restructuring charges adjustment: Excluded $30.0M (3.0% of revenue) from normalized operating income",
-		},
-		{
-			name: "minimal_restructuring_charges",
-			data: &entities.FinancialData{
-				Ticker:                    "TEST",
-				Revenue:                   1000000000, // $1B revenue
-				OperatingIncome:           150000000,  // $150M operating income
-				NormalizedOperatingIncome: 150000000,
-				// Assume 1% of revenue in restructuring charges (below threshold)
-			},
-			rule: &entities.CleaningRule{
-				ID:         "restructuring_charges",
-				Category:   entities.EarningsNormalization,
-				Adjustment: entities.Exclude,
-				Threshold: &entities.ThresholdConfig{
-					PercentageOfRevenue: floatPtr(0.02), // 2% threshold
-				},
-				Severity: entities.Info,
-			},
-			expectedAmount:  0, // Below threshold, no adjustment
-			expectedApplied: false,
-			expectedReason:  "Restructuring charges below materiality threshold (1.0% < 2.0%)",
-		},
-		{
-			name: "no_revenue_data",
-			data: &entities.FinancialData{
-				Ticker:                    "TEST",
-				Revenue:                   0, // No revenue data
-				OperatingIncome:           150000000,
-				NormalizedOperatingIncome: 150000000,
-			},
-			rule: &entities.CleaningRule{
-				ID:         "restructuring_charges",
-				Category:   entities.EarningsNormalization,
-				Adjustment: entities.Exclude,
-				Severity:   entities.Info,
-			},
-			expectedAmount:  0,
-			expectedApplied: false,
-			expectedReason:  "Insufficient revenue data to calculate restructuring charges",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			adjuster := NewEarningsAdjuster()
-
-			// Set up test data with estimated restructuring charges
-			if tt.data.Revenue > 0 {
-				// Simulate restructuring charges based on test scenario
-				// nolint:staticcheck // explicit case easier to read here
-				if tt.name == "significant_restructuring_charges" {
-					// 3% of revenue
-					tt.data.RestructuringCharges = tt.data.Revenue * 0.03
-				} else if tt.name == "minimal_restructuring_charges" {
-					// 1% of revenue
-					tt.data.RestructuringCharges = tt.data.Revenue * 0.01
-				}
-			}
-
-			result := adjuster.ProcessRestructuringChargesAdjustment(tt.data, tt.rule)
-
-			assert.Equal(t, tt.expectedApplied, result.Applied, "Applied status should match")
-			if tt.expectedApplied {
-				assert.InDelta(t, tt.expectedAmount, result.Amount, 1000, "Amount should be within tolerance")
-				assert.Len(t, result.Adjustments, 1, "Should have one adjustment")
-				assert.Contains(t, result.Reasoning, "Restructuring charges adjustment", "Reasoning should mention restructuring")
-
-				// Verify the adjustment details
-				adjustment := result.Adjustments[0]
-				assert.Equal(t, "RestructuringCharges", adjustment.FromAccount)
-				assert.Equal(t, "NormalizedOperatingIncome", adjustment.ToAccount)
-				assert.Equal(t, entities.Exclude, adjustment.Type)
-				assert.InDelta(t, tt.expectedAmount, adjustment.Amount, 1000)
-			} else {
-				assert.Equal(t, 0.0, result.Amount, "Amount should be zero when not applied")
-				assert.Contains(t, result.Reasoning, tt.expectedReason, "Reasoning should match expected")
-			}
-		})
-	}
-}
-
-func TestProcessAssetSaleGainsAdjustment(t *testing.T) {
-	tests := []struct {
-		name            string
-		data            *entities.FinancialData
-		rule            *entities.CleaningRule
-		expectedAmount  float64
-		expectedApplied bool
-	}{
-		{
-			name: "significant_asset_sale_gains",
-			data: &entities.FinancialData{
-				Ticker:                    "TEST",
-				Revenue:                   2000000000, // $2B revenue
-				OperatingIncome:           300000000,  // $300M operating income
-				NormalizedOperatingIncome: 300000000,
-				AssetSaleGains:            15000000, // $15M in gains (0.75% of revenue)
-			},
-			rule: &entities.CleaningRule{
-				ID:         "asset_sale_gains",
-				Category:   entities.EarningsNormalization,
-				Adjustment: entities.Exclude,
-				Severity:   entities.Info,
-			},
-			expectedAmount:  15000000, // $15M gains to be excluded
-			expectedApplied: true,
-		},
-		{
-			name: "no_asset_sale_gains",
-			data: &entities.FinancialData{
-				Ticker:                    "TEST",
-				Revenue:                   2000000000,
-				OperatingIncome:           300000000,
-				NormalizedOperatingIncome: 300000000,
-				AssetSaleGains:            0, // No gains
-			},
-			rule: &entities.CleaningRule{
-				ID:         "asset_sale_gains",
-				Category:   entities.EarningsNormalization,
-				Adjustment: entities.Exclude,
-				Severity:   entities.Info,
-			},
-			expectedAmount:  0,
-			expectedApplied: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			adjuster := NewEarningsAdjuster()
-			result := adjuster.ProcessAssetSaleGainsAdjustment(tt.data, tt.rule)
-
-			assert.Equal(t, tt.expectedApplied, result.Applied)
-			assert.InDelta(t, tt.expectedAmount, result.Amount, 1000)
-
-			if tt.expectedApplied {
-				assert.Len(t, result.Adjustments, 1)
-				adjustment := result.Adjustments[0]
-				assert.Equal(t, "AssetSaleGains", adjustment.FromAccount)
-				assert.Equal(t, "NormalizedOperatingIncome", adjustment.ToAccount)
-			}
-		})
-	}
-}
-
 func TestProcessStockCompensationAdjustment(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -290,8 +112,20 @@ func TestProcessEarningsAdjustments(t *testing.T) {
 
 	result := adjuster.ProcessEarningsAdjustments(gocontext.Background(), data, rules, context)
 
-	assert.True(t, result.Applied, "Should apply earnings adjustments")
-	assert.Len(t, result.Adjustments, 3, "Should have three adjustments")
+	// DC-1 Phase 5 P5-C4: the legacy result.Applied / .Adjustments / .Reasoning
+	// fields were deleted. The three earnings adjustments (restructuring
+	// add-back + asset-sale subtraction fired Restaters, plus the
+	// stock-compensation reclassify) now surface natively: two fired Restater
+	// LedgerEntries + the C4 dilution Flag. The projected entities.Adjustment
+	// audit trail (count == 3) is covered end-to-end by the basket-parity
+	// golden in package datacleaner.
+	firedRestaters := 0
+	for _, e := range result.NativeLedgerEntries {
+		if e.Fired {
+			firedRestaters++
+		}
+	}
+	assert.Equal(t, 2, firedRestaters, "restructuring + asset-sale fire as Restaters")
 	assert.Len(t, result.Flags, 1, "Should have one flag for stock compensation dilution analysis")
 
 	// Verify the stock compensation flag

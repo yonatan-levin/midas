@@ -33,37 +33,21 @@ const (
 	adjusterIDC7WorkingCapital        = "C7_working_capital"
 )
 
-// EarningsAdjustmentResult represents the result of applying Category C
-// earnings normalization adjustments.
+// EarningsAdjustmentResult is the slim native carrier returned by
+// ProcessEarningsAdjustments.
 //
-// DC-1 Phase 2 PR-3 Task 3.1 added the three Native* fields below to carry
-// AdjusterOutput state from rules that have migrated to the Adjuster
-// interface. Mirrors the AssetAdjustmentResult shape PR-2 introduced for
-// Category A. The cleaner orchestrator reads NativeLedgerEntries /
-// NativeOverlays / NativelyEmittedRuleIDs to:
-//   - append the native LedgerEntries to data.AdjustmentLedger BEFORE the
-//     PR-1 shim runs, preserving earnings-category ordering;
-//   - append the native Overlays to data.Overlays (Restater C-rules emit
-//     none, but the field exists for symmetry + future hybrids);
-//   - instruct the shim to SKIP any rule whose ID appears in
-//     NativelyEmittedRuleIDs so the same rule is not double-counted.
+// DC-1 Phase 5 P5-C4 deleted the legacy translator stack and the
+// translator-fed fields (Amount / Applied / Adjustments / Reasoning). The
+// cleaner orchestrator consumes ONLY the native emissions: it drains
+// NativeLedgerEntries onto data.AdjustmentLedger and NativeOverlays onto
+// data.Overlays (preserving earnings-category ordering), derives the firing
+// signal via nativeFired(...), and projects the public entities.Adjustment
+// audit trail from the ledger via adjustmentsFromLedger. Flags carries the
+// category's collected risk flags.
 //
-// Tasks 3.2-3.6 widen NativelyEmittedRuleIDs as more C-rules migrate; Task 3.8
-// deletes the shim earnings branch entirely.
+// Mirrors the slimmed AssetAdjustmentResult / LiabilityAdjustmentResult.
 type EarningsAdjustmentResult struct {
-	Amount float64 `json:"amount"`
-	// Deprecated: DC-1 Phase 5 P5-C3 stopped reading this field from the
-	// orchestrator (datacleaner/service.go::applyActiveAdjustments now uses
-	// nativeFired(NativeLedgerEntries, NativeOverlays, Flags) which filters
-	// Fired:false skip-diagnostic entries). The legacy translator stack still
-	// SETS this field; P5-C4 (deferred) will delete the translators + this
-	// field together. Do NOT add new readers — use nativeFired() or read the
-	// NativeLedgerEntries / NativeOverlays / Flags slices directly.
-	Applied     bool                  `json:"applied"`
-	Adjustments []entities.Adjustment `json:"adjustments"`
-	Flags       []entities.Flag       `json:"flags"`
-	Reasoning   string                `json:"reasoning"`
-
+	Flags                  []entities.Flag        `json:"flags"`
 	NativeLedgerEntries    []entities.LedgerEntry `json:"-"`
 	NativeOverlays         []entities.OverlaySpec `json:"-"`
 	NativelyEmittedRuleIDs map[string]bool        `json:"-"`
@@ -205,85 +189,6 @@ func (ea *EarningsAdjuster) ApplyC1Restructuring(ctx context.Context, working *e
 	}, nil
 }
 
-// c1AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
-// the legacy *AdjustmentResult expected by ProcessEarningsAdjustments' existing
-// aggregate accounting. Parallel to assets.go's a2/a4/a5 translators — C1 is a
-// Restater, so the translation reads the add-back amount from the LedgerEntry's
-// DeltaAmount (positive — C1 is an add-back, not a writedown).
-//
-// originalRestructuring is captured at the dispatcher BEFORE ApplyC1Restructuring
-// runs and threaded in for parity with the asset-side a2/a4/a5 translators.
-// C1's percentage is derived (amount / revenue) — not constant — so the
-// translator computes it directly from the AdjusterOutput shape.
-func c1AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalRestructuring float64) *AdjustmentResult {
-	_ = originalRestructuring // reserved for future symmetry; today's C1 reads the amount from the LedgerEntry directly.
-
-	// Locate the fired LedgerEntry — C1 emits exactly one when fired and zero
-	// Restater-shaped entries when skipped (skip paths produce a Fired:false
-	// LedgerEntry only).
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID != adjusterIDC1RestructuringCharges || !entry.Fired {
-			continue
-		}
-		// DeltaAmount is signed-POSITIVE for C1 (add-back). The legacy
-		// Adjustment.Amount is a positive magnitude, so no sign flip.
-		restructuringAmount := entry.DeltaAmount
-		// Derive ratio for the legacy Percentage field. The original ratio
-		// (restructuring / revenue) is needed for the historical
-		// "X.X% of revenue" string formatting and Adjustment.Percentage.
-		// LedgerEntry doesn't carry revenue; we re-derive from the original
-		// inputs the dispatcher captured. originalRestructuring carries the
-		// raw input field value (which may be <=0 and estimated inside Apply);
-		// the LedgerEntry's Reasoning string already contains the formatted
-		// ratio so we surface that directly.
-		adjustment := entities.Adjustment{
-			ID:          fmt.Sprintf("restructuring_%d", time.Now().UnixNano()),
-			RuleID:      rule.ID,
-			Category:    entities.EarningsNormalization,
-			Type:        entities.Exclude,
-			Amount:      restructuringAmount,
-			FromAccount: "RestructuringCharges",
-			ToAccount:   "NormalizedOperatingIncome",
-			// Percentage is not strictly needed for downstream consumers (no
-			// regression test reads it for C1); leave as 0 for now and rely on
-			// the Reasoning string for the formatted ratio. Mirrors a4/a5's
-			// approach of using a constant percentage when not derivable
-			// without re-reading working.
-			Reasoning: entry.Reasoning,
-			Applied:   true,
-			Timestamp: time.Now(),
-		}
-		return &AdjustmentResult{
-			Amount:      restructuringAmount,
-			Applied:     true,
-			Adjustments: []entities.Adjustment{adjustment},
-			Flags:       out.Flags,
-			Reasoning:   entry.Reasoning,
-		}
-	}
-
-	// Skipped path — surface the reasoning from the Fired:false LedgerEntry
-	// for parity with the legacy "no adjustment" branches.
-	reasoning := "No restructuring charges to add back"
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID == adjusterIDC1RestructuringCharges {
-			if entry.SkipReason != "" {
-				reasoning = entry.SkipReason
-			} else if entry.Reasoning != "" {
-				reasoning = entry.Reasoning
-			}
-			break
-		}
-	}
-	return &AdjustmentResult{
-		Amount:      0.0,
-		Applied:     false,
-		Adjustments: []entities.Adjustment{},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
-}
-
 // c2AssetSaleGainsAdjuster is the per-rule adapter that wraps EarningsAdjuster's
 // C2 rule into the single-Apply Adjuster interface. Mirrors c1RestructuringAdjuster.
 type c2AssetSaleGainsAdjuster struct {
@@ -384,72 +289,6 @@ func (ea *EarningsAdjuster) ApplyC2AssetSaleGains(ctx context.Context, working *
 			SkipMetrics: map[string]float64{"original_Revenue": working.Revenue},
 		}},
 	}, nil
-}
-
-// c2AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
-// the legacy *AdjustmentResult expected by ProcessEarningsAdjustments. C2 is a
-// Restater with NEGATIVE DeltaAmount (subtraction). The legacy
-// Adjustment.Amount is a positive magnitude, so the translator flips sign.
-//
-// originalGains is captured at the dispatcher BEFORE ApplyC2AssetSaleGains
-// runs and threaded in so the legacy Adjustment.Percentage field can be
-// derived from the original revenue ratio when needed. Today's legacy code
-// formats it inline; the translator preserves the existing
-// (gains/revenue)*100 formula.
-func c2AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalGains float64, originalRevenue float64) *AdjustmentResult {
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID != adjusterIDC2AssetSaleGains || !entry.Fired {
-			continue
-		}
-		// DeltaAmount is signed-negative for C2; the legacy Adjustment.Amount
-		// is a positive magnitude.
-		gains := -entry.DeltaAmount
-		_ = originalGains // reserved for symmetry; the legacy magnitude comes from the LedgerEntry.
-		var percentage float64
-		if originalRevenue > 0 {
-			percentage = (gains / originalRevenue) * 100
-		}
-		adjustment := entities.Adjustment{
-			ID:          fmt.Sprintf("asset_gains_%d", time.Now().UnixNano()),
-			RuleID:      rule.ID,
-			Category:    entities.EarningsNormalization,
-			Type:        entities.Exclude,
-			Amount:      gains,
-			FromAccount: "AssetSaleGains",
-			ToAccount:   "NormalizedOperatingIncome",
-			Percentage:  percentage,
-			Reasoning:   fmt.Sprintf("Excluded asset sale gains of $%.1fM from operating income", gains/1000000),
-			Applied:     true,
-			Timestamp:   time.Now(),
-		}
-		return &AdjustmentResult{
-			Amount:      gains,
-			Applied:     true,
-			Adjustments: []entities.Adjustment{adjustment},
-			Flags:       out.Flags,
-			Reasoning:   entry.Reasoning,
-		}
-	}
-
-	// Skipped path — surface the reasoning from the Fired:false LedgerEntry.
-	reasoning := "No asset sale gains to adjust"
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID == adjusterIDC2AssetSaleGains {
-			if entry.SkipReason != "" {
-				reasoning = entry.SkipReason
-			} else if entry.Reasoning != "" {
-				reasoning = entry.Reasoning
-			}
-			break
-		}
-	}
-	return &AdjustmentResult{
-		Amount:      0.0,
-		Applied:     false,
-		Adjustments: []entities.Adjustment{},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
 }
 
 // c3LitigationSettlementsAdjuster is the per-rule adapter that wraps
@@ -557,60 +396,6 @@ func (ea *EarningsAdjuster) ApplyC3Litigation(ctx context.Context, working *enti
 	}, nil
 }
 
-// c3AdjusterOutputToLegacyResult translates the AdjusterOutput shape into the
-// legacy *AdjustmentResult expected by ProcessEarningsAdjustments.
-func c3AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalRevenue float64) *AdjustmentResult {
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID != adjusterIDC3LitigationSettlements || !entry.Fired {
-			continue
-		}
-		settlements := entry.DeltaAmount
-		var percentage float64
-		if originalRevenue > 0 {
-			percentage = (settlements / originalRevenue) * 100
-		}
-		adjustment := entities.Adjustment{
-			ID:          fmt.Sprintf("litigation_%d", time.Now().UnixNano()),
-			RuleID:      rule.ID,
-			Category:    entities.EarningsNormalization,
-			Type:        entities.Exclude,
-			Amount:      settlements,
-			FromAccount: "LitigationSettlements",
-			ToAccount:   "NormalizedOperatingIncome",
-			Percentage:  percentage,
-			Reasoning:   fmt.Sprintf("Excluded litigation settlements of $%.1fM (%.1f%% of revenue)", settlements/1000000, percentage),
-			Applied:     true,
-			Timestamp:   time.Now(),
-		}
-		return &AdjustmentResult{
-			Amount:      settlements,
-			Applied:     true,
-			Adjustments: []entities.Adjustment{adjustment},
-			Flags:       out.Flags,
-			Reasoning:   entry.Reasoning,
-		}
-	}
-
-	reasoning := "No litigation settlements to adjust"
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID == adjusterIDC3LitigationSettlements {
-			if entry.SkipReason != "" {
-				reasoning = entry.SkipReason
-			} else if entry.Reasoning != "" {
-				reasoning = entry.Reasoning
-			}
-			break
-		}
-	}
-	return &AdjustmentResult{
-		Amount:      0.0,
-		Applied:     false,
-		Adjustments: []entities.Adjustment{},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
-}
-
 // c5DerivativeGainsLossesAdjuster is the per-rule adapter that wraps
 // EarningsAdjuster's C5 rule into the single-Apply Adjuster interface.
 type c5DerivativeGainsLossesAdjuster struct {
@@ -713,70 +498,6 @@ func (ea *EarningsAdjuster) ApplyC5DerivativeGainsLosses(ctx context.Context, wo
 	}, nil
 }
 
-// c5AdjusterOutputToLegacyResult translates the AdjusterOutput shape into the
-// legacy *AdjustmentResult expected by ProcessEarningsAdjustments. C5's legacy
-// Adjustment.Amount uses the absolute-magnitude reporting amount, NOT the
-// signed delta — so the translator takes `abs(DeltaAmount)`.
-//
-// originalRevenue is captured at the dispatcher to derive
-// Adjustment.Percentage (reportingAmount/revenue * 100, mirroring legacy
-// line :328 formatting).
-func c5AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalRevenue float64) *AdjustmentResult {
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID != adjusterIDC5DerivativeGainsLosses || !entry.Fired {
-			continue
-		}
-		// abs(DeltaAmount) — branch-agnostic reporting magnitude.
-		reportingAmount := entry.DeltaAmount
-		if reportingAmount < 0 {
-			reportingAmount = -reportingAmount
-		}
-		var percentage float64
-		if originalRevenue > 0 {
-			percentage = (reportingAmount / originalRevenue) * 100
-		}
-		adjustment := entities.Adjustment{
-			ID:          fmt.Sprintf("derivative_%d", time.Now().UnixNano()),
-			RuleID:      rule.ID,
-			Category:    entities.EarningsNormalization,
-			Type:        entities.Exclude,
-			Amount:      reportingAmount,
-			FromAccount: "DerivativeGainsLosses",
-			ToAccount:   "NormalizedOperatingIncome",
-			Percentage:  percentage,
-			Reasoning:   fmt.Sprintf("Excluded derivative gains/losses of $%.1fM from operating income", reportingAmount/1000000),
-			Applied:     true,
-			Timestamp:   time.Now(),
-		}
-		return &AdjustmentResult{
-			Amount:      reportingAmount,
-			Applied:     true,
-			Adjustments: []entities.Adjustment{adjustment},
-			Flags:       out.Flags,
-			Reasoning:   entry.Reasoning,
-		}
-	}
-
-	reasoning := "No derivative gains/losses to adjust"
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID == adjusterIDC5DerivativeGainsLosses {
-			if entry.SkipReason != "" {
-				reasoning = entry.SkipReason
-			} else if entry.Reasoning != "" {
-				reasoning = entry.Reasoning
-			}
-			break
-		}
-	}
-	return &AdjustmentResult{
-		Amount:      0.0,
-		Applied:     false,
-		Adjustments: []entities.Adjustment{},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
-}
-
 // c6CapitalizedInterestAdjuster is the per-rule adapter that wraps
 // EarningsAdjuster's C6 rule into the single-Apply Adjuster interface.
 type c6CapitalizedInterestAdjuster struct {
@@ -871,72 +592,6 @@ func (ea *EarningsAdjuster) ApplyC6CapitalizedInterest(ctx context.Context, work
 			SkipMetrics: map[string]float64{"original_Revenue": working.Revenue},
 		}},
 	}, nil
-}
-
-// c6AdjusterOutputToLegacyResult translates the AdjusterOutput shape into the
-// legacy *AdjustmentResult expected by ProcessEarningsAdjustments. C6's
-// legacy Adjustment.Amount equals CapitalizedInterest (positive); the
-// translator reads it off DeltaAmount.
-//
-// originalCapitalizedInterest is captured at the dispatcher for symmetry
-// with C2/C3/C5 — the translator can also re-derive it from DeltaAmount
-// since the dispatcher's dual-write runs AFTER. Kept threaded for symmetry.
-//
-// originalRevenue is threaded for Adjustment.Percentage computation
-// (mirrors legacy line :1217: `(data.CapitalizedInterest / data.Revenue) * 100`).
-// We guard with `if originalRevenue > 0` matching the C3/C5 precedent.
-func c6AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalCapitalizedInterest float64, originalRevenue float64) *AdjustmentResult {
-	_ = originalCapitalizedInterest // captured for dispatcher-side symmetry; magnitude comes from the LedgerEntry.
-
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID != adjusterIDC6CapitalizedInterest || !entry.Fired {
-			continue
-		}
-		capInterest := entry.DeltaAmount // positive by construction (skip path catches <=0).
-		var percentage float64
-		if originalRevenue > 0 {
-			percentage = (capInterest / originalRevenue) * 100
-		}
-		adjustment := entities.Adjustment{
-			ID:          fmt.Sprintf("cap_interest_%d", time.Now().UnixNano()),
-			RuleID:      rule.ID,
-			Category:    entities.EarningsNormalization,
-			Type:        entities.Reclassify, // Note: Reclassify (not Exclude) — C6 is a between-line move.
-			Amount:      capInterest,
-			FromAccount: "CapitalizedInterest",
-			ToAccount:   "InterestExpense",
-			Percentage:  percentage,
-			Reasoning:   fmt.Sprintf("Reclassified capitalized interest of $%.1fM to interest expense", capInterest/1000000),
-			Applied:     true,
-			Timestamp:   time.Now(),
-		}
-		return &AdjustmentResult{
-			Amount:      capInterest,
-			Applied:     true,
-			Adjustments: []entities.Adjustment{adjustment},
-			Flags:       out.Flags,
-			Reasoning:   entry.Reasoning,
-		}
-	}
-
-	reasoning := "No capitalized interest to adjust"
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID == adjusterIDC6CapitalizedInterest {
-			if entry.SkipReason != "" {
-				reasoning = entry.SkipReason
-			} else if entry.Reasoning != "" {
-				reasoning = entry.Reasoning
-			}
-			break
-		}
-	}
-	return &AdjustmentResult{
-		Amount:      0.0,
-		Applied:     false,
-		Adjustments: []entities.Adjustment{},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
 }
 
 // c4StockCompensationAdjuster is the per-rule adapter that wraps EarningsAdjuster's
@@ -1064,72 +719,6 @@ func (ea *EarningsAdjuster) ApplyC4StockCompensation(ctx context.Context, workin
 	})
 
 	return out, nil
-}
-
-// c4AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
-// the legacy *AdjustmentResult expected by ProcessEarningsAdjustments. Like the
-// asset-side aRD/aCapSoftware translators, C4 is a FlagEmitter — but UNLIKE
-// the asset-side reviews which return Applied:false on every path, the legacy
-// ProcessStockCompensationAdjustment returns Applied:true on the fired path
-// (with a non-empty Adjustments slice carrying an entities.Adjustment{
-// Type:Reclassify} record). The translator preserves that exact shape so the
-// outer dispatcher's `if result.Applied` guard continues to surface the Flag
-// through allFlags.
-func c4AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule, originalRevenue float64) *AdjustmentResult {
-	// Locate the LedgerEntry — there is exactly one (fired or skipped).
-	var entry entities.LedgerEntry
-	for _, e := range out.LedgerEntries {
-		if e.AdjusterID == adjusterIDC4StockCompensation {
-			entry = e
-			break
-		}
-	}
-
-	// Fired path detection: the Flags slice is the firing signal (FlagEmitter
-	// convention). Mirrors the SkipMetrics["sbc_amount"] >0 check or — more
-	// directly — len(out.Flags) > 0.
-	if len(out.Flags) > 0 {
-		sbcAmount := entry.SkipMetrics["sbc_amount"]
-		var percentage float64
-		if originalRevenue > 0 {
-			percentage = (sbcAmount / originalRevenue) * 100
-		}
-		adjustment := entities.Adjustment{
-			ID:          fmt.Sprintf("stock_comp_%d", time.Now().UnixNano()),
-			RuleID:      rule.ID,
-			Category:    entities.EarningsNormalization,
-			Type:        entities.Reclassify,
-			Amount:      sbcAmount,
-			FromAccount: "StockBasedCompensation",
-			ToAccount:   "OperatingExpenses",
-			Percentage:  percentage,
-			Reasoning:   fmt.Sprintf("Reclassified stock-based compensation of $%.1fM for dilution analysis", sbcAmount/1000000),
-			Applied:     true,
-			Timestamp:   time.Now(),
-		}
-		return &AdjustmentResult{
-			Amount:      sbcAmount,
-			Applied:     true, // Legacy parity: Applied:true on fire (NOT Applied:false like asset-side FlagEmitters).
-			Adjustments: []entities.Adjustment{adjustment},
-			Flags:       out.Flags,
-			Reasoning:   entry.Reasoning,
-		}
-	}
-
-	// Skipped path — surface the SkipReason from the Fired:false LedgerEntry.
-	reasoning := "No stock-based compensation to adjust"
-	if entry.SkipReason != "" {
-		reasoning = entry.SkipReason
-	} else if entry.Reasoning != "" {
-		reasoning = entry.Reasoning
-	}
-	return &AdjustmentResult{
-		Amount:      0.0,
-		Applied:     false,
-		Adjustments: []entities.Adjustment{},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
 }
 
 // c7WorkingCapitalAdjuster is the per-rule adapter that wraps EarningsAdjuster's
@@ -1278,55 +867,6 @@ func (ea *EarningsAdjuster) ApplyC7WorkingCapital(ctx context.Context, working *
 	return out, nil
 }
 
-// c7AdjusterOutputToLegacyResult translates the new AdjusterOutput shape into
-// the legacy *AdjustmentResult expected by ProcessEarningsAdjustments.
-//
-// C7's legacy ProcessWorkingCapitalAdjustment returns:
-//   - Fired path: Applied:true, Adjustments:EMPTY slice (no entities.Adjustment
-//     record at all — distinct from C4 which DOES emit one), Flags:populated.
-//   - Skip path: Applied:false, Adjustments:empty, Flags:empty.
-//
-// The translator preserves Applied:true on the fired path so the outer
-// dispatcher's `if result.Applied` guard surfaces the Flag through allFlags.
-func c7AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule) *AdjustmentResult {
-	_ = rule // unused — the legacy result carries no rule-specific fields beyond what's already on the Flag.
-
-	var entry entities.LedgerEntry
-	for _, e := range out.LedgerEntries {
-		if e.AdjusterID == adjusterIDC7WorkingCapital {
-			entry = e
-			break
-		}
-	}
-
-	// Fired path detection: populated Flags is the firing signal.
-	if len(out.Flags) > 0 {
-		wcAmount := entry.SkipMetrics["wc_amount"]
-		return &AdjustmentResult{
-			Amount:      wcAmount,
-			Applied:     true,                    // Legacy parity: Applied:true on fire.
-			Adjustments: []entities.Adjustment{}, // EMPTY — C7 legacy emits NO entities.Adjustment record.
-			Flags:       out.Flags,
-			Reasoning:   entry.Reasoning,
-		}
-	}
-
-	// Skipped path — surface the reasoning from the Fired:false LedgerEntry.
-	reasoning := "No working capital adjustments detected"
-	if entry.SkipReason != "" {
-		reasoning = entry.SkipReason
-	} else if entry.Reasoning != "" {
-		reasoning = entry.Reasoning
-	}
-	return &AdjustmentResult{
-		Amount:      0.0,
-		Applied:     false,
-		Adjustments: []entities.Adjustment{},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
-}
-
 // ProcessEarningsAdjustments applies all Category C earnings normalization rules.
 //
 // DC-1 Phase 2 PR-3 Task 3.1 (incremental Adjuster-interface migration):
@@ -1338,15 +878,12 @@ func c7AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningR
 // double-counted. Tasks 3.2-3.6 add more rules to the NativelyEmittedRuleIDs
 // set; Task 3.8 deletes the shim's earnings branch entirely.
 func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *EarningsAdjustmentResult {
-	var allAdjustments []entities.Adjustment
 	var allFlags []entities.Flag
-	totalAmount := 0.0
-	applied := false
 
 	// Phase 2 PR-3 native emissions — collected here in rule-iteration order so
 	// the orchestrator can append them to data.AdjustmentLedger in position.
-	// The set NativelyEmittedRuleIDs tells the shim which legacy emissions to
-	// skip to avoid double counting.
+	// The set NativelyEmittedRuleIDs records which rules emitted natively
+	// (consumed by per-rule contract tests).
 	var nativeLedger []entities.LedgerEntry
 	var nativeOverlays []entities.OverlaySpec
 	nativelyEmittedRuleIDs := make(map[string]bool, len(rules))
@@ -1362,8 +899,6 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			continue
 		}
 
-		var result *AdjustmentResult
-
 		switch rule.ID {
 		case "restructuring_charges":
 			// DC-1 Phase 2 PR-3 Task 3.1: route C1 through the new Adjuster-
@@ -1373,27 +908,15 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// stay byte-identical AND the AdjusterOutput's LedgerEntries /
 			// Flags reach the cleaner orchestrator.
 			//
-			// CAPTURE originalRestructuring BEFORE Apply runs (mirrors A1's
-			// originalGoodwill capture). Apply does not mutate, so reading
-			// data.RestructuringCharges before AND after Apply yields the same
-			// value; we still capture-before for parity and to document the
-			// execution-order invariant.
-			originalRestructuring := data.RestructuringCharges
 			out, err := ea.ApplyC1Restructuring(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
-				// Adjuster.Apply errors are not yet a defined surface in
-				// Phase 2; ApplyC1Restructuring never returns one today.
-				// Falling back to the legacy path preserves behavior on
-				// hypothetical future errors.
-				result = ea.ProcessRestructuringChargesAdjustment(data, rule)
-				break
+				// Adjuster.Apply errors are not a defined surface today;
+				// ApplyC1Restructuring never returns one. Skip on a
+				// hypothetical future error (the deleted legacy fallback
+				// would have bypassed the native path the orchestrator now
+				// depends on exclusively).
+				continue
 			}
-
-			// Translate the AdjusterOutput into the legacy *AdjustmentResult
-			// shape so the existing aggregate accounting keeps working, AND
-			// perform the dual-write mutation that ApplyC1Restructuring
-			// intentionally omitted.
-			result = c1AdjusterOutputToLegacyResult(out, rule, originalRestructuring)
 
 			// DC-1 Phase 4 (C-3, §8.2.1 Option A): the dispatcher applies the
 			// fired LedgerEntry's COMPONENT delta (NormalizedOperatingIncome,
@@ -1405,6 +928,7 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// does not "fire" (Applied=false), the AdjusterOutput carries a
 			// Fired:false LedgerEntry that is load-bearing for "why didn't C1
 			// fire?" observability.
+			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
@@ -1413,15 +937,10 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// shaped ApplyC2AssetSaleGains. Mirrors the C1 wiring above —
 			// Apply is mutation-free; the dispatcher performs the dual-write
 			// (subtraction, not add-back) AFTER Apply.
-			originalGains := data.AssetSaleGains
-			originalRevenue := data.Revenue
 			out, err := ea.ApplyC2AssetSaleGains(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
-				result = ea.ProcessAssetSaleGainsAdjustment(data, rule)
-				break
+				continue
 			}
-
-			result = c2AdjusterOutputToLegacyResult(out, rule, originalGains, originalRevenue)
 
 			// DC-1 Phase 4 (C-3, §8.2.1 Option A): the helper applies the C2
 			// LedgerEntry's signed COMPONENT delta (DeltaAmount = -gains, i.e.
@@ -1429,20 +948,17 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// mutation.
 			applyLedgerComponentDeltas(applyCtx, data, out)
 
+			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
 		case "litigation_settlements":
 			// DC-1 Phase 2 PR-3 Task 3.3: route C3 through ApplyC3Litigation.
 			// Mirrors C1 wiring (POSITIVE add-back).
-			originalRevenue := data.Revenue
 			out, err := ea.ApplyC3Litigation(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
-				result = ea.ProcessLitigationSettlementsAdjustment(data, rule)
-				break
+				continue
 			}
-
-			result = c3AdjusterOutputToLegacyResult(out, rule, originalRevenue)
 
 			// DC-1 Phase 4 (C-3, §8.2.1 Option A): the helper applies the C3
 			// LedgerEntry's COMPONENT delta (positive add-back of
@@ -1450,6 +966,7 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// umbrella mutation.
 			applyLedgerComponentDeltas(applyCtx, data, out)
 
+			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
@@ -1458,20 +975,15 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// shaped ApplyC4StockCompensation. UNLIKE C1/C2/C3/C5/C6 (Restater
 			// roles), C4 is a FlagEmitter — Apply does NOT mutate the balance
 			// sheet on any path, and there is no dual-write step here. The
-			// legacy result.Applied:true on the fired path is preserved by the
-			// translator so the outer `if result.Applied` guard continues to
-			// surface the dilution Flag through allFlags. See
+			// dilution Flag surfaces through allFlags. See
 			// ApplyC4StockCompensation godoc for the plan-vs-code disagreement.
-			originalRevenue := data.Revenue
 			out, err := ea.ApplyC4StockCompensation(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
-				result = ea.ProcessStockCompensationAdjustment(data, rule)
-				break
+				continue
 			}
-
-			result = c4AdjusterOutputToLegacyResult(out, rule, originalRevenue)
 			// NO dual-write: FlagEmitter convention — no balance-sheet mutation.
 
+			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
@@ -1486,20 +998,13 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// `NormalizedOperatingIncome += DeltaAmount` (mirroring legacy
 			// `NormalizedOperatingIncome -= rawAmount`).
 			//
-			// The legacy *AdjustmentResult.Amount uses the absolute magnitude
-			// (positive in both branches). We replay that contract by passing
-			// `result.Amount` to a `+=` mutation only after the translator
-			// has flipped sign on the loss branch... but that breaks parity.
-			// Instead we mutate by reading the SIGNED DeltaAmount off the
-			// native LedgerEntry directly.
-			originalRevenue := data.Revenue
+			// The COMPONENT mutation reads the SIGNED DeltaAmount off the
+			// native LedgerEntry directly (negative on the gain branch,
+			// positive on the loss branch).
 			out, err := ea.ApplyC5DerivativeGainsLosses(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
-				result = ea.ProcessDerivativeGainsLossesAdjustment(data, rule)
-				break
+				continue
 			}
-
-			result = c5AdjusterOutputToLegacyResult(out, rule, originalRevenue)
 
 			// DC-1 Phase 4 (C-3, §8.2.1 Option A): the generic helper applies
 			// the SIGNED COMPONENT DeltaAmount (negative on the gain branch,
@@ -1508,6 +1013,7 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// did. No umbrella mutation.
 			applyLedgerComponentDeltas(applyCtx, data, out)
 
+			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
@@ -1522,17 +1028,12 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// NOT an equity-flowing event. Phase 3's Restated() accessor must
 			// NOT add C6's DeltaAmount to retained earnings.
 			//
-			// Dual-write targets `data.InterestExpense` (NOT
+			// COMPONENT mutation targets `data.InterestExpense` (NOT
 			// NormalizedOperatingIncome — different field!).
-			originalCapitalizedInterest := data.CapitalizedInterest
-			originalRevenue := data.Revenue
 			out, err := ea.ApplyC6CapitalizedInterest(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
-				result = ea.ProcessCapitalizedInterestAdjustment(data, rule)
-				break
+				continue
 			}
-
-			result = c6AdjusterOutputToLegacyResult(out, rule, originalCapitalizedInterest, originalRevenue)
 
 			// DC-1 Phase 4 (C-3, §8.2.1 Option A): the helper applies the C6
 			// LedgerEntry's COMPONENT delta to data.InterestExpense (NOT
@@ -1543,6 +1044,7 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// mutation.
 			applyLedgerComponentDeltas(applyCtx, data, out)
 
+			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
@@ -1550,18 +1052,14 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// DC-1 Phase 2 PR-3 Task 3.7: route C7 through the new Adjuster-
 			// shaped ApplyC7WorkingCapital. Like C4, C7 is a FlagEmitter
 			// (window-dressing flag only — no balance-sheet mutation). The
-			// legacy Applied:true with EMPTY Adjustments on fire is preserved
-			// by the translator so the outer `if result.Applied` guard
-			// continues to surface the Flag through allFlags.
+			// fired window-dressing Flag surfaces through allFlags.
 			out, err := ea.ApplyC7WorkingCapital(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
-				result = ea.ProcessWorkingCapitalAdjustment(data, rule, cleaningCtx)
-				break
+				continue
 			}
-
-			result = c7AdjusterOutputToLegacyResult(out, rule)
 			// NO dual-write: FlagEmitter convention — no balance-sheet mutation.
 
+			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
@@ -1569,196 +1067,19 @@ func (ea *EarningsAdjuster) ProcessEarningsAdjustments(ctx context.Context, data
 			// Skip unknown rules
 			continue
 		}
-
-		if result != nil && result.Applied {
-			allAdjustments = append(allAdjustments, result.Adjustments...)
-			allFlags = append(allFlags, result.Flags...)
-			totalAmount += result.Amount
-			applied = true
-		}
 	}
 
-	reasoning := fmt.Sprintf("Applied %d earnings normalization adjustments totaling $%.1fM",
-		len(allAdjustments), totalAmount/1000000)
-
+	// DC-1 Phase 5 P5-C4: the legacy *AdjustmentResult accumulation +
+	// audit-trail Reasoning string were deleted. The orchestrator projects
+	// the public audit trail from data.AdjustmentLedger via
+	// adjustmentsFromLedger; flags + native emissions are drained per-arm
+	// above. Earnings rules never mutate an umbrella, so there is no
+	// post-loop recompute (unlike the asset dispatcher).
 	return &EarningsAdjustmentResult{
-		Amount:                 totalAmount,
-		Applied:                applied,
-		Adjustments:            allAdjustments,
 		Flags:                  allFlags,
-		Reasoning:              reasoning,
 		NativeLedgerEntries:    nativeLedger,
 		NativeOverlays:         nativeOverlays,
 		NativelyEmittedRuleIDs: nativelyEmittedRuleIDs,
-	}
-}
-
-// ProcessRestructuringChargesAdjustment implements C1 rule: Remove recurring restructuring charges
-func (ea *EarningsAdjuster) ProcessRestructuringChargesAdjustment(data *entities.FinancialData, rule *entities.CleaningRule) *AdjustmentResult {
-	if data.Revenue <= 0 {
-		return &AdjustmentResult{
-			Amount:      0.0,
-			Applied:     false,
-			Adjustments: []entities.Adjustment{},
-			Flags:       []entities.Flag{},
-			Reasoning:   "Insufficient revenue data to calculate restructuring charges",
-		}
-	}
-
-	// Use actual restructuring charges if available, otherwise estimate
-	restructuringAmount := data.RestructuringCharges
-	if restructuringAmount <= 0 {
-		// Estimate based on revenue (conservative approach)
-		restructuringAmount = data.Revenue * 0.015 // Estimate 1.5% of revenue
-	}
-
-	// Check materiality threshold
-	restructuringRatio := restructuringAmount / data.Revenue
-	threshold := 0.02 // Default 2% threshold
-	if rule.Threshold != nil && rule.Threshold.PercentageOfRevenue != nil {
-		threshold = *rule.Threshold.PercentageOfRevenue
-	}
-
-	if restructuringRatio < threshold {
-		return &AdjustmentResult{
-			Amount:      0.0,
-			Applied:     false,
-			Adjustments: []entities.Adjustment{},
-			Flags:       []entities.Flag{},
-			Reasoning: fmt.Sprintf("Restructuring charges below materiality threshold (%.1f%% < %.1f%%)",
-				restructuringRatio*100, threshold*100),
-		}
-	}
-
-	// Apply adjustment - add back to normalized operating income
-	data.NormalizedOperatingIncome += restructuringAmount
-
-	adjustment := entities.Adjustment{
-		ID:          fmt.Sprintf("restructuring_%d", time.Now().UnixNano()),
-		RuleID:      rule.ID,
-		Category:    entities.EarningsNormalization,
-		Type:        entities.Exclude,
-		Amount:      restructuringAmount,
-		FromAccount: "RestructuringCharges",
-		ToAccount:   "NormalizedOperatingIncome",
-		Percentage:  restructuringRatio * 100,
-		Reasoning: fmt.Sprintf("Excluded restructuring charges of $%.1fM (%.1f%% of revenue)",
-			restructuringAmount/1000000, restructuringRatio*100),
-		Applied:   true,
-		Timestamp: time.Now(),
-	}
-
-	reasoning := fmt.Sprintf("Restructuring charges adjustment: Excluded $%.1fM (%.1f%% of revenue) from normalized operating income",
-		restructuringAmount/1000000, restructuringRatio*100)
-
-	return &AdjustmentResult{
-		Amount:      restructuringAmount,
-		Applied:     true,
-		Adjustments: []entities.Adjustment{adjustment},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
-}
-
-// ProcessAssetSaleGainsAdjustment implements C2 rule: Remove non-core asset sale gains
-func (ea *EarningsAdjuster) ProcessAssetSaleGainsAdjustment(data *entities.FinancialData, rule *entities.CleaningRule) *AdjustmentResult {
-	if data.AssetSaleGains <= 0 {
-		return &AdjustmentResult{
-			Amount:      0.0,
-			Applied:     false,
-			Adjustments: []entities.Adjustment{},
-			Flags:       []entities.Flag{},
-			Reasoning:   "No asset sale gains to adjust",
-		}
-	}
-
-	// Remove asset sale gains from normalized operating income
-	data.NormalizedOperatingIncome -= data.AssetSaleGains
-
-	adjustment := entities.Adjustment{
-		ID:          fmt.Sprintf("asset_gains_%d", time.Now().UnixNano()),
-		RuleID:      rule.ID,
-		Category:    entities.EarningsNormalization,
-		Type:        entities.Exclude,
-		Amount:      data.AssetSaleGains,
-		FromAccount: "AssetSaleGains",
-		ToAccount:   "NormalizedOperatingIncome",
-		Percentage:  (data.AssetSaleGains / data.Revenue) * 100,
-		Reasoning: fmt.Sprintf("Excluded asset sale gains of $%.1fM from operating income",
-			data.AssetSaleGains/1000000),
-		Applied:   true,
-		Timestamp: time.Now(),
-	}
-
-	reasoning := fmt.Sprintf("Asset sale gains adjustment: Excluded $%.1fM from normalized operating income",
-		data.AssetSaleGains/1000000)
-
-	return &AdjustmentResult{
-		Amount:      data.AssetSaleGains,
-		Applied:     true,
-		Adjustments: []entities.Adjustment{adjustment},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
-}
-
-// ProcessLitigationSettlementsAdjustment implements C3 rule: Remove episodic litigation costs
-func (ea *EarningsAdjuster) ProcessLitigationSettlementsAdjustment(data *entities.FinancialData, rule *entities.CleaningRule) *AdjustmentResult {
-	if data.LitigationSettlements <= 0 {
-		return &AdjustmentResult{
-			Amount:      0.0,
-			Applied:     false,
-			Adjustments: []entities.Adjustment{},
-			Flags:       []entities.Flag{},
-			Reasoning:   "No litigation settlements to adjust",
-		}
-	}
-
-	// Check materiality threshold
-	litigationRatio := data.LitigationSettlements / data.Revenue
-	threshold := 0.01 // Default 1% threshold
-	if rule.Threshold != nil && rule.Threshold.PercentageOfRevenue != nil {
-		threshold = *rule.Threshold.PercentageOfRevenue
-	}
-
-	if litigationRatio < threshold {
-		return &AdjustmentResult{
-			Amount:      0.0,
-			Applied:     false,
-			Adjustments: []entities.Adjustment{},
-			Flags:       []entities.Flag{},
-			Reasoning: fmt.Sprintf("Litigation settlements below materiality threshold (%.1f%% < %.1f%%)",
-				litigationRatio*100, threshold*100),
-		}
-	}
-
-	// Add back litigation settlements to normalized operating income
-	data.NormalizedOperatingIncome += data.LitigationSettlements
-
-	adjustment := entities.Adjustment{
-		ID:          fmt.Sprintf("litigation_%d", time.Now().UnixNano()),
-		RuleID:      rule.ID,
-		Category:    entities.EarningsNormalization,
-		Type:        entities.Exclude,
-		Amount:      data.LitigationSettlements,
-		FromAccount: "LitigationSettlements",
-		ToAccount:   "NormalizedOperatingIncome",
-		Percentage:  litigationRatio * 100,
-		Reasoning: fmt.Sprintf("Excluded litigation settlements of $%.1fM (%.1f%% of revenue)",
-			data.LitigationSettlements/1000000, litigationRatio*100),
-		Applied:   true,
-		Timestamp: time.Now(),
-	}
-
-	reasoning := fmt.Sprintf("Litigation settlements adjustment: Excluded $%.1fM (%.1f%% of revenue) from normalized operating income",
-		data.LitigationSettlements/1000000, litigationRatio*100)
-
-	return &AdjustmentResult{
-		Amount:      data.LitigationSettlements,
-		Applied:     true,
-		Adjustments: []entities.Adjustment{adjustment},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
 	}
 }
 
@@ -1859,48 +1180,6 @@ func (ea *EarningsAdjuster) ProcessDerivativeGainsLossesAdjustment(data *entitie
 
 	return &AdjustmentResult{
 		Amount:      adjustmentAmount,
-		Applied:     true,
-		Adjustments: []entities.Adjustment{adjustment},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
-}
-
-// ProcessCapitalizedInterestAdjustment implements C6 rule: Reclassify capitalized interest
-func (ea *EarningsAdjuster) ProcessCapitalizedInterestAdjustment(data *entities.FinancialData, rule *entities.CleaningRule) *AdjustmentResult {
-	if data.CapitalizedInterest <= 0 {
-		return &AdjustmentResult{
-			Amount:      0.0,
-			Applied:     false,
-			Adjustments: []entities.Adjustment{},
-			Flags:       []entities.Flag{},
-			Reasoning:   "No capitalized interest to adjust",
-		}
-	}
-
-	// Add capitalized interest back to interest expense
-	data.InterestExpense += data.CapitalizedInterest
-
-	adjustment := entities.Adjustment{
-		ID:          fmt.Sprintf("cap_interest_%d", time.Now().UnixNano()),
-		RuleID:      rule.ID,
-		Category:    entities.EarningsNormalization,
-		Type:        entities.Reclassify,
-		Amount:      data.CapitalizedInterest,
-		FromAccount: "CapitalizedInterest",
-		ToAccount:   "InterestExpense",
-		Percentage:  (data.CapitalizedInterest / data.Revenue) * 100,
-		Reasoning: fmt.Sprintf("Reclassified capitalized interest of $%.1fM to interest expense",
-			data.CapitalizedInterest/1000000),
-		Applied:   true,
-		Timestamp: time.Now(),
-	}
-
-	reasoning := fmt.Sprintf("Capitalized interest adjustment: Reclassified $%.1fM from PP&E to interest expense",
-		data.CapitalizedInterest/1000000)
-
-	return &AdjustmentResult{
-		Amount:      data.CapitalizedInterest,
 		Applied:     true,
 		Adjustments: []entities.Adjustment{adjustment},
 		Flags:       []entities.Flag{},

@@ -223,12 +223,10 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC7FiresFlag(t *testin
 	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied:true on fire (matches the legacy
-	// ProcessWorkingCapitalAdjustment return shape), but the Adjustments
-	// slice is EMPTY (NO entities.Adjustment record — C7 emits only a Flag).
-	assert.True(t, result.Applied, "C7 legacy parity: Applied:true on fire")
-	assert.Empty(t, result.Adjustments,
-		"C7 legacy parity: Adjustments slice is EMPTY (only a Flag is emitted)")
+	// DC-1 Phase 5 P5-C4: the legacy Applied / Adjustments fields were
+	// deleted. C7 is a FlagEmitter that emits NO entities.Adjustment (it is
+	// in the projection's knownNoEmission set); its firing signal is the
+	// window-dressing Flag, which still surfaces in result.Flags.
 	require.Len(t, result.Flags, 1,
 		"C7's fired Flag must surface in the dispatcher result.Flags")
 	assert.Equal(t, "earnings_quality", result.Flags[0].Type)
@@ -273,8 +271,8 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC7SkipPath(t *testing
 	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
-	assert.False(t, result.Applied)
-	assert.Empty(t, result.Adjustments)
+	// DC-1 Phase 5 P5-C4: skip contract asserted via result.Flags (no flag on
+	// the no-WC path) + the native Fired:false LedgerEntry below.
 	assert.Empty(t, result.Flags)
 
 	require.Len(t, result.NativeLedgerEntries, 1)

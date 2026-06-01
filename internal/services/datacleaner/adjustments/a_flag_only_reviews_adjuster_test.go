@@ -333,12 +333,10 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeFlagOnlyReviews_RDFiresFlag
 	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, createTechContext())
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied=false (flag-only — no balance-sheet adjustment
-	// happened), no Adjustments, but Flags non-empty.
-	assert.False(t, result.Applied,
-		"flag-only review never sets Applied=true on the legacy result")
-	assert.Empty(t, result.Adjustments,
-		"flag-only review emits no entities.Adjustment records")
+	// DC-1 Phase 5 P5-C4: the legacy Applied / Adjustments fields were
+	// deleted. Flag-only contract is now: the fired Flag surfaces in
+	// result.Flags (the slim native carrier keeps Flags) and the native
+	// LedgerEntry stays Fired:false (asserted below).
 	require.Len(t, result.Flags, 1, "flag-only review's fired flag must surface in result.Flags")
 	assert.Equal(t, "rd_capitalization_review", result.Flags[0].Type)
 
@@ -392,8 +390,8 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeFlagOnlyReviews_SoftwareFir
 	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, createTechContext())
 	require.NotNil(t, result)
 
-	assert.False(t, result.Applied)
-	assert.Empty(t, result.Adjustments)
+	// DC-1 Phase 5 P5-C4: flag-only contract asserted via result.Flags +
+	// the native Fired:false LedgerEntry below.
 	require.Len(t, result.Flags, 1)
 	assert.Equal(t, "capitalized_software", result.Flags[0].Type)
 	assert.Equal(t, entities.Warning, result.Flags[0].Severity)
@@ -440,11 +438,10 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeFlagOnlyReviews_SkipPathNat
 	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, createTechContext())
 	require.NotNil(t, result)
 
-	// Both reviews skipped — no flags surface, no adjustments.
-	assert.False(t, result.Applied)
-	assert.Empty(t, result.Adjustments)
+	// Both reviews skipped — no flags surface (DC-1 Phase 5 P5-C4: the legacy
+	// Applied / Adjustments fields were deleted).
 	assert.Empty(t, result.Flags,
-		"both reviews skipped → no flags surface to the legacy result")
+		"both reviews skipped → no flags surface to the result")
 
 	// Both reviews still surface a Fired:false native LedgerEntry — load-
 	// bearing for "the cleaner considered these reviews on this ticker"

@@ -164,12 +164,10 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC5Emission(t *testing
 		result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 		require.NotNil(t, result)
 
-		assert.True(t, result.Applied)
-		require.Len(t, result.Adjustments, 1)
-		// Legacy *AdjustmentResult.Amount uses POSITIVE magnitude (reporting).
-		assert.InDelta(t, 20_000_000.0, result.Adjustments[0].Amount, 1e-6)
-		assert.Equal(t, "DerivativeGainsLosses", result.Adjustments[0].FromAccount)
-		assert.Equal(t, "NormalizedOperatingIncome", result.Adjustments[0].ToAccount)
+		// DC-1 Phase 5 P5-C4: legacy *AdjustmentResult fields deleted; the
+		// fired POSITIVE-magnitude amount / accounts are asserted via the
+		// native Restater entry below + the projection metadata table
+		// (basket-parity golden).
 
 		require.Len(t, result.NativeLedgerEntries, 1)
 		assert.Empty(t, result.NativeOverlays)
@@ -202,7 +200,6 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC5Emission(t *testing
 
 		result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 		require.NotNil(t, result)
-		assert.True(t, result.Applied)
 
 		require.Len(t, result.NativeLedgerEntries, 1)
 		nativeEntry := result.NativeLedgerEntries[0]
@@ -231,9 +228,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC5SkipPath(t *testing
 	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
-	assert.False(t, result.Applied)
-	assert.Empty(t, result.Adjustments)
-
+	// DC-1 Phase 5 P5-C4: skip contract asserted natively — no fired entry.
 	require.Len(t, result.NativeLedgerEntries, 1)
 	assert.False(t, result.NativeLedgerEntries[0].Fired)
 	assert.True(t, result.NativelyEmittedRuleIDs["derivative_gains_losses"])

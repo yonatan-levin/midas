@@ -143,13 +143,9 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC2Emission(t *testing
 	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
-	// Legacy contract.
-	assert.True(t, result.Applied)
-	require.Len(t, result.Adjustments, 1)
-	assert.InDelta(t, 15_000_000.0, result.Adjustments[0].Amount, 1e-6)
-	assert.Equal(t, "AssetSaleGains", result.Adjustments[0].FromAccount)
-	assert.Equal(t, "NormalizedOperatingIncome", result.Adjustments[0].ToAccount)
-	assert.Equal(t, entities.Exclude, result.Adjustments[0].Type)
+	// DC-1 Phase 5 P5-C4: legacy *AdjustmentResult fields deleted; the fired
+	// magnitude / accounts / type are asserted via the native Restater entry
+	// below + the projection metadata table (basket-parity golden).
 
 	// Native emission contract.
 	require.Len(t, result.NativeLedgerEntries, 1)
@@ -189,9 +185,7 @@ func TestEarningsAdjuster_ProcessEarningsAdjustments_NativeC2SkipPath(t *testing
 	result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
-	assert.False(t, result.Applied)
-	assert.Empty(t, result.Adjustments)
-
+	// DC-1 Phase 5 P5-C4: skip contract asserted natively — no fired entry.
 	require.Len(t, result.NativeLedgerEntries, 1)
 	assert.False(t, result.NativeLedgerEntries[0].Fired)
 	assert.True(t, result.NativelyEmittedRuleIDs["asset_sale_gains"])

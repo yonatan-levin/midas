@@ -214,12 +214,13 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA1Emission(t *testing.T) {
 	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied=true, one Adjustment, Adjustments[0].Amount =
-	// originalGoodwill. The legacy *AdjustmentResult shape stays unchanged
-	// so callers that don't know about the Adjuster interface keep working.
-	assert.True(t, result.Applied)
-	require.Len(t, result.Adjustments, 1)
-	assert.Equal(t, 500_000.0, result.Adjustments[0].Amount)
+	// DC-1 Phase 5 P5-C4: the legacy *AdjustmentResult fields were deleted.
+	// The fired contract is now asserted natively: A1 emits one fired
+	// LedgerEntry + one OverlaySpec carrying the goodwill amount (the
+	// projected entities.Adjustment audit content is covered end-to-end by
+	// TestApplyActiveAdjustments_AdjustmentsProjection_BasketParity).
+	require.Len(t, result.NativeLedgerEntries, 1)
+	assert.True(t, result.NativeLedgerEntries[0].Fired)
 
 	// Phase 2 PR-2 Task 2.1 native emission contract:
 	require.Len(t, result.NativeLedgerEntries, 1,
@@ -262,9 +263,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA1SkipPath(t *testing.T) {
 	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied=false, no Adjustments.
-	assert.False(t, result.Applied)
-	assert.Empty(t, result.Adjustments)
+	// DC-1 Phase 5 P5-C4: skip contract asserted natively — no fired entry.
 
 	// Native emission contract — skip path still emits a Fired:false entry.
 	require.Len(t, result.NativeLedgerEntries, 1,
