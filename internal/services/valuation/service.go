@@ -1525,21 +1525,21 @@ func (s *Service) performAlternativeValuation(
 	//
 	// DC-1 Phase 4 (C-3, §4.2.13): revenue_multiple + ffo read the
 	// Restated InterestBearingDebt for their EV→Equity bridges.
-	// DC-1 Phase 5 (P5-C1, P5-C2): DDM's eligible SE/NI/DPS reads now
-	// consume input.LatestRestatedView via the migrated runDividendDiagnostics
-	// / estimateDividendGrowth helpers (see ddm.go::calculateLegacyGordon
-	// godoc for the bit-for-bit safety argument). DDM's modelIBD,
-	// however, STILL reads latestFinancialData.InterestBearingDebt
-	// rather than the Restated view — keeping the bit-for-bit surface
-	// minimal in the P5-C1 EV-correction commit. Flipping DDM's IBD
-	// read to the Restated view is bit-for-bit safe (IBD is not
-	// Restater-touched today; Restated().InterestBearingDebt == entity
-	// value) but is deferred to a future tidy-up; the branch below
-	// captures the current state.
+	// DC-1 Phase 5 (P5-C1, P5-C2): DDM's eligible SE/NI/DPS reads consume
+	// input.LatestRestatedView via the migrated runDividendDiagnostics /
+	// estimateDividendGrowth helpers (see ddm.go::calculateLegacyGordon
+	// godoc for the bit-for-bit safety argument).
+	// DC-1 Phase 5 followup (Cluster C): DDM's modelIBD is now ALSO sourced
+	// from the Restated view — the per-model `!= "ddm"` exclusion is removed.
+	// Bit-for-bit safe per spec §3.2 NOTE: no Restater touches
+	// InterestBearingDebt (B-rules are OverlayEmitters feeding DebtLikeClaims,
+	// not Restaters), so Restated().InterestBearingDebt == entity value for the
+	// JPM/BAC/WFC fixtures (and for every ticker today). ALL alt-models now
+	// read the same Restated IBD source — the last per-model IBD branch is gone.
 	//
 	// CashAndCashEquivalents is NOT a FinancialDataView field (never
 	// Restater-touched) and stays on the entity read for every model.
-	modelIBD := latestFinancialData.InterestBearingDebt
+	modelIBD := restatedViewOr(cleaned, latestFinancialData).InterestBearingDebt
 	modelCash := latestFinancialData.CashAndCashEquivalents
 	// modelDebtLikeClaims carries the B1 (lease) + B2 (pension) + B3 (contingent)
 	// overlay amounts that the EV↔Equity bridge respects per model:
@@ -1549,18 +1549,14 @@ func (s *Service) performAlternativeValuation(
 	//     P/FFO multiple (InterestBearingDebt only back-derives the reported EV),
 	//     so subtracting claims there would risk double-counting the REIT's
 	//     lease-bearing cash flows.
-	// DC-1 Phase 5 (P5-C1): DDM now receives DebtLikeClaims from
+	// DC-1 Phase 5 (P5-C1): DDM receives DebtLikeClaims from
 	// InvestedCapital().DebtLikeClaims — the EV-bridge correction (spec §3.2)
 	// closing the DDM analog of the Phase 4 revenue_multiple finding. The
 	// JPM/BAC/WFC bit-for-bit invariant is preserved because those fixtures
 	// fire no B-rules ⇒ DebtLikeClaims=0 ⇒ +0 term ⇒ EnterpriseValue bits
-	// unchanged. modelIBD stays on the legacy entity read for DDM until P5-C2
-	// migrates DDM's other reads (minimizes the bit-for-bit surface here).
+	// unchanged. (Phase 5 followup Cluster C also flipped DDM's modelIBD to the
+	// Restated view above — see the modelIBD comment for the safety argument.)
 	modelDebtLikeClaims := investedCapitalOr(cleaned, latestFinancialData).DebtLikeClaims
-	if model.ModelType() != "ddm" {
-		mr := restatedViewOr(cleaned, latestFinancialData)
-		modelIBD = mr.InterestBearingDebt
-	}
 
 	modelInput := &models.ModelInput{
 		HistoricalData:         historicalData,
