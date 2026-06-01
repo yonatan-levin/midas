@@ -48,7 +48,16 @@ const traceQueryParam = "trace"
 // Phase 1 commit 1 leaves the actual narrate.Emit calls (request.received,
 // response.sent) to commit 3. This commit just establishes the wiring so
 // subsequent commits can fill in emissions.
-func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc {
+//
+// logger is the PLAIN singleton *zap.Logger. It is passed to the bundle via
+// artifact.WithLogger so the bundle can emit an at-most-once runtime Warn at
+// the first snapshot drop / oversize line / write error (BUG-012). We use the
+// unwrapped singleton on purpose: the BundleSink-wrapped request logger
+// (`wrapped` below) would tee any such Warn back into the bundle's own
+// AppendStream, risking re-entry/deadlock. The bundle's drop-warn does not need
+// request_id baked into the core because it stamps request_id as an explicit
+// field itself.
+func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config, logger *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// requestID is set by the canonical requestIDMiddleware which runs
 		// BEFORE this middleware in the chain. We read it from the gin
@@ -103,7 +112,7 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 		case traceFlag && cfgA.Enabled:
 			// Ticker is unknown at this point — handler will SetTicker
 			// after URL parsing.
-			b, err := artifact.OpenBundle(cfgA, requestID, "", trigger)
+			b, err := artifact.OpenBundle(cfgA, requestID, "", trigger, artifact.WithLogger(logger))
 			if err != nil {
 				// Disk-full / permission / malformed config — emit a Warn so
 				// operators can find the cause in logs. We use the request
@@ -129,7 +138,7 @@ func TraceMiddleware(cfgN narrate.Config, cfgA artifact.Config) gin.HandlerFunc 
 			//
 			// OpenDeferredBundle does NOT mkdir or spawn a goroutine, so
 			// non-firing requests pay only buffer-allocation cost.
-			b, err := artifact.OpenDeferredBundle(cfgA, requestID, "", artifact.TriggerOnError)
+			b, err := artifact.OpenDeferredBundle(cfgA, requestID, "", artifact.TriggerOnError, artifact.WithLogger(logger))
 			if err != nil {
 				// Same Warn shape as the eager path so log readers don't
 				// have to learn two log lines for the same class of failure.

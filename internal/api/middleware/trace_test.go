@@ -45,6 +45,7 @@ func TestTrace_NoOpWhenArtifactDisabled(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: false, RootPath: root},
+		zap.NewNop(),
 	))
 
 	var sawEmitter bool
@@ -87,6 +88,7 @@ func TestTrace_NoOpWhenNoFlag(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: true, RootPath: root},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		assert.Nil(t, artifact.From(c.Request.Context()))
@@ -111,6 +113,7 @@ func TestTrace_OpensBundleViaQuery(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: true, RootPath: root},
+		zap.NewNop(),
 	))
 
 	var bundleRoot string
@@ -142,6 +145,7 @@ func TestTrace_OpensBundleViaHeader(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: true, RootPath: root},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		assert.NotNil(t, artifact.From(c.Request.Context()))
@@ -171,6 +175,7 @@ func TestTrace_TruthyValues(t *testing.T) {
 			r.Use(middleware.TraceMiddleware(
 				narrate.Config{Enabled: true, SampleRate: 1.0},
 				artifact.Config{Enabled: true, RootPath: root},
+				zap.NewNop(),
 			))
 			r.GET("/x", func(c *gin.Context) {
 				assert.NotNil(t, artifact.From(c.Request.Context()))
@@ -197,6 +202,7 @@ func TestTrace_FalsyValuesIgnored(t *testing.T) {
 			r.Use(middleware.TraceMiddleware(
 				narrate.Config{Enabled: true, SampleRate: 1.0},
 				artifact.Config{Enabled: true, RootPath: root},
+				zap.NewNop(),
 			))
 			r.GET("/x", func(c *gin.Context) {
 				assert.Nil(t, artifact.From(c.Request.Context()),
@@ -223,6 +229,7 @@ func TestTrace_HeaderTakesPrecedenceOverQuery(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: true, RootPath: root},
+		zap.NewNop(),
 	))
 
 	var trigger string
@@ -250,6 +257,7 @@ func TestTrace_BundleClosedOnReturn(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: true, RootPath: root},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		c.Status(http.StatusOK)
@@ -305,6 +313,7 @@ func TestTrace_OpenBundleFailureWarnsAndDegrades(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: true, RootPath: rootAsFile},
+		zap.NewNop(),
 	))
 
 	var sawBundle bool
@@ -370,6 +379,7 @@ func TestTrace_BundleSinkInstalledAndCaptures(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: true, RootPath: root, QueueSize: 64},
+		zap.NewNop(),
 	))
 
 	var bundleRoot string
@@ -452,6 +462,7 @@ func TestTrace_NoBundleSink_WhenDisabled(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: false, RootPath: root},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		l := logctx.From(c.Request.Context())
@@ -509,6 +520,7 @@ func TestTrace_HostStreamHasRequestIDExactlyOnce(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: true, RootPath: root, QueueSize: 64},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		// Emit one log line through the request-scoped logger so it goes
@@ -550,6 +562,7 @@ func TestTrace_NarrateEmitterAlwaysOnContext(t *testing.T) {
 	r.Use(middleware.TraceMiddleware(
 		narrate.Config{Enabled: true, SampleRate: 1.0},
 		artifact.Config{Enabled: false},
+		zap.NewNop(),
 	))
 	var hasEmitter bool
 	r.GET("/x", func(c *gin.Context) {
@@ -627,6 +640,7 @@ func TestTrace_OnError_AutoBundle_When500(t *testing.T) {
 			RootPath: root,
 			Triggers: artifact.TriggerConfig{OnError: true},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		// Synthetic 500 — the on_error trigger only cares about Writer.Status().
@@ -664,6 +678,7 @@ func TestTrace_OnError_NoBundle_When200(t *testing.T) {
 			RootPath: root,
 			Triggers: artifact.TriggerConfig{OnError: true},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		c.Status(http.StatusOK)
@@ -698,6 +713,7 @@ func TestTrace_OnError_Disabled_NoBundle_When500(t *testing.T) {
 			RootPath: root,
 			// Triggers.OnError NOT set — defaults to false.
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -732,6 +748,7 @@ func TestTrace_Manual_StillWorks(t *testing.T) {
 			// on_error explicitly off — manual path must be self-sufficient.
 			Triggers: artifact.TriggerConfig{OnError: false},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		c.Status(http.StatusOK)
@@ -766,6 +783,7 @@ func TestTrace_Manual_PrecedenceOverOnError(t *testing.T) {
 			RootPath: root,
 			Triggers: artifact.TriggerConfig{OnError: true},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		// Erroring handler with the manual flag also set — both triggers
@@ -814,6 +832,7 @@ func TestTrace_OnError_BundleSinkInstalledForDeferred(t *testing.T) {
 			RootPath: root,
 			Triggers: artifact.TriggerConfig{OnError: true},
 		},
+		zap.NewNop(),
 	))
 
 	r.GET("/x", func(c *gin.Context) {
@@ -900,6 +919,7 @@ func TestTrace_OnError_PromoteFailure_NoArtifactPathOnNarrate(t *testing.T) {
 			RootPath: rootAsFile,
 			Triggers: artifact.TriggerConfig{OnError: true},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		// Synthetic 500 — triggers the deferred-bundle Promote attempt at
@@ -1001,6 +1021,7 @@ func TestTrace_OnError_HandlerPanic_StillBundles(t *testing.T) {
 			RootPath: root,
 			Triggers: artifact.TriggerConfig{OnError: true},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/boom", func(c *gin.Context) {
 		// Synthetic panic — simulates a nil pointer or any unrecovered
@@ -1073,6 +1094,7 @@ func TestTrace_OnQualityFlag_AutoBundle_WhenThresholdExceeded(t *testing.T) {
 				QualityFlagThreshold: "warning",
 			},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		// Synthetic cleaner hook — record 3 qualifying flags.
@@ -1149,6 +1171,7 @@ func TestTrace_OnQualityFlag_HandlerPanic_StillBundles(t *testing.T) {
 				QualityFlagThreshold: "warning",
 			},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/boom", func(c *gin.Context) {
 		// Record qualifying flags BEFORE panicking so the deferred bundle
@@ -1206,6 +1229,7 @@ func TestTrace_OnQualityFlag_NoBundle_WhenUnderThreshold(t *testing.T) {
 				QualityFlagThreshold: "warning",
 			},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		// Cleaner ran but found nothing severe enough — count=0.
@@ -1243,6 +1267,7 @@ func TestTrace_OnQualityFlag_Disabled_NoBundle(t *testing.T) {
 			RootPath: root,
 			// QualityFlagThreshold NOT set — defaults to "".
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		// No deferred bundle exists, so artifact.From returns nil.
@@ -1287,6 +1312,7 @@ func TestTrace_OnQualityFlag_PrecedenceOverOnError(t *testing.T) {
 				QualityFlagThreshold: "warning",
 			},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		b := artifact.From(c.Request.Context())
@@ -1325,6 +1351,7 @@ func TestTrace_Manual_PrecedenceOverOnQualityFlag(t *testing.T) {
 				QualityFlagThreshold: "warning",
 			},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		b := artifact.From(c.Request.Context())
@@ -1373,6 +1400,7 @@ func TestTrace_OnQualityFlag_PromoteOnce(t *testing.T) {
 				QualityFlagThreshold: "warning",
 			},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		b := artifact.From(c.Request.Context())
@@ -1436,6 +1464,7 @@ func TestTrace_OnQualityFlag_PromotedLogLine(t *testing.T) {
 				QualityFlagThreshold: "warning",
 			},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		// Fire the on_quality_flag auto-trigger by recording flags via the
@@ -1506,6 +1535,7 @@ func TestTrace_OnError_PromotedLogLine(t *testing.T) {
 			RootPath: root,
 			Triggers: artifact.TriggerConfig{OnError: true},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -1553,6 +1583,7 @@ func TestTrace_OnError_PromoteFailed_NoPromotedLogLine(t *testing.T) {
 			RootPath: rootAsFile,
 			Triggers: artifact.TriggerConfig{OnError: true},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -1617,6 +1648,7 @@ func TestTrace_Always_AutoBundle_OnSuccessfulRequest(t *testing.T) {
 			RootPath: root,
 			Triggers: artifact.TriggerConfig{Always: true},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		// No flags recorded, no error — purely the always path.
@@ -1659,6 +1691,7 @@ func TestTrace_Always_Disabled_NoBundle(t *testing.T) {
 			RootPath: root,
 			// Always NOT set — defaults to false.
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		// No deferred bundle exists when no trigger is configured.
@@ -1702,6 +1735,7 @@ func TestTrace_Always_PrecedenceOnError(t *testing.T) {
 				Always:  true,
 			},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		c.AbortWithStatus(http.StatusInternalServerError)
@@ -1739,6 +1773,7 @@ func TestTrace_Always_PrecedenceOnQualityFlag(t *testing.T) {
 				Always:               true,
 			},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		b := artifact.From(c.Request.Context())
@@ -1781,6 +1816,7 @@ func TestTrace_Manual_PrecedenceOverAlways(t *testing.T) {
 			RootPath: root,
 			Triggers: artifact.TriggerConfig{Always: true},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		c.Status(http.StatusOK)
@@ -1843,6 +1879,7 @@ func TestTrace_Always_NoPromotedLogLine(t *testing.T) {
 			// pass for the wrong reason.
 			Triggers: artifact.TriggerConfig{Always: true},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/x", func(c *gin.Context) {
 		c.Status(http.StatusOK)
@@ -1923,6 +1960,7 @@ func TestTrace_Always_HandlerPanic_StillBundles(t *testing.T) {
 				Always: true,
 			},
 		},
+		zap.NewNop(),
 	))
 	r.GET("/boom", func(c *gin.Context) {
 		// Synthetic panic — same shape as the on_error / on_quality_flag

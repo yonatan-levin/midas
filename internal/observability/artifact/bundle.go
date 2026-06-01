@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
@@ -200,6 +202,38 @@ type Bundle struct {
 	oversizeLines atomic.Int64
 	requestID     string
 
+	// trigger is the trigger value the bundle was opened with. IMMUTABLE —
+	// set once at construction from the trigger param and never written again.
+	// The at-most-once warn helpers read it directly (instead of b.manifest)
+	// precisely because they MUST stay lock-free: reading the manifest would
+	// require taking b.manifest.mu, and the helpers fire from the deferred-
+	// buffer eviction paths (under b.pendingMu) and the eager worker goroutine
+	// (which snapshots b.root under b.mu) where adding another lock acquisition
+	// risks an ordering inversion. The promote-time manifest Trigger field can
+	// diverge from this value (Promote overwrites the manifest's trigger), but
+	// for a runtime drop-warning the construction-time trigger is the honest,
+	// always-available value.
+	trigger Trigger
+
+	// logger is the OPT-IN runtime warn sink (BUG-012). nil when the bundle
+	// was constructed without WithLogger — in which case every maybeWarn* is a
+	// no-op and behaviour is identical to the pre-fix package. Set once at
+	// construction via the WithLogger option BEFORE the worker goroutine is
+	// spawned so the worker observes a non-nil logger.
+	//
+	// CRITICAL: this MUST be the plain singleton logger, NOT the
+	// BundleSink-wrapped request logger. A wrapped logger would tee the warn
+	// back into AppendStream, risking re-entry/deadlock. The trace middleware
+	// is responsible for passing the unwrapped logger (see trace.go).
+	logger *zap.Logger
+	// warnedDrop / warnedOversize / warnedWriteErr are the at-most-once gates.
+	// Each maybeWarn* helper CompareAndSwaps its gate from false→true and only
+	// emits on the first transition, so subsequent drops of the same kind
+	// increment counters silently (as before) without spamming the host log.
+	warnedDrop     atomic.Bool
+	warnedOversize atomic.Bool
+	warnedWriteErr atomic.Bool
+
 	// mu protects the streams cache. AppendStream uses cached file handles
 	// so we don't pay open() per line for the ~17 narrate lines + potentially
 	// hundreds of debug lines per request.
@@ -271,6 +305,76 @@ type Bundle struct {
 	configSnapshot ConfigSnapshot
 }
 
+// BundleOption customises a Bundle at construction time (functional-options
+// pattern). Existing call sites that pass no options compile unchanged, so the
+// logger seam (BUG-012) is fully backward-compatible.
+type BundleOption func(*Bundle)
+
+// WithLogger attaches a runtime warn sink so the bundle can emit an
+// at-most-once Warn at the FIRST drop / oversize-line / write-error (BUG-012).
+// When omitted, b.logger stays nil and every warn is a no-op — identical to the
+// pre-fix package. Pass the PLAIN singleton logger, never the BundleSink-wrapped
+// request logger (which would re-enter AppendStream).
+func WithLogger(l *zap.Logger) BundleOption {
+	return func(b *Bundle) { b.logger = l }
+}
+
+// maybeWarnDrop emits a one-shot Warn the first time a snapshot/stream line is
+// dropped. The reason argument names the precise cause so operators can tell
+// the two distinct drop pressures apart in the host log: "queue_full" (the
+// eager worker queue or the deferred count-cap was saturated) vs
+// "bytes_overflow" (the deferred byte-cap PendingBytesCap was exceeded, or a
+// single payload was larger than the whole cap). LOCK-FREE by construction: it
+// reads only the immutable b.requestID / b.trigger, the atomic gate, and
+// b.logger — it MUST NOT touch b.manifest, b.mu, or b.pendingMu because callers
+// fire it while already holding b.pendingMu (deferred eviction) or from the
+// eager worker goroutine. The CompareAndSwap gate guarantees at most one
+// emission per bundle (the FIRST drop's reason wins); later drops stay silent
+// (counters still increment at the call site).
+func (b *Bundle) maybeWarnDrop(reason string) {
+	if b.logger == nil || !b.warnedDrop.CompareAndSwap(false, true) {
+		return
+	}
+	b.logger.Warn("artifact.bundle.snapshot_dropped",
+		zap.String("request_id", b.requestID),
+		zap.String("trigger", string(b.trigger)),
+		zap.String("reason", reason),
+	)
+}
+
+// maybeWarnOversize emits a one-shot Warn the first time a stream line exceeds
+// MaxStreamLineBytes and is rejected. Same lock-free + at-most-once contract as
+// maybeWarnDrop.
+func (b *Bundle) maybeWarnOversize() {
+	if b.logger == nil || !b.warnedOversize.CompareAndSwap(false, true) {
+		return
+	}
+	b.logger.Warn("artifact.bundle.oversize_line",
+		zap.String("request_id", b.requestID),
+		zap.String("trigger", string(b.trigger)),
+		zap.Int("max_stream_line_bytes", MaxStreamLineBytes),
+	)
+}
+
+// maybeWarnWriteErr emits a one-shot Warn the first time a snapshot/stream write
+// to disk fails. The site argument names the failing call site (e.g.
+// "worker_write", "promote_stream_flush", "setticker_rename") so an operator
+// seeing the single at-most-once Warn knows WHICH disk operation failed without
+// opening the manifest. Same lock-free + at-most-once contract as maybeWarnDrop
+// (the FIRST write error's site wins). Notably this fires from the eager worker
+// goroutine, which previously had no logger at all — see the retired TODO in
+// runWorker.
+func (b *Bundle) maybeWarnWriteErr(site string) {
+	if b.logger == nil || !b.warnedWriteErr.CompareAndSwap(false, true) {
+		return
+	}
+	b.logger.Warn("artifact.bundle.write_error",
+		zap.String("request_id", b.requestID),
+		zap.String("trigger", string(b.trigger)),
+		zap.String("site", site),
+	)
+}
+
 // snapshotJob is the unit of work passed from Snapshot() (request-thread,
 // non-blocking) to the bundle's background worker (writes to disk).
 type snapshotJob struct {
@@ -301,7 +405,7 @@ func sanitizeTickerDir(ticker string) string {
 // When ticker is empty (request.received fires before parsing) it falls back
 // to "_no-ticker"; the handler renames the directory to <TICKER>/ once the
 // URL path param is parsed via SetTicker.
-func OpenBundle(cfg Config, requestID, ticker string, trigger Trigger) (*Bundle, error) {
+func OpenBundle(cfg Config, requestID, ticker string, trigger Trigger, opts ...BundleOption) (*Bundle, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -340,10 +444,18 @@ func OpenBundle(cfg Config, requestID, ticker string, trigger Trigger) (*Bundle,
 		manifest:             NewManifestBuilder(requestID, ticker, string(trigger), cfg.GitSHA, cfg.BuildVersion),
 		queue:                make(chan snapshotJob, queueSize),
 		requestID:            requestID,
+		trigger:              trigger,
 		pendingCap:           pendingCap,
 		queueCap:             queueSize,
 		qualityFlagThreshold: cfg.Triggers.QualityFlagThreshold,
 		configSnapshot:       cfg.ConfigSnapshot,
+	}
+
+	// Apply functional options (e.g. WithLogger) BEFORE spawning the worker
+	// goroutine so the worker observes a non-nil logger for its at-most-once
+	// write-error Warn (BUG-012).
+	for _, opt := range opts {
+		opt(b)
 	}
 
 	// RPL-9 (capture side): stamp `00-config.json` at bundle root as soon
@@ -363,6 +475,7 @@ func OpenBundle(cfg Config, requestID, ticker string, trigger Trigger) (*Bundle,
 	// writeConfigSnapshot.
 	if err := writeConfigSnapshot(root, cfg.ConfigSnapshot); err != nil {
 		b.writeErrors.Add(1)
+		b.maybeWarnWriteErr("open_config_snapshot")
 	}
 
 	// Single background worker keeps the file-write order deterministic and
@@ -390,7 +503,7 @@ func OpenBundle(cfg Config, requestID, ticker string, trigger Trigger) (*Bundle,
 // know up-front the bundle should land on disk. Storing the intended trigger
 // at construction lets the manifest's Trigger field be correct even if Snapshot
 // runs before Promote (the manifest is built once at construction).
-func OpenDeferredBundle(cfg Config, requestID, ticker string, trigger Trigger) (*Bundle, error) {
+func OpenDeferredBundle(cfg Config, requestID, ticker string, trigger Trigger, opts ...BundleOption) (*Bundle, error) {
 	if !cfg.Enabled {
 		return nil, nil
 	}
@@ -427,6 +540,7 @@ func OpenDeferredBundle(cfg Config, requestID, ticker string, trigger Trigger) (
 		manifest:             NewManifestBuilder(requestID, ticker, string(trigger), cfg.GitSHA, cfg.BuildVersion),
 		queue:                make(chan snapshotJob, queueSize),
 		requestID:            requestID,
+		trigger:              trigger,
 		pendingCap:           pendingCap,
 		queueCap:             queueSize,
 		qualityFlagThreshold: cfg.Triggers.QualityFlagThreshold,
@@ -435,6 +549,15 @@ func OpenDeferredBundle(cfg Config, requestID, ticker string, trigger Trigger) (
 		// common case (no stream activity) carries zero map overhead.
 	}
 	b.deferred.Store(true)
+
+	// Apply functional options (e.g. WithLogger) so the deferred-buffer
+	// eviction paths have a logger for their at-most-once Warns (BUG-012).
+	// No worker exists yet — Promote() spawns it later — so there is no
+	// before-worker ordering constraint here, but we still apply before
+	// returning so the bundle is fully configured on hand-off.
+	for _, opt := range opts {
+		opt(b)
+	}
 
 	// NB: worker is NOT started here. It is started by Promote() if/when
 	// the bundle is promoted to disk. An unpromoted deferred bundle never
@@ -598,6 +721,7 @@ func (b *Bundle) SetTicker(ticker string) {
 	for filename, f := range b.streams {
 		if cerr := f.Close(); cerr != nil {
 			b.writeErrors.Add(1)
+			b.maybeWarnWriteErr("setticker_stream_close")
 		}
 		delete(b.streams, filename)
 	}
@@ -605,6 +729,7 @@ func (b *Bundle) SetTicker(ticker string) {
 	// Ensure the new ticker directory exists.
 	if err := os.MkdirAll(filepath.Dir(newRoot), 0o755); err != nil {
 		b.writeErrors.Add(1)
+		b.maybeWarnWriteErr("setticker_mkdir")
 		b.mu.Unlock()
 		// Manifest still gets the ticker so the in-memory record is honest
 		// about what the request was for, even if the dir is stuck.
@@ -617,6 +742,7 @@ func (b *Bundle) SetTicker(ticker string) {
 	// the same volume (which they are here — both under the same root).
 	if err := os.Rename(b.root, newRoot); err != nil {
 		b.writeErrors.Add(1)
+		b.maybeWarnWriteErr("setticker_rename")
 		b.mu.Unlock()
 		b.setManifestTicker(ticker)
 		return
@@ -739,6 +865,7 @@ func (b *Bundle) dispatchSnapshot(job snapshotJob) {
 		// Drop on overflow rather than block. The dropped counter feeds into
 		// the bundle outcome at Close().
 		b.dropped.Add(1)
+		b.maybeWarnDrop("queue_full")
 	}
 }
 
@@ -763,6 +890,7 @@ func (b *Bundle) bufferSnapshot(job snapshotJob) {
 		case b.queue <- job:
 		default:
 			b.dropped.Add(1)
+			b.maybeWarnDrop("queue_full")
 		}
 		return
 	}
@@ -777,6 +905,7 @@ func (b *Bundle) bufferSnapshot(job snapshotJob) {
 		// becomes unreachable on the next append/realloc.
 		b.pendingJobs = b.pendingJobs[1:]
 		b.dropped.Add(1)
+		b.maybeWarnDrop("queue_full")
 	}
 
 	// Bound by bytes: drop oldest snapshots until the new job fits, or until
@@ -786,12 +915,14 @@ func (b *Bundle) bufferSnapshot(job snapshotJob) {
 		b.pendingBytes -= int64(len(oldest.data))
 		b.pendingJobs = b.pendingJobs[1:]
 		b.dropped.Add(1)
+		b.maybeWarnDrop("bytes_overflow")
 	}
 
 	// If the new job alone is too big (no snapshots to evict made room),
 	// drop it and account.
 	if size > b.pendingCap {
 		b.dropped.Add(1)
+		b.maybeWarnDrop("bytes_overflow")
 		return
 	}
 
@@ -831,6 +962,7 @@ func (b *Bundle) AppendStream(filename string, line []byte) error {
 	// the bundle's value as a debugging artifact.
 	if int64(len(line)) > MaxStreamLineBytes {
 		b.oversizeLines.Add(1)
+		b.maybeWarnOversize()
 		return nil
 	}
 
@@ -853,6 +985,7 @@ func (b *Bundle) AppendStream(filename string, line []byte) error {
 		opened, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			b.writeErrors.Add(1)
+			b.maybeWarnWriteErr("appendstream_open")
 			return fmt.Errorf("artifact: open stream %s: %w", filename, err)
 		}
 		if b.streams == nil {
@@ -864,11 +997,13 @@ func (b *Bundle) AppendStream(filename string, line []byte) error {
 
 	if _, err := f.Write(line); err != nil {
 		b.writeErrors.Add(1)
+		b.maybeWarnWriteErr("appendstream_write")
 		return fmt.Errorf("artifact: write stream %s: %w", filename, err)
 	}
 	if len(line) == 0 || line[len(line)-1] != '\n' {
 		if _, err := f.Write([]byte{'\n'}); err != nil {
 			b.writeErrors.Add(1)
+			b.maybeWarnWriteErr("appendstream_newline")
 			return fmt.Errorf("artifact: write newline %s: %w", filename, err)
 		}
 	}
@@ -900,6 +1035,7 @@ func (b *Bundle) bufferStream(filename string, line []byte) error {
 	// AppendStream.
 	if int64(len(line)) > MaxStreamLineBytes {
 		b.oversizeLines.Add(1)
+		b.maybeWarnOversize()
 		return nil
 	}
 
@@ -930,6 +1066,7 @@ func (b *Bundle) bufferStream(filename string, line []byte) error {
 	// strictly worse than dropping with a counter increment.
 	if size > b.pendingCap {
 		b.dropped.Add(1)
+		b.maybeWarnDrop("bytes_overflow")
 		return nil
 	}
 
@@ -941,11 +1078,13 @@ func (b *Bundle) bufferStream(filename string, line []byte) error {
 		b.pendingBytes -= int64(len(oldest.data))
 		b.pendingJobs = b.pendingJobs[1:]
 		b.dropped.Add(1)
+		b.maybeWarnDrop("bytes_overflow")
 	}
 
 	// Still over cap and no snapshots left to evict — drop this line.
 	if b.pendingBytes+size > b.pendingCap {
 		b.dropped.Add(1)
+		b.maybeWarnDrop("bytes_overflow")
 		return nil
 	}
 
@@ -1042,6 +1181,7 @@ func (b *Bundle) Promote(trigger Trigger) error {
 	// outcome degrades to "partial".
 	if err := writeConfigSnapshot(mkdirRoot, b.configSnapshot); err != nil {
 		b.writeErrors.Add(1)
+		b.maybeWarnWriteErr("promote_config_snapshot")
 	}
 
 	// Snapshot the buffers and clear them under the lock.
@@ -1127,13 +1267,16 @@ func (b *Bundle) Promote(trigger Trigger) error {
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err != nil {
 			b.writeErrors.Add(1)
+			b.maybeWarnWriteErr("promote_stream_open")
 			continue
 		}
 		if _, werr := f.Write(buf.Bytes()); werr != nil {
 			b.writeErrors.Add(1)
+			b.maybeWarnWriteErr("promote_stream_write")
 		}
 		if cerr := f.Close(); cerr != nil {
 			b.writeErrors.Add(1)
+			b.maybeWarnWriteErr("promote_stream_close")
 		}
 	}
 
@@ -1158,14 +1301,17 @@ func (b *Bundle) runWorker() {
 			// "partial" and annotate the manifest. Pre-fix this branch
 			// silently dropped the failure: a disk-full or permission
 			// error left outcome="ok" with zero phases on disk, which
-			// turned bundles into liars. We still don't have a zap.Logger
-			// here (worker is goroutine-scoped); runtime visibility for
-			// these failures is a follow-up — see TODO below.
+			// turned bundles into liars.
 			b.writeErrors.Add(1)
-			// TODO: thread a *zap.Logger into OpenBundle so worker errors
-			// can be Warn-logged at runtime, not just postmortem in the
-			// manifest. Tracked as a follow-up — see REVIEWER notes for
-			// HIGH 2 in the observability-narrative branch.
+			// BUG-012: the worker now HAS a logger (threaded via WithLogger
+			// from OpenBundle/Promote before this goroutine was spawned).
+			// maybeWarnWriteErr fires an at-most-once runtime Warn here so
+			// operators see worker write failures live — not just postmortem
+			// in 00-manifest.json. It is lock-free (reads only the immutable
+			// requestID/trigger + atomic gate + logger), safe to call from
+			// this goroutine. The retired TODO previously tracked exactly
+			// this gap.
+			b.maybeWarnWriteErr("worker_write")
 			continue
 		}
 		b.manifest.AddPhase(job.phase, []string{job.filename}, int64(len(job.data)))
@@ -1239,10 +1385,12 @@ func (b *Bundle) Close() error {
 	for name, f := range b.streams {
 		if err := f.Sync(); err != nil {
 			b.writeErrors.Add(1)
+			b.maybeWarnWriteErr("close_stream_sync")
 			_ = err // best-effort: nowhere useful to surface this
 		}
 		if err := f.Close(); err != nil {
 			b.writeErrors.Add(1)
+			b.maybeWarnWriteErr("close_stream_close")
 			_ = err
 		}
 		delete(b.streams, name)

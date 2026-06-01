@@ -5,11 +5,11 @@
 | **ID** | BUG-012 |
 | **Title** | `*Bundle` increments `dropped` / `writeErrors` / `oversizeLines` silently — operator only learns of an incomplete bundle by reading `00-manifest.json` after the fact |
 | **Severity** | MINOR (operator-visibility) |
-| **Status** | Open (filed 2026-04-29) |
+| **Status** | Fixed (pending HUMAN acceptance) — 2026-05-31 |
 | **Component** | `internal/observability/artifact/bundle.go` |
 | **Reported** | 2026-04-29 (Phase 2.B QA pass) |
 | **Affects** | Phase 2.A on_error trigger AND Phase 2.B on_quality_flag trigger; does NOT affect manual `?trace=1` correctness |
-| **First flagged** | Phase 2.A REVIEWER round 1 as follow-up B-4 (2026-04-27); re-surfaced by Phase 2.B QA (2026-04-29). The bundle.go:935-941 inline TODO acknowledges the gap. |
+| **First flagged** | Phase 2.A REVIEWER round 1 as follow-up B-4 (2026-04-27); re-surfaced by Phase 2.B QA (2026-04-29). The inline TODO that acknowledged the gap lived in `runWorker` at `internal/observability/artifact/bundle.go:1165-1168` (NOT the stale 935-941 reference used elsewhere in this doc); it was retired by the fix and replaced with the `maybeWarnWriteErr()` call. |
 
 ## Summary
 
@@ -37,7 +37,7 @@ The fix requires changing the `Bundle` constructor signature to accept a `*zap.L
 - `internal/api/middleware/trace.go` (passes the logger through)
 - `internal/api/server.go` wiring
 
-Deliberate scope deferral. The bundle.go:935-941 TODO documents the gap and notes the intended approach.
+Deliberate scope deferral. The `runWorker` TODO at `internal/observability/artifact/bundle.go:1165-1168` documented the gap and noted the intended approach (the earlier "935-941" reference was stale).
 
 ## Recommended fix
 
@@ -99,8 +99,23 @@ Subsequent drops increment counters silently as today; the first one fires the W
 - Existing tests still pass without modification (Option B) OR with a single mechanical update (Option A).
 - The manifest `notes` field still records the full counter values at Close time (current behavior unchanged).
 
+## Resolution (as shipped)
+
+Implemented **Option B (functional option)** on branch `fix/bug-012-bundle-warn-on-drop` (2026-05-31), purely additive — no drop/eviction/promote/close logic changed; every counter `.Add(1)` is preserved and the `Close()` manifest `notes`/`outcome="partial"` accounting is untouched.
+
+- **Seam:** `type BundleOption func(*Bundle)` + `WithLogger(*zap.Logger)`; both `OpenBundle` / `OpenDeferredBundle` are now variadic (`opts ...BundleOption`), so the ~30 existing call sites compile unchanged. Nil logger → every warn is a no-op (back-compat identical to pre-fix).
+- **At-most-once:** three `atomic.Bool` gates (`warnedDrop` / `warnedOversize` / `warnedWriteErr`), each helper short-circuits `if b.logger == nil || !b.warned*.CompareAndSwap(false, true) { return }` (nil-check BEFORE the CAS, so a nil-logger bundle never burns its gate). The FIRST event of each kind emits; later ones stay silent (counters still increment).
+- **Lock-free helpers:** `maybeWarnDrop` / `maybeWarnOversize` / `maybeWarnWriteErr` read only the immutable `b.requestID` / `b.trigger` (a new immutable field set at construction), the atomic gate, and `b.logger`. They MUST NOT touch `b.manifest` / `b.mu` / `b.pendingMu` because they fire from inside `pendingMu`-held eviction loops and from the worker goroutine — verified race-clean.
+- **Cause granularity (closes the acceptance-criterion "queue/bytes/oversize" intent + review follow-ups):**
+  - `artifact.bundle.snapshot_dropped` carries `reason` = `queue_full` (worker queue / deferred count-cap saturated) **or** `bytes_overflow` (deferred `PendingBytesCap` exceeded / single payload bigger than the cap).
+  - `artifact.bundle.oversize_line` carries `max_stream_line_bytes`.
+  - `artifact.bundle.write_error` carries `site` naming the failing call (`worker_write`, `promote_stream_open/write/close`, `setticker_mkdir/rename/stream_close`, `appendstream_open/write/newline`, `open_config_snapshot`, `promote_config_snapshot`, `close_stream_sync/close`).
+  - Every warn carries `request_id` + `trigger` for host-log correlation.
+- **Wiring:** `TraceMiddleware(cfgN, cfgA, logger *zap.Logger)` threads the **plain singleton** `s.logger` (NOT the BundleSink-wrapped request logger, which would re-enter `AppendStream`) into both constructors via `WithLogger`.
+- **Tests** (`bundle_warn_test.go`, `zaptest/observer`): the 4 spec-required tests + `TestBundle_WriteErrorEmitsWarn` (asserts `site=worker_write`) + `TestBundle_QueueFullDropEmitsQueueFullReason` (pins the `queue_full` vs `bytes_overflow` reason split). All pass under `-race`; the artifact package's own pre-existing concurrency tests stay green.
+
 ## Cross-references
 
 - Phase 2.A REVIEWER round 1 finding B-4 (2026-04-27)
 - Phase 2.B QA (2026-04-29) Finding #2 — re-surfaced
-- Inline TODO at `internal/observability/artifact/bundle.go:935-941`
+- Inline TODO at `internal/observability/artifact/bundle.go:1165-1168` (the "935-941" reference cited at the top of this doc was stale; the real TODO lived in `runWorker` and was retired by the fix)

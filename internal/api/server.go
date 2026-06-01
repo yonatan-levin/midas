@@ -217,6 +217,10 @@ func (s *Server) setupMiddleware() {
 				},
 			},
 		},
+		// BUG-012: pass the PLAIN singleton logger so the bundle can emit an
+		// at-most-once runtime Warn on buffer drops / oversize lines / write
+		// errors. NOT the BundleSink-wrapped request logger (re-entry risk).
+		s.logger,
 	))
 
 	// 3. Security headers on every response
