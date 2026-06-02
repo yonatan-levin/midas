@@ -158,8 +158,8 @@ For each fired entry in the ledger (`entry.Fired == true` OR — for FlagEmitter
 3. Resolve `pct`:
    - `absent` → `0` (Go zero value, omitted from JSON via `omitempty`)
    - `constant` → `meta.ConstantPct`
-   - `from_pre_state` → `(amount / entry.SkipMetrics[meta.PreStateKey]) * 100` guarded by `> 0` denominator check (matches the legacy translator guards)
-4. Construct `entities.Adjustment{...}` from `meta` + `entry.RuleID` + `entry.Reasoning` + `entry.Timestamp` (use entry's timestamp, not `time.Now()` — the legacy `time.Now()` is the non-deterministic bit excluded from the basket-parity test; use the entry's deterministic capture timestamp instead for cleaner replay parity).
+   - `from_pre_state` → `(amount / d) * 100` where `d, ok := entry.SkipMetrics[meta.PreStateKey]`, computed ONLY when `ok && d > 0`. The explicit presence check (NOT a bare `> 0`) makes a MISSING pre-state key distinguishable from a legitimate zero denominator, protecting the Path-(a) guarantee against a future dropped capture silently degrading `Percentage` to 0. Matches the legacy translator's `> 0` value guards.
+4. Construct `entities.Adjustment{...}` from `meta` + `entry.RuleID` + the resolved `Reasoning` + a fresh `time.Now()` for `ID`/`Timestamp`. **As-built decision (deviates from this section's original recommendation):** the implementation keeps legacy `time.Now()` for `Adjustment.ID`/`Timestamp` rather than the entry's capture timestamp. Rationale: bit-for-bit parity with the deleted per-rule translators (which all stamped `time.Now()` at projection time) is the conservative behavior-preserving choice, and the basket-parity golden excludes both `ID` and `Timestamp`, so neither affects the gate. Switching to a deterministic `entry.Timestamp` remains a safe future improvement if deterministic audit-replay is ever required.
 
 ### 4.6 The metadata table (extracted from translator audit)
 
@@ -285,12 +285,9 @@ After §6.4 lands and the basket-parity golden is green:
 
 ### 7.1 New basket-parity golden test (BLOCKING for P5-C3-full)
 
-`TestApplyActiveAdjustments_AdjustmentsProjection_BasketParity` — runs the 10-ticker basket (`artifacts/tier2-baseline/`) through the cleaner pipeline twice:
+`TestApplyActiveAdjustments_AdjustmentsProjection_BasketParity` — **as-built note (deviates from the original 10-ticker plan).** The implemented test does NOT run the 10-ticker `artifacts/tier2-baseline/` set: the real basket tickers fire ~zero cleaning adjustments, so they would not exercise the projection branches. Instead it uses three SYNTHETIC fixtures — `HEAVY_INTANGIBLES`, `FIRES_ALL_C_RULES`, `MINIMAL_SKIPS` — hand-seeded to deterministically drive every emitting rule cluster (A1/A2/A4/A5 + the full C-rule family + the OverlayEmitter family). This is a STRICTER projection-coverage gate than the real basket.
 
-- **Snapshot A:** pre-rewrite — captured in the FIRST commit of this PR with the old translator-driven aggregation still wired up, persisted as a golden JSON under `internal/services/datacleaner/testdata/adjustments_projection_basket_golden.json` keyed by ticker.
-- **Snapshot B:** post-rewrite — produced by the projection helper in the SECOND commit.
-
-The test loads Snapshot A and asserts byte-identity with Snapshot B for the `[]entities.Adjustment` slice content (`RuleID`, `Category`, `Type`, `Amount`, `FromAccount`, `ToAccount`, `Percentage`, `Reasoning`, `Applied`) PER ticker. Excludes `ID` (non-deterministic — embeds `time.Now().UnixNano()`) and `Timestamp` (replaced by the deterministic LedgerEntry timestamp; new test, can be re-baselined on first capture).
+The test asserts byte-identity for the projected `[]entities.Adjustment` slice content (`RuleID`, `Category`, `Type`, `Amount`, `FromAccount`, `ToAccount`, `Percentage`, `Reasoning`, `Applied`) per fixture against a committed golden JSON under `internal/services/datacleaner/testdata/` (non-trivial; real per-fixture Adjustment arrays). Excludes `ID` and `Timestamp` (both non-deterministic — the as-built projection stamps `time.Now()`; see §4.5 step 4).
 
 Acceptance bar: 0 ticker drifts. Any per-ticker drift = REVERT the projection change, audit the pre-state-capture coverage, fix, re-run. NEVER update the golden to make this pass.
 
