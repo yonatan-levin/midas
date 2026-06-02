@@ -1,6 +1,6 @@
 # Datacleaner — Phase 4 Spec (Consumer Migration + B3 Routing Flip + Dual-Write Deletion)
 
-**Status:** DESIGN (authored 2026-05-26, ready for BACKEND dispatch)
+**Status:** SHIPPED — merged to master `ce94f70` (2026-05-27). Consumer migration + B3 routing flip + dispatcher dual-write deletion + `CalculationVersion` 4.2 → 4.3. Closeout: [phase-4-closeout](../implementations/datacleaner-component-primitive-and-parallel-views-phase-4-closeout.md). (Phase 5 — the final phase — subsequently closed DC-1; see the parent spec status.)
 **Phase:** Phase 4 of the DC-1 refactor sequence (5 phases total)
 **Parent spec:** [datacleaner-component-primitive-and-parallel-views-spec.md](datacleaner-component-primitive-and-parallel-views-spec.md) — §"Phasing & implementation sequence" row "Phase 4 — Consumer migration + WACC boundary" + §"Consumer migration map"
 **Phase 3 spec:** [datacleaner-component-primitive-and-parallel-views-phase-3-spec.md](datacleaner-component-primitive-and-parallel-views-phase-3-spec.md)

@@ -1,6 +1,6 @@
 # Datacleaner — Component Primitive & Parallel Views Spec
 
-**Status:** DESIGN (brainstorm-validated, 2026-05-15 — superseded only by implementation plan)
+**Status:** COMPLETE / CLOSED (2026-06-02) — all 5 phases shipped. Phase 0 `1640394`, Phase 1 `2d916a7`, Phase 2 (4-PR stack, tip `ed1dadd`), Phase 3 `46e84b1` + followup `3490227`, Phase 4 `ce94f70`, Phase 5 PARTIAL `e816fcc` + follow-up `8ca0841`. DC-1 refactor done; the cleaner now emits the three-view output (`AsReported`/`Restated`/`InvestedCapital`) with native `AdjustmentLedger`/`OverlaySpec` and the legacy translator stack is fully deleted. Reviewer tracker archived to `docs/reviewer/archive/`. Sole remaining item is the operator replay-baseline capture (`docs/reviewer/DC-1-phase-5-replay-verification-followup.md`).
 **Tracker origin:** `docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md` (filed 2026-05-05)
 **Estimated effort:** ~3 weeks focused work, 5 independently-mergeable phases
 **Pressure tested by:** GPT-5.5-pro deep-analysis pass (2026-05-15) — three substantive corrections incorporated (single `Adjuster` interface, B3 → `DebtLikeClaims`, `AmountSemantics`)

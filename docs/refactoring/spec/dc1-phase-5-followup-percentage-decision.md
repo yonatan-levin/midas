@@ -1,6 +1,6 @@
 # DC-1 Phase 5 follow-up — `entities.Adjustment.Percentage` projection decision (spec addendum)
 
-**Status:** ARCH DECISION — APPROVED (Path (a), SkipMetrics-based)
+**Status:** IMPLEMENTED — Path (a) (SkipMetrics-based) shipped in the `dc1-phase-5-followup` PR, merged to master `8ca0841` (2026-06-02). See [follow-up closeout](../implementations/dc1-phase-5-followup-closeout.md).
 **Date:** 2026-05-31
 **Author:** ARCH
 **Branch:** `dc1-phase-5-followup`

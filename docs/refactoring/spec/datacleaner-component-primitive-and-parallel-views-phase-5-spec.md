@@ -1,6 +1,6 @@
 # Datacleaner — Phase 5 Spec (DDM Migration + DebtLikeClaims Correction + Legacy Translator/Struct Retirement + Cleanup)
 
-**Status:** DESIGN (authored 2026-05-27, ready for BACKEND dispatch after HUMAN review)
+**Status:** SHIPPED — PARTIAL merged `e816fcc`; follow-up (P5-C3-full Adjustments-projection + P5-C4 translator/dead-helper deletion + DDM `modelIBD` view flip) merged `8ca0841` (2026-06-02). Closes DC-1. Closeouts: [phase-5-closeout](../implementations/datacleaner-component-primitive-and-parallel-views-phase-5-closeout.md) + [follow-up closeout](../implementations/dc1-phase-5-followup-closeout.md). ARCH `Adjustment.Percentage` decision: [dc1-phase-5-followup-percentage-decision.md](dc1-phase-5-followup-percentage-decision.md).
 **Phase:** Phase 5 of the DC-1 refactor sequence (FINAL phase — closes DC-1)
 **Parent spec:** [datacleaner-component-primitive-and-parallel-views-spec.md](datacleaner-component-primitive-and-parallel-views-spec.md) — §"Phasing & implementation sequence" row "Phase 5 — DDM migration + `Raw()` cleanup + vestigial deletion" + §"Consumer migration map" (DDM rows)
 **Phase 4 spec:** [datacleaner-component-primitive-and-parallel-views-phase-4-spec.md](datacleaner-component-primitive-and-parallel-views-phase-4-spec.md) — §7 (DDM bit-for-bit preservation), §9 (DDM migration sub-plan §9.4), §4.2.11 (DDM read sites)
