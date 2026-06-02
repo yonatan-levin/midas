@@ -103,9 +103,10 @@ func reasoningFromOverlay(overlays []entities.OverlaySpec, overlayID string) str
 // against the legacy translator implementations one-by-one.
 //
 // Maintainability note: adding a new adjuster requires adding a row here.
-// The projection helper emits zero Adjustments + a WARN log for any
-// LedgerEntry whose AdjusterID is not in this map (covered by the
-// defensive pin TestAdjustmentsProjection_HandlesUnknownAdjusterID).
+// The projection helper emits zero Adjustments and silently skips any
+// LedgerEntry whose AdjusterID is not in this map (no logger dependency at
+// this layer; covered by the defensive pin
+// TestAdjustmentsProjection_HandlesUnknownAdjusterID).
 //
 //nolint:gochecknoglobals // immutable canonical-set sentinel; populated once via package init.
 var perRuleAdjustmentMeta = map[string]ruleMeta{
@@ -306,8 +307,8 @@ var knownNoEmission = map[string]struct{}{
 //
 // Emission predicate per entry:
 //   - Fired:false → SKIP (the FlagEmitter family is special-cased below).
-//   - AdjusterID unknown → SKIP (logged WARN once via the projection's
-//     fallback path; defensive pin
+//   - AdjusterID unknown → SKIP silently (no logger dependency at this
+//     layer; defensive pin
 //     TestAdjustmentsProjection_HandlesUnknownAdjusterID).
 //   - AdjusterID in knownNoEmission → SKIP silently (legacy parity).
 //   - C4 special case: a Fired:false LedgerEntry whose SkipMetrics
@@ -375,8 +376,15 @@ func adjustmentsFromLedger(
 		case percentageConstant:
 			percentage = meta.ConstantPct
 		case percentageFromPreState:
-			denominator = entry.SkipMetrics[meta.PreStateKey]
-			if denominator > 0 {
+			// Explicit presence check (NOT just `> 0`): a MISSING pre-state
+			// key and a legitimate zero denominator must be distinguishable.
+			// Without the `ok` guard a future dropped capture would silently
+			// emit Percentage=0 in the public API — the exact Path-(b)
+			// degradation Path (a) exists to prevent. Capture coverage for
+			// every percentageFromPreState rule is pinned by
+			// TestPreStateCapture_OnFiredLedgerEntries.
+			if d, ok := entry.SkipMetrics[meta.PreStateKey]; ok && d > 0 {
+				denominator = d
 				percentage = (amount / denominator) * 100
 			} // else zero — matches the legacy `if originalRevenue > 0` guard.
 		}

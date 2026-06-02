@@ -1600,21 +1600,26 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(ctx context.Context, data *enti
 // deleted translator chain produced.
 //
 // Behaviorally identical to the legacy predicate across all six asset rules:
-//   - A2/A4/A5 (Restaters): legacy Amount = -DeltaAmount (>0 on a writedown),
-//     so a fired LedgerEntry with DeltaAmount < 0 triggers — matches Amount>0.
-//   - A1 (OverlayEmitter): legacy Amount = overlay.Amount (>0 when fired), so a
-//     goodwill overlay with Amount > 0 triggers.
+//   - A2/A4/A5 (Restaters): legacy Amount = abs(DeltaAmount) > 0 on a fired
+//     component restate. A fired LedgerEntry with a non-empty Component and a
+//     non-zero DeltaAmount triggers. (All asset Restaters write NEGATIVE deltas
+//     today; the `!= 0` guard — rather than `< 0` — future-proofs against a
+//     positive-delta asset Restater that legacy `Amount > 0` would also have
+//     triggered, removing a one-directional sign fragility.)
+//   - A1 (OverlayEmitter): legacy Amount = overlay.Amount (>0 when fired). A1
+//     goodwill exclusion is the ONLY asset-side overlay, so the trigger is
+//     scoped to its OverlayID rather than any positive overlay amount.
 //   - A-RD / A-CapSoftware (FlagEmitters): legacy Applied=false always; they
-//     emit no writedown delta and no overlay, so this returns false. (They also
+//     emit no component delta and no overlay, so this returns false. (They also
 //     return early in the dispatcher and never reach this call.)
 func assetArmTriggersTangibleRecompute(out AdjusterOutput) bool {
 	for _, entry := range out.LedgerEntries {
-		if entry.Fired && entry.DeltaAmount < 0 {
+		if entry.Fired && entry.Component != "" && entry.DeltaAmount != 0 {
 			return true
 		}
 	}
 	for _, overlay := range out.Overlays {
-		if overlay.Amount > 0 {
+		if overlay.OverlayID == adjusterIDA1GoodwillExclusion && overlay.Amount > 0 {
 			return true
 		}
 	}

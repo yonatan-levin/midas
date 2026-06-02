@@ -505,14 +505,13 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 		}
 	}
 
-	// DC-1 Phase 5 P5-C3-full (DC-1 follow-up): result.Adjustments is now
-	// derived from the native LedgerEntry + OverlaySpec emissions via
-	// adjustmentsFromLedger AFTER all three category dispatchers have run.
-	// The legacy *Result.Adjustments slices still exist (the translator
-	// stack is the basket-parity source of truth for the golden capture)
-	// but the orchestrator NO LONGER reads them — P5-C4 then deletes the
-	// translators alongside the dispatcher-side `original*` capture
-	// variables.
+	// DC-1 Phase 5 P5-C3-full (DC-1 follow-up): result.Adjustments is
+	// derived EXCLUSIVELY from the native LedgerEntry + OverlaySpec
+	// emissions via adjustmentsFromLedger AFTER all three category
+	// dispatchers have run. The legacy per-rule translator stack was
+	// deleted in P5-C4 (commit 569a892); the category dispatchers now
+	// return only the native carrier (Flags + NativeLedgerEntries +
+	// NativeOverlays + NativelyEmittedRuleIDs).
 	//
 	// Firing signal (totalRulesApplied + Flags drain) stays on
 	// nativeFired() per P5-C3-scoped — that migration shipped in the
