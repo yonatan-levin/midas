@@ -538,13 +538,10 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB3Emission(t *testi
 	result := la.ProcessLiabilityAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied=true, one Adjustment with the weighted
-	// amount.
-	assert.True(t, result.Applied)
-	require.Len(t, result.Adjustments, 1)
+	// DC-1 Phase 5 P5-C4: the legacy *LiabilityAdjustmentResult fields were
+	// deleted. The fired weighted amount (totalContingent * AI probability)
+	// is asserted via the native OverlaySpec below (B3 is an OverlayEmitter).
 	expectedWeighted := 180_000.0 * b3AIMockResponseProbability
-	assert.InDelta(t, expectedWeighted, result.Adjustments[0].Amount, 1e-9,
-		"legacy Adjustment.Amount must equal totalContingent * AI probability (180k * 0.30)")
 
 	// Phase 2 PR-4 Task 4.3 native emission contract:
 	require.GreaterOrEqual(t, len(result.NativeLedgerEntries), 1,
@@ -605,9 +602,7 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB3SkipPath(t *testi
 	result := la.ProcessLiabilityAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied=false, no Adjustments.
-	assert.False(t, result.Applied)
-	assert.Empty(t, result.Adjustments)
+	// DC-1 Phase 5 P5-C4: skip contract asserted natively — no fired entry.
 
 	// Native emission contract — skip path still emits a Fired:false entry.
 	require.Len(t, result.NativeLedgerEntries, 1,

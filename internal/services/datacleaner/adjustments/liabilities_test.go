@@ -395,11 +395,14 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments(t *testing.T) {
 
 	result := adjuster.ProcessLiabilityAdjustments(gocontext.Background(), data, rules, context)
 
-	// Verify comprehensive results
+	// Verify comprehensive results. DC-1 Phase 5 P5-C4: the legacy
+	// result.Applied / .TotalLiabilityAdjustment / .Adjustments fields were
+	// deleted. The three B-rule adjustments now surface as three native
+	// OverlaySpecs (B1 lease + B2 pension + B3 contingent); their total is
+	// asserted below, and the projected entities.Adjustment audit trail
+	// (count == 3) is covered by the basket-parity golden.
 	require.NotNil(t, result, "Result should not be nil")
-	assert.True(t, result.Applied, "Adjustments should be applied")
-	assert.Greater(t, result.TotalLiabilityAdjustment, float64(0), "Total adjustment should be positive")
-	assert.Len(t, result.Adjustments, 3, "Should have adjustments for all categories")
+	assert.Len(t, result.NativeOverlays, 3, "Should have a native overlay for each B-rule category")
 	assert.Greater(t, len(result.Flags), 0, "Should generate flags")
 
 	// Expected debt-like-claim increase from the three B-rules:

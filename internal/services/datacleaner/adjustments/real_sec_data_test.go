@@ -202,8 +202,10 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), financialData, liabilityRules, context)
 		require.NotNil(t, liabilityResult, "Liability result should not be nil")
 
-		// Validate processing completed
-		assert.NotNil(t, liabilityResult.Adjustments, "Should have liability adjustment records")
+		// Validate processing completed. DC-1 Phase 5 P5-C4: the
+		// liabilityResult.Adjustments / .TotalLiabilityAdjustment fields were
+		// deleted; the B-rule effect lives on the native overlays.
+		assert.NotNil(t, liabilityResult.NativeOverlays, "Should have native liability emission records")
 
 		// Apple should have manageable debt levels for a mega-cap tech company
 		if financialData.TotalDebt > 0 {
@@ -212,15 +214,19 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 				"Apple debt-to-assets should be reasonable for mega-cap tech")
 		}
 
-		if len(liabilityResult.Adjustments) > 0 {
-			t.Logf("Real Apple Category B adjustments: %d adjustments made", len(liabilityResult.Adjustments))
-			for _, adj := range liabilityResult.Adjustments {
-				t.Logf("  - %s: %.2fB (%s)", adj.Type, adj.Amount/1000000000, adj.Reasoning)
+		var overlayTotal float64
+		for _, ov := range liabilityResult.NativeOverlays {
+			overlayTotal += ov.Amount
+		}
+		if len(liabilityResult.NativeOverlays) > 0 {
+			t.Logf("Real Apple Category B emissions: %d native overlays", len(liabilityResult.NativeOverlays))
+			for _, ov := range liabilityResult.NativeOverlays {
+				t.Logf("  - %s: %.2fB (%s)", ov.OverlayID, ov.Amount/1000000000, ov.Reasoning)
 			}
 		}
 
-		t.Logf("Real Apple Category B results: %d adjustments, TotalLiabilityAdjustment=%.2fB",
-			len(liabilityResult.Adjustments), liabilityResult.TotalLiabilityAdjustment/1000000000)
+		t.Logf("Real Apple Category B results: %d native overlays, overlay total=%.2fB",
+			len(liabilityResult.NativeOverlays), overlayTotal/1000000000)
 	})
 
 	t.Run("Real Apple Data Complete Pipeline Performance", func(t *testing.T) {
@@ -256,7 +262,7 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 		require.NotNil(t, assetResult)
 		require.NotNil(t, liabilityResult)
 
-		totalAdjustments := len(assetResult.Adjustments) + len(liabilityResult.Adjustments)
+		totalAdjustments := len(assetResult.Adjustments) + len(liabilityResult.NativeOverlays)
 
 		// Apple should produce meaningful results
 		assert.GreaterOrEqual(t, financialData.TotalAssets, float64(300000000000),

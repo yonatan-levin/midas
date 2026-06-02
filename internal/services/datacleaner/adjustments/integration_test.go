@@ -139,8 +139,11 @@ func TestCompleteDataCleaningPipeline(t *testing.T) {
 			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), tt.data, liabilityRules, tt.context)
 
 			require.NotNil(t, liabilityResult, "Liability adjustment result should not be nil")
-			assert.Equal(t, tt.expectSuccess, liabilityResult.Applied, "Liability adjustment application mismatch")
-			assert.Len(t, liabilityResult.Adjustments, tt.expectLiabAdj, "Liability adjustment count mismatch")
+			// DC-1 Phase 5 P5-C4: the legacy liabilityResult.Applied /
+			// .Adjustments / .TotalLiabilityAdjustment fields were deleted.
+			// The B-rule effect is now asserted on the native overlays: one
+			// OverlaySpec per fired B-rule (B1/B2/B3 are OverlayEmitters).
+			assert.Len(t, liabilityResult.NativeOverlays, tt.expectLiabAdj, "Liability native-overlay count mismatch")
 
 			// Validate combined results
 			totalFlags := len(liabilityResult.Flags)
@@ -149,19 +152,6 @@ func TestCompleteDataCleaningPipeline(t *testing.T) {
 
 			// Validate data integrity after both adjustments
 			assert.Greater(t, tt.data.TotalAssets, float64(0), "Total assets should remain positive")
-			// DC-1 Phase 4 (C-4): B-rule debt dual-write is DELETED. The
-			// liability adjustment amount no longer flows into data.TotalDebt —
-			// it is recorded on the NativeOverlays (DebtLikeClaims/TotalDebt
-			// fields) for InvestedCapital() to consume. Verify the adjustment
-			// magnitude is captured on the overlays rather than the umbrella.
-			if liabilityResult.TotalLiabilityAdjustment > 0 {
-				var overlayTotal float64
-				for _, o := range liabilityResult.NativeOverlays {
-					overlayTotal += o.Amount
-				}
-				assert.GreaterOrEqual(t, overlayTotal, liabilityResult.TotalLiabilityAdjustment-1.0,
-					"Phase 4: B-rule adjustments recorded on NativeOverlays (debt-like claims), not data.TotalDebt")
-			}
 		})
 	}
 }
@@ -261,12 +251,16 @@ func TestRealWorldScenarios(t *testing.T) {
 			assert.Less(t, processingTime, tt.performance, "Processing should meet performance requirements")
 			assert.Less(t, processingTime, 500*time.Millisecond, "Must meet <500ms requirement")
 
-			// Validate expected adjustments
-			allAdjustments := append(assetResult.Adjustments, liabilityResult.Adjustments...)
+			// Validate expected adjustments. DC-1 Phase 5 P5-C4: the
+			// liabilityResult.Adjustments audit slice was deleted; the B-rule
+			// audit reasoning now lives on the native OverlaySpecs. We build
+			// the reasoning corpus from the asset-side TangibleAssetsResult
+			// adjustments (still present) plus the liability native overlays.
+			reasonings := collectReasonings(assetResult.Adjustments, liabilityResult.NativeOverlays, liabilityResult.NativeLedgerEntries)
 			for expectedAdjType, shouldExist := range tt.expectedAdj {
 				found := false
-				for _, adj := range allAdjustments {
-					if contains(adj.Reasoning, expectedAdjType) {
+				for _, r := range reasonings {
+					if contains(r, expectedAdjType) {
 						found = true
 						break
 					}
@@ -279,7 +273,7 @@ func TestRealWorldScenarios(t *testing.T) {
 			}
 
 			// Validate realistic outputs
-			assert.NotEmpty(t, allAdjustments, "Should have some adjustments for real-world scenarios")
+			assert.NotEmpty(t, reasonings, "Should have some adjustments for real-world scenarios")
 			assert.Greater(t, tt.data.TotalAssets, float64(0), "Assets should remain positive")
 		})
 	}
@@ -359,20 +353,26 @@ func TestIndustrySpecificAdjustments(t *testing.T) {
 			assetResult := assetAdjuster.ProcessAssetAdjustments(gocontext.Background(), &testData, assetRules, context)
 			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), &testData, liabilityRules, context)
 
-			// Validate industry-specific behavior
-			allAdjustments := append(assetResult.Adjustments, liabilityResult.Adjustments...)
+			// Validate industry-specific behavior. DC-1 Phase 5 P5-C4: the
+			// dispatcher *Result.Adjustments audit slices were deleted. Build
+			// the audit corpus (reasoning + magnitude) from the native
+			// emissions of both categories.
 			allFlags := append(assetResult.Flags, liabilityResult.Flags...)
+			audit := collectAuditEntries(
+				assetResult.NativeOverlays, assetResult.NativeLedgerEntries,
+				liabilityResult.NativeOverlays, liabilityResult.NativeLedgerEntries,
+			)
 
 			assert.Len(t, allFlags, tt.expectFlags, "Industry-specific flag count mismatch for %s", tt.industryName)
-			assert.GreaterOrEqual(t, len(allAdjustments), 2, "Should have multiple adjustments for %s", tt.industryName)
+			assert.GreaterOrEqual(t, len(audit), 2, "Should have multiple adjustments for %s", tt.industryName)
 
 			// Validate adjustment amounts are reasonable for industry
 			for adjustmentType, expectedAmount := range tt.expectAdj {
 				found := false
-				for _, adj := range allAdjustments {
-					if contains(adj.Reasoning, adjustmentType) {
+				for _, e := range audit {
+					if contains(e.reasoning, adjustmentType) {
 						// Allow ±20% variance for industry-specific adjustments
-						assert.InDelta(t, expectedAmount, adj.Amount, expectedAmount*0.2,
+						assert.InDelta(t, expectedAmount, e.amount, expectedAmount*0.2,
 							"Adjustment amount for %s should be industry-appropriate", adjustmentType)
 						found = true
 						break
@@ -458,9 +458,11 @@ func TestPerformanceBenchmarks(t *testing.T) {
 					successCount++
 				}
 
-				// Ensure adjustments were applied (not just measuring empty processing)
-				allAdjustments := append(assetResult.Adjustments, liabilityResult.Adjustments...)
-				assert.NotEmpty(t, allAdjustments, "Should have adjustments in iteration %d", i)
+				// Ensure adjustments were applied (not just measuring empty
+				// processing). DC-1 Phase 5 P5-C4: liabilityResult.Adjustments
+				// was deleted; the B-rule effect lives on the native overlays.
+				assert.True(t, len(assetResult.Adjustments) > 0 || len(liabilityResult.NativeOverlays) > 0,
+					"Should have adjustments in iteration %d", i)
 			}
 
 			// Validate performance metrics
@@ -576,8 +578,15 @@ func TestAuditTrailCompleteness(t *testing.T) {
 	assetResult := assetAdjuster.CalculateNetTangibleAssets(data, context)
 	liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), data, liabilityRules, context)
 
-	// Validate audit trail completeness
-	allAdjustments := append(assetResult.Adjustments, liabilityResult.Adjustments...)
+	// Validate audit trail completeness. DC-1 Phase 5 P5-C4: the dispatcher
+	// *Result.Adjustments / .AuditTrail fields were deleted. The asset-side
+	// CalculateNetTangibleAssets still returns a TangibleAssetsResult with
+	// Adjustments, which we validate here; the liability-side audit content
+	// is now produced by the datacleaner-package adjustmentsFromLedger
+	// projection and validated end-to-end by the basket-parity golden. We
+	// additionally validate the liability native emissions carry the audit
+	// primitives (RuleID + Reasoning + magnitude) the projection consumes.
+	allAdjustments := assetResult.Adjustments
 	allFlags := liabilityResult.Flags
 
 	t.Run("Adjustment Documentation", func(t *testing.T) {
@@ -607,22 +616,25 @@ func TestAuditTrailCompleteness(t *testing.T) {
 		}
 	})
 
-	t.Run("Transformation Traceability", func(t *testing.T) {
-		assert.NotEmpty(t, assetResult.AuditTrail, "Asset result must have audit trail")
-		assert.NotEmpty(t, liabilityResult.AuditTrail, "Liability result must have audit trail")
-
-		// Validate audit trail contains key information
-		assert.Contains(t, liabilityResult.AuditTrail, "Category B", "Audit trail should reference rule category")
-		assert.Contains(t, liabilityResult.AuditTrail, "adjustment", "Audit trail should mention adjustments")
-		assert.Contains(t, liabilityResult.AuditTrail, "debt", "Audit trail should mention debt impact")
+	t.Run("Native Liability Emission Documentation", func(t *testing.T) {
+		// The native OverlaySpecs the liability projection consumes must
+		// carry the audit primitives (RuleID, Reasoning, positive Amount).
+		require.NotEmpty(t, liabilityResult.NativeOverlays,
+			"liability B-rules must emit native overlays for the audit-trail projection")
+		for _, ov := range liabilityResult.NativeOverlays {
+			assert.NotEmpty(t, ov.OverlayID, "every native overlay must carry an OverlayID")
+			assert.NotEmpty(t, ov.Reasoning, "every native overlay must carry reasoning")
+			assert.Greater(t, ov.Amount, float64(0), "every fired overlay amount must be positive")
+		}
 	})
 
 	t.Run("Regulatory Compliance", func(t *testing.T) {
-		// Ensure all adjustments reference SEC guide sources
+		// Ensure the audit corpus references SEC guide sources. DC-1 Phase 5
+		// P5-C4: draw from asset adjustments + liability native emissions.
 		secGuideReferences := 0
-		for _, adj := range allAdjustments {
-			if contains(adj.Reasoning, "rule") || contains(adj.Reasoning, "A1") ||
-				contains(adj.Reasoning, "B1") || contains(adj.Reasoning, "guide") {
+		for _, r := range collectReasonings(assetResult.Adjustments, liabilityResult.NativeOverlays, liabilityResult.NativeLedgerEntries) {
+			if contains(r, "rule") || contains(r, "A1") ||
+				contains(r, "B1") || contains(r, "guide") {
 				secGuideReferences++
 			}
 		}
@@ -688,7 +700,7 @@ func TestRealSECDataIntegration(t *testing.T) {
 		}
 
 		t.Logf("Real Apple data processed in %dms with %d adjustments and %d flags",
-			duration.Milliseconds(), len(assetResult.Adjustments)+len(liabilityResult.Adjustments),
+			duration.Milliseconds(), len(assetResult.Adjustments)+len(liabilityResult.NativeOverlays),
 			len(liabilityResult.Flags))
 	})
 
@@ -697,23 +709,17 @@ func TestRealSECDataIntegration(t *testing.T) {
 		liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), appleData, liabilityRules, context)
 
-		// Technology companies typically have minimal pension obligations
+		// Technology companies typically have minimal pension obligations.
+		// DC-1 Phase 5 P5-C4: liabilityResult.Adjustments was deleted; inspect
+		// the native overlays (keyed by OverlayID/Reasoning) instead.
 		pensionAdjustments := 0
-		for _, adj := range liabilityResult.Adjustments {
-			if contains(adj.RuleID, "pension") || contains(adj.FromAccount, "Pension") {
+		for _, ov := range liabilityResult.NativeOverlays {
+			if contains(ov.OverlayID, "pension") || contains(ov.Reasoning, "Pension") {
 				pensionAdjustments++
 			}
 		}
 
 		assert.LessOrEqual(t, pensionAdjustments, 1, "Apple should have minimal pension adjustments")
-
-		// Technology companies may have significant operating leases (offices, retail)
-		leaseAdjustments := 0
-		for _, adj := range liabilityResult.Adjustments {
-			if contains(adj.RuleID, "lease") || contains(adj.FromAccount, "Lease") {
-				leaseAdjustments++
-			}
-		}
 
 		// Apple has retail stores and corporate offices
 		assert.GreaterOrEqual(t, appleData.OperatingLeaseLiability, float64(1000000000),
@@ -736,13 +742,15 @@ func TestRealSECDataIntegration(t *testing.T) {
 		assert.Less(t, duration.Milliseconds(), int64(300),
 			"Mega-cap processing should be efficient")
 
-		// Validate comprehensive analysis was performed
+		// Validate comprehensive analysis was performed. DC-1 Phase 5 P5-C4:
+		// the liabilityResult.AuditTrail string field was deleted; the
+		// equivalent audit content is now the native overlay/ledger emissions
+		// (validated end-to-end by the datacleaner basket-parity golden). Here
+		// we assert the dispatcher completed and surfaced native emissions.
 		assert.GreaterOrEqual(t, len(liabilityResult.Flags), 0,
 			"Mega-cap analysis should complete successfully")
-
-		// Validate audit trail mentions mega-cap considerations
-		assert.Contains(t, liabilityResult.AuditTrail, "debt",
-			"Audit trail should mention debt analysis")
+		assert.NotNil(t, liabilityResult.NativelyEmittedRuleIDs,
+			"Mega-cap analysis must register native rule emissions")
 	})
 
 	t.Run("Real Data Audit Trail Validation", func(t *testing.T) {
@@ -751,12 +759,18 @@ func TestRealSECDataIntegration(t *testing.T) {
 		assetResult := assetAdjuster.CalculateNetTangibleAssets(appleData, context)
 		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), appleData, liabilityRules, context)
 
-		// Validate comprehensive audit trail for real data
+		// Validate comprehensive audit trail for real data. DC-1 Phase 5
+		// P5-C4: the liabilityResult.AuditTrail string was deleted; the
+		// liability audit content is now the native overlay/ledger reasonings.
 		assert.NotEmpty(t, assetResult.AuditTrail, "Asset audit trail should be populated")
-		assert.NotEmpty(t, liabilityResult.AuditTrail, "Liability audit trail should be populated")
 
-		// Audit trail should mention Apple-specific characteristics
-		combinedAuditTrail := assetResult.AuditTrail + " " + liabilityResult.AuditTrail
+		// Audit trail should mention Apple-specific characteristics. Build the
+		// combined corpus from the asset audit string + liability native
+		// emission reasonings.
+		combinedAuditTrail := assetResult.AuditTrail
+		for _, r := range collectReasonings(nil, liabilityResult.NativeOverlays, liabilityResult.NativeLedgerEntries) {
+			combinedAuditTrail += " " + r
+		}
 
 		// Should reference the major accounts in Apple's financials
 		hasRelevantReferences := contains(combinedAuditTrail, "asset") ||
@@ -770,6 +784,72 @@ func TestRealSECDataIntegration(t *testing.T) {
 		t.Logf("Real Apple data audit trail: %s",
 			combinedAuditTrail[:min(200, len(combinedAuditTrail))]+"...")
 	})
+}
+
+// auditEntry is a test-only flattening of a native emission's audit
+// primitives (reasoning + magnitude). DC-1 Phase 5 P5-C4: the dispatcher no
+// longer returns a translated []entities.Adjustment audit slice; the audit
+// trail is projected in package datacleaner via adjustmentsFromLedger (covered
+// by the basket-parity golden). These helpers surface just the reasoning +
+// magnitude the adjustments-package integration assertions need, WITHOUT
+// duplicating the full projection (no Category/Type/Percentage).
+type auditEntry struct {
+	reasoning string
+	amount    float64
+}
+
+// collectAuditEntries flattens asset + liability native emissions (overlays
+// then fired ledger entries) into reasoning + magnitude pairs.
+func collectAuditEntries(
+	assetOverlays []entities.OverlaySpec, assetLedger []entities.LedgerEntry,
+	liabOverlays []entities.OverlaySpec, liabLedger []entities.LedgerEntry,
+) []auditEntry {
+	var out []auditEntry
+	addOverlays := func(ovs []entities.OverlaySpec) {
+		for _, ov := range ovs {
+			out = append(out, auditEntry{reasoning: ov.Reasoning, amount: ov.Amount})
+		}
+	}
+	addLedger := func(entries []entities.LedgerEntry) {
+		for _, e := range entries {
+			if !e.Fired {
+				continue
+			}
+			amt := e.DeltaAmount
+			if amt < 0 {
+				amt = -amt
+			}
+			out = append(out, auditEntry{reasoning: e.Reasoning, amount: amt})
+		}
+	}
+	addOverlays(assetOverlays)
+	addLedger(assetLedger)
+	addOverlays(liabOverlays)
+	addLedger(liabLedger)
+	return out
+}
+
+// collectReasonings gathers the audit-reasoning corpus: the asset-side
+// TangibleAssetsResult adjustments (still emitted by CalculateNetTangibleAssets)
+// plus the liability native overlay + fired-ledger reasonings.
+func collectReasonings(
+	assetAdjustments []entities.Adjustment,
+	liabOverlays []entities.OverlaySpec,
+	liabLedger []entities.LedgerEntry,
+) []string {
+	var out []string
+	for _, a := range assetAdjustments {
+		out = append(out, a.Reasoning)
+	}
+	for _, ov := range liabOverlays {
+		out = append(out, ov.Reasoning)
+	}
+	for _, e := range liabLedger {
+		if e.Fired {
+			out = append(out, e.Reasoning)
+		}
+	}
+	return out
 }
 
 // Helper functions for creating test data

@@ -464,25 +464,10 @@ type TangibleAssetsResult struct {
 	AuditTrail             string       `json:"audit_trail"`
 }
 
-// AssetAdjustmentResult represents the result of applying asset adjustments
-type AssetAdjustmentResult struct {
-	Applied                bool         `json:"applied"`
-	TotalAssetAdjustment   float64      `json:"total_asset_adjustment"`
-	AdjustedTangibleAssets float64      `json:"adjusted_tangible_assets"`
-	Adjustments            []Adjustment `json:"adjustments"`
-	Flags                  []Flag       `json:"flags"`
-	AuditTrail             string       `json:"audit_trail"`
-}
-
-// LiabilityAdjustmentResult represents the result of applying liability adjustments
-type LiabilityAdjustmentResult struct {
-	Applied                  bool         `json:"applied"`
-	TotalLiabilityAdjustment float64      `json:"total_liability_adjustment"`
-	AdjustedTotalDebt        float64      `json:"adjusted_total_debt"`
-	Adjustments              []Adjustment `json:"adjustments"`
-	Flags                    []Flag       `json:"flags"`
-	AuditTrail               string       `json:"audit_trail"`
-}
+// DC-1 Phase 5 P5-C4: the dead entities.AssetAdjustmentResult /
+// entities.LiabilityAdjustmentResult duplicate structs were deleted here.
+// They had zero code callers (grep-confirmed — only doc references); the
+// adjustments package uses its own package-local slim result structs.
 
 // Quality Assessment Entities
 

@@ -11,10 +11,14 @@ import "time"
 // fire on this ticker?" without requiring code reading; SkipReason and
 // SkipMetrics carry that diagnostic.
 //
-// Phase 2 invariant: this struct is POPULATED but no production consumer reads
-// it yet (matches the Phase 0 plug-field discipline). Phase 3 introduces the
-// CleanedFinancialData.Restated() accessor that consumes EquityOffset and
-// TaxShieldDTA.
+// Consumers (as of DC-1 Phase 5): the LedgerEntry → entities.Adjustment
+// projection (datacleaner.adjustmentsFromLedger, which produces the public
+// ValuationResult.CleaningAdjustments audit trail) and the
+// CleanedFinancialData.Restated() view reconstruction (which consumes
+// EquityOffset and TaxShieldDTA). (Historical note: Phase 2 populated this
+// struct before any production consumer read it, matching the Phase 0
+// plug-field discipline; Phase 3 added Restated() and Phase 5 added the
+// Adjustment projection.)
 //
 // SourceReliability is the T2-BS-3 carve-out hook. It defaults to "high" and
 // flips to "parser_known_dropout" when an adjuster touches a field known to be
@@ -37,8 +41,17 @@ type LedgerEntry struct {
 	EquityOffset float64 `json:"equity_offset,omitempty"`
 	TaxShieldDTA float64 `json:"tax_shield_dta,omitempty"`
 
-	// Populated when Fired=false.
-	SkipReason  string             `json:"skip_reason,omitempty"`
+	// SkipReason is the diagnostic "why did this rule skip?" string,
+	// populated when Fired=false.
+	SkipReason string `json:"skip_reason,omitempty"`
+	// SkipMetrics carries scalar context keyed by name. On skip paths
+	// (Fired=false) it holds diagnostic ratios; since DC-1 P5-followup it
+	// ALSO carries pre-state scalars on fire paths (Fired=true) consumed by
+	// the LedgerEntry → Adjustment projection (see
+	// internal/services/datacleaner/adjustment_projection.go). The
+	// "original_<Field>" key convention (e.g. "original_Revenue",
+	// "original_OtherIntangibles") names the canonical entity field
+	// snapshotted at the adjuster's Apply* entry.
 	SkipMetrics map[string]float64 `json:"skip_metrics,omitempty"`
 
 	// T2-BS-3 carve-out hook. "" or "high" → trustworthy; "medium" → review;

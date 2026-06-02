@@ -219,10 +219,14 @@ func (asp *AssetQualityStageProcessor) ProcessStage(ctx context.Context, data *e
 	// Apply asset adjustments
 	adjustmentResult := asp.assetAdjuster.ProcessAssetAdjustments(ctx, data, rulePointers, cleaningCtx)
 
+	// DC-1 Phase 5 P5-C4: the legacy *AdjustmentResult.Adjustments slice was
+	// deleted; project the public audit trail from the native LedgerEntry +
+	// OverlaySpec emissions via the shared adjustmentsFromLedger helper —
+	// the same projection the cleaner orchestrator uses.
 	return &entities.StageResult{
 		Stage:        entities.StageAssetQuality,
 		Success:      true,
-		Adjustments:  adjustmentResult.Adjustments,
+		Adjustments:  adjustmentsFromLedger(adjustmentResult.NativeLedgerEntries, adjustmentResult.NativeOverlays, perRuleAdjustmentMeta),
 		Flags:        adjustmentResult.Flags,
 		Duration:     time.Since(start),
 		RulesApplied: len(assetRules),
@@ -260,10 +264,12 @@ func (lsp *LiabilityCompletenessStageProcessor) ProcessStage(ctx context.Context
 	// Apply liability adjustments
 	adjustmentResult := lsp.liabilityAdjuster.ProcessLiabilityAdjustments(ctx, data, rulePointers, cleaningCtx)
 
+	// DC-1 Phase 5 P5-C4: project the audit trail from the native emissions
+	// (see AssetQualityStageProcessor for rationale).
 	return &entities.StageResult{
 		Stage:        entities.StageLiabilityCompleteness,
 		Success:      true,
-		Adjustments:  adjustmentResult.Adjustments,
+		Adjustments:  adjustmentsFromLedger(adjustmentResult.NativeLedgerEntries, adjustmentResult.NativeOverlays, perRuleAdjustmentMeta),
 		Flags:        adjustmentResult.Flags,
 		Duration:     time.Since(start),
 		RulesApplied: len(liabilityRules),
@@ -301,10 +307,12 @@ func (esp *EarningsNormalizationStageProcessor) ProcessStage(ctx context.Context
 	// Apply earnings adjustments
 	adjustmentResult := esp.earningsAdjuster.ProcessEarningsAdjustments(ctx, data, rulePointers, cleaningCtx)
 
+	// DC-1 Phase 5 P5-C4: project the audit trail from the native emissions
+	// (see AssetQualityStageProcessor for rationale).
 	return &entities.StageResult{
 		Stage:        entities.StageEarningsNormalization,
 		Success:      true, // Stage is successful even if no adjustments needed
-		Adjustments:  adjustmentResult.Adjustments,
+		Adjustments:  adjustmentsFromLedger(adjustmentResult.NativeLedgerEntries, adjustmentResult.NativeOverlays, perRuleAdjustmentMeta),
 		Flags:        adjustmentResult.Flags,
 		Duration:     time.Since(start),
 		RulesApplied: len(earningsRules),

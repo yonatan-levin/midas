@@ -217,18 +217,11 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA4Emission(t *testing.T) {
 	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied=true, one Adjustment, Adjustments[0].Amount
-	// equals the valuation-allowance magnitude (100_000). The legacy
-	// *AdjustmentResult shape stays unchanged so callers that don't know
-	// about the Adjuster interface keep working.
-	assert.True(t, result.Applied)
-	require.Len(t, result.Adjustments, 1)
-	assert.InDelta(t, 100_000.0, result.Adjustments[0].Amount, 1e-6)
-	assert.Equal(t, "DeferredTaxAssets", result.Adjustments[0].FromAccount)
-	assert.Equal(t, "ValuationAllowance", result.Adjustments[0].ToAccount)
-	assert.Equal(t, entities.AdjustmentTypeValuationAllowance, result.Adjustments[0].Type)
-	assert.InDelta(t, 50.0, result.Adjustments[0].Percentage, 1e-9,
-		"legacy A4 percentage is a fixed 50% allowance rate")
+	// DC-1 Phase 5 P5-C4: the legacy *AdjustmentResult fields were deleted.
+	// The fired magnitude / FromAccount / ToAccount / Type / fixed-50%
+	// Percentage are now asserted via the native Restater LedgerEntry below +
+	// the projection metadata table (A4 → percentageConstant 50.0), covered
+	// end-to-end by the basket-parity golden.
 
 	// Phase 2 PR-2 Task 2.3 native emission contract:
 	require.Len(t, result.NativeLedgerEntries, 1,
@@ -281,9 +274,7 @@ func TestAssetAdjuster_ProcessAssetAdjustments_NativeA4SkipPath(t *testing.T) {
 	result := aa.ProcessAssetAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied=false, no Adjustments.
-	assert.False(t, result.Applied)
-	assert.Empty(t, result.Adjustments)
+	// DC-1 Phase 5 P5-C4: skip contract asserted natively — no fired entry.
 
 	// Native emission contract — skip path still emits a Fired:false entry.
 	require.Len(t, result.NativeLedgerEntries, 1,

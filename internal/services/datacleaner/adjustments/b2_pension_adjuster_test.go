@@ -227,12 +227,9 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB2Emission(t *testi
 	result := la.ProcessLiabilityAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied=true, one Adjustment, Adjustments[0].Amount =
-	// underfunding + OPEB.
-	assert.True(t, result.Applied)
-	require.Len(t, result.Adjustments, 1)
-	assert.Equal(t, 250_000.0, result.Adjustments[0].Amount,
-		"legacy Adjustment.Amount must equal underfunding (200k) + OPEB (50k)")
+	// DC-1 Phase 5 P5-C4: the legacy *LiabilityAdjustmentResult fields were
+	// deleted. The fired amount (underfunding 200k + OPEB 50k) is asserted
+	// via the native OverlaySpec below (B2 is an OverlayEmitter).
 
 	// Phase 2 PR-4 Task 4.2 native emission contract:
 	require.GreaterOrEqual(t, len(result.NativeLedgerEntries), 1,
@@ -284,9 +281,7 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB2SkipPath(t *testi
 	result := la.ProcessLiabilityAdjustments(context.Background(), data, rules, cleaningCtx)
 	require.NotNil(t, result)
 
-	// Legacy contract: Applied=false, no Adjustments.
-	assert.False(t, result.Applied)
-	assert.Empty(t, result.Adjustments)
+	// DC-1 Phase 5 P5-C4: skip contract asserted natively — no fired entry.
 
 	// Native emission contract — skip path still emits a Fired:false entry.
 	require.Len(t, result.NativeLedgerEntries, 1,

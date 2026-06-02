@@ -10,6 +10,41 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
 
+// requireFiredEntry asserts that at least one LedgerEntry in the slice has
+// Fired=true. DC-1 Phase 5 P5-C4: replaces the deleted `result.Applied`
+// sanity gate now that the dispatcher returns only the native carrier. A
+// "fired" rule is one whose AdjusterOutput emitted a Fired:true LedgerEntry
+// (Restater family); FlagEmitters are exercised by their own dedicated tests.
+func requireFiredEntry(t *testing.T, entries []entities.LedgerEntry) {
+	t.Helper()
+	for _, e := range entries {
+		if e.Fired {
+			return
+		}
+	}
+	require.FailNow(t, "expected at least one fired native LedgerEntry, found none")
+}
+
+// countFiredAssetEmissions counts the asset-category emissions that the legacy
+// translator chain would have surfaced as an applied entities.Adjustment:
+// one per fired Restater writedown (DeltaAmount < 0 → A2/A4/A5) plus one per
+// goodwill-exclusion overlay (Amount > 0 → A1). DC-1 Phase 5 P5-C4: replaces
+// the deleted len(result.Adjustments) count.
+func countFiredAssetEmissions(result *AssetAdjustmentResult) int {
+	n := 0
+	for _, e := range result.NativeLedgerEntries {
+		if e.Fired && e.DeltaAmount < 0 {
+			n++
+		}
+	}
+	for _, ov := range result.NativeOverlays {
+		if ov.Amount > 0 {
+			n++
+		}
+	}
+	return n
+}
+
 // TestDispatcherDualWriteDeleted_Assets pins the DC-1 Phase 4 §8.2.1 Option A
 // contract change for the asset-side Restaters (A2 intangible, A4 DTA, A5
 // inventory): after Phase 4 the dispatcher applies each fired LedgerEntry's
@@ -32,7 +67,7 @@ func TestDispatcherDualWriteDeleted_Assets(t *testing.T) {
 
 		result := aa.ProcessAssetAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 		require.NotNil(t, result)
-		require.True(t, result.Applied)
+		requireFiredEntry(t, result.NativeLedgerEntries)
 
 		// Component delta still applied (helper, not the deleted dual-write).
 		assert.InDelta(t, 100_000.0, data.OtherIntangibles, 1e-6,
@@ -53,7 +88,7 @@ func TestDispatcherDualWriteDeleted_Assets(t *testing.T) {
 
 		result := aa.ProcessAssetAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 		require.NotNil(t, result)
-		require.True(t, result.Applied)
+		requireFiredEntry(t, result.NativeLedgerEntries)
 
 		assert.InDelta(t, 100_000.0, data.DeferredTaxAssets, 1e-6,
 			"A4 component delta must still land on data.DeferredTaxAssets")
@@ -76,7 +111,7 @@ func TestDispatcherDualWriteDeleted_Assets(t *testing.T) {
 
 		result := aa.ProcessAssetAdjustments(context.Background(), data, rules, createRetailContext())
 		require.NotNil(t, result)
-		require.True(t, result.Applied)
+		requireFiredEntry(t, result.NativeLedgerEntries)
 
 		assert.InDelta(t, 240_000.0, data.Inventory, 1e-6,
 			"A5 component delta must still land on data.Inventory")
@@ -106,7 +141,7 @@ func TestDispatcherDualWriteDeleted_Earnings(t *testing.T) {
 
 		result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 		require.NotNil(t, result)
-		require.True(t, result.Applied)
+		requireFiredEntry(t, result.NativeLedgerEntries)
 
 		// 150M + 30M add-back = 180M, applied by the generic helper.
 		assert.InDelta(t, 180_000_000.0, data.NormalizedOperatingIncome, 1e-6,
@@ -127,7 +162,7 @@ func TestDispatcherDualWriteDeleted_Earnings(t *testing.T) {
 
 		result := ea.ProcessEarningsAdjustments(context.Background(), data, rules, &entities.CleaningContext{})
 		require.NotNil(t, result)
-		require.True(t, result.Applied)
+		requireFiredEntry(t, result.NativeLedgerEntries)
 
 		// 50M + 20M = 70M, applied by the helper to InterestExpense.
 		assert.InDelta(t, 70_000_000.0, data.InterestExpense, 1e-6,
@@ -166,7 +201,6 @@ func TestDispatcherDualWriteDeleted_Liabilities(t *testing.T) {
 
 		result := la.ProcessLiabilityAdjustments(context.Background(), data, rules, &entities.CleaningContext{IndustryCode: "44"})
 		require.NotNil(t, result)
-		require.True(t, result.Applied)
 		require.Len(t, result.NativeOverlays, 1)
 		require.Greater(t, result.NativeOverlays[0].Amount, 0.0)
 

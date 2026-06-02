@@ -63,38 +63,24 @@ const (
 // hardcoded literal is the only stable identifier available in Phase 2.
 const b3AIModelName = "footnote_analysis"
 
-// LiabilityAdjustmentResult represents the result of applying liability adjustments.
+// LiabilityAdjustmentResult is the slim native carrier returned by
+// ProcessLiabilityAdjustments.
 //
-// DC-1 Phase 2 PR-4 Task 4.1 added the three Native* fields below to carry
-// AdjusterOutput state from Category B rules that have migrated to the
-// Adjuster interface (PR-4 Task 4.1 onwards). The cleaner orchestrator reads
-// NativeLedgerEntries / NativeOverlays / NativelyEmittedRuleIDs to:
-//   - append the native LedgerEntries to data.AdjustmentLedger BEFORE the
-//     PR-1 shim runs, preserving liability-category ordering;
-//   - append the native Overlays to data.Overlays;
-//   - instruct the shim to SKIP any rule whose ID appears in
-//     NativelyEmittedRuleIDs so the same rule is not double-counted.
+// DC-1 Phase 5 P5-C4 deleted the legacy translator stack and the
+// translator-fed fields (Applied / TotalLiabilityAdjustment /
+// AdjustedTotalDebt / Adjustments / AuditTrail). The cleaner orchestrator
+// consumes ONLY the native emissions: it drains NativeLedgerEntries onto
+// data.AdjustmentLedger and NativeOverlays onto data.Overlays (preserving
+// liability-category ordering), derives the firing signal via nativeFired(...),
+// and projects the public entities.Adjustment audit trail from the ledger via
+// adjustmentsFromLedger. Flags carries the category's collected risk flags.
 //
-// Mirrors AssetAdjustmentResult (PR-2 Task 2.1) and EarningsAdjustmentResult
-// (PR-3 Task 3.1). PR-4 Task 4.4 absorbs the dispatcher's dual-write into the
-// Adjuster path and Task 4.5 deletes the shim's liability branch.
+// Mirrors the slimmed AssetAdjustmentResult / EarningsAdjustmentResult.
 type LiabilityAdjustmentResult struct {
-	// Deprecated: DC-1 Phase 5 P5-C3 stopped reading this field from the
-	// orchestrator (datacleaner/service.go::applyActiveAdjustments now uses
-	// nativeFired(NativeLedgerEntries, NativeOverlays, Flags) which filters
-	// Fired:false skip-diagnostic entries). The legacy translator stack still
-	// SETS this field; P5-C4 (deferred) will delete the translators + this
-	// field together. Do NOT add new readers — use nativeFired() or read the
-	// NativeLedgerEntries / NativeOverlays / Flags slices directly.
-	Applied                  bool                   `json:"applied"`
-	TotalLiabilityAdjustment float64                `json:"total_liability_adjustment"`
-	AdjustedTotalDebt        float64                `json:"adjusted_total_debt"`
-	Adjustments              []entities.Adjustment  `json:"adjustments"`
-	Flags                    []entities.Flag        `json:"flags"`
-	AuditTrail               string                 `json:"audit_trail"`
-	NativeLedgerEntries      []entities.LedgerEntry `json:"-"`
-	NativeOverlays           []entities.OverlaySpec `json:"-"`
-	NativelyEmittedRuleIDs   map[string]bool        `json:"-"`
+	Flags                  []entities.Flag        `json:"flags"`
+	NativeLedgerEntries    []entities.LedgerEntry `json:"-"`
+	NativeOverlays         []entities.OverlaySpec `json:"-"`
+	NativelyEmittedRuleIDs map[string]bool        `json:"-"`
 }
 
 // b1OperatingLeaseCapitalizationAdjuster is the per-rule adapter that lets
@@ -269,15 +255,12 @@ func (b *b3ContingentLiabilityAdjuster) Apply(ctx context.Context, working *enti
 // 4.1 renames it so the `context` package identifier is unshadowed inside
 // the function body — required for the new Adjuster.Apply call site.
 func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(ctx context.Context, data *entities.FinancialData, rules []*entities.CleaningRule, cleaningCtx *entities.CleaningContext) *LiabilityAdjustmentResult {
-	var allAdjustments []entities.Adjustment
 	var allFlags []entities.Flag
-	var totalAdjustment float64
-	originalDebt := data.TotalDebt
 
 	// Phase 2 PR-4 native emissions — collected here in rule-iteration order
 	// so the orchestrator can append them to data.AdjustmentLedger in
-	// position. The set NativelyEmittedRuleIDs tells the shim which legacy
-	// emissions to skip to avoid double counting.
+	// position. The set NativelyEmittedRuleIDs records which rules emitted
+	// natively (consumed by per-rule contract tests).
 	var nativeLedger []entities.LedgerEntry
 	var nativeOverlays []entities.OverlaySpec
 	nativelyEmittedRuleIDs := make(map[string]bool, len(rules))
@@ -301,21 +284,15 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(ctx context.Context, da
 	// accuracy correction: contingent/lease/pension claims compete with
 	// shareholders for cash flows but are not interest-bearing capital.
 	//
-	// dualWrite is now a no-op retained ONLY so the per-arm call sites and the
-	// documented B1→B2→B3 firing-order comments survive review-by-diff; it
-	// performs no mutation. Phase 5 removes the closure + its call sites
-	// entirely alongside the legacy-result-struct cleanup.
-	dualWrite := func(result *AdjustmentResult) {
-		_ = result // Phase 4: B-rule debt dual-write deleted; effect flows via InvestedCapital().DebtLikeClaims.
-	}
+	// DC-1 Phase 5 P5-C4: the no-op dualWrite closure + the legacy
+	// *AdjustmentResult translator chain are DELETED. The B1→B2→B3 firing
+	// order is preserved by the rule-iteration order of the switch below.
 
 	// Process each Category B rule
 	for _, rule := range rules {
 		if rule.Category != entities.LiabilityCompleteness || !rule.Enabled {
 			continue
 		}
-
-		var result *AdjustmentResult
 
 		switch rule.ID {
 		case "operating_leases":
@@ -328,33 +305,23 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(ctx context.Context, da
 			// orchestrator.
 			out, err := la.ApplyB1OperatingLeases(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
-				// Adjuster.Apply errors are not yet a defined surface in
-				// Phase 2; today's ApplyB1OperatingLeases never returns one.
-				// Falling back to the legacy path on hypothetical future
-				// errors preserves the dual-write contract — dualWrite runs
-				// at the end of this arm regardless of which branch set
-				// `result`.
-				result = la.ProcessOperatingLeaseAdjustment(applyCtx, data, rule, cleaningCtx)
-				dualWrite(result)
-				break
+				// Adjuster.Apply errors are not a defined surface today;
+				// ApplyB1OperatingLeases never returns one. Skip on a
+				// hypothetical future error (the deleted legacy fallback
+				// would have bypassed the native path the orchestrator now
+				// depends on exclusively).
+				continue
 			}
 
-			// Translate the AdjusterOutput into the legacy *AdjustmentResult
-			// shape so the dispatcher's audit-trail accounting keeps working.
-			// result.Amount mirrors out.Overlays[0].Amount when fired (see
-			// b1AdjusterOutputToLegacyResult), so dualWrite reads it directly.
-			result = b1AdjusterOutputToLegacyResult(out, rule)
-
 			// Record native emissions for the orchestrator. Even when the
-			// rule does not "fire" in the legacy sense (Applied=false), the
+			// rule does not "fire" in the legacy sense (Fired:false), the
 			// AdjusterOutput carries a Fired:false LedgerEntry that is still
-			// load-bearing for "why didn't B1 fire?" observability.
+			// load-bearing for "why didn't B1 fire?" observability. The
+			// OverlaySpec carries the lease PV for InvestedCapital().DebtLikeClaims.
+			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
-
-			// Task 4.4 per-arm dual-write — see helper godoc above.
-			dualWrite(result)
 		case "pension_obligations":
 			// DC-1 Phase 2 PR-4 Task 4.2: route B2 through the new
 			// Adjuster-shaped ApplyB2PensionUnderfunding. Mirrors the B1
@@ -365,33 +332,20 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(ctx context.Context, da
 			// reach the cleaner orchestrator.
 			out, err := la.ApplyB2PensionUnderfunding(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
-				// Adjuster.Apply errors are not yet a defined surface in
-				// Phase 2; today's ApplyB2PensionUnderfunding never returns
-				// one. Falling back to the legacy path on hypothetical
-				// future errors preserves the dual-write contract —
-				// dualWrite runs at the end of this arm regardless of
-				// which branch set `result`.
-				result = la.ProcessPensionAdjustment(data, rule, cleaningCtx)
-				dualWrite(result)
-				break
+				// Adjuster.Apply errors are not a defined surface today;
+				// ApplyB2PensionUnderfunding never returns one. Skip on a
+				// hypothetical future error (see B1 arm rationale).
+				continue
 			}
 
-			// Translate the AdjusterOutput into the legacy *AdjustmentResult
-			// shape so the dispatcher's audit-trail accounting keeps working.
-			// result.Amount mirrors out.Overlays[0].Amount when fired (see
-			// b2AdjusterOutputToLegacyResult), so dualWrite reads it directly.
-			result = b2AdjusterOutputToLegacyResult(out, rule)
-
 			// Record native emissions for the orchestrator. Even when the
-			// rule does not "fire" in the legacy sense (Applied=false), the
+			// rule does not "fire" in the legacy sense (Fired:false), the
 			// AdjusterOutput carries a Fired:false LedgerEntry that is still
 			// load-bearing for "why didn't B2 fire?" observability.
+			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
-
-			// Task 4.4 per-arm dual-write — see helper godoc above.
-			dualWrite(result)
 		case "contingent_liabilities":
 			// DC-1 Phase 2 PR-4 Task 4.3: route B3 through the new
 			// Adjuster-shaped ApplyB3Contingent. Mirrors B1/B2 wiring —
@@ -406,70 +360,37 @@ func (la *LiabilityAdjuster) ProcessLiabilityAdjustments(ctx context.Context, da
 			// 181-189.
 			out, err := la.ApplyB3Contingent(applyCtx, data, rule, cleaningCtx)
 			if err != nil {
-				// Adjuster.Apply errors are not yet a defined surface in
-				// Phase 2; today's ApplyB3Contingent surfaces no errors
-				// even when the AI service fails (the AI failure is
-				// absorbed by the legacy fallback path inside Process*).
-				// Falling back to the legacy path on hypothetical future
-				// errors preserves the dual-write contract — dualWrite
-				// runs at the end of this arm regardless of which branch
-				// set `result`.
-				result = la.ProcessContingentLiabilityAdjustment(applyCtx, data, rule, cleaningCtx)
-				dualWrite(result)
-				break
+				// Adjuster.Apply errors are not a defined surface today;
+				// ApplyB3Contingent surfaces no error even when the AI
+				// service fails (the AI failure is absorbed inside Apply).
+				// Skip on a hypothetical future error (see B1 arm rationale).
+				continue
 			}
 
-			// Translate the AdjusterOutput into the legacy
-			// *AdjustmentResult shape so the dispatcher's audit-trail
-			// accounting keeps working. result.Amount mirrors
-			// out.Overlays[0].Amount when fired (see
-			// b3AdjusterOutputToLegacyResult), so dualWrite reads it
-			// directly. Note the Field-vs-mutation mismatch:
-			// OverlaySpec.Field is "DebtLikeClaims" but dualWrite mutates
-			// data.TotalDebt — Phase 4 closes this gap by flipping
-			// consumers to read the overlay.
-			result = b3AdjusterOutputToLegacyResult(out, rule)
-
-			// Record native emissions for the orchestrator. Even when
-			// the rule does not "fire" in the legacy sense
-			// (Applied=false), the AdjusterOutput carries a Fired:false
-			// LedgerEntry that is still load-bearing for "why didn't B3
-			// fire?" observability.
+			// Record native emissions for the orchestrator. The OverlaySpec
+			// (Field:"DebtLikeClaims") carries the probability-weighted
+			// contingent amount for InvestedCapital().DebtLikeClaims. Even on
+			// the non-fired path the Fired:false LedgerEntry is load-bearing
+			// for "why didn't B3 fire?" observability.
+			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)
 			nativelyEmittedRuleIDs[rule.ID] = true
-
-			// Task 4.4 per-arm dual-write — see helper godoc above.
-			dualWrite(result)
 		default:
 			continue // Skip unknown rules
 		}
-
-		// Aggregate bookkeeping — NOT a mutation of `data`. Each per-rule
-		// arm above already performed its dual-write via dualWrite(result)
-		// before reaching this point, so this block only collects
-		// allAdjustments/allFlags and tallies totalAdjustment.
-		if result != nil && result.Applied {
-			allAdjustments = append(allAdjustments, result.Adjustments...)
-			allFlags = append(allFlags, result.Flags...)
-			totalAdjustment += result.Amount
-		}
 	}
 
-	applied := len(allAdjustments) > 0
-	auditTrail := fmt.Sprintf("Processed %d Category B liability rules, total adjustment: %.0f, debt increased from %.0f to %.0f",
-		len(rules), totalAdjustment, originalDebt, data.TotalDebt)
-
+	// DC-1 Phase 5 P5-C4: the legacy *AdjustmentResult accumulation +
+	// audit-trail string were deleted. The orchestrator projects the public
+	// audit trail from data.AdjustmentLedger via adjustmentsFromLedger; the
+	// B-rule OverlaySpecs flow to InvestedCapital().DebtLikeClaims. B-rules
+	// never mutate an umbrella, so there is no post-loop recompute.
 	return &LiabilityAdjustmentResult{
-		Applied:                  applied,
-		TotalLiabilityAdjustment: totalAdjustment,
-		AdjustedTotalDebt:        data.TotalDebt,
-		Adjustments:              allAdjustments,
-		Flags:                    allFlags,
-		AuditTrail:               auditTrail,
-		NativeLedgerEntries:      nativeLedger,
-		NativeOverlays:           nativeOverlays,
-		NativelyEmittedRuleIDs:   nativelyEmittedRuleIDs,
+		Flags:                  allFlags,
+		NativeLedgerEntries:    nativeLedger,
+		NativeOverlays:         nativeOverlays,
+		NativelyEmittedRuleIDs: nativelyEmittedRuleIDs,
 	}
 }
 
@@ -598,61 +519,6 @@ func firstAdjustmentReasoning(legacy *AdjustmentResult) string {
 		return legacy.Adjustments[0].Reasoning
 	}
 	return legacy.Reasoning
-}
-
-// b1AdjusterOutputToLegacyResult translates the new AdjusterOutput shape
-// into the legacy *AdjustmentResult expected by ProcessLiabilityAdjustments'
-// existing audit-trail accounting. Mirrors a1AdjusterOutputToLegacyResult —
-// B1 is an OverlayEmitter, so the translation reads the lease amount from
-// the OverlaySpec.Amount (not from a LedgerEntry DeltaAmount; B1 emits
-// none on the LedgerEntry per the OverlayEmitter convention).
-func b1AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule) *AdjustmentResult {
-	// Locate the firing OverlaySpec — B1 emits exactly one when fired and
-	// zero when skipped (skip paths produce a Fired:false LedgerEntry only).
-	for _, overlay := range out.Overlays {
-		if overlay.OverlayID != adjusterIDB1OperatingLeaseCapitalization {
-			continue
-		}
-		adjustment := entities.Adjustment{
-			ID:          fmt.Sprintf("lease-pv-adj-%d", time.Now().UnixNano()),
-			RuleID:      rule.ID,
-			Category:    entities.LiabilityCompleteness,
-			Type:        entities.TreatAsDebt,
-			Amount:      overlay.Amount,
-			FromAccount: "OperatingLeaseCommitments",
-			ToAccount:   "InterestBearingDebt",
-			Reasoning:   overlay.Reasoning,
-			Applied:     true,
-			Timestamp:   time.Now(),
-		}
-		return &AdjustmentResult{
-			Amount:      overlay.Amount,
-			Applied:     true,
-			Adjustments: []entities.Adjustment{adjustment},
-			Flags:       out.Flags,
-			Reasoning:   fmt.Sprintf("operating_lease_adj: Capitalized %.0f operating lease commitments to debt", overlay.Amount),
-		}
-	}
-
-	// Skipped path — surface the SkipReason from the Fired:false LedgerEntry
-	// for parity with the legacy "no adjustment" branches.
-	reasoning := "No operating lease data available"
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID == adjusterIDB1OperatingLeaseCapitalization {
-			reasoning = entry.SkipReason
-			if reasoning == "" {
-				reasoning = entry.Reasoning
-			}
-			break
-		}
-	}
-	return &AdjustmentResult{
-		Amount:      0.0,
-		Applied:     false,
-		Adjustments: []entities.Adjustment{},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
 }
 
 // ProcessOperatingLeaseAdjustment implements B1 rule: Operating lease present value calculation
@@ -945,61 +811,6 @@ func (la *LiabilityAdjuster) ApplyB2PensionUnderfunding(ctx context.Context, wor
 	return out, nil
 }
 
-// b2AdjusterOutputToLegacyResult translates the new AdjusterOutput shape
-// into the legacy *AdjustmentResult expected by ProcessLiabilityAdjustments'
-// existing audit-trail accounting. Mirrors b1AdjusterOutputToLegacyResult —
-// B2 is an OverlayEmitter, so the translation reads the pension amount
-// from the OverlaySpec.Amount (not from a LedgerEntry DeltaAmount; B2
-// emits none on the LedgerEntry per the OverlayEmitter convention).
-func b2AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule) *AdjustmentResult {
-	// Locate the firing OverlaySpec — B2 emits exactly one when fired and
-	// zero when skipped (skip paths produce a Fired:false LedgerEntry only).
-	for _, overlay := range out.Overlays {
-		if overlay.OverlayID != adjusterIDB2PensionUnderfunding {
-			continue
-		}
-		adjustment := entities.Adjustment{
-			ID:          fmt.Sprintf("pension-adj-%d", time.Now().UnixNano()),
-			RuleID:      rule.ID,
-			Category:    entities.LiabilityCompleteness,
-			Type:        entities.TreatAsDebt,
-			Amount:      overlay.Amount,
-			FromAccount: "PensionUnderfunding",
-			ToAccount:   "InterestBearingDebt",
-			Reasoning:   overlay.Reasoning,
-			Applied:     true,
-			Timestamp:   time.Now(),
-		}
-		return &AdjustmentResult{
-			Amount:      overlay.Amount,
-			Applied:     true,
-			Adjustments: []entities.Adjustment{adjustment},
-			Flags:       out.Flags,
-			Reasoning:   fmt.Sprintf("Added %.0f in under-funded pension/OPEB obligations to debt", overlay.Amount),
-		}
-	}
-
-	// Skipped path — surface the SkipReason from the Fired:false LedgerEntry
-	// for parity with the legacy "no adjustment" branches.
-	reasoning := "No under-funded pension or OPEB obligations present"
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID == adjusterIDB2PensionUnderfunding {
-			reasoning = entry.SkipReason
-			if reasoning == "" {
-				reasoning = entry.Reasoning
-			}
-			break
-		}
-	}
-	return &AdjustmentResult{
-		Amount:      0.0,
-		Applied:     false,
-		Adjustments: []entities.Adjustment{},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
-}
-
 // ApplyB3Contingent is the Adjuster-shaped (DC-1 Phase 2 PR-4 Task 4.3)
 // implementation of the B3 contingent-liability rule. Mirrors
 // ApplyB1OperatingLeases / ApplyB2PensionUnderfunding's structure — produces
@@ -1160,67 +971,6 @@ func (la *LiabilityAdjuster) ApplyB3Contingent(ctx context.Context, working *ent
 	return out, nil
 }
 
-// b3AdjusterOutputToLegacyResult translates the new AdjusterOutput shape
-// into the legacy *AdjustmentResult expected by ProcessLiabilityAdjustments'
-// existing audit-trail accounting. Mirrors b1AdjusterOutputToLegacyResult /
-// b2AdjusterOutputToLegacyResult — B3 is an OverlayEmitter, so the
-// translation reads the contingent amount from the OverlaySpec.Amount (not
-// from a LedgerEntry DeltaAmount; B3 emits none on the LedgerEntry per
-// the OverlayEmitter convention).
-//
-// Note: the emitted legacy Adjustment uses entities.ProbabilityWeighted (the
-// canonical B3 type per ProcessContingentLiabilityAdjustment), NOT
-// entities.TreatAsDebt — preserves the legacy taxonomy that downstream
-// callers (`Adjustment.Type` switches in service.go, etc.) depend on.
-func b3AdjusterOutputToLegacyResult(out AdjusterOutput, rule *entities.CleaningRule) *AdjustmentResult {
-	// Locate the firing OverlaySpec — B3 emits exactly one when fired and
-	// zero when skipped (skip paths produce a Fired:false LedgerEntry only).
-	for _, overlay := range out.Overlays {
-		if overlay.OverlayID != adjusterIDB3ContingentLiability {
-			continue
-		}
-		adjustment := entities.Adjustment{
-			ID:          fmt.Sprintf("contingent-adj-%d", time.Now().UnixNano()),
-			RuleID:      rule.ID,
-			Category:    entities.LiabilityCompleteness,
-			Type:        entities.ProbabilityWeighted,
-			Amount:      overlay.Amount,
-			FromAccount: "ContingentLiabilities",
-			ToAccount:   "EstimatedLiabilities",
-			Reasoning:   overlay.Reasoning,
-			Applied:     true,
-			Timestamp:   time.Now(),
-		}
-		return &AdjustmentResult{
-			Amount:      overlay.Amount,
-			Applied:     true,
-			Adjustments: []entities.Adjustment{adjustment},
-			Flags:       out.Flags,
-			Reasoning:   fmt.Sprintf("Applied probability-weighted adjustment of %.0f for contingent liabilities", overlay.Amount),
-		}
-	}
-
-	// Skipped path — surface the SkipReason from the Fired:false LedgerEntry
-	// for parity with the legacy "no adjustment" branches.
-	reasoning := "No contingent liabilities disclosed to assess"
-	for _, entry := range out.LedgerEntries {
-		if entry.AdjusterID == adjusterIDB3ContingentLiability {
-			reasoning = entry.SkipReason
-			if reasoning == "" {
-				reasoning = entry.Reasoning
-			}
-			break
-		}
-	}
-	return &AdjustmentResult{
-		Amount:      0.0,
-		Applied:     false,
-		Adjustments: []entities.Adjustment{},
-		Flags:       []entities.Flag{},
-		Reasoning:   reasoning,
-	}
-}
-
 // ProcessPensionAdjustment implements B2 rule: Under-funded pension obligations as debt
 func (la *LiabilityAdjuster) ProcessPensionAdjustment(data *entities.FinancialData, rule *entities.CleaningRule, context *entities.CleaningContext) *AdjustmentResult {
 	// Calculate pension underfunding
@@ -1325,6 +1075,11 @@ type preComputedAIResult struct {
 // cancellation propagates to the AI service. The legacy direct-call test
 // path may still pass context.Background(); the dispatcher passes the
 // real request ctx.
+//
+// Unlike the deleted legacy singular A/C Process*Adjustment helpers (removed
+// in P5-C4 closeout), this remains a SUPPORTED direct-call entry point: it is
+// exercised by the integration smoke test and the B3 AI-provenance direct-call
+// coverage, and was deliberately ctx-threaded in the Phase 3 followup.
 func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(ctx context.Context, data *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) *AdjustmentResult {
 	return la.processContingentLiabilityAdjustment(ctx, data, rule, cleaningCtx, nil)
 }
