@@ -11,10 +11,14 @@ import "time"
 // fire on this ticker?" without requiring code reading; SkipReason and
 // SkipMetrics carry that diagnostic.
 //
-// Phase 2 invariant: this struct is POPULATED but no production consumer reads
-// it yet (matches the Phase 0 plug-field discipline). Phase 3 introduces the
-// CleanedFinancialData.Restated() accessor that consumes EquityOffset and
-// TaxShieldDTA.
+// Consumers (as of DC-1 Phase 5): the LedgerEntry → entities.Adjustment
+// projection (datacleaner.adjustmentsFromLedger, which produces the public
+// ValuationResult.CleaningAdjustments audit trail) and the
+// CleanedFinancialData.Restated() view reconstruction (which consumes
+// EquityOffset and TaxShieldDTA). (Historical note: Phase 2 populated this
+// struct before any production consumer read it, matching the Phase 0
+// plug-field discipline; Phase 3 added Restated() and Phase 5 added the
+// Adjustment projection.)
 //
 // SourceReliability is the T2-BS-3 carve-out hook. It defaults to "high" and
 // flips to "parser_known_dropout" when an adjuster touches a field known to be

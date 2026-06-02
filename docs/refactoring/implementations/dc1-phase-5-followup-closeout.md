@@ -19,7 +19,9 @@ DC-1 Phase 5 PARTIAL (merged to master as `e816fcc`) shipped P5-C1 (DDM EV-bridg
 | DDM `modelIBD` view-migration flip | ✅ DONE (commit C1) |
 | Fresh CalcVersion-4.4 replay baseline capture | 🚫 OPERATOR follow-up (unchanged; needs live SEC/market capture) |
 
-## 2. Commit ladder (branch `dc1-phase-5-followup`, 10 commits on top of master `974570c`)
+## 2. Commit ladder (branch `dc1-phase-5-followup`, on top of master `974570c`)
+
+The 7-commit substantive ladder (A0–C1), 4 review-fix commits (FIX-1..FIX-4), and 2 doc commits (this closeout + its count fix, folded into FIX-4). Total branch range `974570c..HEAD` is 12 commits.
 
 | # | SHA | Subject |
 |---|---|---|
@@ -33,6 +35,8 @@ DC-1 Phase 5 PARTIAL (merged to master as `e816fcc`) shipped P5-C1 (DDM EV-bridg
 | FIX-1 | `2281f25` | fix(dc1-p5fu): harden adjustmentsFromLedger pre-state guard + tangible-recompute predicate (review findings) |
 | FIX-3 | `e24a669` | docs(dc1-p5fu): align percentage-decision addendum with as-built (synthetic basket + legacy timestamp) |
 | FIX-2 | `c57df97` | refactor(dc1-p5fu): delete test-only-dead legacy Process* helpers (P5-C4 closeout) |
+| — | `fc99d44` | docs(dc1-p5fu): file Phase 5 follow-up closeout (this doc) |
+| FIX-4 | _(this commit)_ | docs(dc1-p5fu): fix-commit B-V-R-Q + gpt-5.5 review NITs — comment/godoc accuracy + commit-count |
 
 ## 3. Design — the Adjustments-projection (P5-C3-full)
 
@@ -94,3 +98,4 @@ This PR completes the code work. The DC-1 milestone-status docs sweep is intenti
 | Date | Change |
 |---|---|
 | 2026-06-02 | Implementation complete on `dc1-phase-5-followup`: P5-C3-full (A0–A4) + P5-C4 (B1) + DDM IBD flip (C1) + 3 review-fix commits (FIX-1/FIX-2/FIX-3) closing all B-V-R-Q + gpt-5.5 findings. All load-bearing invariants GREEN; full suite 46 ok / 0 FAIL; shadow byte-identical. Awaiting HUMAN review/merge. DC-1 milestone docs sweep deferred to merge (§8). |
+| 2026-06-02 | Ran the mandated `/execute` B-V-R-Q subagent cycle + gpt-5.5 Q-pass on the FIX-commit delta (`b023694..fc99d44`), per FEEDBACK-LOG 2026-05-30 (the fixes had only been inline-validated). VERIFIER=VERIFIED, REVIEWER=APPROVE, QA=PASS, gpt-5.5=no Critical/High (F1/F3/FIX-2 independently confirmed behavior-preserving). FIX-4 (this commit) closes the resulting comment/doc-accuracy NITs: stale `assetArmTriggersTangibleRecompute` call-site comment, overstated F1-guard comment, stale `LedgerEntry` struct godoc Phase-2 "no consumer reads it" invariant, and this §2 commit-count fix. Comment/doc-only; no logic change; full suite re-verified GREEN. |

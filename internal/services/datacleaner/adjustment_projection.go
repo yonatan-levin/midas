@@ -376,17 +376,18 @@ func adjustmentsFromLedger(
 		case percentageConstant:
 			percentage = meta.ConstantPct
 		case percentageFromPreState:
-			// Explicit presence check (NOT just `> 0`): a MISSING pre-state
-			// key and a legitimate zero denominator must be distinguishable.
-			// Without the `ok` guard a future dropped capture would silently
-			// emit Percentage=0 in the public API — the exact Path-(b)
-			// degradation Path (a) exists to prevent. Capture coverage for
-			// every percentageFromPreState rule is pinned by
-			// TestPreStateCapture_OnFiredLedgerEntries.
+			// Preserve the legacy zero-percentage behavior when the captured
+			// denominator is absent OR non-positive (both yield Percentage=0,
+			// matching the old `if originalRevenue > 0` guard). The explicit
+			// `ok` check keeps a missing pre-state key syntactically distinct
+			// from a zero value at this site; the real guarantee that a future
+			// dropped capture is caught comes from
+			// TestPreStateCapture_OnFiredLedgerEntries, which pins capture
+			// coverage for every percentageFromPreState rule.
 			if d, ok := entry.SkipMetrics[meta.PreStateKey]; ok && d > 0 {
 				denominator = d
 				percentage = (amount / denominator) * 100
-			} // else zero — matches the legacy `if originalRevenue > 0` guard.
+			}
 		}
 
 		// Resolve Reasoning. For A1/B1/B2/B3 (OverlayEmitter family),

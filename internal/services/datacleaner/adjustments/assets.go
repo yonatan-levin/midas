@@ -1251,9 +1251,9 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(ctx context.Context, data *enti
 		// Recalculate tangible assets after each asset adjustment that
 		// modified an asset component. Native trigger (replaces the legacy
 		// `result.Applied && result.Amount > 0`): a fired Restater LedgerEntry
-		// with a writedown (DeltaAmount < 0 → A2/A4/A5) OR a positive
-		// goodwill-exclusion overlay (A1). FlagEmitters (RD/CapSW) return
-		// early above and never reach here.
+		// with a non-empty Component and non-zero DeltaAmount (A2/A4/A5 today)
+		// OR a positive A1 goodwill-exclusion overlay. FlagEmitters (RD/CapSW)
+		// return early above and never reach here.
 		if assetArmTriggersTangibleRecompute(armOut) {
 			aa.recalculateTangibleAssets(data)
 		}
