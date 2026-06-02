@@ -14,54 +14,6 @@ func TestNewEarningsAdjuster(t *testing.T) {
 	assert.NotNil(t, adjuster)
 }
 
-func TestProcessStockCompensationAdjustment(t *testing.T) {
-	tests := []struct {
-		name            string
-		data            *entities.FinancialData
-		rule            *entities.CleaningRule
-		expectedAmount  float64
-		expectedApplied bool
-	}{
-		{
-			name: "significant_stock_compensation",
-			data: &entities.FinancialData{
-				Ticker:                    "TECH",
-				Revenue:                   5000000000, // $5B revenue
-				OperatingIncome:           1000000000, // $1B operating income
-				NormalizedOperatingIncome: 1000000000,
-				StockBasedCompensation:    200000000,  // $200M in stock comp (4% of revenue)
-				SharesOutstanding:         1000000000, // 1B shares
-			},
-			rule: &entities.CleaningRule{
-				ID:         "stock_compensation",
-				Category:   entities.EarningsNormalization,
-				Adjustment: entities.Reclassify,
-				Severity:   entities.Info,
-			},
-			expectedAmount:  200000000, // $200M to be reclassified
-			expectedApplied: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			adjuster := NewEarningsAdjuster()
-			result := adjuster.ProcessStockCompensationAdjustment(tt.data, tt.rule)
-
-			assert.Equal(t, tt.expectedApplied, result.Applied)
-			assert.InDelta(t, tt.expectedAmount, result.Amount, 1000)
-
-			if tt.expectedApplied {
-				assert.Len(t, result.Adjustments, 1)
-				adjustment := result.Adjustments[0]
-				assert.Equal(t, "StockBasedCompensation", adjustment.FromAccount)
-				assert.Equal(t, entities.Reclassify, adjustment.Type)
-				assert.Contains(t, result.Reasoning, "Stock-based compensation")
-			}
-		})
-	}
-}
-
 func TestProcessEarningsAdjustments(t *testing.T) {
 	// Integration test for multiple earnings adjustments
 	data := &entities.FinancialData{

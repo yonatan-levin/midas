@@ -1075,6 +1075,11 @@ type preComputedAIResult struct {
 // cancellation propagates to the AI service. The legacy direct-call test
 // path may still pass context.Background(); the dispatcher passes the
 // real request ctx.
+//
+// Unlike the deleted legacy singular A/C Process*Adjustment helpers (removed
+// in P5-C4 closeout), this remains a SUPPORTED direct-call entry point: it is
+// exercised by the integration smoke test and the B3 AI-provenance direct-call
+// coverage, and was deliberately ctx-threaded in the Phase 3 followup.
 func (la *LiabilityAdjuster) ProcessContingentLiabilityAdjustment(ctx context.Context, data *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) *AdjustmentResult {
 	return la.processContingentLiabilityAdjustment(ctx, data, rule, cleaningCtx, nil)
 }
