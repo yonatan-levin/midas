@@ -4,7 +4,7 @@
 **Type:** Verification gap (NOT a bug — no defect found; the code is behavior-preserving and the test suite is green)
 **Date:** 2026-06-02
 **Origin:** `/verify` (app-level runtime observation) run on the `dc1-phase-5-followup` branch after the full B-V-R-Q + gpt-5.5 review cycle.
-**Related:** [Phase 5 follow-up closeout §8](../refactoring/implementations/dc1-phase-5-followup-closeout.md) · [Phase 5 spec §5.3/§5.4 replay attribution caveat](../refactoring/spec/datacleaner-component-primitive-and-parallel-views-phase-5-spec.md)
+**Related:** [Phase 5 follow-up closeout §8](../refactoring/archive/dc1-phase-5-followup-closeout.md) · [Phase 5 spec §5.3/§5.4 replay attribution caveat](../refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-5-spec.md)
 
 ---
 

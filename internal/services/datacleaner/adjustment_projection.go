@@ -315,7 +315,7 @@ var knownNoEmission = map[string]struct{}{
 //     carries "sbc_amount" AND whose AdjusterID is the C4 constant
 //     IS the FlagEmitter firing signal. We emit when sbc_amount > 0.
 //
-// Spec: docs/refactoring/spec/dc1-phase-5-followup-percentage-decision.md §4.4 / §4.5.
+// Spec: docs/refactoring/archive/dc1-phase-5-followup-percentage-decision.md §4.4 / §4.5.
 func adjustmentsFromLedger(
 	ledger entities.AdjustmentLedger,
 	overlays []entities.OverlaySpec,

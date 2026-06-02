@@ -49,7 +49,7 @@ import (
 // REVERTS the projection change — do NOT update the golden to make this
 // pass.
 //
-// Spec: docs/refactoring/spec/dc1-phase-5-followup-percentage-decision.md §7.1
+// Spec: docs/refactoring/archive/dc1-phase-5-followup-percentage-decision.md §7.1
 func TestApplyActiveAdjustments_AdjustmentsProjection_BasketParity(t *testing.T) {
 	// Synthetic fixtures, sorted by name for stable iteration. The seed
 	// values are tuned by inspection of the per-rule applicability +

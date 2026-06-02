@@ -29,7 +29,7 @@ import (
 // where a regression silently degrades Adjustment.Percentage to 0.0
 // for the affected rule and the basket-parity golden flags it.
 //
-// Spec: docs/refactoring/spec/dc1-phase-5-followup-percentage-decision.md §6.2 / §7.3 item 4
+// Spec: docs/refactoring/archive/dc1-phase-5-followup-percentage-decision.md §6.2 / §7.3 item 4
 func TestPreStateCapture_OnFiredLedgerEntries(t *testing.T) {
 	ctx := context.Background()
 	cleaningCtx := &entities.CleaningContext{}
