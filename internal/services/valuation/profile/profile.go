@@ -9,7 +9,7 @@
 // validation. Downstream phases (P0b-P4) wire the Registry into service.go
 // and consume ResolvedProfile from ModelInput. See:
 //
-//	docs/refactoring/spec/assumption-profile-spec.md             (canonical spec)
+//	docs/refactoring/archive/assumption-profile-spec.md             (canonical spec)
 //	docs/refactoring/archive/assumption-profile-implementation-plan.md
 package profile
 

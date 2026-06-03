@@ -2,7 +2,7 @@
 
 **Status:** DEFERRED — interface ships in Tier 2; concrete DB-backed implementation tracked here for if/when it becomes needed.
 **Filed:** 2026-05-14 alongside Tier 2 spec landing.
-**Companion:** `docs/refactoring/spec/assumption-profile-spec.md`
+**Companion:** `docs/refactoring/archive/assumption-profile-spec.md`
 
 ---
 
