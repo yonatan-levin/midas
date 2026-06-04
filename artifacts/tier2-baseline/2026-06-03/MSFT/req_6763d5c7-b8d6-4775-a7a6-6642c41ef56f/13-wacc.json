@@ -1,0 +1,26 @@
+{
+  "blume_beta": 1.06231,
+  "inputs": {
+    "MarketValueOfEquity": 3181227161988,
+    "MarketValueOfDebt": 40262000000,
+    "Beta": 1.06231,
+    "RiskFreeRate": 0.045,
+    "MarketRiskPremium": 0.05,
+    "CountryRiskPremium": 0,
+    "InterestExpense": 0,
+    "TaxRate": 0.21
+  },
+  "raw_beta": 1.093,
+  "relevered_beta": 1.06231,
+  "result": {
+    "cost_of_equity": 0.09811550000000001,
+    "cost_of_debt_pretax": 0,
+    "cost_of_debt_after_tax": 0,
+    "weight_of_equity": 0.9875020532506916,
+    "weight_of_debt": 0.012497946749308349,
+    "wacc": 0.09688925770571824,
+    "total_value": 3221489161988,
+    "tax_shield": 0
+  },
+  "unlevered_beta": 1.0517938114285044
+}

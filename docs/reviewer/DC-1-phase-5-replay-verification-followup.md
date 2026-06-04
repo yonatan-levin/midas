@@ -1,10 +1,10 @@
 # DC-1 Phase 5 — Replay / live-response verification follow-up
 
-**Status:** OPEN (operator follow-up — not a code blocker)
+**Status:** PARTIALLY CLOSED (operator follow-up — not a code blocker). **Update 2026-06-03:** the "no current-version baseline" half of the gap (§3 confound) is **closed** — a fresh `CalculationVersion 4.4` baseline for the 10-ticker basket was captured live this session and landed at `artifacts/tier2-baseline/2026-06-03/` (recipe: `docs/accuracy/baseline-capture-runbook.md`). The three Phase-5-*attributable* confirmations in §4 (4.3→4.4 isolation needing `FRED_API_KEY`; B-rule-firing bank EV correction; cleaning-rule projection) remain OPEN — they need a B-rule bank + cleaning-rule ticker + live FRED that the basket/this session lack.
 **Type:** Verification gap (NOT a bug — no defect found; the code is behavior-preserving and the test suite is green)
-**Date:** 2026-06-02
+**Date:** 2026-06-02 (baseline-captured update 2026-06-03)
 **Origin:** `/verify` (app-level runtime observation) run on the `dc1-phase-5-followup` branch after the full B-V-R-Q + gpt-5.5 review cycle.
-**Related:** [Phase 5 follow-up closeout §8](../refactoring/archive/dc1-phase-5-followup-closeout.md) · [Phase 5 spec §5.3/§5.4 replay attribution caveat](../refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-5-spec.md)
+**Related:** [Phase 5 follow-up closeout §8](../refactoring/archive/dc1-phase-5-followup-closeout.md) · [Phase 5 spec §5.3/§5.4 replay attribution caveat](../refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-5-spec.md) · [Baseline-capture runbook](../accuracy/baseline-capture-runbook.md) · [Accuracy report 2026-06-03](../accuracy/report-2026-06-03.md)
 
 ---
 
@@ -49,3 +49,4 @@ A clean, Phase-5-attributable live verification needs **infrastructure not avail
 | Date | Change |
 |---|---|
 | 2026-06-02 | Filed from the `/verify` runtime observation on `dc1-phase-5-followup`. Runtime PASS for the observable response intent (`calculation_version 4.4` live, no regression, clean run); two Phase-5-specific behaviors (DebtLikeClaims EV correction non-zero path; non-empty adjustments projection) not exercisable on the hermetic basket + confounded 4.1 baseline → operator live-capture follow-up recorded (§4). |
+| 2026-06-03 | **§3 confound closed.** Captured a fresh `CalculationVersion 4.4` baseline for the 10-ticker basket via live `?trace=1` capture (cold-cache, config-fallback macro since no `FRED_API_KEY`); landed at `artifacts/tier2-baseline/2026-06-03/` (10/10 complete bundles; JPM 7/8 per the known RPL-8 DDM-skips-cleaner-snapshot). Recipe + operator residuals documented in `docs/accuracy/baseline-capture-runbook.md`. Built `cmd/accuracy` to report intrinsic-vs-price over the baseline (`docs/accuracy/report-2026-06-03.md`): mean absolute price gap **86.7%**, 9/10 intrinsic below market, negative intrinsic on KO + AMD, JPM `ddm→dcf` model divergence (live T2-BS-1 fallback). The 86.7%-gap / negative-FCF-projection finding is filed for a separate `/debug` track (engine FCF projection) — **out of scope** for this verification follow-up. §4.1–§4.3 stay OPEN (need B-rule bank + cleaning-rule ticker + live FRED). |

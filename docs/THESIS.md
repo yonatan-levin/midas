@@ -116,7 +116,7 @@ W-1..W-5 and S-2/S-3/S-5 were resolved in earlier commits (`4d46142`, `01f4db0`)
 
 No commitment yet — listed for future prioritization:
 
-1. **Accuracy validation** — systematic comparison of Midas valuations against benchmarks (analyst consensus, implied prices). User has flagged this as a gap.
+1. **Accuracy validation** — systematic comparison of Midas valuations against benchmarks (analyst consensus, implied prices). User has flagged this as a gap. **IN PROGRESS (2026-06-03, branch `feat/accuracy-harness`):** fresh `CalculationVersion 4.4` baseline captured for the 10-ticker basket (`artifacts/tier2-baseline/2026-06-03/`) + new offline harness `cmd/accuracy` reports intrinsic-vs-price with red flags (`docs/accuracy/report-2026-06-03.md`). **Headline finding — engine is systematically off:** mean absolute price gap **86.7%**, 9/10 tickers value below market (mean −84%), KO + AMD return **negative** intrinsic values, and AAPL/NVDA/MSFT show terminal PV ≥96% of EV driven by **negative explicit-window FCF projections**. Root cause looks like the multi-stage FCF projection (working-capital / capex drag during the growth phase) → spun out as a dedicated **`/debug` track** (the harness is the regression oracle; this Next-Candidate item now covers the benchmark-comparison surface, the engine fix is its own work).
 2. **Close the W-4 coverage gap** — bring `models/` to 90%+.
 3. **Fix S-1/S-4** — make config loading robust for Docker deployments.
 4. **Sector-specific validation sets** — test bank valuations against known bank valuations, REIT valuations against REIT benchmarks, etc.
