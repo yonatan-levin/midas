@@ -88,6 +88,45 @@ Lead with the rule. The **Why** lets future sessions judge edge cases. The **How
 
 **Source:** User callout during DC-1 Phase 5 post-review-fix execution, 2026-05-30 session. Validated by the immediate subsequent cycle catching real bugs (REVIEWER LOW + Q MEDIUM) that inline self-validation had missed.
 
+### 2026-06-04 — Use isolated git worktrees for changes, never edit on `master`
+
+**Rule:** For any non-trivial change, work in an isolated **git worktree** (via the native `EnterWorktree` tool, which places it under `.claude/worktrees/`), not a plain branch in the main checkout — and never make edits on `master`'s working tree. A branch alone is insufficient; the *working tree* must be isolated. Prefer the native `EnterWorktree` tool over `git worktree add` (the `superpowers:using-git-worktrees` skill flags the latter as the wrong choice when a native tool exists).
+
+**Why:** 2026-06-04 — I made doc edits directly on `master`, then "corrected" it by creating a plain branch in the *same* main checkout. The user pointed out the project guidelines specify worktrees, not branches (`TOOLS_REFERENCE.md` row 47 → `superpowers:using-git-worktrees`; "Lesson A" in `docs/refactoring/implementations/assumption-profile-tier-2-closeout-handoff.md`). This repo runs multiple concurrent sessions/worktrees; the shared main checkout gets its branch swapped underneath a session, which has already caused replay contamination (see `docs/reviewer/archive/T2-P4-W1-classifier-prefix-mismatch.md`). A worktree isolates the working tree, not just the branch pointer.
+
+**How to apply:**
+- At the start of any change, if `git rev-parse --git-dir` equals `--git-common-dir` (you're in the main checkout, not a linked worktree), create one with the native `EnterWorktree` tool.
+- Relocating work already started on `master`: `git stash` → restore `master` → `EnterWorktree` → `git stash pop` (stash is shared across all worktrees of one repo, so it bridges cleanly when both share the same base commit).
+- Never leave uncommitted work on `master`. Commit only when the user asks.
+
+**Source:** User callout 2026-06-04 ("you worked on the master branch?" → "in my project guidelines I specifically mention worktree not branch").
+
+### 2026-06-04 — `AGENTS.md` is a loading contract, not a project-history log
+
+**Rule:** `AGENTS.md` (and any "what to read / how to work" loading-contract doc) holds only guidelines, one-line file pointers, and repo-working conventions. It must NOT carry project history — phase milestones, commit/merge SHAs, "Phase X SHIPPED" status walls. Phase/milestone history has ONE canonical home: `docs/THESIS.md`, with per-subject detail in the `*-closeout.md` docs. Keep every Tier-4 row to a single line.
+
+**Why:** 2026-06-04 — AGENTS.md's Tier-4 table had ballooned to ~3,967 words because two rows (17a/17b) each carried ~1,900-word per-phase changelogs (commit SHAs, merge ladders) already duplicated in `docs/THESIS.md` and `CLAUDE.md`. This defeats the loading contract's purpose (scan-in-10-seconds to decide what to open) and creates a third copy that silently drifts. The bloat hid in *single-line table cells*, so a line-based `git diff` showed it as trivial — which is exactly why it survived past edits.
+
+**How to apply:**
+- When editing AGENTS.md, keep each Tier-4 cell a one-line pointer (file + why-to-open). If you're about to write "Phase X SHIPPED (commit abc123)", it belongs in `docs/THESIS.md` / the closeout doc, not here.
+- Single source of truth: if a fact already exists in THESIS.md, point to it — never copy it.
+- The AGENTS.md Change Log tracks changes to *that file* (structure/loading order), not project phases.
+
+**Source:** User callout 2026-06-04 ("AGENTS.md should not be in charge of project history it should be guidelines and AGENT related info what to read and how to work in the repo").
+
+### 2026-06-04 — Keep every API-doc surface complete and code-synced; regenerate generated files with the pinned tool version
+
+**Rule:** The API documentation set — `docs/API_DOCUMENTATION.md`, `docs/openapi.yaml`, `CONTRACTS.md`, `README.md`, and the generated `docs/swagger.{json,yaml}` + `docs/docs.go` — must describe every option/flag and every response field, and must agree with one another. The struct actually serialized to the HTTP response (the value passed to `c.JSON()`) is the source of truth — not a symbol's mere presence in the codebase. Generated files are regenerated, never hand-edited, and with the `swag` CLI version matching the pinned library in `go.mod`.
+
+**Why:** 2026-06-04 — the docs documented two response fields that don't exist on the wire (`analyst_weight`/`historical_weight` live in the growth estimator, not `FairValueResponse`), omitted two that do (`assumption_profile`, `resolution_trace`), and described the bulk response shape *backwards* ("no separate `failures[]` array" when the struct emits exactly that). Separately, regenerating `swagger.json` with the globally-installed `swag` (v1.16.4) produced a `docs.go` that wouldn't compile against the pinned library (`go.mod`: v1.8.12) — it emitted `LeftDelim`/`RightDelim` fields the older library lacks.
+
+**How to apply:**
+- When changing or documenting an API, diff the response struct against every doc surface in BOTH directions (fields-in-doc-not-in-struct = phantoms; fields-in-struct-not-in-doc = gaps).
+- Validate `openapi.yaml` parses and every `$ref` resolves before finishing.
+- Regenerate via `go run github.com/swaggo/swag/cmd/swag@<go.mod-pinned-version> init -g cmd/server/main.go --parseDependency --parseInternal -o docs`, then confirm `go build ./docs/`.
+
+**Source:** Originating task 2026-06-04 — user flagged `docs/API_DOCUMENTATION.md` as not describing all options/flags or response-field meanings; sync extended to openapi.yaml + CONTRACTS.md + README.md + regenerated swagger.
+
 ---
 
 ## Archive (Promoted to MEMORY.md or Obsolete)
@@ -135,3 +174,4 @@ Lead with the rule. The **Why** lets future sessions judge edge cases. The **How
 | Date | Change |
 |------|--------|
 | 2026-04-18 | Initial empty template. No active rules yet. |
+| 2026-06-04 | Added 3 active rules — isolated-worktrees, AGENTS.md-is-not-a-history-log, API-doc-sync + swag-version-pinning. |
