@@ -43,7 +43,7 @@
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/handlers.BulkFairValueRequest"
+                            "$ref": "#/definitions/internal_api_v1_handlers.BulkFairValueRequest"
                         }
                     }
                 ],
@@ -51,37 +51,37 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.BulkFairValueResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.BulkFairValueResponse"
                         }
                     },
                     "400": {
                         "description": "Invalid request format",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Missing or invalid API key",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     },
                     "403": {
                         "description": "Insufficient permissions",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     },
                     "429": {
                         "description": "Rate limit exceeded",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     }
                 }
@@ -134,43 +134,43 @@
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.FairValueResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.FairValueResponse"
                         }
                     },
                     "400": {
                         "description": "Invalid ticker or parameters",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     },
                     "401": {
                         "description": "Missing or invalid API key",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     },
                     "403": {
                         "description": "Insufficient permissions",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     },
                     "404": {
                         "description": "Ticker not found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     },
                     "429": {
                         "description": "Rate limit exceeded",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     },
                     "500": {
                         "description": "Internal server error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
                         }
                     }
                 }
@@ -178,7 +178,7 @@
         }
     },
     "definitions": {
-        "entities.SanityCheck": {
+        "github_com_midas_dcf-valuation-api_internal_core_entities.SanityCheck": {
             "type": "object",
             "properties": {
                 "flags": {
@@ -218,7 +218,55 @@
                 }
             }
         },
-        "handlers.BulkFailure": {
+        "github_com_midas_dcf-valuation-api_internal_services_valuation_profile.ResolutionTrace": {
+            "type": "object",
+            "properties": {
+                "config_hash": {
+                    "type": "string"
+                },
+                "config_version": {
+                    "type": "string"
+                },
+                "fallback_reason": {
+                    "type": "string"
+                },
+                "human_reason": {
+                    "type": "string"
+                },
+                "matched_rule_id": {
+                    "type": "string"
+                },
+                "missing_facts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "profile_id": {
+                    "type": "string"
+                },
+                "resolver_version": {
+                    "type": "string"
+                },
+                "source": {
+                    "$ref": "#/definitions/github_com_midas_dcf-valuation-api_internal_services_valuation_profile.Source"
+                }
+            }
+        },
+        "github_com_midas_dcf-valuation-api_internal_services_valuation_profile.Source": {
+            "type": "string",
+            "enum": [
+                "explicit",
+                "inferred",
+                "fallback"
+            ],
+            "x-enum-varnames": [
+                "SourceExplicit",
+                "SourceInferred",
+                "SourceFallback"
+            ]
+        },
+        "internal_api_v1_handlers.BulkFailure": {
             "type": "object",
             "properties": {
                 "error_code": {
@@ -232,7 +280,7 @@
                 }
             }
         },
-        "handlers.BulkFairValueRequest": {
+        "internal_api_v1_handlers.BulkFairValueRequest": {
             "description": "Bulk fair value calculation request for multiple tickers",
             "type": "object",
             "required": [
@@ -265,27 +313,27 @@
                 }
             }
         },
-        "handlers.BulkFairValueResponse": {
+        "internal_api_v1_handlers.BulkFairValueResponse": {
             "type": "object",
             "properties": {
                 "failures": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.BulkFailure"
+                        "$ref": "#/definitions/internal_api_v1_handlers.BulkFailure"
                     }
                 },
                 "results": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/handlers.FairValueResponse"
+                        "$ref": "#/definitions/internal_api_v1_handlers.FairValueResponse"
                     }
                 },
                 "summary": {
-                    "$ref": "#/definitions/handlers.BulkSummary"
+                    "$ref": "#/definitions/internal_api_v1_handlers.BulkSummary"
                 }
             }
         },
-        "handlers.BulkSummary": {
+        "internal_api_v1_handlers.BulkSummary": {
             "type": "object",
             "properties": {
                 "failed": {
@@ -299,7 +347,7 @@
                 }
             }
         },
-        "handlers.ErrorResponse": {
+        "internal_api_v1_handlers.ErrorResponse": {
             "description": "Standard error response following RFC 7807 Problem Details",
             "type": "object",
             "properties": {
@@ -349,7 +397,7 @@
                 }
             }
         },
-        "handlers.FairValueResponse": {
+        "internal_api_v1_handlers.FairValueResponse": {
             "description": "Fair value calculation response with intrinsic valuation metrics",
             "type": "object",
             "properties": {
@@ -363,6 +411,11 @@
                     "type": "string",
                     "example": "2025-08-13T22:15:34.402652598Z"
                 },
+                "assumption_profile": {
+                    "description": "Tier 2 P0b additive fields. All omitempty — legacy mature-large-bank\nDDM responses remain byte-identical (TestDDM_LegacyPath_BitForBit\npins this). AssumptionProfile is the resolved profile_id so API\nconsumers can correlate the result with the calibration record.\nResolutionTrace carries the full audit trail (matched_rule_id,\nfallback_reason, config_hash) for replay determinism and audit. The\nDCF diagnostic fields are declared here for schema ownership in P0b\neven though P2 fills them — keeps the wire shape stable from this\ncommit forward.",
+                    "type": "string",
+                    "example": "mature_large_bank:mature"
+                },
                 "calculation_method": {
                     "description": "Model used: multi_stage_dcf, ddm, ffo, revenue_multiple",
                     "type": "string",
@@ -371,7 +424,7 @@
                 "calculation_version": {
                     "description": "Engine version that produced this result",
                     "type": "string",
-                    "example": "4.1"
+                    "example": "4.2"
                 },
                 "currency": {
                     "description": "Currency is the ISO-4217 code that dcf_value_per_share and\ntangible_value_per_share are denominated in. Always \"USD\" — the\nvaluation service FX-converts each period's reporting-currency\nmonetary fields to USD via Phase B9 of the IFRS-FPI plan\n(docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md), so\nAPI consumers MUST NOT re-convert. Surfaced so a downstream client\ncan display \"USD\" alongside the per-share value rather than guessing.",
@@ -397,6 +450,26 @@
                     "description": "Data quality score (0-100)",
                     "type": "number",
                     "example": 85.5
+                },
+                "dcf_horizon_years": {
+                    "type": "integer",
+                    "example": 5
+                },
+                "dcf_per_year_pv": {
+                    "type": "array",
+                    "items": {
+                        "type": "number"
+                    }
+                },
+                "dcf_terminal_growth_used": {
+                    "type": "number"
+                },
+                "dcf_terminal_method": {
+                    "type": "string",
+                    "example": "gordon_growth"
+                },
+                "dcf_terminal_pct_of_ev": {
+                    "type": "number"
                 },
                 "dcf_value_per_share": {
                     "description": "Discounted cash flow fair value per share",
@@ -437,7 +510,7 @@
                     "description": "Dual industry classification (SIC + heuristic) for drift detection",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/handlers.Industry"
+                            "$ref": "#/definitions/internal_api_v1_handlers.Industry"
                         }
                     ]
                 },
@@ -445,11 +518,14 @@
                     "type": "number",
                     "example": 4.55
                 },
+                "resolution_trace": {
+                    "$ref": "#/definitions/github_com_midas_dcf-valuation-api_internal_services_valuation_profile.ResolutionTrace"
+                },
                 "sanity_check": {
                     "description": "Multiples cross-check against sector medians",
                     "allOf": [
                         {
-                            "$ref": "#/definitions/entities.SanityCheck"
+                            "$ref": "#/definitions/github_com_midas_dcf-valuation-api_internal_core_entities.SanityCheck"
                         }
                     ]
                 },
@@ -477,7 +553,7 @@
                 }
             }
         },
-        "handlers.Industry": {
+        "internal_api_v1_handlers.Industry": {
             "description": "Dual industry classification (SIC + heuristic) with a Match flag",
             "type": "object",
             "properties": {

@@ -133,7 +133,7 @@ Invoke-RestMethod -Method GET -Uri http://localhost:8080/api/v1/fair-value/AAPL 
   "tangible_value_per_share": 3.47,
   "dcf_value_per_share": 167.23,
   "as_of": "2025-01-31T10:30:00Z",
-  "data_quality_score": 0.92,
+  "data_quality_score": 92,
   "data_quality_grade": "A"
 }
 ```
@@ -142,15 +142,18 @@ Invoke-RestMethod -Method GET -Uri http://localhost:8080/api/v1/fair-value/AAPL 
 
 Request:
 ```json
-{ "tickers": ["AAPL", "MSFT", "GOOGL"] }
+{ "tickers": ["AAPL", "MSFT", "ZZZZ"] }
 ```
 
-Response:
+Response (HTTP 207 Multi-Status — partial success):
 ```json
 {
   "results": [
     { "ticker": "AAPL", "wacc": 0.095, "growth_rate": 0.033, "tangible_value_per_share": 3.47, "dcf_value_per_share": 167.23, "as_of": "..." },
     { "ticker": "MSFT", "wacc": 0.091, "growth_rate": 0.058, "tangible_value_per_share": 24.18, "dcf_value_per_share": 380.45, "as_of": "..." }
+  ],
+  "failures": [
+    { "ticker": "ZZZZ", "error_code": "TICKER_NOT_FOUND", "message": "Ticker not found in any data source" }
   ],
   "summary": { "total_requested": 3, "successful": 2, "failed": 1 }
 }
@@ -160,11 +163,11 @@ Response:
 
 #### Key Metrics Explained
 
-- **DCF Fair Value per Share**: Intrinsic value based on 5-year discounted cash flow projection
+- **DCF Fair Value per Share**: Intrinsic value from a multi-year discounted cash flow projection (archetype-driven explicit horizon, typically 3–10 years)
 - **Net Tangible Asset Value per Share**: Book value excluding intangibles, adjusted for market conditions
 - **WACC**: Weighted Average Cost of Capital used as the discount rate
-- **Growth Rate**: Terminal growth rate applied beyond the explicit forecast period
-- **Quality Score**: 0-1 score indicating data reliability and adjustment transparency
+- **Growth Rate**: Summary first-stage growth rate — the CAGR of the per-year projected `growth_rates` (not the terminal rate; see `dcf_terminal_growth_used` for that)
+- **Quality Score**: 0–100 score indicating data reliability and adjustment transparency
 - **Quality Grade**: Letter grade (A/B/C/D/F) derived from the quality score
 
 #### Query Parameter Overrides

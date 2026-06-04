@@ -1,6 +1,6 @@
 basePath: /api/v1
 definitions:
-  entities.SanityCheck:
+  github_com_midas_dcf-valuation-api_internal_core_entities.SanityCheck:
     properties:
       flags:
         description: Specific warnings about divergences
@@ -29,7 +29,40 @@ definitions:
         description: Sector median P/FCF ratio (omitted when unknown)
         type: number
     type: object
-  handlers.BulkFailure:
+  github_com_midas_dcf-valuation-api_internal_services_valuation_profile.ResolutionTrace:
+    properties:
+      config_hash:
+        type: string
+      config_version:
+        type: string
+      fallback_reason:
+        type: string
+      human_reason:
+        type: string
+      matched_rule_id:
+        type: string
+      missing_facts:
+        items:
+          type: string
+        type: array
+      profile_id:
+        type: string
+      resolver_version:
+        type: string
+      source:
+        $ref: '#/definitions/github_com_midas_dcf-valuation-api_internal_services_valuation_profile.Source'
+    type: object
+  github_com_midas_dcf-valuation-api_internal_services_valuation_profile.Source:
+    enum:
+    - explicit
+    - inferred
+    - fallback
+    type: string
+    x-enum-varnames:
+    - SourceExplicit
+    - SourceInferred
+    - SourceFallback
+  internal_api_v1_handlers.BulkFailure:
     properties:
       error_code:
         type: string
@@ -38,7 +71,7 @@ definitions:
       ticker:
         type: string
     type: object
-  handlers.BulkFairValueRequest:
+  internal_api_v1_handlers.BulkFairValueRequest:
     description: Bulk fair value calculation request for multiple tickers
     properties:
       override_beta:
@@ -63,20 +96,20 @@ definitions:
     required:
     - tickers
     type: object
-  handlers.BulkFairValueResponse:
+  internal_api_v1_handlers.BulkFairValueResponse:
     properties:
       failures:
         items:
-          $ref: '#/definitions/handlers.BulkFailure'
+          $ref: '#/definitions/internal_api_v1_handlers.BulkFailure'
         type: array
       results:
         items:
-          $ref: '#/definitions/handlers.FairValueResponse'
+          $ref: '#/definitions/internal_api_v1_handlers.FairValueResponse'
         type: array
       summary:
-        $ref: '#/definitions/handlers.BulkSummary'
+        $ref: '#/definitions/internal_api_v1_handlers.BulkSummary'
     type: object
-  handlers.BulkSummary:
+  internal_api_v1_handlers.BulkSummary:
     properties:
       failed:
         type: integer
@@ -85,7 +118,7 @@ definitions:
       total_requested:
         type: integer
     type: object
-  handlers.ErrorResponse:
+  internal_api_v1_handlers.ErrorResponse:
     description: Standard error response following RFC 7807 Problem Details
     properties:
       code:
@@ -124,7 +157,7 @@ definitions:
         example: https://problems.midas.dev/INVALID_TICKER
         type: string
     type: object
-  handlers.FairValueResponse:
+  internal_api_v1_handlers.FairValueResponse:
     description: Fair value calculation response with intrinsic valuation metrics
     properties:
       adr_ratio_applied:
@@ -144,13 +177,26 @@ definitions:
         description: Timestamp of calculation
         example: "2025-08-13T22:15:34.402652598Z"
         type: string
+      assumption_profile:
+        description: |-
+          Tier 2 P0b additive fields. All omitempty — legacy mature-large-bank
+          DDM responses remain byte-identical (TestDDM_LegacyPath_BitForBit
+          pins this). AssumptionProfile is the resolved profile_id so API
+          consumers can correlate the result with the calibration record.
+          ResolutionTrace carries the full audit trail (matched_rule_id,
+          fallback_reason, config_hash) for replay determinism and audit. The
+          DCF diagnostic fields are declared here for schema ownership in P0b
+          even though P2 fills them — keeps the wire shape stable from this
+          commit forward.
+        example: mature_large_bank:mature
+        type: string
       calculation_method:
         description: 'Model used: multi_stage_dcf, ddm, ffo, revenue_multiple'
         example: multi_stage_dcf
         type: string
       calculation_version:
         description: Engine version that produced this result
-        example: "4.1"
+        example: "4.2"
         type: string
       currency:
         description: |-
@@ -194,6 +240,20 @@ definitions:
         description: Data quality score (0-100)
         example: 85.5
         type: number
+      dcf_horizon_years:
+        example: 5
+        type: integer
+      dcf_per_year_pv:
+        items:
+          type: number
+        type: array
+      dcf_terminal_growth_used:
+        type: number
+      dcf_terminal_method:
+        example: gordon_growth
+        type: string
+      dcf_terminal_pct_of_ev:
+        type: number
       dcf_value_per_share:
         description: Discounted cash flow fair value per share
         example: 156.42
@@ -223,14 +283,16 @@ definitions:
         type: string
       industry:
         allOf:
-        - $ref: '#/definitions/handlers.Industry'
+        - $ref: '#/definitions/internal_api_v1_handlers.Industry'
         description: Dual industry classification (SIC + heuristic) for drift detection
       ncav_per_share:
         example: 4.55
         type: number
+      resolution_trace:
+        $ref: '#/definitions/github_com_midas_dcf-valuation-api_internal_services_valuation_profile.ResolutionTrace'
       sanity_check:
         allOf:
-        - $ref: '#/definitions/entities.SanityCheck'
+        - $ref: '#/definitions/github_com_midas_dcf-valuation-api_internal_core_entities.SanityCheck'
         description: Multiples cross-check against sector medians
       tangible_value_per_share:
         description: Net tangible book value per share
@@ -250,7 +312,7 @@ definitions:
           type: string
         type: array
     type: object
-  handlers.Industry:
+  internal_api_v1_handlers.Industry:
     description: Dual industry classification (SIC + heuristic) with a Match flag
     properties:
       heuristic_code:
@@ -323,31 +385,31 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/handlers.FairValueResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.FairValueResponse'
         "400":
           description: Invalid ticker or parameters
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
         "401":
           description: Missing or invalid API key
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
         "403":
           description: Insufficient permissions
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
         "404":
           description: Ticker not found
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
         "429":
           description: Rate limit exceeded
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
         "500":
           description: Internal server error
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
       security:
       - ApiKeyAuth: []
       summary: Get fair value for a stock
@@ -365,34 +427,34 @@ paths:
         name: request
         required: true
         schema:
-          $ref: '#/definitions/handlers.BulkFairValueRequest'
+          $ref: '#/definitions/internal_api_v1_handlers.BulkFairValueRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/handlers.BulkFairValueResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.BulkFairValueResponse'
         "400":
           description: Invalid request format
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
         "401":
           description: Missing or invalid API key
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
         "403":
           description: Insufficient permissions
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
         "429":
           description: Rate limit exceeded
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
         "500":
           description: Internal server error
           schema:
-            $ref: '#/definitions/handlers.ErrorResponse'
+            $ref: '#/definitions/internal_api_v1_handlers.ErrorResponse'
       security:
       - ApiKeyAuth: []
       summary: Get fair values for multiple stocks

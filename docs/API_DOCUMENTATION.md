@@ -152,6 +152,8 @@ curl -X POST \
 | `AUTH_003` | 401 | API key has expired |
 | `AUTH_004` | 401 | API key is inactive (disabled) |
 | `AUTH_005` | 401 | Authentication service error |
+| `AUTH_006` | 401 | No authentication information on the request context (internal precondition failure on a protected route) |
+| `AUTH_007` | 500 | Authentication information malformed (internal type error) |
 | `AUTH_008` | 403 | Insufficient permissions for this endpoint |
 
 ---
@@ -268,7 +270,7 @@ curl -H "X-API-Key: <key>" \
   "data_quality_score": 90,
   "data_quality_grade": "A",
   "calculation_method": "multi_stage_dcf",
-  "calculation_version": "4.1",
+  "calculation_version": "4.4",
   "warnings": [],
   "sanity_check": {
     "implied_pe": 18.5,
@@ -304,7 +306,7 @@ curl -H "X-API-Key: <key>" \
   "ncav_per_share": -0.765,
   "graham_floor_per_share": 0,
   "calculation_method": "revenue_multiple",
-  "calculation_version": "4.1",
+  "calculation_version": "4.4",
   "current_price": 11.20,
   "warnings": [
     "Applied 6.5x EV/Revenue multiple for MFG_SEMI sector",
@@ -339,8 +341,6 @@ When `total_liabilities` cannot be sourced from the underlying filings, the four
 | `growth_rates` | float[] | Per-year growth rates across projection period (length matches `dcf_horizon_years`) |
 | `growth_source` | string | How growth was estimated: `analyst_blend`, `historical_only`, `default` |
 | `growth_confidence` | string | Confidence level: `high`, `medium`, `low` |
-| `analyst_weight` | float | Weight given to analyst consensus in the growth blend (0.0–1.0) |
-| `historical_weight` | float | Weight given to historical CAGR in the growth blend (1.0 − `analyst_weight`) |
 | `tangible_value_per_share` | float | Net tangible book value per share (floor value). Denominator priority chain: diluted shares first, then market basic, then financial basic — same chain as `dcf_value_per_share`, `ncav_per_share`, and the Graham fields. |
 | `dcf_value_per_share` | float | Intrinsic per-share value. For tickers routed to non-DCF models (DDM, FFO, revenue_multiple) this field carries that model's per-share output — `calculation_method` distinguishes which math fired. |
 | `current_assets_per_share` | float | Current assets ÷ diluted shares — pure asset-side floor with no liability subtraction. **Omitted** when `total_liabilities` cannot be resolved. |
@@ -353,10 +353,12 @@ When `total_liabilities` cannot be sourced from the underlying filings, the four
 | `dcf_per_year_pv` | float[] | Per-year present value of FCF for the explicit projection period. Useful for chart-friendly visualization. |
 | `dcf_terminal_growth_used` | float | Final terminal growth rate after the WACC-spread guardrail clamps. |
 | `as_of` | ISO 8601 | Timestamp the valuation was computed. |
-| `data_quality_score` | integer | 0-100 score reflecting data freshness and completeness (see [§3.2.2](#322-data-quality-score)). |
+| `data_quality_score` | number | 0-100 score reflecting data freshness and completeness — may be fractional (e.g. `85.5`), not strictly integer (see [§3.2.2](#322-data-quality-score)). |
 | `data_quality_grade` | string | Letter grade derived from `data_quality_score` (see [§3.2.2](#322-data-quality-score)). |
 | `calculation_method` | string | Which valuation model fired (see [§3.2.3](#323-calculation-method-values)). |
-| `calculation_version` | string | Engine math version. Bumped when model math changes; consumers can use this to detect engine upgrades affecting historical comparisons. |
+| `calculation_version` | string | Engine math version. Bumped when model math changes; consumers can use this to detect engine upgrades affecting historical comparisons. Current engine: `4.4`. |
+| `assumption_profile` | string | Resolved assumption-profile ID in `archetype:maturity` form (e.g. `mature_large_bank:mature`). Identifies the calibration record (DCF horizon, terminal method, discount method, growth caps) the engine applied to this company. **Omitted** when no profile registry is wired (legacy/test paths). See [§3.2.7](#327-assumption_profile--resolution_trace). |
+| `resolution_trace` | object | Structured audit trail of *how* the assumption profile was selected — matched rule, fallback reason, config hash, missing facts. See [§3.2.7](#327-assumption_profile--resolution_trace). |
 | `sanity_check` | object | Cross-validation against sector median multiples (see [§3.2.4](#324-sanity-check)). |
 | `industry` | object | Dual industry classification (see [§3.2.5](#325-industry-classification)). |
 | `currency` | string | ISO-4217 code. All monetary per-share fields are denominated in this currency. Always `"USD"` — non-USD reporting currencies are FX-converted upstream. |
@@ -398,10 +400,15 @@ When `calculation_method = "revenue_multiple"`, the `warnings` array carries the
 | Field | Type | Description |
 |-------|------|-------------|
 | `implied_pe` | float | DCF Value / EPS |
+| `sector_median_pe` | float | Sector median P/E the implied figure is compared against |
 | `implied_ev_ebitda` | float | Enterprise Value / EBITDA |
-| `implied_pfcf` | float | DCF Value / FCF per Share |
-| `is_reasonable` | bool | `false` if any implied multiple is >2× or <0.5× sector median |
-| `flags` | string[] | Specific divergences observed (e.g., `"implied_pe > 2x sector median"`) |
+| `sector_median_ev_ebitda` | float | Sector median EV/EBITDA |
+| `implied_pfcf` | float | DCF Value / FCF per Share. **Omitted** when FCF is zero. |
+| `sector_median_pfcf` | float | Sector median P/FCF. **Omitted** when unknown. |
+| `is_reasonable` | bool | `true` only when **all** implied multiples fall within `[0.5×, 2.0×]` of their sector median; `false` if any single one breaches |
+| `flags` | string[] | Per-metric divergence strings (e.g., `"DCF-implied P/E (9.3) is <0.5x sector median (28.0) for TECH"`) |
+
+The entire `sanity_check` object is present **only** when the `multi_stage_dcf` path fires *and* `config/industry_multiples.json` has matching sector entries; it is omitted for DDM / FFO / revenue_multiple routes.
 
 Cross-check flags are **advisory only** — they do not invalidate the valuation; they are surfaced as a transparency signal.
 
@@ -446,6 +453,29 @@ Full error-response format is documented in [§4 Error Handling](#4-error-handli
 
 ---
 
+#### 3.2.7 `assumption_profile` & `resolution_trace`
+
+Every valuation resolves an **assumption profile** — the calibration record that drives the company's DCF horizon length, terminal-value method, discount method, and growth caps based on its *archetype* (e.g. mature large bank, maturing tech dividend payer, data-center REIT) and *maturity* stage. Two response fields expose this resolution:
+
+- **`assumption_profile`** (string) — the resolved profile ID in `archetype:maturity` form, e.g. `mature_large_bank:mature`. Use it to correlate a result with the exact calibration that produced it.
+- **`resolution_trace`** (object) — the structured audit trail of *how* that profile was chosen. Useful for explaining an unexpected horizon/method and for replay determinism.
+
+| `resolution_trace` sub-field | Type | Description |
+|------------------------------|------|-------------|
+| `profile_id` | string | Same value as the top-level `assumption_profile`. |
+| `source` | string | How the profile was selected: `explicit` (a non-wildcard industry rule matched and had a profile entry), `inferred` (partial match; reserved for future use), or `fallback` (no rule matched, or the matched archetype/maturity had no entry — the conservative default profile was applied). |
+| `resolver_version` | string | Version of the resolution algorithm that ran. |
+| `config_version` | string | Version of `config/assumption_profiles.json` in effect. |
+| `config_hash` | string | SHA-256 of the profile config, for replay reproducibility. Omitted when unset. |
+| `matched_rule_id` | string | ID of the archetype rule that matched. Omitted on `fallback`. |
+| `fallback_reason` | string | Why the fallback fired. Present only when `source = fallback`. |
+| `missing_facts` | string[] | Facts that were unavailable during resolution (drove inference/fallback). Omitted when none. |
+| `human_reason` | string | Human-readable one-line summary of the resolution decision. |
+
+Both fields are **omitted** on the legacy mature-large-bank DDM path and on test paths where no profile registry is wired. `source = "fallback"` is a useful dashboard signal: it means the engine could not match a calibrated archetype and fell back to conservative defaults.
+
+---
+
 #### `POST /api/v1/fair-value/bulk`
 
 Calculate fair values for multiple stocks in a single request. Supports partial success — some tickers may succeed while others fail.
@@ -470,7 +500,7 @@ Calculate fair values for multiple stocks in a single request. Supports partial 
 
 **Response Shape:**
 
-Failed tickers are inlined into the same `results[]` array (with Problem-Details error fields populated) so consumers can iterate the array in request order. There is no separate `failures[]` array.
+The response has up to three top-level keys: `results[]` (successful valuations, in request order), `failures[]` (per-ticker failures), and `summary` (counts). `failures[]` is **omitted when every ticker succeeds**. Each failure entry is a compact `{ticker, error_code, message}` triple — **not** a full RFC 7807 Problem-Details object (those are returned only for whole-request errors such as a malformed body). Iterate `results[]` and `failures[]` separately and match items by `ticker`.
 
 ```json
 {
@@ -480,7 +510,7 @@ Failed tickers are inlined into the same `results[]` array (with Problem-Details
       "wacc": 0.092,
       "dcf_value_per_share": 156.42,
       "calculation_method": "multi_stage_dcf",
-      "calculation_version": "4.1",
+      "calculation_version": "4.4",
       "data_quality_score": 90,
       "data_quality_grade": "A",
       "...": "...full FairValueResponse fields..."
@@ -494,6 +524,13 @@ Failed tickers are inlined into the same `results[]` array (with Problem-Details
       "...": "..."
     }
   ],
+  "failures": [
+    {
+      "ticker": "INVALID",
+      "error_code": "INVALID_TICKER",
+      "message": "Invalid ticker format: must be 1-5 alphanumeric characters"
+    }
+  ],
   "summary": {
     "total_requested": 3,
     "successful": 2,
@@ -501,6 +538,8 @@ Failed tickers are inlined into the same `results[]` array (with Problem-Details
   }
 }
 ```
+
+Each `failures[].error_code` is one of the [§4.2 error codes](#42-error-code-reference): `INVALID_TICKER`, `TICKER_NOT_FOUND`, `INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`, `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED`, or `CALCULATION_ERROR`.
 
 **HTTP Status Logic:**
 
@@ -678,8 +717,9 @@ All error responses follow the [RFC 7807](https://tools.ietf.org/html/rfc7807) P
 | `MODEL_NOT_APPLICABLE` | 422 | No valuation model can be applied to this company |
 | `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` | 422 | 20-F filer using a taxonomy or reporting currency not yet covered. Most ADRs are supported. |
 | `CALCULATION_ERROR` | 500 | Internal error during valuation calculation |
+| `INTERNAL` | 500 | Unhandled internal error — a panic was recovered by the server; the underlying detail is intentionally not exposed in the response |
 | `RATE_LIMIT_EXCEEDED` | 429 | Rate limit exceeded (check `Retry-After` header) |
-| `AUTH_001` – `AUTH_008` | 401 / 403 | Authentication/authorization errors (see [§2](#2-authentication)) |
+| `AUTH_001` – `AUTH_008` | 401 / 403 / 500 | Authentication/authorization errors (see [§2](#2-authentication)) |
 
 ### 4.3 Distinguishing 422 Cases
 
@@ -762,7 +802,7 @@ All API responses include the following headers:
 |---------|-------|
 | Allowed Origins | `*` in development; restricted per deployment in production |
 | Allowed Methods | `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS` |
-| Allowed Headers | `Origin`, `Content-Type`, `Authorization`, `X-API-Key`, `X-Request-ID` |
+| Allowed Headers | `Origin`, `Content-Type`, `Content-Length`, `Accept-Encoding`, `X-CSRF-Token`, `Authorization`, `X-API-Key`, `X-Request-ID`, `X-Midas-Trace` |
 | Exposed Headers | `Content-Length`, `X-Request-ID` |
 | Credentials | Allowed |
 | Max Age | 12 hours |

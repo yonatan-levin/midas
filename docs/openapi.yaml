@@ -5,7 +5,7 @@ info:
   description: |
     REST API exposing intrinsic value metrics per ticker.
     - Net Tangible Asset Value per share
-    - DCF Fair Value per share (7-year explicit projection, WACC-discounted)
+    - DCF Fair Value per share (archetype-driven explicit horizon of 3-10 years, WACC-discounted)
 servers:
   - url: http://localhost:8080
     description: Local development
@@ -90,6 +90,16 @@ paths:
           schema:
             type: number
             format: float
+        - name: trace
+          in: query
+          required: false
+          description: |
+            Set to `1` to capture a server-side per-request artifact bundle for
+            debugging. Does not change the response body. Equivalent to sending
+            the `X-Midas-Trace: 1` header.
+          schema:
+            type: string
+            enum: ["1"]
       responses:
         '200':
           description: Fair value metrics
@@ -105,6 +115,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           description: Authentication required or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions for this endpoint
           content:
             application/json:
               schema:
@@ -132,6 +148,18 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded (see Retry-After header)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal calculation error (CALCULATION_ERROR) or recovered panic (INTERNAL)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/v1/fair-value/bulk:
     post:
       summary: Get fair value for multiple tickers
@@ -155,8 +183,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '207':
+          description: |
+            Multi-Status — some tickers succeeded and some failed. Body is a
+            BulkFairValueResponse; inspect `results[]` and `failures[]`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkFairValueResponse'
         '401':
           description: Authentication required or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions for this endpoint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: |
+            All requested tickers failed. Body is still a BulkFairValueResponse
+            with an empty `results[]` and a populated `failures[]`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkFairValueResponse'
+        '429':
+          description: Rate limit exceeded (see Retry-After header)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
           content:
             application/json:
               schema:
@@ -224,7 +286,12 @@ components:
           example: "3674"
         sic:
           type: string
-          description: SIC-derived industry label (TECH, MFG, RETAIL, UTIL, FINL, HEALTH, NA)
+          description: |
+            SIC-derived industry label. Top-level codes: TECH, MFG, RETAIL,
+            UTIL, FIN, HEALTH, ENERGY, RESTATE, TELECOM, TRANS, CONS. Plus
+            sub-industry refinements (TECH_SAAS, MFG_SEMI, FIN_BANK,
+            HEALTH_BIOTECH, …) and REIT subsectors (REIT_RESIDENTIAL,
+            REIT_DATACENTER, …).
           example: "MFG"
         heuristic_code:
           type: string
@@ -261,9 +328,10 @@ components:
             type: number
             format: float
           description: |
-            Per-year growth rates for the explicit projection period (years 1-7).
-            Stage 1 (years 1-3) = high-growth rate from analyst/historical blend;
-            Stage 2 (years 4-7) = linear fade toward terminal rate.
+            Per-year growth rates for the explicit projection period. Length
+            equals dcf_horizon_years (archetype-driven: 3/5/7/10). Stage 1 =
+            high-growth rate from the analyst/historical blend; Stage 2 =
+            linear fade toward the terminal rate.
           example: [0.05, 0.048, 0.046, 0.044, 0.042, 0.038, 0.034]
         dcf_horizon_years:
           type: integer
@@ -346,11 +414,12 @@ components:
             everything else to `multi_stage_dcf`.
         calculation_version:
           type: string
-          example: "4.1"
+          example: "4.4"
           description: |
             Calculation engine version. Bumped on shape-changing or breaking-numeric
             changes (e.g., 4.1 added Graham-floor diagnostic fields and flipped the
-            tangible_value_per_share denominator to diluted shares).
+            tangible_value_per_share denominator to diluted shares; 4.4 is the
+            current DC-1 parallel-views engine).
         warnings:
           type: array
           items:
@@ -448,6 +517,16 @@ components:
             produces after applyADRRatio. Surfaced so consumers can compute
             the upside/downside discount ((dcf - price) / price) without a
             second quote lookup. Omitted when zero (delisted or unavailable).
+        assumption_profile:
+          type: string
+          example: "mature_large_bank:mature"
+          description: |
+            Resolved assumption-profile ID in `archetype:maturity` form.
+            Identifies the calibration record (DCF horizon, terminal method,
+            discount method, growth caps) the engine applied to this company.
+            Omitted when no profile registry is wired (legacy/test paths).
+        resolution_trace:
+          $ref: '#/components/schemas/ResolutionTrace'
     BulkFairValueRequest:
       type: object
       required: [tickers]
@@ -473,6 +552,23 @@ components:
           type: integer
         failed:
           type: integer
+    BulkFailure:
+      type: object
+      description: |
+        Compact per-ticker failure record for the bulk endpoint. NOT a full
+        RFC 7807 Problem-Details object — those are returned only for
+        whole-request errors (e.g. a malformed body).
+      properties:
+        ticker:
+          type: string
+          example: "XYZA1"
+        error_code:
+          type: string
+          enum: [INVALID_TICKER, TICKER_NOT_FOUND, INSUFFICIENT_DATA, MODEL_NOT_APPLICABLE, FOREIGN_PRIVATE_ISSUER_UNSUPPORTED, CALCULATION_ERROR]
+          example: "TICKER_NOT_FOUND"
+        message:
+          type: string
+          example: "Ticker not found in any data source"
     BulkFairValueResponse:
       type: object
       properties:
@@ -480,6 +576,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/FairValueResponse'
+        failures:
+          type: array
+          description: |
+            Per-ticker failures, in the order encountered. Omitted when every
+            ticker succeeds (HTTP 200). Iterate separately from `results[]`
+            and match by `ticker`.
+          items:
+            $ref: '#/components/schemas/BulkFailure'
         summary:
           $ref: '#/components/schemas/BulkSummary'
     ErrorResponse:
@@ -537,5 +641,49 @@ components:
           description: |
             Per-metric flag strings for any breach, e.g.
             "DCF-implied P/E (9.3) is <0.5x sector median (28.0) for TECH".
+    ResolutionTrace:
+      type: object
+      description: |
+        Structured audit trail of how the assumption profile was selected.
+        Lets consumers explain an unexpected horizon/method and supports
+        replay determinism. Omitted (with assumption_profile) on legacy
+        mature-large-bank DDM and test paths where no profile registry is
+        wired.
+      properties:
+        profile_id:
+          type: string
+          example: "mature_large_bank:mature"
+          description: Same value as the top-level assumption_profile.
+        source:
+          type: string
+          enum: [explicit, inferred, fallback]
+          description: |
+            How the profile was selected. `explicit` = a non-wildcard industry
+            rule matched and had a profile entry. `inferred` = partial match
+            (reserved for future use). `fallback` = no rule matched / no entry;
+            the conservative default profile was applied.
+        resolver_version:
+          type: string
+          description: Version of the resolution algorithm that ran.
+        config_version:
+          type: string
+          description: Version of config/assumption_profiles.json in effect.
+        config_hash:
+          type: string
+          description: SHA-256 of the profile config, for replay reproducibility. Omitted when unset.
+        matched_rule_id:
+          type: string
+          description: ID of the archetype rule that matched. Omitted on fallback.
+        fallback_reason:
+          type: string
+          description: Why the fallback fired. Present only when source = fallback.
+        missing_facts:
+          type: array
+          items:
+            type: string
+          description: Facts unavailable during resolution (drove inference/fallback). Omitted when none.
+        human_reason:
+          type: string
+          description: Human-readable one-line summary of the resolution decision.
 
 
