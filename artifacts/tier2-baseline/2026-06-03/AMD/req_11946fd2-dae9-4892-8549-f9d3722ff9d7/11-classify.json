@@ -1,0 +1,14 @@
+{
+  "chosen_industry_code": "MFG_SEMI",
+  "heuristic_code": "20",
+  "heuristic_name": "Industrials",
+  "match": true,
+  "sic_classifier": {
+    "Sector": "MFG",
+    "Industry": "MFG_SEMI",
+    "SubIndustry": "MFG_SEMI",
+    "ModelHint": "MFG_SEMI",
+    "NAICS": "",
+    "SIC": "3674"
+  }
+}

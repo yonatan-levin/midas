@@ -1,0 +1,33 @@
+{
+  "profile_id": "reit_industrial:standard_growth",
+  "source": "explicit",
+  "resolver_version": "1.0.0",
+  "config_version": "1.0.0",
+  "config_hash": "766c8f1df25f1f467d706c0d6a1df45f75bb71bfb506556f890cd7818def2caa",
+  "resolved_snapshot": {
+    "profile_id": "reit_industrial:standard_growth",
+    "archetype": "reit_industrial",
+    "maturity": "standard_growth",
+    "horizon_years": 3,
+    "compound_growth_cap": 1.4,
+    "revenue_base_method": "raw_ttm",
+    "discount_method": "cost_of_equity",
+    "terminal_method": "exit_multiple",
+    "stabilized": true,
+    "fade_years": 0,
+    "terminal_multiple": 22.5,
+    "dps_growth_cap": 0,
+    "payout_path": [],
+    "dividend_forecast_horizon": 0,
+    "stable_dividend_growth": 0.03
+  },
+  "trace": {
+    "profile_id": "reit_industrial:standard_growth",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.0.0",
+    "config_hash": "766c8f1df25f1f467d706c0d6a1df45f75bb71bfb506556f890cd7818def2caa",
+    "matched_rule_id": "reit_industrial",
+    "human_reason": "default_standard_growth"
+  }
+}

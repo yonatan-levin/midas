@@ -1,0 +1,14 @@
+{
+  "chosen_industry_code": "REIT_DATACENTER",
+  "heuristic_code": "20",
+  "heuristic_name": "Industrials",
+  "match": true,
+  "sic_classifier": {
+    "Sector": "RESTATE",
+    "Industry": "REIT_DATACENTER",
+    "SubIndustry": "REIT_DATACENTER",
+    "ModelHint": "REIT_DATACENTER",
+    "NAICS": "",
+    "SIC": "6798"
+  }
+}
