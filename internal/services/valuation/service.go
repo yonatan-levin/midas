@@ -218,9 +218,24 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	start := s.clock.Now()
 	s.log(ctx).Info("Starting valuation calculation", zap.String("ticker", ticker))
 
+	// Normalize legacy scalar override fields into the unified Overrides carrier so
+	// T4's resolver has a single canonical source to read from. This is additive prep
+	// only: the existing consumption of OverrideBeta/OverrideRiskFree at ~L688-695 is
+	// UNTOUCHED — T4 replaces those reads with params.Beta/params.RiskFreeRate.
+	// Rule: legacy wins only when Overrides.Beta/RiskFreeRate is nil (no double-set).
+	if opts != nil {
+		if opts.OverrideBeta != nil && opts.Overrides.Beta == nil {
+			opts.Overrides.Beta = opts.OverrideBeta
+		}
+		if opts.OverrideRiskFree != nil && opts.Overrides.RiskFreeRate == nil {
+			opts.Overrides.RiskFreeRate = opts.OverrideRiskFree
+		}
+	}
+
 	// Skip cache for requests with overrides — they represent ad-hoc user queries
 	// that should not pollute (or be served from) the default-parameter cache.
-	hasOverrides := opts != nil && (opts.OverrideBeta != nil || opts.OverrideRiskFree != nil)
+	// hasAnyOverride covers both the legacy scalar fields and the unified Overrides carrier.
+	hasOverrides := opts.hasAnyOverride()
 	cacheKey := fmt.Sprintf("valuation:v4:%s", ticker)
 
 	em := narrate.From(ctx)
