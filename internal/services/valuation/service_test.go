@@ -3844,3 +3844,70 @@ func TestService_DCF_NoProfile_PreservesLegacy7y(t *testing.T) {
 	assert.Len(t, result.DCFPerYearPV, result.DCFHorizonYears,
 		"DCFPerYearPV length must always equal DCFHorizonYears")
 }
+
+// buildP2TestServiceDefaultEstimator is buildP2TestService WITHOUT the
+// Stage3Years bump, so the shared estimator produces only the legacy 7 growth
+// rates (3 + 4 + 0). Used to force a profile-horizon clamp (profile horizon 10
+// > 7 available rates), exercising T4's resolver clamp + warnings-drain rule.
+func buildP2TestServiceDefaultEstimator(t *testing.T, reg profile.Registry) *Service {
+	t.Helper()
+	financialRepo := &MockFinancialDataRepository{}
+	marketRepo := &MockMarketDataRepository{}
+	macroRepo := &MockMacroDataRepository{}
+	cache := &MockCacheRepository{}
+	dataCleaner := &MockDataCleanerService{}
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:                 1 * time.Hour,
+			SlowRequestThreshold:     500 * time.Millisecond,
+			DataFetchTimeout:         30 * time.Second,
+			DefaultTerminalGrowthCap: 0.025,
+			DCFMaxGrowthRate:         0.5,
+			DCFMinGrowthRate:         -0.3,
+		},
+	}
+	logger := zap.NewNop()
+	// Default estimator (Stage3Years = 0 → 7 rates), deliberately NOT extended.
+	return NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, metricsService, cfg, logger, newTestCalcEmitter(), reg)
+}
+
+// TestService_DCF_ProfileHorizonClamp_NoWarningOnDefaultPath is the T4
+// byte-identity guard for the warnings-drain rule. A profile requesting a
+// 10-year horizon against only 7 available growth rates triggers the resolver's
+// silent clamp (10 → 7), which appends a clamp advisory to
+// EffectiveValuationParams.Warnings. On the DEFAULT path (no request overrides)
+// that advisory MUST NOT reach result.Warnings — legacy code only LOGGED the
+// clamp, it never surfaced it in the response. The tier2-baseline replay tickers
+// are all mature/cyclical (no clamp), so only this test pins the rule.
+func TestService_DCF_ProfileHorizonClamp_NoWarningOnDefaultPath(t *testing.T) {
+	// horizon_years = 10, but the default 3/4/0 estimator yields only 7 rates,
+	// so the resolver clamps 10 → 7 and records a horizon-clamp advisory.
+	reg := loadP2TestRegistry(t, "hypergrowth_profitable", "high_growth", 10, "gordon_growth")
+	svc := buildP2TestServiceDefaultEstimator(t, reg)
+	historicalData, marketData, macroData := createTestData()
+
+	// Default path: opts == nil (no overrides) ⇒ p.Warnings must stay internal.
+	result, err := svc.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// The clamp actually happened: horizon collapsed from the profile's 10 to the
+	// 7 available growth rates (proves the clamp path was exercised, so the
+	// "no warning" assertion below is meaningful, not vacuous).
+	assert.Equal(t, 7, result.DCFHorizonYears,
+		"profile horizon (10) must clamp to the 7 available growth rates")
+
+	// CRITICAL: no resolver advisory leaked into the response on the default path.
+	for _, w := range result.Warnings {
+		assert.NotContains(t, w, "horizon_years",
+			"default-path result.Warnings must NOT carry the resolver horizon-clamp advisory (got %q)", w)
+		assert.NotContains(t, w, "clamped",
+			"default-path result.Warnings must NOT carry any clamp advisory (got %q)", w)
+	}
+}

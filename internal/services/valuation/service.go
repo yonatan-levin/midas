@@ -23,6 +23,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	growthsvc "github.com/midas/dcf-valuation-api/internal/services/growth"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/models"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/params"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 	"github.com/midas/dcf-valuation-api/pkg/finance/dcf"
 	"github.com/midas/dcf-valuation-api/pkg/finance/growth"
@@ -699,128 +700,6 @@ func (s *Service) performValuation(
 	// why AsReported, not Restated).
 	tangibleValuePerShare := s.calculateTangibleValuePerShare(asReportedViewOr(cleaned, latestFinancialData), marketData)
 
-	// Determine beta and risk-free rate, applying user overrides when provided
-	beta := marketData.GetEffectiveBeta()
-	riskFreeRate := macroData.GetEffectiveRiskFreeRate()
-	if opts != nil {
-		if opts.OverrideBeta != nil {
-			beta = *opts.OverrideBeta
-		}
-		if opts.OverrideRiskFree != nil {
-			riskFreeRate = *opts.OverrideRiskFree
-		}
-	}
-
-	// Phase 4: Beta improvements — Blume adjustment + unlever/relever.
-	// Track each beta stage so we can include all values in the stage-6 "wacc" trace.
-	rawBeta := beta
-	blumeBeta := wacc.BlumeAdjustedBeta(beta)
-	beta = blumeBeta
-	unleveredBeta := blumeBeta // default: same as blume if no relever conditions met
-	releveredBeta := blumeBeta // default: same as blume if no relever conditions met
-
-	// Unlever beta to remove capital structure effect, then relever at current D/E.
-	// For a single company this is near-identity, but it normalizes extreme D/E betas
-	// and prepares the pipeline for industry-average beta comparison.
-	// DC-1 Phase 4 (C-4 / B3 routing flip): WACC capital-structure inputs read
-	// Restated().InterestBearingDebt + Restated().InterestExpense. After C-4
-	// deletes the B1/B2/B3 dispatcher dual-writes (below),
-	// Restated().InterestBearingDebt is the parser-stamped value with NO B-rule
-	// inflation — B1+B2+B3 amounts flow ONLY into InvestedCapital().DebtLikeClaims
-	// (the EV→Equity bridge), NOT into the capital-structure denominator. This
-	// is the substantive accuracy correction: contingent/lease/pension claims
-	// are shareholder claims, not interest-bearing capital. C6 capitalized
-	// interest restates InterestExpense via the Restated view. TaxRate is not
-	// Restater-touched (and not a view field) and stays on the entity.
-	waccRestated := restatedViewOr(cleaned, latestFinancialData)
-	marketEquity := marketData.CalculateMarketValue()
-	if marketEquity > 0 && waccRestated.InterestBearingDebt > 0 {
-		debtEquityRatio := waccRestated.InterestBearingDebt / marketEquity
-		unleveredBeta = wacc.UnleveredBeta(blumeBeta, latestFinancialData.TaxRate, debtEquityRatio)
-		releveredBeta = wacc.RelleveredBeta(unleveredBeta, latestFinancialData.TaxRate, debtEquityRatio)
-		beta = releveredBeta
-	}
-
-	s.log(ctx).Debug("Beta adjustments applied",
-		zap.String("ticker", historicalData.Ticker),
-		zap.Float64("raw_beta", rawBeta),
-		zap.Float64("adjusted_beta", beta))
-
-	// Phase 4: Look up country risk premium for international / ADR companies.
-	// US-domiciled companies get CRP = 0, so the formula is backward-compatible.
-	countryCode := GetCountryForTicker(historicalData.Ticker)
-	countryRiskPremium := GetCountryRiskPremium(s.countryRiskMap, countryCode)
-	if countryRiskPremium > 0 {
-		s.log(ctx).Info("Country risk premium applied",
-			zap.String("ticker", historicalData.Ticker),
-			zap.String("country", countryCode),
-			zap.Float64("crp", countryRiskPremium))
-	}
-
-	// Calculate WACC (with CRP for international companies)
-	waccInputs := wacc.Inputs{
-		RiskFreeRate:        riskFreeRate,
-		MarketRiskPremium:   macroData.MarketRiskPremium,
-		Beta:                beta,
-		CountryRiskPremium:  countryRiskPremium,
-		MarketValueOfEquity: marketData.CalculateMarketValue(),
-		MarketValueOfDebt:   waccRestated.InterestBearingDebt, // B-rules NO LONGER feed this (B3 flip realized)
-		InterestExpense:     waccRestated.InterestExpense,     // C6 restater touches this
-		TaxRate:             latestFinancialData.TaxRate,
-	}
-
-	waccResult, err := wacc.Calculate(waccInputs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate WACC: %w", err)
-	}
-
-	// Record WACC calculation metric
-	s.metricsService.IncWACCCalculations()
-	s.metricsService.SetAverageWACC(waccResult.WACC)
-
-	// Stage 6 — "wacc" calc trace: emit every WACC component so operators can audit
-	// the cost-of-capital build-up (beta ladder, risk premiums, debt cost, final rate).
-	if s.calcEmitter != nil {
-		s.calcEmitter.Emit(ctx, "wacc",
-			zap.String("ticker", historicalData.Ticker),
-			zap.Float64("rf", riskFreeRate),
-			zap.Float64("beta_raw", rawBeta),
-			zap.Float64("beta_blume", blumeBeta),
-			zap.Float64("beta_unlevered", unleveredBeta),
-			zap.Float64("beta_relevered", releveredBeta),
-			zap.Float64("erp", macroData.MarketRiskPremium),
-			zap.Float64("crp", countryRiskPremium),
-			zap.Float64("tax_rate", latestFinancialData.TaxRate),
-			zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
-			zap.Float64("wacc", waccResult.WACC),
-		)
-	}
-
-	// Tier-1 narrate: wacc.computed. Spec §5 row 13 fields. Carries the
-	// final WACC and the major inputs so a reader can sanity-check it.
-	narrate.From(ctx).Emit(ctx, narrate.PhaseWACCComputed, narrate.OutcomeOK, "",
-		zap.Float64("cost_of_equity", waccResult.CostOfEquity),
-		zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
-		zap.Float64("weight_equity", waccResult.WeightOfEquity),
-		zap.Float64("wacc", waccResult.WACC),
-		zap.Bool("country_premium_applied", countryRiskPremium > 0),
-	)
-	// Tier-3 artifact bundle: snapshot WACC inputs + result.
-	if b := artifact.From(ctx); b != nil {
-		b.Snapshot(ctx, "wacc.computed", "13-wacc.json", map[string]any{
-			"inputs":         waccInputs,
-			"result":         waccResult,
-			"raw_beta":       rawBeta,
-			"blume_beta":     blumeBeta,
-			"unlevered_beta": unleveredBeta,
-			"relevered_beta": releveredBeta,
-		})
-	}
-
-	// Use terminal growth from the growth estimate, with WACC safety guard
-	terminalGrowthRate := s.calculateTerminalGrowthRate(growthEstimate.SummaryGrowthRate(), waccResult.WACC)
-	growthEstimate.TerminalGrowthRate = terminalGrowthRate
-
 	// --- Phase 3: Industry-aware model selection ---
 	// Classify industry using IndustryClassifier (SIC/NAICS/keyword matching).
 	// The IndustryCode on the financial data may already be populated from
@@ -1021,6 +900,227 @@ func (s *Service) performValuation(
 		}
 	}
 
+	// --- Request-valuation-overrides (T4): resolve the EffectiveValuationParams. ---
+	//
+	// §3.7 ordering: the WACC-independent knobs (beta/rf/MRP/tax, growth staging,
+	// horizon, terminal method/multiple) are resolved HERE — after the growth
+	// estimate (growthRateLen known) and after industry + profile resolution (the
+	// industry exit-multiple default + profile horizon/method/multiple feed the
+	// Defaults). Terminal growth is finalized in ResolveTerminal AFTER WACC.
+	//
+	// PRIME DIRECTIVE: on the default path (empty Overrides) every resolved value
+	// equals today's source read, so WACC + DCF are byte-identical. The Defaults
+	// below project the EXACT legacy sources the old code read inline.
+	hasOverrides := opts.hasAnyOverride()
+
+	// opts may be nil (e.g. internal/scheduler callers, tests). hasAnyOverride is
+	// nil-safe; the Overrides carrier itself must be read through a nil guard.
+	// A zero-value params.Overrides has all-nil pointer fields, so the resolver
+	// takes every default — preserving the legacy nil-opts behavior exactly.
+	//
+	// Normalize the legacy scalar override fields (OverrideBeta/OverrideRiskFree)
+	// into the Overrides carrier here too. CalculateValuation already does this at
+	// its entry, but performValuation is also called directly (tests, and any
+	// future caller), so this idempotent fold keeps the legacy scalar fields
+	// honored on every path. Rule (matches T3): legacy wins only when the
+	// corresponding Overrides field is still nil (no double-set).
+	var overrides params.Overrides
+	if opts != nil {
+		overrides = opts.Overrides
+		if opts.OverrideBeta != nil && overrides.Beta == nil {
+			overrides.Beta = opts.OverrideBeta
+		}
+		if opts.OverrideRiskFree != nil && overrides.RiskFreeRate == nil {
+			overrides.RiskFreeRate = opts.OverrideRiskFree
+		}
+	}
+
+	// growthRateLen mirrors the legacy projectionYears computation
+	// (len(growthEstimate.ProjectedGrowthRates), with the 0→5 fallback) so the
+	// resolver's horizon-vs-length clamp matches the pre-T4 silent clamp exactly.
+	growthRateLen := len(growthEstimate.ProjectedGrowthRates)
+	if growthRateLen == 0 {
+		growthRateLen = 5 // fallback (mirrors the legacy projectionYears == 0 → 5)
+	}
+
+	// IndustryExitMultiple is the same industry EV/EBITDA lookup the legacy
+	// exit-multiple block performed inline; 0 when no industry default exists.
+	var industryExitMultiple float64
+	if s.industryMultiples != nil && s.industryMultiples.EVEBITDAMultiples != nil {
+		industryExitMultiple = LookupMultiple(s.industryMultiples.EVEBITDAMultiples, industryCode)
+	}
+
+	// Profile-derived knob baselines: pass through ONLY when the resolved profile
+	// carries a value, exactly mirroring the legacy gates at service.go (horizon:
+	// `resolvedProfile != nil && resolvedProfile.HorizonYears > 0`; method:
+	// `resolvedProfile.TerminalMethod != ""`). The resolver re-applies the same
+	// >0 / != "" gating internally, so passing zero/"" is a no-op default.
+	var profileHorizonYears int
+	var profileTerminalMethod string
+	var profileTerminalMultiple float64
+	if resolvedProfile != nil {
+		profileHorizonYears = resolvedProfile.HorizonYears
+		profileTerminalMethod = string(resolvedProfile.TerminalMethod)
+		profileTerminalMultiple = resolvedProfile.TerminalMultiple
+	}
+
+	// Estimator stage years: the shared s.growthEstimator's configured stages
+	// (DefaultEstimatorConfig 3/4/0). T4 reuses the shared estimator (the
+	// per-request estimator is T5); these feed the resolver's staging invariants.
+	estCfg := s.growthEstimator.Config()
+
+	resolverDefaults := params.Defaults{
+		TerminalGrowthCap: s.config.Valuation.DefaultTerminalGrowthCap,
+		MaxGrowthRate:     s.config.Valuation.DCFMaxGrowthRate,
+		MinGrowthRate:     s.config.Valuation.DCFMinGrowthRate,
+		Stage1Years:       estCfg.Stage1Years,
+		Stage2Years:       estCfg.Stage2Years,
+		Stage3Years:       estCfg.Stage3Years,
+
+		// WACC inputs + tax — the EXACT legacy default sources.
+		Beta:              marketData.GetEffectiveBeta(),
+		RiskFreeRate:      macroData.GetEffectiveRiskFreeRate(),
+		MarketRiskPremium: macroData.MarketRiskPremium,
+		TaxRate:           latestFinancialData.TaxRate,
+
+		ProfileHorizonYears:     profileHorizonYears,
+		ProfileTerminalMethod:   profileTerminalMethod,
+		ProfileTerminalMultiple: profileTerminalMultiple,
+		IndustryExitMultiple:    industryExitMultiple,
+	}
+
+	p, err := params.ResolveInputs(resolverDefaults, overrides, growthRateLen)
+	if err != nil {
+		// Propagate the typed *params.ParamError so the handler can map it to 422
+		// (T8). Never swallow — a cross-knob violation is a caller error, not a 500.
+		return nil, err
+	}
+
+	// Determine beta and risk-free rate from the resolved params (S4). On the
+	// default path p.Beta == marketData.GetEffectiveBeta() and
+	// p.RiskFreeRate == macroData.GetEffectiveRiskFreeRate(), so WACC is unchanged.
+	beta := p.Beta
+	riskFreeRate := p.RiskFreeRate
+
+	// Phase 4: Beta improvements — Blume adjustment + unlever/relever.
+	// Track each beta stage so we can include all values in the stage-6 "wacc" trace.
+	rawBeta := beta
+	blumeBeta := wacc.BlumeAdjustedBeta(beta)
+	beta = blumeBeta
+	unleveredBeta := blumeBeta // default: same as blume if no relever conditions met
+	releveredBeta := blumeBeta // default: same as blume if no relever conditions met
+
+	// Unlever beta to remove capital structure effect, then relever at current D/E.
+	// For a single company this is near-identity, but it normalizes extreme D/E betas
+	// and prepares the pipeline for industry-average beta comparison.
+	// DC-1 Phase 4 (C-4 / B3 routing flip): WACC capital-structure inputs read
+	// Restated().InterestBearingDebt + Restated().InterestExpense. After C-4
+	// deletes the B1/B2/B3 dispatcher dual-writes (below),
+	// Restated().InterestBearingDebt is the parser-stamped value with NO B-rule
+	// inflation — B1+B2+B3 amounts flow ONLY into InvestedCapital().DebtLikeClaims
+	// (the EV→Equity bridge), NOT into the capital-structure denominator. This
+	// is the substantive accuracy correction: contingent/lease/pension claims
+	// are shareholder claims, not interest-bearing capital. C6 capitalized
+	// interest restates InterestExpense via the Restated view. TaxRate is not
+	// Restater-touched (and not a view field) and stays on the entity.
+	waccRestated := restatedViewOr(cleaned, latestFinancialData)
+	marketEquity := marketData.CalculateMarketValue()
+	if marketEquity > 0 && waccRestated.InterestBearingDebt > 0 {
+		debtEquityRatio := waccRestated.InterestBearingDebt / marketEquity
+		unleveredBeta = wacc.UnleveredBeta(blumeBeta, latestFinancialData.TaxRate, debtEquityRatio)
+		releveredBeta = wacc.RelleveredBeta(unleveredBeta, latestFinancialData.TaxRate, debtEquityRatio)
+		beta = releveredBeta
+	}
+
+	s.log(ctx).Debug("Beta adjustments applied",
+		zap.String("ticker", historicalData.Ticker),
+		zap.Float64("raw_beta", rawBeta),
+		zap.Float64("adjusted_beta", beta))
+
+	// Phase 4: Look up country risk premium for international / ADR companies.
+	// US-domiciled companies get CRP = 0, so the formula is backward-compatible.
+	countryCode := GetCountryForTicker(historicalData.Ticker)
+	countryRiskPremium := GetCountryRiskPremium(s.countryRiskMap, countryCode)
+	if countryRiskPremium > 0 {
+		s.log(ctx).Info("Country risk premium applied",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("country", countryCode),
+			zap.Float64("crp", countryRiskPremium))
+	}
+
+	// Calculate WACC (with CRP for international companies)
+	waccInputs := wacc.Inputs{
+		RiskFreeRate:        riskFreeRate,        // p.RiskFreeRate (S4)
+		MarketRiskPremium:   p.MarketRiskPremium, // S4: was macroData.MarketRiskPremium
+		Beta:                beta,                // p.Beta, after the Blume/relever ladder (S4)
+		CountryRiskPremium:  countryRiskPremium,
+		MarketValueOfEquity: marketData.CalculateMarketValue(),
+		MarketValueOfDebt:   waccRestated.InterestBearingDebt, // B-rules NO LONGER feed this (B3 flip realized)
+		InterestExpense:     waccRestated.InterestExpense,     // C6 restater touches this
+		TaxRate:             p.TaxRate,                        // S6/R6: was latestFinancialData.TaxRate (coherent tax override)
+	}
+
+	waccResult, err := wacc.Calculate(waccInputs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate WACC: %w", err)
+	}
+
+	// Record WACC calculation metric
+	s.metricsService.IncWACCCalculations()
+	s.metricsService.SetAverageWACC(waccResult.WACC)
+
+	// Stage 6 — "wacc" calc trace: emit every WACC component so operators can audit
+	// the cost-of-capital build-up (beta ladder, risk premiums, debt cost, final rate).
+	if s.calcEmitter != nil {
+		s.calcEmitter.Emit(ctx, "wacc",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Float64("rf", riskFreeRate),
+			zap.Float64("beta_raw", rawBeta),
+			zap.Float64("beta_blume", blumeBeta),
+			zap.Float64("beta_unlevered", unleveredBeta),
+			zap.Float64("beta_relevered", releveredBeta),
+			zap.Float64("erp", p.MarketRiskPremium), // S4: the ERP actually fed to WACC
+			zap.Float64("crp", countryRiskPremium),
+			zap.Float64("tax_rate", p.TaxRate), // S6: the tax rate actually fed to WACC
+			zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
+			zap.Float64("wacc", waccResult.WACC),
+		)
+	}
+
+	// Tier-1 narrate: wacc.computed. Spec §5 row 13 fields. Carries the
+	// final WACC and the major inputs so a reader can sanity-check it.
+	narrate.From(ctx).Emit(ctx, narrate.PhaseWACCComputed, narrate.OutcomeOK, "",
+		zap.Float64("cost_of_equity", waccResult.CostOfEquity),
+		zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
+		zap.Float64("weight_equity", waccResult.WeightOfEquity),
+		zap.Float64("wacc", waccResult.WACC),
+		zap.Bool("country_premium_applied", countryRiskPremium > 0),
+	)
+	// Tier-3 artifact bundle: snapshot WACC inputs + result.
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "wacc.computed", "13-wacc.json", map[string]any{
+			"inputs":         waccInputs,
+			"result":         waccResult,
+			"raw_beta":       rawBeta,
+			"blume_beta":     blumeBeta,
+			"unlevered_beta": unleveredBeta,
+			"relevered_beta": releveredBeta,
+		})
+	}
+
+	// Terminal growth (S1): finalize against the COMPUTED WACC via the params
+	// resolver. ResolveTerminal's auto-derive path is a byte-identical port of the
+	// legacy calculateTerminalGrowthRate (same cap 0.03, floor 0.02, WACC-2% spread,
+	// 0.01 degenerate floor) — see params/resolve.go. historicalCAGR is the same
+	// growthEstimate.SummaryGrowthRate() the legacy call used.
+	if err := params.ResolveTerminal(&p, waccResult.WACC, growthEstimate.SummaryGrowthRate()); err != nil {
+		// Propagate the typed *params.ParamError (e.g. explicit terminal_growth_rate
+		// >= WACC) so the handler maps it to 422 (T8). Default path never errors.
+		return nil, err
+	}
+	terminalGrowthRate := p.TerminalGrowthRate
+	growthEstimate.TerminalGrowthRate = terminalGrowthRate
+
 	// Select the appropriate valuation model based on industry and financials.
 	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace;
 	// ticker is threaded in so that trace entry carries it self-describingly (M-1a).
@@ -1110,38 +1210,16 @@ func (s *Service) performValuation(
 
 	// Perform DCF calculation with multi-stage growth rates.
 	//
-	// Tier 2 VAL-1 (P2): horizon and terminal method are driven by the
-	// resolved AssumptionProfile when available. When the profile registry
-	// isn't wired (test paths) or HorizonYears==0 (legacy mature_large_bank
-	// signal), we fall back to the pre-P2 behavior — horizon equals the
-	// growth-estimate slice length. This preserves bit-for-bit responses
-	// for tickers that don't yet route through the profile system.
-	// Spec §6.2.
-	projectionYears := len(growthEstimate.ProjectedGrowthRates)
-	if projectionYears == 0 {
-		projectionYears = 5 // fallback
-	}
-	terminalMethodLabel := "gordon_growth"
-	if resolvedProfile != nil && resolvedProfile.HorizonYears > 0 {
-		profileHorizon := resolvedProfile.HorizonYears
-		// Guardrail: cap horizon by the number of growth rates we actually
-		// produced. The growth estimator's Stage3Years config controls the
-		// upper bound; if a profile requests more years than the estimator
-		// can deliver, we clamp + warn rather than feed zero-rates into the
-		// DCF. This keeps the contract "horizon ≤ len(growth_rates)" intact.
-		if profileHorizon > projectionYears {
-			s.log(ctx).Warn("Profile horizon exceeds available growth rates; clamping",
-				zap.String("ticker", historicalData.Ticker),
-				zap.String("profile_id", resolvedProfile.ProfileID),
-				zap.Int("profile_horizon", profileHorizon),
-				zap.Int("available_growth_rates", projectionYears))
-			profileHorizon = projectionYears
-		}
-		projectionYears = profileHorizon
-		if resolvedProfile.TerminalMethod != "" {
-			terminalMethodLabel = string(resolvedProfile.TerminalMethod)
-		}
-	}
+	// S2 (T4): horizon + terminal method come from the resolved params. The
+	// resolver already applied the legacy precedence (growth-rate length ←
+	// profile.HorizonYears>0 ← request override) AND the legacy silent clamp
+	// (horizon ≤ stage-sum, horizon ≤ growth-rate length) for profile/default-
+	// sourced horizons — the previous inline `if profileHorizon > projectionYears`
+	// guard now lives in params.ResolveInputs. On the default path p.HorizonYears
+	// equals the old clamped projectionYears (growthRateLen == stageSum for the
+	// shared 3/4/0 estimator), so the DCF horizon is byte-identical.
+	projectionYears := p.HorizonYears
+	terminalMethodLabel := p.TerminalMethod
 
 	// Truncate the growth-rate slice fed into the DCF to match the
 	// chosen horizon. dcf.CalculateDCF treats GrowthRates[i] as the rate
@@ -1158,7 +1236,7 @@ func (s *Service) performValuation(
 		TerminalGrowthRate:  terminalGrowthRate,
 		WACC:                waccResult.WACC,
 		ProjectionYears:     projectionYears,
-		TaxRate:             latestFinancialData.TaxRate,
+		TaxRate:             p.TaxRate, // S6: was latestFinancialData.TaxRate (default-path identical)
 	}
 
 	// Use true FCF when D&A and CapEx data are available.
@@ -1181,17 +1259,29 @@ func (s *Service) performValuation(
 	}
 	usingNOPATFallback := !dcfInputs.UseTrueFCF
 
-	// Phase 4: Wire exit-multiple terminal value from industry config.
+	// Phase 4 / S5 (T4): Wire exit-multiple terminal value.
 	// When available, DCF averages Gordon Growth TV with exit-multiple TV to reduce model risk.
-	if s.industryMultiples != nil && s.industryMultiples.EVEBITDAMultiples != nil {
-		exitMultiple := LookupMultiple(s.industryMultiples.EVEBITDAMultiples, industryCode)
-		if exitMultiple > 0 {
-			dcfInputs.ExitMultiple = exitMultiple
-			s.log(ctx).Debug("Exit multiple wired for terminal value averaging",
-				zap.String("ticker", historicalData.Ticker),
-				zap.String("industry", industryCode),
-				zap.Float64("exit_multiple", exitMultiple))
-		}
+	//
+	// BYTE-IDENTITY: the legacy DCF averaging used the INDUSTRY EV/EBITDA lookup
+	// EXCLUSIVELY (industryExitMultiple) — it never consulted the profile's
+	// terminal_multiple. So the default/profile path keeps using
+	// industryExitMultiple verbatim. p.TerminalMultiple (which folds in the
+	// profile multiple) is read ONLY when the REQUEST explicitly touched the
+	// multiple or selected terminal_method — those are non-canonical,
+	// cache-bypassed responses where honoring the override is the desired effect.
+	// Using p.TerminalMultiple unconditionally would regress every profiled
+	// ticker (e.g. AAPL profile multiple 5 vs TECH industry 18).
+	exitMultiple := industryExitMultiple
+	if overrides.TerminalMultiple != nil || overrides.TerminalMethod != nil {
+		exitMultiple = p.TerminalMultiple
+	}
+	if exitMultiple > 0 {
+		dcfInputs.ExitMultiple = exitMultiple
+		s.log(ctx).Debug("Exit multiple wired for terminal value averaging",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("industry", industryCode),
+			zap.String("terminal_method", terminalMethodLabel),
+			zap.Float64("exit_multiple", exitMultiple))
 	}
 
 	dcfResult, err := dcf.CalculateDCF(dcfInputs)
@@ -1399,6 +1489,22 @@ func (s *Service) performValuation(
 
 	if dcfFallbackWarning != "" {
 		result.Warnings = append(result.Warnings, dcfFallbackWarning)
+	}
+
+	// Param-resolver advisories (T4). CRITICAL byte-identity rule: the resolver
+	// appends notes to p.Warnings (the profile-horizon clamp note, the near-WACC
+	// advisory). Legacy code only LOGGED the horizon clamp — it NEVER added it to
+	// result.Warnings. So we append p.Warnings to result.Warnings ONLY when the
+	// request carried overrides (those responses are cache-bypassed and
+	// non-canonical). On the default path result.Warnings stays byte-identical;
+	// the WARN logs below preserve the legacy clamp log line either way.
+	for _, w := range p.Warnings {
+		s.log(ctx).Warn("Valuation parameter advisory",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("advisory", w))
+	}
+	if hasOverrides && len(p.Warnings) > 0 {
+		result.Warnings = append(result.Warnings, p.Warnings...)
 	}
 
 	if len(gf.Warnings) > 0 {
@@ -1735,6 +1841,14 @@ func (s *Service) calculateTangibleValuePerShare(financial *cleaneddata.Financia
 
 // calculateTerminalGrowthRate calculates a conservative terminal growth rate.
 // It also enforces a minimum 2% spread below WACC to prevent terminal value explosion.
+//
+// T4 NOTE: the live valuation path no longer calls this method — terminal growth
+// is finalized by params.ResolveTerminal, whose auto-derive branch is a verbatim
+// port of this function (cap 0.03, floor 0.02, WACC-2% spread, 0.01 degenerate
+// floor). The method is retained as the independent regression pin behind
+// TestService_calculateTerminalGrowthRate; the params byte-identity table
+// (TestResolveTerminal_EmptyOverride_MatchesCalculateTerminalGrowthRate) asserts
+// ResolveTerminal reproduces it bit-for-bit. Keep the two in sync.
 func (s *Service) calculateTerminalGrowthRate(historicalCAGR, wacc float64) float64 {
 	// Conservative approach: min of 3% or half of historical CAGR
 	terminalGrowth := historicalCAGR / 2
