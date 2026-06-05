@@ -55,6 +55,8 @@ func identityCopy(raw *entities.FinancialData) FinancialDataView {
 		InterestBearingDebt: raw.InterestBearingDebt,
 		StockholdersEquity:  raw.StockholdersEquity,
 
+		CashAndCashEquivalents: raw.CashAndCashEquivalents,
+
 		OperatingIncome:           raw.OperatingIncome,
 		NormalizedOperatingIncome: raw.NormalizedOperatingIncome,
 		Revenue:                   raw.Revenue,

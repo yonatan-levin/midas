@@ -973,7 +973,7 @@ func TestService_performValuation(t *testing.T) {
 		assert.Greater(t, result.GrowthRate, 0.0)
 		assert.Greater(t, result.EnterpriseValue, 0.0)
 		assert.Greater(t, result.DataFreshnessScore, 0)
-		assert.Equal(t, "4.4", result.CalculationVersion) // DC-1 Phase 5 (P5-C1): bumped from 4.3 (DDM EV-bridge DebtLikeClaims correction)
+		assert.Equal(t, "4.5", result.CalculationVersion) // BUG-014: bumped from 4.4 (DCF operating NWC excludes cash)
 	})
 
 	t.Run("single period uses default growth rate", func(t *testing.T) {
@@ -2394,6 +2394,94 @@ func TestService_calculateNetWorkingCapitalChange(t *testing.T) {
 	})
 }
 
+// TestService_calculateNetWorkingCapitalChange_ExcludesCash is the BUG-014
+// regression pin: working capital fed into the DCF must be OPERATING NWC,
+// i.e. cash & cash-equivalents excluded from current assets on BOTH the
+// latest and prior periods before the delta. A year-over-year cash build is
+// a RESULT of free cash flow, never a use of it; including it inverts the
+// sign of projected FCF for cash-generative firms (KO/AMD went negative).
+//
+// On PRE-FIX code (latestNWC = CurrentAssets - CurrentLiabilities, cash
+// included) these cases FAIL; they pass only once cash is netted out.
+//
+// Field-availability note (see BUG-014 §5): the SEC parser exposes
+// CashAndCashEquivalents as its own field but lumps short-term/marketable
+// investments and current-portion-of-debt into the OtherCurrentAssets /
+// OtherCurrentLiabilities plugs, so they cannot be isolated. The fix
+// therefore excludes cash & equivalents only — the reliably-available
+// component — and that approximation is documented in the implementation.
+func TestService_calculateNetWorkingCapitalChange_ExcludesCash(t *testing.T) {
+	service, _, _, _, _, _ := createTestService()
+
+	mkPeriod := func(filingYear int, ca, cl, cash float64) *entities.FinancialData {
+		return &entities.FinancialData{
+			CurrentAssets:          ca,
+			CurrentLiabilities:     cl,
+			CashAndCashEquivalents: cash,
+			Revenue:                1_000_000,
+			OperatingIncome:        100_000,
+			SharesOutstanding:      1_000,
+			FilingDate:             time.Date(filingYear, 1, 15, 0, 0, 0, 0, time.UTC),
+		}
+	}
+
+	tests := []struct {
+		name string
+		// latest / prior current assets, current liabilities, cash
+		latestCA, latestCL, latestCash float64
+		priorCA, priorCL, priorCash    float64
+		wantDelta                      float64
+		why                            string
+	}{
+		{
+			name:     "cash build excluded → operating NWC delta is what flows to FCF",
+			latestCA: 500_000, latestCL: 300_000, latestCash: 150_000,
+			priorCA: 400_000, priorCL: 250_000, priorCash: 50_000,
+			// PRE-FIX (cash included): latestNWC=200k, priorNWC=150k, delta=+50k.
+			// POST-FIX (operating): latestOpNWC=(500k-150k)-300k=50k,
+			//   priorOpNWC=(400k-50k)-250k=100k, delta=50k-100k = -50k.
+			// The $100k cash build flipped a +50k "investment" into a -50k release.
+			wantDelta: -50_000,
+			why:       "cash accumulation must not be counted as working capital invested",
+		},
+		{
+			name:     "cash-rich firm: cash exceeds coded NWC (KO-like)",
+			latestCA: 30_390, latestCL: 22_378, latestCash: 10_574,
+			priorCA: 27_000, priorCL: 20_000, priorCash: 8_000,
+			// PRE-FIX: latest=8_012, prior=7_000, delta=+1_012 (cash consumed).
+			// POST-FIX: latestOp=(30_390-10_574)-22_378=-2_562,
+			//   priorOp=(27_000-8_000)-20_000=-1_000, delta=-2_562-(-1_000)=-1_562.
+			// True operating NWC is NEGATIVE (supplier float) — a cash SOURCE.
+			wantDelta: -1_562,
+			why:       "KO-like: operating NWC is negative; engine must see a release, not a use",
+		},
+		{
+			name:     "zero cash → identical to legacy CA-CL behavior (no regression)",
+			latestCA: 500_000, latestCL: 300_000, latestCash: 0,
+			priorCA: 400_000, priorCL: 250_000, priorCash: 0,
+			// With no cash, operating NWC == coded NWC; delta unchanged.
+			wantDelta: 50_000,
+			why:       "no-cash fixtures preserve the pre-fix delta exactly",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			latest := mkPeriod(2024, tc.latestCA, tc.latestCL, tc.latestCash)
+			prior := mkPeriod(2023, tc.priorCA, tc.priorCL, tc.priorCash)
+			historical := &entities.HistoricalFinancialData{
+				Ticker: "TEST",
+				Data: map[string]*entities.FinancialData{
+					"2023FY": prior,
+					"2024FY": latest,
+				},
+			}
+			got := service.calculateNetWorkingCapitalChange(historical, latest, nil)
+			assert.InDelta(t, tc.wantDelta, got, 0.01, tc.why)
+		})
+	}
+}
+
 func TestService_performValuation_NegativeOperatingIncome(t *testing.T) {
 	_, marketData, macroData := createTestData()
 
@@ -2454,7 +2542,7 @@ func TestService_performValuation_NegativeOperatingIncome(t *testing.T) {
 	if result != nil {
 		assert.Equal(t, "revenue_multiple", result.CalculationMethod,
 			"Should use revenue multiple model for negative OI")
-		assert.Equal(t, "4.4", result.CalculationVersion) // DC-1 Phase 5 (P5-C1): bumped from 4.3 (DDM EV-bridge DebtLikeClaims correction)
+		assert.Equal(t, "4.5", result.CalculationVersion) // BUG-014: bumped from 4.4 (DCF operating NWC excludes cash)
 		assert.Greater(t, result.DCFValuePerShare, 0.0,
 			"Revenue multiple should produce a positive value when revenue is available")
 	}
@@ -2495,7 +2583,7 @@ func TestService_performValuation_TrueFCF(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Greater(t, result.DCFValuePerShare, 0.0)
 	assert.Greater(t, result.EquityValue, 0.0)
-	assert.Equal(t, "4.4", result.CalculationVersion) // DC-1 Phase 5 (P5-C1): bumped from 4.3 (DDM EV-bridge DebtLikeClaims correction)
+	assert.Equal(t, "4.5", result.CalculationVersion) // BUG-014: bumped from 4.4 (DCF operating NWC excludes cash)
 }
 
 func TestService_performValuation_GrowthCapping(t *testing.T) {
@@ -2952,7 +3040,7 @@ func TestService_performValuation_FINZeroDPS_FallbackToDCF(t *testing.T) {
 	if result != nil {
 		assert.Equal(t, "multi_stage_dcf", result.CalculationMethod,
 			"Should fall back to multi_stage_dcf when DDM fails and OI is positive")
-		assert.Equal(t, "4.4", result.CalculationVersion) // DC-1 Phase 5 (P5-C1): bumped from 4.3 (DDM EV-bridge DebtLikeClaims correction)
+		assert.Equal(t, "4.5", result.CalculationVersion) // BUG-014: bumped from 4.4 (DCF operating NWC excludes cash)
 		assert.Greater(t, result.DCFValuePerShare, 0.0,
 			"DCF fallback should produce a positive value")
 		// S-2 nit: verify the fallback warning is present

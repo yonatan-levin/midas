@@ -76,9 +76,20 @@ func TestDataCleanerRecompute_ShadowMode_TickerBasket(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, dateDirs, "no baseline date directories under %s — capture a baseline first", baselineParent)
-	sort.Strings(dateDirs)
-	bundleRoot := dateDirs[len(dateDirs)-1]
-	t.Logf("tier2-baseline resolved to %s (newest of %d date dirs)", filepath.Base(bundleRoot), len(dateDirs))
+	// Pin to a FIXED baseline date rather than the newest. The committed shadow
+	// snapshots are a byte-stable regression reference ("git diff --quiet
+	// recompute-shadow/" is load-bearing per CLAUDE.md). Resolving "newest" made
+	// the snapshots auto-repoint (path-only churn) whenever a newer baseline was
+	// added under artifacts/tier2-baseline/ (e.g. the 2026-06-03 accuracy-harness
+	// capture), tripping that invariant on every suite run. This test guards the
+	// divergence DATA, not capture recency, so a fixed reference is correct.
+	// shadowBaselineDate is the date the committed snapshots were generated against.
+	const shadowBaselineDate = "2026-05-19"
+	bundleRoot := filepath.Join(baselineParent, shadowBaselineDate)
+	info, statErr := os.Stat(bundleRoot)
+	require.NoError(t, statErr, "pinned shadow baseline %s missing — restore it or repin shadowBaselineDate", bundleRoot)
+	require.True(t, info.IsDir(), "pinned shadow baseline %s is not a directory", bundleRoot)
+	t.Logf("tier2-baseline pinned to %s (of %d date dirs present)", shadowBaselineDate, len(dateDirs))
 
 	// Build a real DataCleanerService — the WARN signal MUST come from the
 	// recompute call site wired into the production pipeline, not from a
