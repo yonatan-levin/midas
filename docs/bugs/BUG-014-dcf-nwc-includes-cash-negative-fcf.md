@@ -1,6 +1,6 @@
 # BUG-014 — DCF working-capital term includes cash → negative projected FCF → systematic undervaluation
 
-**Status:** OPEN — root cause confirmed (read from source + quantified on captured 4.4 bundles). Engine fix NOT yet implemented (large change; needs its own branch + regression tests + DC-1-invariant care).
+**Status:** PRIMARY FIX RESOLVED (merging to master) — operating NWC excludes cash; `CalculationVersion` 4.4 → 4.5; regression tests added; DDM bit-for-bit + DC-1 invariants green. Passed full `/execute` B-V-R-Q (VERIFIER VERIFIED, REVIEWER APPROVE_WITH_NITS, QA PASS) + an independent `/code-review` (REVIEWER APPROVE_WITH_NITS, QA PASS). SECONDARY `dcf.go:122` scaling change deliberately NOT applied (see §8). **STILL OPEN (separate follow-up):** the §5 quarterly-base understatement that keeps KO/AMD negative, and an operator fresh-4.5 `cmd/accuracy` baseline capture to quantify the basket-wide gap improvement.
 **Severity:** HIGH — core DCF valuation is wrong across the whole basket. 9/10 tickers value below market by a mean of −84%; KO and AMD produce **negative** intrinsic values (model breakdown, not conservatism).
 **Filed:** 2026-06-03, from the `/debug` track opened on the finding the new `cmd/accuracy` harness surfaced.
 **Area:** BACKEND — valuation engine (`internal/services/valuation` + `pkg/finance/dcf`).
@@ -102,3 +102,57 @@ A single base-year ΔNWC is multiplied by the **cumulative** operating-income gr
 | Date | Change |
 |---|---|
 | 2026-06-03 | Filed from the `/debug` track. Root cause confirmed from source (`calculateNetWorkingCapitalChange` + `dcf.go:122`) and quantified on captured 4.4 bundles (NVDA NWC $107B incl. cash; KO cash > NWC). Engine fix deferred to a dedicated branch; `cmd/accuracy` is the regression oracle. |
+| 2026-06-04 | PRIMARY fix implemented on `fix/dcf-nwc-cash` (operating NWC excludes cash & equivalents; `CalculationVersion` 4.4 → 4.5). SECONDARY `dcf.go:122` change deliberately NOT applied — see §8. Awaiting VERIFIER + fresh 4.5 baseline capture (operator). |
+
+## 8. Implementation outcome (BACKEND, 2026-06-04)
+
+**Field-availability finding (Step 0).** Only `CashAndCashEquivalents` is exposed
+as its own field on `entities.FinancialData` (and now on the `cleaneddata`
+`FinancialDataView`). There is **no** `ShortTermInvestments`/marketable-securities
+field and **no** `ShortTermDebt`/current-portion-of-debt field: the DC-1 Phase-0
+plug invariant `CurrentAssets == Cash + Inventory + OtherCurrentAssets` lumps
+short-term investments into `OtherCurrentAssets`, and `CurrentLiabilities ==
+OperatingLeaseLiabilityCurrent + OtherCurrentLiabilities` lumps short-term debt
+into `OtherCurrentLiabilities`. Confirmed on the captured 4.4 bundles: NVDA
+`other_current_assets = $111.96B` (the unisolable short-term-investment hoard),
+KO `$15.09B`, AMD `$15.00B`. **The fix therefore excludes cash & equivalents
+only** — the reliably-available component — and documents the approximation in
+`calculateNetWorkingCapitalChange`. Isolating ST investments / ST debt requires a
+parser-side change (out of scope; candidate follow-up).
+
+**Primary fix (shipped).** `calculateNetWorkingCapitalChange` now computes
+`operatingNWC = (CurrentAssets − Cash&Equivalents) − CurrentLiabilities` on both
+the latest and prior periods (still read from `AsReported()` — the C-2 zero-drift
+rationale is preserved; cash is identity-copied across all views, so the
+subtraction is drift-neutral with respect to the cleaner). `CalculationVersion`
+bumped 4.4 → 4.5 at both stamp sites; the four live pins in `service_test.go`
+updated.
+
+**Secondary fix (`dcf.go:122`) — DELIBERATELY NOT APPLIED.** The primary fix
+alone restores positive projected FCF for the canonical cash-rich case (NVDA:
+`dcf_per_year_pv` flips −3.85B → +2.07B across the window; `dcf_value_per_share`
+29.60 → 34.22; terminal dominance 104% → 98%). KO/AMD remain negative, but the
+year-1 FCF decomposition proves this is **not** "purely" the cumulative-scaling
+overstatement — it is dominated by the §5 **quarterly-base** problem (KO/AMD base
+OI is a 10-Q figure, ~4× understated NOPAT), which is explicitly out of scope.
+Even switching to per-year-increment scaling does not flip AMD year-1 FCF
+positive (NOPAT_y1 1.53B − CapEx 0.51B − incrementalΔWC 1.33B = −0.32B), so the
+secondary change would introduce engine-wide drift across every DCF ticker (large
+blast radius, no clean validation oracle) without achieving the success criterion
+for the names it would target. Per the fix mandate ("if the primary fix alone
+restores positive FCF, leave dcf.go as-is"), `dcf.go:122` is unchanged.
+**Follow-up candidate:** reconsider the base-ΔNWC scaling semantics (constant vs
+per-year-increment vs cumulative) as its own ARCH-reviewed change, alongside the
+DCF-quarterly-base fix (§5).
+
+**Replay evidence (hermetic, `--from=parsed`, vs captured 4.4 baseline).** DCF
+tickers move toward market: NVDA 29.60 → 34.22, AAPL 20.66 → 33.37, MSFT 68.18 →
+92.44, AMD −38.70 → −21.68 (negativity halved), F 32.86 → 23.75 (cash-release
+benefit correctly trimmed), KO −14.77 → −15.52 (quarterly-base-bound). DDM (JPM),
+FFO (PLD), and revenue_multiple (MXL) primary values are bit-for-bit unchanged —
+only `calculation_version` drifts for those — confirming the NWC fix is contained
+to the DCF FCF path. (EQIX shows growth/WACC drift that is **pre-existing replay
+non-determinism**, reproduced with the fix stashed — not attributable to BUG-014.)
+A fresh 4.5 `cmd/accuracy` mean-gap number requires a re-captured baseline
+(operator follow-up; `cmd/accuracy` reads saved `17-response.json`, not the live
+engine).

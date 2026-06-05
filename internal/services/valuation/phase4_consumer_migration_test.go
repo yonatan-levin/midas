@@ -128,23 +128,30 @@ func TestPerformValuation_NWCChangeUsesAsReported(t *testing.T) {
 		},
 	}
 
-	// AsReported (CORRECT, pinned) basis:
-	//   latest NWC = 16,505 - 9,000 = 7,505
-	//   prior  NWC = 14,000 - 8,000 = 6,000
-	//   delta      = 1,505
-	const wantAsReportedDelta = 1_505.0
+	// BUG-014: NWC is now OPERATING NWC — cash & equivalents are netted out of
+	// current assets on both periods before the delta. The AsReported-vs-Restated
+	// discrimination this test guards is unchanged (still reads the stamped
+	// umbrella); only the numeric basis shifts by the cash term.
+	//
+	// AsReported (CORRECT, pinned) operating-NWC basis:
+	//   latest opNWC = (16,505 - 10,000 cash) - 9,000 = -2,495
+	//   prior  opNWC = (14,000 -  9,000 cash) - 8,000 = -3,000
+	//   delta        = -2,495 - (-3,000) = 505
+	const wantAsReportedDelta = 505.0
 
-	// Restated (WRONG, recomputed-umbrella) basis — what the bug produced:
-	//   latest NWC = (10,000+4,000+678) - 8,000 = 14,678 - 8,000 = 6,678
-	//   prior  NWC = (9,000+3,000+500) - 7,300  = 12,500 - 7,300 = 5,200
-	//   delta      = 1,478
-	const restatedDelta = 1_478.0
+	// Restated (WRONG, recomputed-umbrella) operating-NWC basis — what a
+	// regression back to Restated() would produce (cash also netted out, but
+	// from the recomputed umbrella):
+	//   latest opNWC = ((10,000+4,000+678) - 10,000) - 8,000 = -3,322
+	//   prior  opNWC = ((9,000+3,000+500)  -  9,000) - 7,300 = -3,800
+	//   delta        = -3,322 - (-3,800) = 478
+	const restatedDelta = 478.0
 
 	result := svc.calculateNetWorkingCapitalChange(historical, postCleanLatest, cleaned)
 	assert.InDelta(t, wantAsReportedDelta, result, 1e-6,
 		"NWC change must read the stamped (AsReported) CurrentAssets/CurrentLiabilities umbrellas, NOT the recomputed Restated umbrellas — otherwise the Phase-0 plug shortfall drifts FCF on AMD-class tickers")
 	assert.Greater(t, math.Abs(result-restatedDelta), 1.0,
-		"a Restated()-basis NWC delta (1,478) would mean the read regressed back to the recomputed umbrella")
+		"a Restated()-basis NWC delta (478) would mean the read regressed back to the recomputed umbrella")
 }
 
 // TestEffectiveOI_ReadsView pins the Phase 4 effectiveOI signature flip: the
@@ -324,15 +331,16 @@ func TestPerformValuation_EquityBridgeSubtractsDebtLikeClaims(t *testing.T) {
 		"the new bridge differs from the legacy 5-arg bridge by exactly the contingent amount")
 }
 
-// DC-1 Phase 5 P5-C1 CalculationVersion 4.3 → 4.4 LIVE-stamp coverage:
+// CalculationVersion LIVE-stamp coverage (currently 4.5 — bumped from 4.4
+// by BUG-014, which made DCF working capital exclude cash & equivalents):
 //   - DCF path: service_test.go::TestService_performValuation,
 //     ::TestService_performValuation_TrueFCF, and
 //     ::TestService_performValuation_FINZeroDPS_FallbackToDCF
 //     (FIN → DDM-fail → DCF fallback) all assert
-//     result.CalculationVersion == "4.4".
+//     result.CalculationVersion == "4.5".
 //   - Alt-model path: service_test.go::TestService_performValuation_NegativeOperatingIncome
 //     routes to revenue_multiple (performAlternativeValuation) and
-//     asserts result.CalculationVersion == "4.4".
+//     asserts result.CalculationVersion == "4.5".
 //
 // The previous incarnation of this gate was a self-referential
 // TestCalculationVersion_IsV43/_IsV44 in this file; gpt-5.5 review
@@ -341,8 +349,8 @@ func TestPerformValuation_EquityBridgeSubtractsDebtLikeClaims(t *testing.T) {
 // production code path was exercised). DELETED in favor of the four
 // live pins above, which DO exercise the stamp through performValuation /
 // performAlternativeValuation. Updating those four pins (and the two
-// inline service.go stamp comments at lines 1323 + 1635) is the canonical
-// way to track future CalculationVersion bumps.
+// inline service.go stamp comments in the result-assembly blocks) is the
+// canonical way to track future CalculationVersion bumps.
 
 // TestCalculateTangibleValuePerShare_UsesView pins the DC-1 Phase 4 C-5
 // migration of calculateTangibleValuePerShare to a *cleaneddata.FinancialDataView

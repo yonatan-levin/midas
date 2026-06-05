@@ -137,6 +137,62 @@ func TestCalculateDCF_TrueFCF(t *testing.T) {
 	assert.Greater(t, result.EnterpriseValue, 0.0)
 }
 
+// TestCalculateDCF_OperatingNWC_PositiveFCF is an engine-boundary DOCUMENTATION
+// pin for BUG-014 — NOT a RED regression. CalculateDCF itself is unchanged by
+// the fix; the cash-exclusion lives in the caller
+// (service.go::calculateNetWorkingCapitalChange), pinned RED-provably by
+// TestService_calculateNetWorkingCapitalChange_ExcludesCash. This test documents
+// the post-fix expectation at the engine layer: given an OPERATING NWC change
+// (cash excluded) rather than the cash-polluted (CurrentAssets - CurrentLiabilities)
+// delta, every explicit-year FCF and the terminal-year FCF must be positive.
+//
+// Before BUG-014 the caller fed a cash-build-dominated ΔNWC (e.g. NVDA ≈ $31B
+// on $42B of NOPAT+D&A−CapEx) which drove FCF negative and growing more
+// negative across the window (cumulative growth scaling). This test pins the
+// post-fix expectation purely at the engine boundary: a modest operating ΔNWC
+// relative to NOPAT keeps FCF positive for all years.
+func TestCalculateDCF_OperatingNWC_PositiveFCF(t *testing.T) {
+	// NVDA-scale, $ millions. Operating ΔNWC here is the cash-excluded value
+	// the fixed caller would compute, NOT the +$31B cash-polluted figure.
+	inputs := Inputs{
+		BaseOperatingIncome:         53_536,
+		GrowthRate:                  0.10,
+		TerminalGrowthRate:          0.03,
+		WACC:                        0.10,
+		TaxRate:                     0.15,
+		ProjectionYears:             5,
+		UseTrueFCF:                  true,
+		DepreciationAndAmortization: 997,
+		CapitalExpenditures:         1_757,
+		// Operating ΔNWC: a few % of revenue growth, NOT the cash hoard.
+		NetWorkingCapitalChange: 3_000,
+	}
+
+	result, err := CalculateDCF(inputs)
+	assert.NoError(t, err)
+	assert.NotNil(t, result)
+
+	for i, p := range result.Projections {
+		assert.Greater(t, p.FreeCashFlow, 0.0,
+			"year %d FCF must be positive for a cash-generative firm once cash is excluded from NWC", i+1)
+		assert.Greater(t, p.PresentValue, 0.0,
+			"year %d discounted FCF must be positive (dcf_per_year_pv > 0)", i+1)
+	}
+
+	assert.Greater(t, result.TerminalYearFCF, 0.0,
+		"terminal-year FCF must be positive so the Gordon terminal value is positive")
+	assert.Greater(t, result.EnterpriseValue, 0.0,
+		"enterprise value must be positive for a cash-generative firm")
+
+	// Sanity: with cumulative-growth scaling, once year 1 is positive every
+	// later year is MORE positive (NOPAT and the scaled reinvestment terms
+	// share the same growthFactor) — FCF must be monotonically non-decreasing.
+	for i := 1; i < len(result.Projections); i++ {
+		assert.GreaterOrEqual(t, result.Projections[i].FreeCashFlow, result.Projections[i-1].FreeCashFlow,
+			"FCF should not turn more negative year over year once the base year is positive")
+	}
+}
+
 func TestCalculateDCF_TrueFCF_AssetLight(t *testing.T) {
 	// Asset-light company: D&A > CapEx (SaaS model)
 	// FCF should be HIGHER than NOPAT

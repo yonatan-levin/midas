@@ -1320,7 +1320,7 @@ func (s *Service) performValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     "multi_stage_dcf",
-		CalculationVersion:    "4.4", // DC-1 Phase 5 (P5-C1): DDM EV-bridge DebtLikeClaims correction (+B-rule overlays for DDM EnterpriseValue). DCF/revenue_multiple/FFO numerics unaffected; only DDM EnterpriseValue drifts for B-rule-firing banks.
+		CalculationVersion:    "4.5", // BUG-014: DCF working capital now excludes cash & equivalents (operating NWC). Changes dcf_value_per_share engine-wide by design for cash-holding firms. Prior: 4.4 (DC-1 Phase 5 P5-C1 DDM EV-bridge DebtLikeClaims correction).
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -1642,7 +1642,7 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:          marketData.SharePrice,
 		DataFreshnessScore:    dataFreshnessScore,
 		CalculationMethod:     modelResult.ModelType,
-		CalculationVersion:    "4.4", // DC-1 Phase 5 (P5-C1): DDM EV-bridge DebtLikeClaims correction (+B-rule overlays for DDM EnterpriseValue). DCF/revenue_multiple/FFO numerics unaffected; only DDM EnterpriseValue drifts for B-rule-firing banks.
+		CalculationVersion:    "4.5", // BUG-014: DCF working capital now excludes cash & equivalents (operating NWC). Alt-model numerics (DDM/FFO/revenue_multiple) are unaffected by the NWC change — only calculation_version drifts on those paths (bit-for-bit primary values; see BUG-014 §8 replay evidence). The bump is engine-wide for a single version stamp. Prior: 4.4 (DC-1 Phase 5 P5-C1).
 		Warnings:              modelResult.Warnings,
 	}
 
@@ -1957,26 +1957,54 @@ func (s *Service) getAnalystEstimates(ctx context.Context, ticker string) *ports
 	return estimates
 }
 
-// calculateNetWorkingCapitalChange computes the change in net working capital
-// between the two most recent annual periods. Positive = cash consumed.
+// calculateNetWorkingCapitalChange computes the change in *operating* net
+// working capital between the two most recent annual periods. Positive = cash
+// consumed (a use of cash in FCF); negative = cash released (a source).
 //
-// DC-1 Phase 4 (C-2, REVIEWER-HIGH followup): both the latest and prior periods
-// read CurrentAssets/CurrentLiabilities from the AsReported() view, NOT
-// Restated(). Restated() RECOMPUTES the current-asset/-liability umbrellas as
-// sum(components)+Phase-0 plug, which is NOT bit-for-bit equal to the
-// parser-stamped umbrella for tickers whose plug under-reconstructs it (e.g.
-// AMD: reported 16,505M vs recomputed 14,678M, delta −1,826M, even with ZERO
-// Restaters firing; deltas grow across periods so they do not cancel in the
-// latest−prior delta). Reading Restated() therefore drifted
-// NetWorkingCapitalChange → FCF → dcf_value_per_share, violating the Class II
-// zero-drift expectation (spec §5.1/§5.2). This is the SAME recomputed-umbrella
-// root cause already handled for TangibleAssets (calculateTangibleValuePerShare,
-// C-5) — NWC was the one read that slipped through. AsReported() is identity-
-// copied (parser umbrellas verbatim), so NWC change stays bit-for-bit identical
-// to pre-Phase-4. A future DELIBERATE decision to have NWC reflect current-asset
-// Restaters (e.g. an A5 inventory writedown) can flip AsReported→Restated WITH a
-// documented drift expectation; Phase 4's principle is "only the intended B3
-// routing flip drifts."
+// BUG-014: operating NWC EXCLUDES cash. The free-cash-flow definition is
+//
+//	FCF = NOPAT + D&A − CapEx − ΔWC
+//
+// where ΔWC must be the change in *operating* working capital. Cash &
+// cash-equivalents are NOT operating working capital — a cash build is the
+// RESULT of free cash flow, never a use of it. Including the year-over-year
+// cash change double-counts it and inverts the sign of projected FCF for
+// exactly the cash-generative firms the engine most needs to value (KO and
+// AMD produced negative intrinsic values; NVDA's coded NWC was $107B on $82B
+// of revenue, dominated by the cash + short-term-investment hoard). We
+// therefore net cash out of current assets on BOTH the latest and the prior
+// period before taking the delta:
+//
+//	operatingNWC = (CurrentAssets − Cash&Equivalents) − CurrentLiabilities
+//	ΔWC          = operatingNWC_latest − operatingNWC_prior
+//
+// FIELD-AVAILABILITY APPROXIMATION (BUG-014 §5): the textbook operating-NWC
+// definition also removes short-term/marketable investments from current
+// assets and the current portion of debt from current liabilities. Today's
+// SEC XBRL parser exposes CashAndCashEquivalents as its own field but lumps
+// short-term investments into the OtherCurrentAssets plug and short-term debt
+// into the OtherCurrentLiabilities plug (see entities.FinancialData plug
+// invariants and BUG-014 §5), so those two components cannot be isolated
+// without a parser change. We exclude cash & equivalents only — the reliably-
+// available component. For cash-rich firms with a large unisolable short-term-
+// investment balance (e.g. NVDA) this remains a PARTIAL correction; the sign
+// flip it produces for KO/AMD is the load-bearing fix. Isolating ST
+// investments / ST debt is deferred to a parser-side change.
+//
+// DC-1 Phase 4 (C-2, REVIEWER-HIGH followup) — UNCHANGED by BUG-014: both the
+// latest and prior periods read CurrentAssets/CurrentLiabilities (and now cash)
+// from the AsReported() view, NOT Restated(). Restated() RECOMPUTES the
+// current-asset/-liability umbrellas as sum(components)+Phase-0 plug, which is
+// NOT bit-for-bit equal to the parser-stamped umbrella for tickers whose plug
+// under-reconstructs it (e.g. AMD: reported 16,505M vs recomputed 14,678M,
+// delta −1,826M, even with ZERO Restaters firing; deltas grow across periods so
+// they do not cancel in the latest−prior delta). Reading Restated() therefore
+// drifted NetWorkingCapitalChange → FCF → dcf_value_per_share. AsReported() is
+// identity-copied (parser umbrellas verbatim), and cash is identity-copied
+// across all views (no Restater touches it), so the cash subtraction is
+// drift-neutral with respect to the cleaner. A future DELIBERATE decision to
+// have NWC reflect current-asset Restaters can flip AsReported→Restated WITH a
+// documented drift expectation.
 func (s *Service) calculateNetWorkingCapitalChange(
 	historicalData *entities.HistoricalFinancialData,
 	latest *entities.FinancialData,
@@ -1987,7 +2015,12 @@ func (s *Service) calculateNetWorkingCapitalChange(
 		return 0 // data not available
 	}
 
-	latestNWC := latestView.CurrentAssets - latestView.CurrentLiabilities
+	// Operating NWC excludes cash & equivalents (BUG-014). Cash is subtracted
+	// directly; when the field is zero/unavailable this reduces to the legacy
+	// CurrentAssets − CurrentLiabilities, so cash-less fixtures are unaffected.
+	// (CurrentAssets − cash) may legitimately go negative for cash-rich firms
+	// like KO, where operating NWC is negative — that is correct, not clamped.
+	latestOperatingNWC := (latestView.CurrentAssets - latestView.CashAndCashEquivalents) - latestView.CurrentLiabilities
 
 	// Find prior period to compute delta
 	recentYears := historicalData.GetRecentYears(2)
@@ -2006,6 +2039,6 @@ func (s *Service) calculateNetWorkingCapitalChange(
 		return 0
 	}
 
-	priorNWC := priorView.CurrentAssets - priorView.CurrentLiabilities
-	return latestNWC - priorNWC
+	priorOperatingNWC := (priorView.CurrentAssets - priorView.CashAndCashEquivalents) - priorView.CurrentLiabilities
+	return latestOperatingNWC - priorOperatingNWC
 }

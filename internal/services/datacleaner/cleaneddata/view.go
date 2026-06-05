@@ -67,6 +67,13 @@ type FinancialDataView struct {
 	InterestBearingDebt float64
 	StockholdersEquity  float64
 
+	// CashAndCashEquivalents is the parser-stamped cash position. Identity
+	// across all three views (no Restater touches it; it is a CurrentAssets
+	// component, not an umbrella). Consumed by the DCF operating-NWC
+	// calculation (BUG-014) which excludes cash from working capital so a
+	// cash build is not mis-counted as a cash outflow.
+	CashAndCashEquivalents float64
+
 	// DebtLikeClaims is the InvestedCapital-only field: sum of B1 + B2 + B3
 	// overlay amounts. Zero on AsReported and Restated views.
 	DebtLikeClaims float64
