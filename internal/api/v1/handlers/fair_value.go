@@ -669,6 +669,20 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		return
 	}
 
+	// Layer-1 static validation: per-knob range + enum checks before any work.
+	// Returns 422 INVALID_OVERRIDE on the first out-of-range knob. Cross-knob
+	// invariants (terminal < WACC, min ≤ max, horizon ≤ stage-sum) are Layer 2
+	// (T8, resolver) and are NOT checked here.
+	if errResp := validateOverrides(request.Options); errResp != nil {
+		errResp.Instance = c.Request.URL.Path
+		errResp.Timestamp = time.Now().UTC().Format(time.RFC3339)
+		errResp.Method = c.Request.Method
+		c.Header("Content-Type", "application/problem+json")
+		c.JSON(errResp.Status, errResp)
+		c.Abort()
+		return
+	}
+
 	// Project the structured options DTO into the domain-layer Overrides once,
 	// at the request level. The same projected overrides apply to every ticker.
 	// projectOverrides is nil-safe: if request.Options is nil, projectedOverrides
