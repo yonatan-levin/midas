@@ -1,0 +1,13 @@
+{
+  "implied_pe": 8.319017377616596,
+  "sector_median_pe": 22,
+  "implied_ev_ebitda": 6.041464114663788,
+  "sector_median_ev_ebitda": 10,
+  "implied_pfcf": 11.57464892680458,
+  "sector_median_pfcf": 25,
+  "is_reasonable": false,
+  "flags": [
+    "DCF-implied P/E (8.3) is \u003c0.5x sector median (22.0) for MFG_SEMI",
+    "DCF-implied P/FCF (11.6) is \u003c0.5x sector median (25.0) for MFG_SEMI"
+  ]
+}

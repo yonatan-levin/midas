@@ -1,0 +1,297 @@
+{
+  "success": true,
+  "rules_applied": 16,
+  "processing_time": 1352100,
+  "timestamp": "2026-06-05T17:32:44.6810187+03:00",
+  "cleaned_data": {
+    "ticker": "NVDA",
+    "industry_code": "",
+    "cik": "1045810",
+    "as_of": "2025-04-27T03:00:00+03:00",
+    "reporting_currency": "USD",
+    "operating_income": 53536000000,
+    "normalized_operating_income": 53536000000,
+    "revenue": 81615000000,
+    "research_and_development": 0,
+    "interest_expense": 0,
+    "tax_rate": 0.21,
+    "restructuring_charges": 0,
+    "asset_sale_gains": 0,
+    "litigation_settlements": 0,
+    "stock_based_compensation": 0,
+    "derivative_gains_losses": 0,
+    "capitalized_interest": 0,
+    "working_capital_adjustment": 0,
+    "total_assets": 259474000000,
+    "tangible_assets": 235460000000,
+    "goodwill": 20894000000,
+    "other_intangibles": 3120000000,
+    "total_debt": 8470000000,
+    "interest_bearing_debt": 8470000000,
+    "intangible_assets": 0,
+    "indefinite_lived_intangibles": 0,
+    "deferred_tax_assets": 11707000000,
+    "valuation_allowance": 0,
+    "effective_tax_rate": 0,
+    "cost_of_goods_sold": 0,
+    "inventory": 15478200000,
+    "inventory_turnover": 3.163739969763926,
+    "dead_inventory_writedown": 0,
+    "operating_lease_liability_current": 0,
+    "operating_lease_liability_noncurrent": 0,
+    "operating_lease_liability": 4344000000,
+    "operating_lease_commitments": null,
+    "pension_liabilities": 0,
+    "opeb_liability": 0,
+    "pension_plan_assets": 0,
+    "projected_benefit_obligation": 0,
+    "contingent_liabilities": 0,
+    "environmental_liabilities": 0,
+    "litigation_liabilities": 0,
+    "incremental_borrowing_rate": 0,
+    "risk_free_rate": 0,
+    "dividends_per_share": 0,
+    "net_income": 58321000000,
+    "gain_on_property_sales": 0,
+    "depreciation_and_amortization": 997000000,
+    "capital_expenditures": 1757000000,
+    "operating_cash_flow": 0,
+    "current_assets": 150995000000,
+    "current_liabilities": 43884000000,
+    "other_current_assets": 111961000000,
+    "other_non_current_assets": 72758000000,
+    "other_current_liabilities": 43884000000,
+    "other_non_current_liabilities": 11646000000,
+    "adjustment_ledger": [
+      {
+        "timestamp": "2026-06-05T17:32:44.6816858+03:00",
+        "adjuster_id": "A-capitalized_software_review",
+        "rule_id": "capitalized_software",
+        "fired": false,
+        "reasoning": "capitalized_software: Intangibles 3120000000 (3.8% of revenue) flagged for software review",
+        "skip_reason": "flag-only review; no balance-sheet adjustment",
+        "skip_metrics": {
+          "intangible_amount": 3120000000,
+          "intangible_ratio": 0.03822826686270906,
+          "threshold": 0.015
+        }
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6816858+03:00",
+        "adjuster_id": "A5_inventory_writedown",
+        "rule_id": "obsolete_inventory",
+        "fired": true,
+        "reasoning": "inventory_writedown: Applied 40% writedown to obsolete inventory per A5 rule",
+        "component": "Inventory",
+        "delta_amount": -10318800000,
+        "equity_offset": -10318800000
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6816858+03:00",
+        "adjuster_id": "A1_goodwill_exclusion",
+        "rule_id": "goodwill_exclusion",
+        "fired": true,
+        "reasoning": "A1 goodwill exclusion overlay emitted"
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6816858+03:00",
+        "adjuster_id": "A2_intangible_writedown",
+        "rule_id": "intangible_adjustment",
+        "fired": false,
+        "reasoning": "intangible ratio below 2% threshold",
+        "skip_reason": "Intangible ratio 1.2% below adjustment threshold 2.0%",
+        "skip_metrics": {
+          "intangible_ratio": 0.012024326136722755,
+          "threshold": 0.02
+        }
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6816858+03:00",
+        "adjuster_id": "A-RD_capitalization_review",
+        "rule_id": "rd_capitalization_review",
+        "fired": false,
+        "reasoning": "No R\u0026D expenses present to review",
+        "skip_reason": "No R\u0026D expenses present to review"
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6816858+03:00",
+        "adjuster_id": "B2_pension_underfunding",
+        "rule_id": "pension_obligations",
+        "fired": false,
+        "reasoning": "No under-funded pension or OPEB obligations present",
+        "skip_reason": "No under-funded pension or OPEB obligations present"
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6816858+03:00",
+        "adjuster_id": "B1_operating_lease_capitalization",
+        "rule_id": "operating_leases",
+        "fired": true,
+        "reasoning": "B1 operating-lease capitalization overlay emitted"
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6823708+03:00",
+        "adjuster_id": "C5_derivative_gains_losses",
+        "rule_id": "derivative_gains_losses",
+        "fired": false,
+        "reasoning": "No derivative gains/losses to adjust",
+        "skip_reason": "No derivative gains/losses to adjust"
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6823708+03:00",
+        "adjuster_id": "C6_capitalized_interest",
+        "rule_id": "capitalized_interest",
+        "fired": false,
+        "reasoning": "No capitalized interest to adjust",
+        "skip_reason": "No capitalized interest to adjust"
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6823708+03:00",
+        "adjuster_id": "C2_asset_sale_gains",
+        "rule_id": "asset_sale_gains",
+        "fired": false,
+        "reasoning": "No asset sale gains to adjust",
+        "skip_reason": "No asset sale gains to adjust"
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6823708+03:00",
+        "adjuster_id": "C4_stock_compensation",
+        "rule_id": "stock_compensation",
+        "fired": false,
+        "reasoning": "No stock-based compensation to adjust",
+        "skip_reason": "No stock-based compensation to adjust"
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6823708+03:00",
+        "adjuster_id": "C7_working_capital",
+        "rule_id": "working_capital_window_dressing",
+        "fired": false,
+        "reasoning": "No working capital adjustments detected",
+        "skip_reason": "No working capital adjustments detected"
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6823708+03:00",
+        "adjuster_id": "C1_restructuring_charges",
+        "rule_id": "restructuring_charges",
+        "fired": false,
+        "reasoning": "Restructuring charges below materiality threshold (1.5% \u003c 2.0%)",
+        "skip_reason": "Restructuring charges below materiality threshold (1.5% \u003c 2.0%)",
+        "skip_metrics": {
+          "restructuring_ratio": 0.015,
+          "threshold": 0.02
+        }
+      },
+      {
+        "timestamp": "2026-06-05T17:32:44.6823708+03:00",
+        "adjuster_id": "C3_litigation_settlements",
+        "rule_id": "litigation_settlements",
+        "fired": false,
+        "reasoning": "No litigation settlements to adjust",
+        "skip_reason": "No litigation settlements to adjust"
+      }
+    ],
+    "overlays": [
+      {
+        "overlay_id": "A1_goodwill_exclusion",
+        "rule_id": "goodwill_exclusion",
+        "field": "TotalAssets",
+        "operation": "subtract",
+        "amount": 20894000000,
+        "amount_semantics": "incremental",
+        "reasoning": "goodwill_exclusion: Excluded 20894000000 goodwill (8.1% of assets) per A1 rule"
+      },
+      {
+        "overlay_id": "B1_operating_lease_capitalization",
+        "rule_id": "operating_leases",
+        "field": "TotalDebt",
+        "operation": "add",
+        "amount": 4344000000,
+        "amount_semantics": "incremental",
+        "reasoning": "operating_lease_adj: Present value of operating lease commitments (1.7% of assets) calculated using simplified_liability_based method with 4.5% discount rate over 8 years"
+      }
+    ],
+    "total_liabilities": 64000000000,
+    "cash_and_cash_equivalents": 13237000000,
+    "stockholders_equity": 195474000000,
+    "minority_interest": 0,
+    "preferred_equity": 0,
+    "shares_outstanding": 24200000000,
+    "diluted_shares_outstanding": 24391000000,
+    "period": "",
+    "filing_period": "2027Q1",
+    "filing_date": "2026-05-20T03:00:00+03:00",
+    "has_normalized_data": true,
+    "missing_fields": [
+      "tax_rate"
+    ]
+  },
+  "quality_score": 90,
+  "quality_grade": "A",
+  "quality_issues": [
+    "Warning: Significant intangibles (3.8% of revenue) may include inappropriately capitalized software"
+  ],
+  "adjustments": [
+    {
+      "id": "A5_inventory_writedown_1780669964682370800",
+      "rule_id": "obsolete_inventory",
+      "category": "asset_quality",
+      "type": "writedown",
+      "amount": 10318800000,
+      "from_account": "Inventory",
+      "to_account": "InventoryWritedown",
+      "percentage": 40,
+      "reasoning": "inventory_writedown: Applied 40% writedown to obsolete inventory per A5 rule",
+      "applied": true,
+      "timestamp": "2026-06-05T17:32:44.6823708+03:00"
+    },
+    {
+      "id": "A1_goodwill_exclusion_1780669964682370800",
+      "rule_id": "goodwill_exclusion",
+      "category": "asset_quality",
+      "type": "exclude",
+      "amount": 20894000000,
+      "from_account": "Goodwill",
+      "reasoning": "goodwill_exclusion: Excluded 20894000000 goodwill (8.1% of assets) per A1 rule",
+      "applied": true,
+      "timestamp": "2026-06-05T17:32:44.6823708+03:00"
+    },
+    {
+      "id": "B1_operating_lease_capitalization_1780669964682370800",
+      "rule_id": "operating_leases",
+      "category": "liability_completeness",
+      "type": "treat_as_debt",
+      "amount": 4344000000,
+      "from_account": "OperatingLeaseCommitments",
+      "to_account": "InterestBearingDebt",
+      "reasoning": "operating_lease_adj: Present value of operating lease commitments (1.7% of assets) calculated using simplified_liability_based method with 4.5% discount rate over 8 years",
+      "applied": true,
+      "timestamp": "2026-06-05T17:32:44.6823708+03:00"
+    }
+  ],
+  "flags": [
+    {
+      "id": "software-flag-1780669964681685800",
+      "rule_id": "capitalized_software",
+      "type": "capitalized_software",
+      "severity": "warning",
+      "amount": 3120000000,
+      "percentage": 3.822826686270906,
+      "description": "Significant intangibles (3.8% of revenue) may include inappropriately capitalized software",
+      "recommendation": "Review software development cost capitalization and consider expensing",
+      "timestamp": "2026-06-05T17:32:44.6816858+03:00"
+    },
+    {
+      "id": "inventory-flag-1780669964681685800",
+      "rule_id": "obsolete_inventory",
+      "type": "dead_inventory",
+      "severity": "high",
+      "amount": 10318800000,
+      "percentage": 40,
+      "description": "Applied inventory writedown (40.0% of total inventory)",
+      "recommendation": "Implement inventory liquidation procedures and improve turnover",
+      "timestamp": "2026-06-05T17:32:44.6816858+03:00"
+    }
+  ],
+  "industry_code": "45",
+  "sector_name": "Information Technology",
+  "industry_specific": true
+}

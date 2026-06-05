@@ -1,0 +1,79 @@
+{
+  "ticker": "AAPL",
+  "wacc": 0.0961561644147566,
+  "growth_rate": 0.07673059443295305,
+  "growth_rates": [
+    0.07673059443295305,
+    0.07673059443295305,
+    0.07673059443295305,
+    0.07673059443295305,
+    0.07673059443295305,
+    0.07673059443295305,
+    0.07673059443295305
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 23.447506304040513,
+  "dcf_value_per_share": 149.31848173655385,
+  "current_assets_per_share": 9.786448654011888,
+  "ncav_per_share": -8.181314615439097,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-06-05T17:32:46Z",
+  "data_quality_score": 90,
+  "data_quality_grade": "A",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.6",
+  "warnings": [
+    "terminal_dominance: terminal_pv is 81.3% of enterprise_value (\u003e80% threshold; consider longer horizon or lower terminal growth)",
+    "operating_income_base: source=ANNUAL_FY operating_income=$133050000000",
+    "operating_income_base: TTM unavailable, used latest FY ($133050000000 dated 2025-10-31) [2025FY]",
+    "DCF-implied P/E (74.3) is \u003e2x sector median (28.0) for TECH",
+    "DCF-implied EV/EBITDA (52.6) is \u003e2x sector median (18.0) for TECH",
+    "DCF-implied P/FCF (69.0) is \u003e2x sector median (32.0) for TECH"
+  ],
+  "sanity_check": {
+    "implied_pe": 74.34055712371735,
+    "sector_median_pe": 28,
+    "implied_ev_ebitda": 52.56413086194254,
+    "sector_median_ev_ebitda": 18,
+    "implied_pfcf": 68.95741206778034,
+    "sector_median_pfcf": 32,
+    "is_reasonable": false,
+    "flags": [
+      "DCF-implied P/E (74.3) is \u003e2x sector median (28.0) for TECH",
+      "DCF-implied EV/EBITDA (52.6) is \u003e2x sector median (18.0) for TECH",
+      "DCF-implied P/FCF (69.0) is \u003e2x sector median (32.0) for TECH"
+    ]
+  },
+  "industry": {
+    "sic_code": "3571",
+    "sic": "TECH",
+    "heuristic_code": "45",
+    "heuristic_name": "Information Technology",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 313.9,
+  "assumption_profile": "software_like_large_scale:mature",
+  "resolution_trace": {
+    "profile_id": "software_like_large_scale:mature",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.0.0",
+    "config_hash": "766c8f1df25f1f467d706c0d6a1df45f75bb71bfb506556f890cd7818def2caa",
+    "matched_rule_id": "tech_generic",
+    "human_reason": "large_cap_low_growth"
+  },
+  "dcf_horizon_years": 5,
+  "dcf_terminal_method": "gordon_growth",
+  "dcf_terminal_pct_of_ev": 0.8128256386748092,
+  "dcf_per_year_pv": [
+    86723106422.40685,
+    85186239844.87198,
+    83676608902.38965,
+    82193730937.69633,
+    80737131846.9562
+  ],
+  "dcf_terminal_growth_used": 0.03
+}

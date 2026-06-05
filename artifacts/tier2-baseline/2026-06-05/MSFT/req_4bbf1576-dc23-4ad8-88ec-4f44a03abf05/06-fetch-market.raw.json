@@ -1,0 +1,41 @@
+{
+  "quoteResponse": {
+    "error": null,
+    "result": [
+      {
+        "averageDailyVolume3Month": 34617223,
+        "beta": 1.103,
+        "cryptoTradeable": false,
+        "currency": "USD",
+        "customPriceAlertConfidence": "HIGH",
+        "esgPopulated": false,
+        "exchange": "NMS",
+        "exchangeDataDelayedBy": 0,
+        "exchangeTimezoneName": "America/New_York",
+        "exchangeTimezoneShortName": "EDT",
+        "firstTradeDateMilliseconds": 511108200000,
+        "fullExchangeName": "NasdaqGS",
+        "gmtOffSetMilliseconds": -14400000,
+        "hasPrePostMarketData": true,
+        "impliedSharesOutstanding": 7428434704,
+        "language": "en-US",
+        "market": "us_market",
+        "marketCap": 3137956478976,
+        "marketState": "REGULAR",
+        "priceHint": 2,
+        "quoteSourceName": "Nasdaq Real Time Price",
+        "quoteType": "EQUITY",
+        "region": "US",
+        "regularMarketPrice": 422.425,
+        "regularMarketTime": 1780669966,
+        "regularMarketVolume": 5722303,
+        "sharesOutstanding": 7428434704,
+        "sourceInterval": 15,
+        "symbol": "MSFT",
+        "tradeable": false,
+        "triggerable": true,
+        "typeDisp": "Equity"
+      }
+    ]
+  }
+}

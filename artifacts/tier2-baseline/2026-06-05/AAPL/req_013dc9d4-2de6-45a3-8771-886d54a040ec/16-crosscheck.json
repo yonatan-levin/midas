@@ -1,0 +1,14 @@
+{
+  "implied_pe": 74.34055712371735,
+  "sector_median_pe": 28,
+  "implied_ev_ebitda": 52.56413086194254,
+  "sector_median_ev_ebitda": 18,
+  "implied_pfcf": 68.95741206778034,
+  "sector_median_pfcf": 32,
+  "is_reasonable": false,
+  "flags": [
+    "DCF-implied P/E (74.3) is \u003e2x sector median (28.0) for TECH",
+    "DCF-implied EV/EBITDA (52.6) is \u003e2x sector median (18.0) for TECH",
+    "DCF-implied P/FCF (69.0) is \u003e2x sector median (32.0) for TECH"
+  ]
+}
