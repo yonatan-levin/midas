@@ -112,7 +112,7 @@ Static range = **outer sanity rail** (catch unit errors like `50` vs `0.05`); th
 |------|----------------------|-------------------|--------------|------------------------|
 | Terminal growth rate | `terminal_growth_rate` | const default ← override | `[-0.20, 0.50]` | **< WACC** (strict; warn if within 1% of WACC) |
 | Terminal growth cap (auto-derive path) | `terminal_growth_cap` | config `DefaultTerminalGrowthCap` ← override | `[-0.20, 0.50]` | ignored when explicit `terminal_growth_rate` set |
-| Horizon years | `horizon_years` | `profile.HorizonYears` ← override | `[1, 50]` | **≤ stage1+stage2+stage3** |
+| Horizon years | `horizon_years` | `profile.HorizonYears` ← override | `[1, 50]` | **≤ stage1+stage2+stage3** — fires as 422 **only when `horizon_years` is request-sourced**; a profile-sourced horizon keeps today's clamp+WARN so the default path stays byte-identical |
 | Growth stage years | `growth_stages.{stage1,stage2,stage3}_years` | estimator default `3/4/0` ← override | each `[0, 50]` | `sum ≥ 1` AND `sum ≥ horizon_years` |
 | Max growth rate | `max_growth_rate` | config `DCFMaxGrowthRate` ← override | `[-1.0, 10.0]` | **≥ min_growth_rate** |
 | Min growth rate | `min_growth_rate` | config `DCFMinGrowthRate` ← override | `[-1.0, 10.0]` | **≥ -1.0** (revenue can't shrink past 0) AND `≤ max` |
@@ -136,11 +136,11 @@ Each scattered read becomes a read of the resolved params:
 | Site | Today | After |
 |------|-------|-------|
 | `service.go:806/1721` `calculateTerminalGrowthRate` | hardcoded 3% cap + WACC−2% clamp | reads `params.TerminalGrowthRate`; auto-derive helper still exists for the default path but its cap comes from `params`, and an explicit override is honored as-is subject to the `< WACC` invariant |
-| `service.go:1105–1129` horizon block | `profile.HorizonYears` + **silent clamp** to growth length | `params.HorizonYears`; the clamp becomes a resolver invariant (→422) |
+| `service.go:1105–1129` horizon block | `profile.HorizonYears` + **silent clamp** to growth length | `params.HorizonYears`; clamp→422 invariant **only for request-sourced horizon**; profile-sourced retains the clamp+WARN (default-path preservation) |
 | `service.go:107` estimator construction | shared `s.growthEstimator` from `DefaultEstimatorConfig()` | when override present, build a **per-request** estimator from `params.Stage{1,2,3}Years` + `params.{Max,Min}GrowthRate`; otherwise reuse the shared one (fast path) |
 | `service.go:747–748` WACC inputs | `macroData.MarketRiskPremium`, beta/rf | `params.MarketRiskPremium`, `params.Beta`, `params.RiskFreeRate` |
 | `service.go:1169–1180` exit-multiple block | industry-config lookup only | `params.TerminalMethod` / `params.TerminalMultiple` (industry lookup is the default source) |
-| `service.go:1146` tax | `latest.TaxRate` | `params.TaxRate` |
+| `service.go:1146` tax | `latest.TaxRate` | `params.TaxRate` — the same override also applies to the WACC after-tax cost of debt and the alt-model `ModelInput.TaxRate`; all three move together for coherence |
 
 ## 7. API surface
 
@@ -174,7 +174,7 @@ domain). Example:
 
 `FairValueResponse` gains an `applied_overrides` object: for each knob the request
 touched, the **final value** and its **source layer** (`request`), plus any knob the
-resolver pulled from `profile`/`default` that the caller asked about. This is the
+resolver applied. **v1 scope:** echo only the knobs the request explicitly set (each tagged `source: "request"`); echoing profile-/default-sourced knobs the caller merely asked about is deferred. Provenance rides on `entities.ValuationResult` as an additive `omitempty` field. This is the
 direct cure for "was my value honored?" — the caller never has to guess.
 
 ## 9. Caching & replay
