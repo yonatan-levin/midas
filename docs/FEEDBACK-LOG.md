@@ -127,6 +127,31 @@ Lead with the rule. The **Why** lets future sessions judge edge cases. The **How
 
 **Source:** Originating task 2026-06-04 — user flagged `docs/API_DOCUMENTATION.md` as not describing all options/flags or response-field meanings; sync extended to openapi.yaml + CONTRACTS.md + README.md + regenerated swagger.
 
+### 2026-06-05 — Project specs go in the project docs tree, NOT `docs/superpowers/`
+
+**Rule:** Write design specs and implementation plans into the midas docs tree —
+`docs/refactoring/spec/` for engine/architecture design specs, `docs/refactoring/archive/`
+for closed specs/plans, `docs/reviewer/` for review trackers. **Do NOT create specs/plans
+under `docs/superpowers/` (`specs/` or `plans/`)** — that path is the generic
+brainstorming-/`writing-plans`-skill default and is **obsolete** for this repo. The
+skills' default output location is explicitly overridden here.
+
+**Why:** 2026-06-05 — during the request-valuation-overrides brainstorm, the
+`brainstorming` skill defaulted to `docs/superpowers/specs/`. The user flagged that
+folder as obsolete and asked that specs land in one of the real project docs folders
+instead, so specs stay discoverable alongside the existing engine specs (e.g.
+`docs/refactoring/spec/valuation-engine-upgrade-spec.md`) rather than in a skill-generic
+location nobody browses.
+
+**How to apply:**
+- New design spec from brainstorming → `docs/refactoring/spec/YYYY-MM-DD-<topic>-design.md`.
+- New implementation plan from `writing-plans` → `docs/refactoring/spec/` or
+  `docs/refactoring/implementations/` (sibling to the spec), never `docs/superpowers/plans/`.
+- When a spec/plan closes, move it to `docs/refactoring/archive/` per existing practice.
+- If any skill auto-targets `docs/superpowers/`, redirect it to the project tree.
+
+**Source:** Request-valuation-overrides brainstorm, 2026-06-05 session.
+
 ---
 
 ## Archive (Promoted to MEMORY.md or Obsolete)
