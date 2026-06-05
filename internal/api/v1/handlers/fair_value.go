@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -255,10 +256,19 @@ type BulkFairValueRequest struct {
 }
 
 // BulkFailure describes why a single ticker failed during bulk valuation.
+//
+// Knob is populated for INVALID_OVERRIDE failures so programmatic consumers
+// can identify exactly which valuation knob triggered the error without
+// parsing the human-readable Message. For all other error codes Knob is
+// omitted (omitempty) to keep the wire shape backward-compatible.
 type BulkFailure struct {
 	Ticker    string `json:"ticker"`
 	ErrorCode string `json:"error_code"`
 	Message   string `json:"message"`
+	// Knob is the name of the override parameter that caused an INVALID_OVERRIDE
+	// error. Empty (and omitted) for non-override error codes. Mirrors the
+	// context.knob field in the single-ticker 422 ErrorResponse.
+	Knob string `json:"knob,omitempty"`
 }
 
 // BulkFairValueResponse represents the response for bulk requests.
@@ -554,8 +564,42 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		return
 	}
 
-	// Convert to response format
-	response := FairValueResponse{
+	response := h.buildFairValueResponse(ticker, result)
+
+	// Tier-1 narrate: valuation.computed success line. Carries the headline
+	// numbers so the per-request story ends with the actual fair-value output.
+	em.Emit(c.Request.Context(), narrate.PhaseValuationComputed, narrate.OutcomeOK, "",
+		zap.String("model", result.CalculationMethod),
+		zap.Float64("fair_value_per_share", result.DCFValuePerShare),
+		zap.Float64("tangible_value_per_share", result.TangibleValuePerShare),
+	)
+
+	// Tier-3 artifact bundle: snapshot the final response body. This is the
+	// canonical "what we sent back to the client" record — invaluable when
+	// a downstream consumer reports an unexpected number weeks later.
+	if b := artifact.From(c.Request.Context()); b != nil {
+		b.Snapshot(c.Request.Context(), "response.sent", "17-response.json", &response)
+		b.AddSchemaVersion("FairValueResponse", 1)
+	}
+
+	logctx.From(c.Request.Context()).Info("Fair value calculation completed",
+		zap.String("ticker", ticker),
+		zap.Float64("dcf_value", result.DCFValuePerShare),
+		zap.Float64("tangible_value", result.TangibleValuePerShare))
+
+	c.JSON(http.StatusOK, response)
+}
+
+// buildFairValueResponse constructs a FairValueResponse from a validated result.
+// This is the single place where ValuationResult fields are mapped to the API
+// response shape, shared by GetFairValue (GET) and PostFairValue (POST) to
+// guarantee byte-identical output for the same service result.
+//
+// T10 note: when applied_overrides is added to the response it should be
+// injected here as an extra parameter (e.g. appliedKnobs []string) so both
+// callers pass it in from their own override-tracking context.
+func (h *FairValueHandler) buildFairValueResponse(ticker string, result *entities.ValuationResult) FairValueResponse {
+	return FairValueResponse{
 		Ticker:                ticker,
 		WACC:                  result.WACC,
 		GrowthRate:            result.GrowthRate,
@@ -596,24 +640,186 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		DCFPerYearPV:          result.DCFPerYearPV,
 		DCFTerminalGrowthUsed: result.DCFTerminalGrowthUsed,
 	}
+}
 
-	// Tier-1 narrate: valuation.computed success line. Carries the headline
-	// numbers so the per-request story ends with the actual fair-value output.
+// PostFairValue handles POST /api/v1/fair-value/:ticker requests.
+//
+// The POST form accepts an optional JSON body with an `options` block of
+// per-request valuation knob overrides. An empty body (or `{}`) produces a
+// response byte-identical to GET /api/v1/fair-value/:ticker for the same
+// ticker. The body is completely optional — callers that have no overrides
+// MAY use GET instead; POST exists so override knobs can be passed without
+// stuffing them into query parameters.
+//
+// Error ordering mirrors GetFairValue:
+//  1. Ticker validation (400)
+//  2. Layer-1 override validation via validateOverrides (422 INVALID_OVERRIDE)
+//  3. Service call + Layer-2 ParamError (422 INVALID_OVERRIDE)
+//  4. Sentinel errors: FPI → INSUFFICIENT_DATA → MODEL_NOT_APPLICABLE → 404 → 500
+//
+// @Summary      Post fair value for a stock with optional overrides
+// @Description  Calculate intrinsic fair value for a stock; optional JSON body accepts per-request valuation knob overrides
+// @Tags         fair-value
+// @Accept       json
+// @Produce      json
+// @Security     ApiKeyAuth
+// @Param        ticker   path     string              true  "Stock ticker symbol (e.g., AAPL)"
+// @Param        request  body     SingleFairValueRequest  false "Optional override options"
+// @Success      200  {object}  FairValueResponse
+// @Failure      400  {object}  ErrorResponse "Invalid ticker or parameters"
+// @Failure      401  {object}  ErrorResponse "Missing or invalid API key"
+// @Failure      403  {object}  ErrorResponse "Insufficient permissions"
+// @Failure      404  {object}  ErrorResponse "Ticker not found"
+// @Failure      422  {object}  ErrorResponse "Invalid override knob value"
+// @Failure      429  {object}  ErrorResponse "Rate limit exceeded"
+// @Failure      500  {object}  ErrorResponse "Internal server error"
+// @Router       /fair-value/{ticker} [post]
+func (h *FairValueHandler) PostFairValue(c *gin.Context) {
+	ticker := strings.ToUpper(c.Param("ticker"))
+
+	// Validate ticker format — same guard as GET.
+	if !isValidTicker(ticker) {
+		h.sendError(c, http.StatusBadRequest, "INVALID_TICKER",
+			"Invalid ticker format",
+			"Ticker must be 1-5 alphanumeric characters",
+			map[string]interface{}{"ticker": ticker})
+		return
+	}
+
+	// Stamp ticker on the observability handles, same as GET.
+	em := narrate.From(c.Request.Context())
+	em.WithTicker(ticker)
+	if b := artifact.From(c.Request.Context()); b != nil {
+		b.SetTicker(ticker)
+	}
+
+	// Bind the optional request body. An absent or empty body is explicitly
+	// valid — the zero-value req (Options == nil) is the "no overrides" case
+	// and produces a response byte-identical to GET.
+	//
+	// ShouldBindJSON returns io.EOF when the request body is completely empty.
+	// We treat that as "no body supplied" rather than an error so that callers
+	// can POST with no body (or Content-Type absent) and get GET semantics.
+	var req SingleFairValueRequest
+	if err := c.ShouldBindJSON(&req); err != nil && !isEmptyBodyError(err) {
+		h.sendError(c, http.StatusBadRequest, "INVALID_REQUEST",
+			"Invalid request format",
+			"Request body does not match expected format",
+			map[string]interface{}{"validation_error": err.Error()})
+		return
+	}
+
+	// Layer-1 static validation: per-knob range + enum checks.
+	// Returns 422 INVALID_OVERRIDE on the first out-of-range knob.
+	if errResp := validateOverrides(req.Options); errResp != nil {
+		errResp.Instance = c.Request.URL.Path
+		errResp.Timestamp = time.Now().UTC().Format(time.RFC3339)
+		errResp.Method = c.Request.Method
+		c.Header("Content-Type", "application/problem+json")
+		c.JSON(errResp.Status, errResp)
+		c.Abort()
+		return
+	}
+
+	// Project the DTO into domain-layer Overrides. Only allocate opts when at
+	// least one override is present — nil *ValuationOptions signals "no overrides"
+	// to the cache layer, preserving the same cache-eligibility as a plain GET.
+	var opts *valuation.ValuationOptions
+	if req.Options != nil && anyBulkOverride(nil, nil, req.Options) {
+		projected := projectOverrides(req.Options)
+		opts = &valuation.ValuationOptions{
+			Overrides: projected,
+		}
+	}
+
+	// Tier-1 narrate: handler.entry — mirrors GET for observability parity.
+	em.Emit(c.Request.Context(), narrate.PhaseHandlerEntry, narrate.OutcomeOK, "",
+		zap.Bool("has_overrides", opts != nil),
+	)
+
+	// Tier-3 artifact bundle: snapshot the parsed handler input.
+	if b := artifact.From(c.Request.Context()); b != nil {
+		b.Snapshot(c.Request.Context(), "handler.entry", "02-handler-options.json", map[string]any{
+			"ticker":  ticker,
+			"options": req.Options,
+		})
+	}
+
+	logctx.From(c.Request.Context()).Info("Processing POST fair value request",
+		zap.String("ticker", ticker),
+		zap.Bool("has_overrides", opts != nil))
+
+	// Calculate valuation.
+	result, err := h.valuationService.CalculateValuation(c.Request.Context(), ticker, opts)
+	if err != nil {
+		em.Emit(c.Request.Context(), narrate.PhaseValuationComputed, narrate.OutcomeError, err.Error())
+
+		logctx.From(c.Request.Context()).Error("Valuation calculation failed",
+			zap.String("ticker", ticker),
+			zap.Error(err))
+
+		// Layer-2 cross-knob invariants (T8) — checked first so a specific
+		// invariant message is never masked by the generic error fallthrough.
+		if errResp, ok := paramErrorResponse(err); ok {
+			errResp.Instance = c.Request.URL.Path
+			errResp.Timestamp = time.Now().UTC().Format(time.RFC3339)
+			errResp.Method = c.Request.Method
+			c.Header("Content-Type", "application/problem+json")
+			c.JSON(http.StatusUnprocessableEntity, errResp)
+			c.Abort()
+			return
+		}
+
+		// FPI must be checked before ErrInsufficientData — same ordering as GET.
+		if errors.Is(err, valuation.ErrTickerNotFound) {
+			h.sendError(c, http.StatusNotFound, "TICKER_NOT_FOUND",
+				"Ticker not found",
+				"The specified ticker could not be found in our database",
+				map[string]interface{}{"ticker": ticker})
+		} else if errors.Is(err, valuation.ErrForeignPrivateIssuer) {
+			h.sendError(c, http.StatusUnprocessableEntity, "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
+				"Foreign private issuer not covered",
+				"This ticker files using a taxonomy or currency pair Midas does not yet cover. Supported: ifrs-full taxonomy with FRED-tracked currencies (TWD, EUR, JPY, GBP, HKD, CNY, KRW, CHF, CAD, AUD, INR, BRL, DKK). Out-of-coverage taxonomies (JGAAP, K-IFRS, ifrs-smes) and currencies are tracked in docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md.",
+				map[string]interface{}{
+					"ticker":      ticker,
+					"filing_type": "20-F",
+					"taxonomy":    "ifrs-full",
+				})
+		} else if errors.Is(err, valuation.ErrInsufficientData) {
+			h.sendError(c, http.StatusUnprocessableEntity, "INSUFFICIENT_DATA",
+				"Insufficient data for valuation",
+				"Not enough financial data available to perform reliable valuation",
+				map[string]interface{}{"ticker": ticker})
+		} else if errors.Is(err, valuation.ErrModelNotApplicable) {
+			h.sendError(c, http.StatusUnprocessableEntity, "MODEL_NOT_APPLICABLE",
+				"Standard DCF model not applicable",
+				"Standard DCF requires positive operating income and alternative models (DDM, FFO, revenue multiples) could not produce a result for this company.",
+				map[string]interface{}{"ticker": ticker})
+		} else {
+			h.sendError(c, http.StatusInternalServerError, "CALCULATION_ERROR",
+				"Valuation calculation failed",
+				"An internal error occurred during valuation calculation",
+				map[string]interface{}{"ticker": ticker})
+		}
+		return
+	}
+
+	response := h.buildFairValueResponse(ticker, result)
+
+	// Tier-1 narrate: valuation.computed success.
 	em.Emit(c.Request.Context(), narrate.PhaseValuationComputed, narrate.OutcomeOK, "",
 		zap.String("model", result.CalculationMethod),
 		zap.Float64("fair_value_per_share", result.DCFValuePerShare),
 		zap.Float64("tangible_value_per_share", result.TangibleValuePerShare),
 	)
 
-	// Tier-3 artifact bundle: snapshot the final response body. This is the
-	// canonical "what we sent back to the client" record — invaluable when
-	// a downstream consumer reports an unexpected number weeks later.
+	// Tier-3 artifact bundle: snapshot the final response body.
 	if b := artifact.From(c.Request.Context()); b != nil {
 		b.Snapshot(c.Request.Context(), "response.sent", "17-response.json", &response)
 		b.AddSchemaVersion("FairValueResponse", 1)
 	}
 
-	logctx.From(c.Request.Context()).Info("Fair value calculation completed",
+	logctx.From(c.Request.Context()).Info("POST fair value calculation completed",
 		zap.String("ticker", ticker),
 		zap.Float64("dcf_value", result.DCFValuePerShare),
 		zap.Float64("tangible_value", result.TangibleValuePerShare))
@@ -678,16 +884,12 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 	// block. A conflict means the same knob is supplied twice with potentially
 	// different values — we reject rather than silently resolve (design §4.1/F4).
 	if conflicts := detectOverrideConflicts(request.OverrideBeta, request.OverrideRiskFree, request.Options); len(conflicts) > 0 {
-		// Report the first conflict; the detail message names both the legacy field
-		// and the options path so the caller knows exactly what to remove.
-		conflictKnob := "beta"
-		if strings.Contains(conflicts[0], "risk_free_rate") {
-			conflictKnob = "risk_free_rate"
-		}
+		// Report the first conflict; the typed Knob field lets us name the
+		// conflicting parameter without string parsing (I-1 carry-forward).
 		h.sendError(c, http.StatusUnprocessableEntity, "INVALID_OVERRIDE",
 			"Invalid valuation override",
-			conflicts[0],
-			map[string]interface{}{"knob": conflictKnob})
+			conflicts[0].Message,
+			map[string]interface{}{"knob": conflicts[0].Knob})
 		return
 	}
 
@@ -768,43 +970,9 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 			continue
 		}
 
-		// Add to results
-		response := FairValueResponse{
-			Ticker:                ticker,
-			WACC:                  result.WACC,
-			GrowthRate:            result.GrowthRate,
-			GrowthRates:           result.GrowthRates,
-			GrowthSource:          result.GrowthSource,
-			GrowthConfidence:      result.GrowthConfidence,
-			TangibleValuePerShare: result.TangibleValuePerShare,
-			DCFValuePerShare:      result.DCFValuePerShare,
-			CurrentAssetsPerShare: result.CurrentAssetsPerShare,
-			NCAVPerShare:          result.NCAVPerShare,
-			GrahamFloorPerShare:   result.GrahamFloorPerShare,
-			GrahamDiscountPct:     result.GrahamDiscountPct,
-			AsOf:                  result.CalculatedAt.Format("2006-01-02T15:04:05Z"),
-			DataQualityScore:      result.DataQualityScore,
-			DataQualityGrade:      string(result.DataQualityGrade),
-			CalculationMethod:     result.CalculationMethod,
-			CalculationVersion:    result.CalculationVersion,
-			Warnings:              result.Warnings,
-			SanityCheck:           result.SanityCheck,
-			Industry:              BuildIndustryFromResult(result),
-			// Phase B12 (IFRS-FPI): mirror single-ticker handler for parity.
-			Currency:        currencyOrUSD(result.ReportingCurrency),
-			ADRRatioApplied: result.ADRRatioApplied,
-			CurrentPrice:    result.CurrentPrice,
-			// Tier 2 P0b: mirror single-ticker handler for response parity.
-			AssumptionProfile:     result.AssumptionProfile,
-			ResolutionTrace:       result.ResolutionTrace,
-			DCFHorizonYears:       result.DCFHorizonYears,
-			DCFTerminalMethod:     result.DCFTerminalMethod,
-			DCFTerminalPctOfEV:    result.DCFTerminalPctOfEV,
-			DCFPerYearPV:          result.DCFPerYearPV,
-			DCFTerminalGrowthUsed: result.DCFTerminalGrowthUsed,
-		}
-
-		results = append(results, response)
+		// Add to results — use the shared builder to guarantee parity with the
+		// single-ticker endpoints (GET + POST).
+		results = append(results, h.buildFairValueResponse(ticker, result))
 		successful++
 	}
 
@@ -849,12 +1017,15 @@ func classifyBulkError(ticker string, err error) BulkFailure {
 	// stage-sum < 1, horizon out of range, exit-multiple unresolvable. These are
 	// caller errors — map to INVALID_OVERRIDE with the offending knob name so
 	// the consumer can fix the request without contacting the operator.
+	// I-2: populate Knob from pe.Knob so bulk INVALID_OVERRIDE entries carry the
+	// same machine-readable knob fidelity as the single-ticker context.knob field.
 	var pe *params.ParamError
 	if errors.As(err, &pe) {
 		return BulkFailure{
 			Ticker:    ticker,
 			ErrorCode: "INVALID_OVERRIDE",
 			Message:   pe.Error(),
+			Knob:      pe.Knob,
 		}
 	}
 
@@ -991,12 +1162,22 @@ func anyBulkOverride(legacyBeta, legacyRF *float64, o *ValuationOverrides) bool 
 			o.GrowthStages.Stage3Years != nil))
 }
 
+// overrideConflict describes a single knob that was supplied through BOTH a
+// legacy top-level field and the structured options block. Knob is the
+// canonical override name (e.g. "beta", "risk_free_rate"); Message is the
+// human-readable explanation sent in the 422 Detail field.
+type overrideConflict struct {
+	// Knob is the machine-readable override name, matching the options JSON key
+	// (e.g. "beta", "risk_free_rate"). Callers can use Knob directly instead of
+	// parsing Message.
+	Knob string
+	// Message is the human-readable explanation suitable for the 422 Detail field.
+	Message string
+}
+
 // detectOverrideConflicts checks whether any knob is supplied BOTH through a
 // legacy field (OverrideBeta / OverrideRiskFree) AND through the structured
-// options block. Returns one string per conflicting knob naming exactly which
-// pair conflicts, e.g.:
-//
-//	"beta set in both override_beta and options.beta; supply only one"
+// options block. Returns one overrideConflict per conflicting knob.
 //
 // The caller is responsible for deciding what to do with conflicts; for the
 // bulk path a non-empty slice means 422.
@@ -1004,21 +1185,25 @@ func anyBulkOverride(legacyBeta, legacyRF *float64, o *ValuationOverrides) bool 
 // Design §4.1 / plan §5 T6: "conflict detection" — only beta and risk_free_rate
 // have legacy counterparts in the bulk request. MarketRiskPremium and all other
 // knobs are available only via options, so they never conflict here.
-func detectOverrideConflicts(legacyBeta, legacyRF *float64, o *ValuationOverrides) []string {
+func detectOverrideConflicts(legacyBeta, legacyRF *float64, o *ValuationOverrides) []overrideConflict {
 	if o == nil {
 		return nil
 	}
 
-	var conflicts []string
+	var conflicts []overrideConflict
 
 	if legacyBeta != nil && o.Beta != nil {
-		conflicts = append(conflicts,
-			"beta set in both override_beta and options.beta; supply only one")
+		conflicts = append(conflicts, overrideConflict{
+			Knob:    "beta",
+			Message: "beta set in both override_beta and options.beta; supply only one",
+		})
 	}
 
 	if legacyRF != nil && o.RiskFreeRate != nil {
-		conflicts = append(conflicts,
-			"risk_free_rate set in both override_rf and options.risk_free_rate; supply only one")
+		conflicts = append(conflicts, overrideConflict{
+			Knob:    "risk_free_rate",
+			Message: "risk_free_rate set in both override_rf and options.risk_free_rate; supply only one",
+		})
 	}
 
 	return conflicts
@@ -1056,6 +1241,14 @@ func currencyOrUSD(c string) string {
 		return "USD"
 	}
 	return c
+}
+
+// isEmptyBodyError reports whether err signals an absent or zero-length request
+// body rather than a malformed one. Gin's ShouldBindJSON returns io.EOF when
+// the body reader is empty, which PostFairValue treats as "no overrides
+// supplied" (equivalent to calling GET) rather than a request error.
+func isEmptyBodyError(err error) bool {
+	return errors.Is(err, io.EOF)
 }
 
 // isValidTicker validates ticker format (1-5 alphanumeric characters)

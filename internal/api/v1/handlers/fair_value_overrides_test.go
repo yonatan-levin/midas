@@ -203,29 +203,37 @@ func TestDetectOverrideConflicts_NilLegacyFields(t *testing.T) {
 
 func TestDetectOverrideConflicts_BetaConflict(t *testing.T) {
 	// Both legacy override_beta and options.beta set → beta conflict reported.
+	// I-1: the returned type is overrideConflict{Knob, Message}; callers read
+	// .Knob directly instead of parsing .Message.
 	conflicts := detectOverrideConflicts(ptrFloat(1.2), nil, &ValuationOverrides{
 		Beta: ptrFloat(1.5),
 	})
 	require.Len(t, conflicts, 1)
-	assert.Contains(t, conflicts[0], "beta",
+	assert.Equal(t, "beta", conflicts[0].Knob,
+		"Knob must be 'beta' so callers don't need to parse the message")
+	assert.Contains(t, conflicts[0].Message, "beta",
 		"conflict message must mention 'beta'")
-	assert.Contains(t, conflicts[0], "override_beta",
+	assert.Contains(t, conflicts[0].Message, "override_beta",
 		"conflict message must name the legacy field 'override_beta'")
-	assert.Contains(t, conflicts[0], "options.beta",
+	assert.Contains(t, conflicts[0].Message, "options.beta",
 		"conflict message must name the options field 'options.beta'")
 }
 
 func TestDetectOverrideConflicts_RFConflict(t *testing.T) {
 	// Both legacy override_rf and options.risk_free_rate set → rf conflict reported.
+	// I-1: the returned type is overrideConflict{Knob, Message}; callers read
+	// .Knob directly instead of parsing .Message.
 	conflicts := detectOverrideConflicts(nil, ptrFloat(0.04), &ValuationOverrides{
 		RiskFreeRate: ptrFloat(0.05),
 	})
 	require.Len(t, conflicts, 1)
-	assert.Contains(t, conflicts[0], "risk_free_rate",
+	assert.Equal(t, "risk_free_rate", conflicts[0].Knob,
+		"Knob must be 'risk_free_rate'")
+	assert.Contains(t, conflicts[0].Message, "risk_free_rate",
 		"conflict message must mention 'risk_free_rate'")
-	assert.Contains(t, conflicts[0], "override_rf",
+	assert.Contains(t, conflicts[0].Message, "override_rf",
 		"conflict message must name the legacy field 'override_rf'")
-	assert.Contains(t, conflicts[0], "options.risk_free_rate",
+	assert.Contains(t, conflicts[0].Message, "options.risk_free_rate",
 		"conflict message must name the options field 'options.risk_free_rate'")
 }
 

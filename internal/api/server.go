@@ -297,7 +297,12 @@ func (s *Server) setupRoutes() {
 			s.respondWithError(c, http.StatusBadRequest, "INVALID_TICKER", "Ticker parameter is required")
 		})
 		fairValueGroup.GET("/:ticker", fairValueHandler.GetFairValue)
+		// R7: "/bulk" is a static POST route registered BEFORE the wildcard
+		// "/:ticker" POST. Gin resolves static paths before wildcard paths
+		// within the same group, so POST /bulk → GetBulkFairValue and
+		// POST /<any-ticker> → PostFairValue with no conflict or panic.
 		fairValueGroup.POST("/bulk", fairValueHandler.GetBulkFairValue)
+		fairValueGroup.POST("/:ticker", fairValueHandler.PostFairValue)
 	}
 
 	// Health endpoints (protected)
