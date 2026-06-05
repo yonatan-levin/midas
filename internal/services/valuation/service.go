@@ -1301,6 +1301,10 @@ func (s *Service) performValuation(
 	// cache-bypassed responses where honoring the override is the desired effect.
 	// Using p.TerminalMultiple unconditionally would regress every profiled
 	// ticker (e.g. AAPL profile multiple 5 vs TECH industry 18).
+	// TRACKED FOLLOW-UP (design §3.5-vs-§5/§6 reconciliation, sweep in T11):
+	// whether a profile-sourced terminal_method=exit_multiple should drive the
+	// DCF averaging WITHOUT a request override is a deliberate behavior-change
+	// decision, intentionally OUT OF SCOPE here to preserve byte-identity.
 	exitMultiple := industryExitMultiple
 	if overrides.TerminalMultiple != nil || overrides.TerminalMethod != nil {
 		exitMultiple = p.TerminalMultiple

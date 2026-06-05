@@ -30,6 +30,7 @@ const (
 	knobTaxRate            = "tax_rate"
 	knobBeta               = "beta"
 	knobRiskFreeRate       = "risk_free_rate"
+	knobMarketRiskPremium  = "market_risk_premium"
 	knobGrowthStages       = "growth_stages"
 )
 
@@ -184,7 +185,7 @@ func ResolveInputs(d Defaults, o Overrides, growthRateLen int) (EffectiveValuati
 	p.MarketRiskPremium = d.MarketRiskPremium
 	if o.MarketRiskPremium != nil {
 		p.MarketRiskPremium = *o.MarketRiskPremium
-		p.Provenance["market_risk_premium"] = SourceRequest
+		p.Provenance[knobMarketRiskPremium] = SourceRequest
 	}
 
 	p.TaxRate = d.TaxRate
