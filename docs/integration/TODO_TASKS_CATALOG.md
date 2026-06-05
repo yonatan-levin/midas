@@ -3,6 +3,7 @@
 
 **Project**: DCF Valuation API (Go)  
 **Catalog Date**: January 19, 2025  
+**Last Verified**: June 5, 2026 (live-code reconciliation pass — see §2026-06-05 Verification Pass)  
 **Purpose**: Complete inventory of all TODO comments and pending tasks  
 
 ---
@@ -15,6 +16,37 @@ This document catalogs all TODO comments found throughout the codebase, organize
 **High Priority**: 8 items  
 **Medium Priority**: 18 items (updated from 15)  
 **Low Priority**: 9 items  
+
+> ⚠️ The counts above are the original January-2025 tally and are **superseded** by the
+> 2026-06-05 verification pass below. The HIGH-priority block was already fully completed;
+> the live-code re-check reclassified several MEDIUM/LOW items as **DONE** or **PARTIAL**.
+
+---
+
+## ✅ **2026-06-05 VERIFICATION PASS**
+
+Every pending item was re-checked against the live codebase (post DC-1 Phases 0–5 datacleaner
+refactor, engine `CalculationVersion 4.4`). Legend: **DONE** = shipped; **PARTIAL** = infra
+shipped but a residual TODO remains; **OPEN** = TODO still present (line numbers refreshed).
+
+| Item | Verdict | Evidence (2026-06-05) |
+|------|---------|-----------------------|
+| Context Management — "use proper context from caller" | **DONE** | DC-1 Phase 3 followup threaded `ctx`; godoc at `adjustments/liabilities.go:524-529` documents the retired `context.Background()` TODO |
+| Test Data Enhancement — problematic patterns / contingent liabilities | **DONE** | `createTestProblematicFinancialData` + `createTestRiskyFinancialData` at `datacleaner/service_test.go:487+` (contingent, litigation, restructuring, derivatives, missing fields) |
+| API docs — fair-value endpoint | **DONE** | swagger `@Summary`/`@Router` at `handlers/fair_value.go:287,303,501,514` |
+| Migration + seed *tooling* | **DONE** | `cmd/migrate/main.go` + `cmd/seed-demo-key/main.go` both exist |
+| AI footnote analysis | **PARTIAL** | B3 AI path shipped (DC-1 Phase 3: `analyzeContingentLiabilityWithAI` + SHA-256 provenance); heuristic helper `liabilities.go:1290` still carries the "replace with AI" TODO |
+| Adjuster test coverage (A3 / A6 / A7) | **PARTIAL** | 16 `*_Adjuster_Interface_Contract` tests incl. A3 (`ACapitalizedSoftwareReviewAdjuster`); legacy A6 (ROU) folded into B1 lease PV, A7 (excess cash) retired in DC-1 — confirm intent |
+| `launch_staging.sh` migration/seed wiring | **OPEN** | tooling exists but `scripts/launch_staging.sh:103,108` still placeholder — wire to `cmd/migrate` + `cmd/seed-demo-key` |
+| Financial Data Extraction (9 sites) | **OPEN** | TODOs present at `datacleaner/service.go:744,756,764,775,785,840,961,1008,1017`; may be partly superseded by the DC-1 Adjuster framework — confirm dead-vs-live before deleting |
+| Company Size Classification | **OPEN** | `datacleaner/service.go:1161` |
+| Industry Mapping Expansion | **OPEN** | `datacleaner/service.go:459` |
+| Generic Rule Implementation (×2) | **OPEN** | `datacleaner/service.go:794,867` |
+| API docs — health / performance / server | **OPEN** | zero swagger annotations in `handlers/health.go`, `handlers/performance.go`, `api/server.go` |
+| Inventory turnover analysis | **OPEN** | `datacleaner/flagging/risk_analyzer.go:128` (was tracked under `flagging/system_test.go`) |
+| Monitoring & Observability (×2) | **OPEN** | `adjustments/liabilities.go:641-642` |
+| Configuration System (thresholds / source) | **OPEN** | `adjustments/liabilities.go:17,27` + `adjustments/assets.go:14` |
+| Cloud deployment config variables | **OPEN** | not found in `scripts/`/`config/` — still unstarted |
 
 ---
 
@@ -75,43 +107,47 @@ This document catalogs all TODO comments found throughout the codebase, organize
 
 ## ⚠️ **MEDIUM PRIORITY TODOS** (Technical Debt & Enhancements)
 
-### **Phase 2.5 MVP Infrastructure** 🆕
+### **Phase 2.5 MVP Infrastructure** 🆕 — ⚠️ **PARTIAL (2026-06-05)**
 **Location**: `scripts/launch_staging.sh`
-- [ ] **Add migration command when available** (Line 91)
-- [ ] **Add seed script when SQL seed is created** (Line 96)
-- [ ] **Add cloud deployment configuration variables** (from Phase 2.5.1)
+- [ ] **Add migration command when available** (now Line 103) — ⚠️ tooling DONE (`cmd/migrate/main.go` exists); only the staging-script wiring remains
+- [ ] **Add seed script when SQL seed is created** (now Line 108) — ⚠️ tooling DONE (`cmd/seed-demo-key/main.go` exists); only the staging-script wiring remains
+- [ ] **Add cloud deployment configuration variables** (from Phase 2.5.1) — OPEN (not found in `scripts/`/`config/`)
 - **Impact**: MVP deployment readiness
 - **Effort**: 1 hour
 
-### **Financial Data Extraction Improvements**
-**Location**: Multiple files in `internal/services/datacleaner/service.go`
-- [ ] **Extract actual restructuring charges from financial data** (Line 469)
-- [ ] **Extract actual asset sale gains from financial data** (Line 481)
-- [ ] **Extract actual litigation costs from financial data** (Line 489)
-- [ ] **Get actual cash from data - placeholder currently used** (Line 500)
-- [ ] **Extract actual ROU assets from financial data** (Line 510)
-- [ ] **Extract actual DTA from financial data** (Line 564)
-- [ ] **Extract actual capitalized interest from financial data** (Line 683)
-- [ ] **Extract actual operating lease liability from financial data** (Line 729)
-- [ ] **Extract actual pension underfunding from financial data** (Line 738)
+### **Financial Data Extraction Improvements** — **OPEN (line numbers refreshed 2026-06-05)**
+**Location**: `internal/services/datacleaner/service.go`
+> ⚠️ All 9 TODOs remain in the live legacy rule path. The DC-1 Adjuster framework
+> (`internal/services/datacleaner/adjustments/`) now extracts several of these for real (B1
+> operating-lease PV, A5 inventory, C6 capitalized interest, …) — confirm whether each
+> `service.go` site below is now dead code before implementing vs. deleting it.
+- [ ] **Extract actual restructuring charges from financial data** (Line 744)
+- [ ] **Extract actual asset sale gains from financial data** (Line 756)
+- [ ] **Extract actual litigation costs from financial data** (Line 764)
+- [ ] **Get actual cash from data - placeholder currently used** (Line 775)
+- [ ] **Extract actual ROU assets from financial data** (Line 785)
+- [ ] **Extract actual DTA from financial data** (Line 840)
+- [ ] **Extract actual capitalized interest from financial data** (Line 961)
+- [ ] **Extract actual operating lease liability from financial data** (Line 1008)
+- [ ] **Extract actual pension underfunding from financial data** (Line 1017)
 - **Impact**: Data accuracy and business logic precision
 - **Effort**: 2-3 hours total
 
-### **AI Integration Structure**
+### **AI Integration Structure** — ⚠️ **PARTIAL (2026-06-05)**
 **Location**: `internal/services/datacleaner/adjustments/liabilities.go`
-- [ ] **Integrate AI service for footnote analysis for precise probability estimates** (Line 364)
-- [ ] **Replace with AI-powered footnote analysis for more precise estimates** (Line 497)
+- [x] **Integrate AI service for footnote analysis for precise probability estimates** ✅ DC-1 Phase 3 shipped the B3 contingent-liability AI path (`analyzeContingentLiabilityWithAI` + SHA-256 provenance)
+- [ ] **Replace with AI-powered footnote analysis for more precise estimates** (now Line 1290) — heuristic helper `getContingentLiabilityProbability` still uses industry-classifier rates
 - **Impact**: Advanced analytics capability
 - **Effort**: Phase 3B Step 6 (45 minutes)
 
 ### **Company Size Classification**
-**Location**: `internal/services/datacleaner/service.go:871`
+**Location**: `internal/services/datacleaner/service.go:1161` _(was :871; refreshed 2026-06-05)_
 - [ ] **Implement proper company size classification based on market cap**
 - **Impact**: Better risk assessment
 - **Effort**: 30 minutes
 
 ### **Industry Mapping Expansion**
-**Location**: `internal/services/datacleaner/service.go:260`
+**Location**: `internal/services/datacleaner/service.go:459` _(was :260; refreshed 2026-06-05)_
 - [ ] **Add more industry mappings as needed**
 - **Impact**: Broader industry coverage
 - **Effort**: 15 minutes per industry
@@ -120,72 +156,74 @@ This document catalogs all TODO comments found throughout the codebase, organize
 
 ## 📊 **LOW PRIORITY TODOS** (Future Enhancements)
 
-### **Test Coverage Expansion**
-**Location**: `internal/services/datacleaner/adjustments/assets_test.go:635-640`
-- [ ] **Add tests for ProcessRightOfUseAssetAdjustment (A6)**
-- [ ] **Add tests for ProcessExcessCashAdjustment (A7)**
-- [ ] **Add tests for ProcessCapitalizedSoftwareAdjustment (A3)**
-- [ ] **Add integration tests with multiple adjustments**
+### **Test Coverage Expansion** — ⚠️ **PARTIAL (2026-06-05)**
+**Location**: `internal/services/datacleaner/adjustments/` (per-adjuster `*_adjuster_test.go`)
+> DC-1 Phase 2 rebuilt the adjusters behind the `Adjuster` interface; all 16 canonical adjusters
+> now ship `*_Adjuster_Interface_Contract` tests. The legacy function names below predate that refactor.
+- [ ] **Add tests for ProcessRightOfUseAssetAdjustment (A6)** — ROU folded into B1 (`b1_operating_leases_adjuster_test.go`); confirm coverage intent
+- [ ] **Add tests for ProcessExcessCashAdjustment (A7)** — retired in DC-1; confirm whether still needed
+- [x] **Add tests for ProcessCapitalizedSoftwareAdjustment (A3)** ✅ `TestACapitalizedSoftwareReviewAdjuster_Adjuster_Interface_Contract`
+- [ ] **Add integration tests with multiple adjustments** — partially covered by `internal/integration/datacleaner_ledger_basket_test.go`
 - [ ] **Add error handling and edge cases tests**
 - **Impact**: Test coverage improvement (currently 77-83%)
 - **Effort**: 2-3 hours total
 
-### **Test Data Enhancement**
-**Location**: `internal/services/datacleaner/service_test.go`
-- [ ] **Add more problematic patterns** (Line 459)
-- [ ] **Add contingent liabilities, aggressive accounting, etc.** (Line 474)
+### **Test Data Enhancement** — ✅ **DONE (2026-06-05)**
+**Location**: `internal/services/datacleaner/service_test.go:487+`
+- [x] **Add more problematic patterns** ✅ `createTestProblematicFinancialData` / `createTestRiskyFinancialData`
+- [x] **Add contingent liabilities, aggressive accounting, etc.** ✅ fixtures set `ContingentLiabilities`, `LitigationLiabilities`, `RestructuringCharges`, `StockBasedCompensation`, `DerivativeGainsLosses`, missing-field lists
 - **Impact**: Better test scenarios
 - **Effort**: 30 minutes
 
 ### **Inventory Analysis Enhancement**
-**Location**: `internal/services/datacleaner/flagging/system_test.go:395`
+**Location**: `internal/services/datacleaner/flagging/risk_analyzer.go:128` _(was `system_test.go:395`; refreshed 2026-06-05)_
 - [ ] **Add inventory turnover data for better analysis**
 - **Impact**: Improved inventory obsolescence detection
 - **Effort**: 20 minutes
 
 ### **Monitoring & Observability**
-**Location**: `internal/services/datacleaner/adjustments/liabilities.go:199-200`
+**Location**: `internal/services/datacleaner/adjustments/liabilities.go:641-642` _(was :199-200; refreshed 2026-06-05)_
 - [ ] **Add monitoring metrics for calculation performance**
 - [ ] **Log calculation details for audit trail**
 - **Impact**: Production monitoring
 - **Effort**: 45 minutes
 
 ### **Configuration System**
-**Location**: `internal/services/datacleaner/adjustments/liabilities.go:15,21`
+**Location**: `internal/services/datacleaner/adjustments/liabilities.go:17,27` + `adjustments/assets.go:14` _(refreshed 2026-06-05)_
 - [ ] **Add configuration for adjustment thresholds**
 - [ ] **Load configuration from proper source**
 - **Impact**: Operational flexibility
 - **Effort**: 30 minutes
 
-### **Context Management**
-**Location**: `internal/services/datacleaner/adjustments/liabilities.go:94`
-- [ ] **Use proper context from caller**
+### **Context Management** — ✅ **DONE (2026-06-05)**
+**Location**: `internal/services/datacleaner/adjustments/liabilities.go` (ctx threaded in DC-1 Phase 3 followup)
+- [x] **Use proper context from caller** ✅ `ProcessOperatingLeaseAdjustment(ctx, …)` and sibling adjusters now take `ctx`; the retired `context.Background()` TODO is documented at `liabilities.go:524-529`
 - **Impact**: Better error handling and cancellation
 - **Effort**: 15 minutes
 
 ### **Generic Rule Implementation**
-**Location**: `internal/services/datacleaner/service.go:519,591`
+**Location**: `internal/services/datacleaner/service.go:794,867` _(was :519,591; refreshed 2026-06-05)_
 - [ ] **Implement specific logic for each rule** (2 instances)
 - **Impact**: Complete rule coverage
 - **Effort**: 1-2 hours
 
 ---
 
-### **Proper API documentation**
+### **Proper API documentation** — ⚠️ **PARTIAL (2026-06-05)**
 **Location**: `internal/api/v1/handlers/health.go`
-- [ ] **Add proper API documentation for the health check endpoint**
+- [ ] **Add proper API documentation for the health check endpoint** — OPEN (no swagger annotations)
 - **Impact**: Better API documentation
 - **Effort**: 15 minutes
 **Location**: `internal/api/v1/handlers/performance.go`
-- [ ] **Add proper API documentation for the performance dashboard endpoint**
+- [ ] **Add proper API documentation for the performance dashboard endpoint** — OPEN (no swagger annotations)
 - **Impact**: Better API documentation
 - **Effort**: 15 minutes
 **Location**: `internal/api/v1/handlers/fair_value.go`
-- [ ] **Add proper API documentation for the fair value endpoint**
+- [x] **Add proper API documentation for the fair value endpoint** ✅ swagger `@Summary`/`@Router` at lines 287, 303, 501, 514
 - **Impact**: Better API documentation
 - **Effort**: 15 minutes
 **Location**: `internal/api/server.go`
-- [ ] **Add proper API documentation for the server entry point**
+- [ ] **Add proper API documentation for the server entry point** — OPEN (no swagger annotations)
 - **Impact**: Better API documentation
 - **Effort**: 15 minutes
 
@@ -260,8 +298,8 @@ This document catalogs all TODO comments found throughout the codebase, organize
 - [x] **Created launch_staging.sh script** - Single-command launch for local staging
 - [x] **Created stop_staging.sh script** - Clean shutdown of staging environment
 - [x] **Updated README.md** - Added Quick Start documentation
-- [ ] **Database migrations** - Still needs implementation
-- [ ] **Demo data seeding** - SQL seed script pending
+- [x] **Database migrations** ✅ `cmd/migrate/main.go` exists (verified 2026-06-05) — `launch_staging.sh` wiring still TODO
+- [x] **Demo data seeding** ✅ `cmd/seed-demo-key/main.go` exists (verified 2026-06-05) — `launch_staging.sh` wiring still TODO
 - **Impact**: Simplified local development and testing workflow
 - **Technical Details**:
   - Scripts handle .env creation from config.env.example
@@ -299,4 +337,4 @@ This document catalogs all TODO comments found throughout the codebase, organize
 
 ---
 
-*This catalog represents a comprehensive inventory of all identified TODO items as of January 28, 2025. Items are prioritized based on business impact, implementation phase requirements, and technical debt severity.*
+*This catalog represents a comprehensive inventory of all identified TODO items as of January 28, 2025, last reconciled against the live codebase on June 5, 2026 (see the **2026-06-05 Verification Pass** near the top). Items are prioritized based on business impact, implementation phase requirements, and technical debt severity.*

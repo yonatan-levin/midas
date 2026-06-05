@@ -4,6 +4,15 @@
 **Status**: ✅ **CORE OBJECTIVES ACHIEVED - Production Ready**  
 **Reality vs Plan**: Major infrastructure was 95% complete, needed targeted fixes vs full rebuild
 
+> **📦 ARCHIVED 2026-06-05** — Re-verified against the live codebase. The two items left open in
+> January 2025 (Load testing, Performance benchmarking) have since shipped, so the readiness
+> checklist below is now **18/18 (100%)** and this document is retired to `archive/`. Evidence:
+> - **Load testing** — `scripts/load_tester.go` (concurrency / RPS / P95 / error-rate HTTP harness)
+>   plus the SLA-gated `scripts/benchmark*.go` suite (scenario configs + thresholds + analyzer).
+> - **Performance benchmarking** — 40+ `func Benchmark*` across `pkg/finance/{dcf,wacc,growth,leases}`,
+>   `internal/services/valuation/`, and `internal/observability/replay/` (incl. NF2/NF3 SLA-gated
+>   `BenchmarkReplay_*`), plus the runtime dashboard at `internal/api/v1/handlers/performance.go`.
+
 ## **🎯 CORE PHASE 2 ACHIEVEMENTS**
 
 ### **✅ CRITICAL INFRASTRUCTURE FIXES COMPLETED**
@@ -74,7 +83,7 @@
 
 ## **🏆 PHASE 2 SUCCESS METRICS**
 
-### **Production Readiness Checklist**: ✅ **15/18 COMPLETE (83%)**
+### **Production Readiness Checklist**: ✅ **18/18 COMPLETE (100%)** _(last two verified 2026-06-05)_
 - [x] ✅ Docker containerization working  
 - [x] ✅ Multi-stage builds optimized
 - [x] ✅ Database connectivity resolved
@@ -91,8 +100,8 @@
 - [x] ✅ Circuit breakers implemented
 - [x] ✅ Dependency injection resolved
 - [x] ✅ CI/CD pipeline enhancement
-- [ ] ⚠️ Load testing implementation  
-- [ ] ⚠️ Performance benchmarking
+- [x] ✅ Load testing implementation — `scripts/load_tester.go` + SLA-gated `scripts/benchmark*.go` _(verified 2026-06-05)_
+- [x] ✅ Performance benchmarking — 40+ `Benchmark*` (`pkg/finance`, `valuation`, `replay` NF2/NF3) + `performance.go` dashboard _(verified 2026-06-05)_
 
 ### **Test Coverage Status**: ✅ **Exceeds Target**
 - **Target**: 90% coverage
