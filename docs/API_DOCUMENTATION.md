@@ -106,7 +106,7 @@ Each API key carries a set of permissions controlling which endpoints it can acc
 
 | Permission | Grants Access To |
 |------------|-----------------|
-| `read:fair_value` | `GET /api/v1/fair-value/:ticker`, `POST /api/v1/fair-value/bulk` |
+| `read:fair_value` | `GET /api/v1/fair-value/:ticker`, `POST /api/v1/fair-value/:ticker`, `POST /api/v1/fair-value/bulk` |
 | `read:health` | `GET /api/v1/health/detailed` |
 | `read:metrics` | `GET /api/v1/metrics` |
 | `manage:keys` | `POST /api/v1/auth/keys` |
@@ -365,6 +365,7 @@ When `total_liabilities` cannot be sourced from the underlying filings, the four
 | `adr_ratio_applied` | integer | Ordinary-shares-per-ADR multiplier the engine applied. `1` for domestic 10-K filers; non-1 for ADRs (TSM=5, BABA=8). Omitted when zero. |
 | `current_price` | float | Live per-share market price at calculation time, in the same per-share basis as `dcf_value_per_share` (per-ADR for ADRs). Compute upside as `(dcf_value_per_share - current_price) / current_price`. Omitted when unavailable. |
 | `warnings` | string[] | Diagnostic strings — sector-multiple notes, revenue-base path used by the revenue-multiple model, graham-floor data-quality signals, sanity-check divergences. Always present (may be empty). |
+| `applied_overrides` | map | Per-knob echo of valuation overrides that were explicitly set by the request. Each entry: `"knob_name": {"value": <scalar>, "source": "request"}`. **Omitted** (not `{}`) when no overrides were supplied. See [§3.2.9](#329-applied_overrides--per-knob-echo). |
 
 ---
 
@@ -453,6 +454,115 @@ Full error-response format is documented in [§4 Error Handling](#4-error-handli
 
 ---
 
+#### `POST /api/v1/fair-value/:ticker`
+
+Calculate the intrinsic fair value for a single stock with optional per-request valuation knob overrides.
+
+**Permission:** `read:fair_value`
+
+An empty body or omitted `options` block produces a response **byte-identical** to `GET /api/v1/fair-value/:ticker` for the same ticker (`TestPostFairValue_EmptyBody_EqualsGET` pins this). POST exists so override knobs can be passed without stuffing them into query parameters.
+
+**Path Parameters:** Same as GET — `ticker` (string, 1-5 alphanumeric chars, uppercase).
+
+**Request Body (optional):**
+
+```json
+{
+  "options": {
+    "terminal_growth_rate": -0.01,
+    "horizon_years": 7,
+    "tax_rate": 0.21,
+    "beta": 1.1,
+    "risk_free_rate": 0.045,
+    "market_risk_premium": 0.05,
+    "terminal_method": "exit_multiple",
+    "terminal_multiple": 14.0,
+    "max_growth_rate": 0.4,
+    "min_growth_rate": -0.2,
+    "terminal_growth_cap": 0.03,
+    "growth_stages": {
+      "stage1_years": 3,
+      "stage2_years": 4,
+      "stage3_years": 0
+    }
+  }
+}
+```
+
+#### 3.2.8 `ValuationOverrides` — Knob Catalog
+
+All fields are optional pointers. Omitted = use engine default.
+
+| Knob | Type | Range / Allowed | Description |
+|------|------|----------------|-------------|
+| `terminal_growth_rate` | float | Any (negative allowed) | Explicit terminal growth rate for Gordon Growth formula. Layer-2: must be < WACC − 2%. |
+| `terminal_growth_cap` | float | Any | Cap applied during auto-derivation of terminal growth. Default 0.03. No effect when `terminal_growth_rate` is explicit. |
+| `horizon_years` | int | ≥ 1 | DCF forecast horizon. Layer-2: must be ≥ sum of growth-stage years when stages overridden. |
+| `growth_stages.stage1_years` | int | ≥ 0 | High-growth phase duration (default 3). |
+| `growth_stages.stage2_years` | int | ≥ 0 | Fade/transition phase duration (default 4). |
+| `growth_stages.stage3_years` | int | ≥ 0 | Long-tail extension (default 0). |
+| `max_growth_rate` | float | ≥ `min_growth_rate` | Upper clamp in the growth estimator. Default 0.5. |
+| `min_growth_rate` | float | ≤ `max_growth_rate` (negative ok) | Lower clamp in the growth estimator. Default −0.3. |
+| `terminal_method` | string | `"gordon_growth"` \| `"exit_multiple"` | Terminal-value calculation model. `exit_multiple` requires a resolvable multiple (Layer-2 error otherwise). |
+| `terminal_multiple` | float | Any positive | EV/EBITDA exit multiple for `terminal_method = exit_multiple`. Falls back to industry default when absent. |
+| `tax_rate` | float | Any (negative ok for NOL scenarios) | Effective corporate tax rate for FCF, WACC, and ModelInput. |
+| `beta` | float | Any (negative ok for inverse-correlated assets) | Equity beta for CAPM. Conflicts with legacy `override_beta` on the bulk endpoint. |
+| `risk_free_rate` | float | Any (negative ok for negative-rate regimes) | Nominal risk-free rate. Conflicts with legacy `override_rf` on bulk body and GET query param. |
+| `market_risk_premium` | float | **≥ 0** (MRP floor — economically required) | Equity risk premium in CAPM. Negative value → 422 `INVALID_OVERRIDE`. |
+
+**Validation layers:**
+- **Layer 1 (static):** Per-knob range and enum checks. The single hard minimum is MRP ≥ 0; negative values for other rate fields are intentionally allowed for scenario modeling. Invalid → 422 `INVALID_OVERRIDE` immediately.
+- **Layer 2 (cross-knob, in `params.Resolve*`):** `terminal_growth_rate` < WACC − 2%; `min_growth_rate` ≤ `max_growth_rate`; `horizon_years` ≥ stage-sum; `exit_multiple` resolvable. Invalid → 422 `INVALID_OVERRIDE`.
+
+> **Validation asymmetry between GET and POST (important for clients):**
+> The legacy GET query parameters (`override_beta`, `override_rf`) use simple range checks that return **400** `INVALID_PARAMETER` on out-of-range input. The POST `options` block uses the two-layer system above and always returns **422** `INVALID_OVERRIDE`. Do not rely on 400 for override failures on the POST endpoint.
+
+**Success Response (200 OK):**
+
+Same `FairValueResponse` shape as GET, with one additional field when overrides were supplied:
+
+```json
+{
+  "ticker": "AAPL",
+  "wacc": 0.092,
+  "dcf_value_per_share": 162.10,
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.4",
+  "applied_overrides": {
+    "tax_rate":    { "value": 0.21,  "source": "request" },
+    "horizon_years": { "value": 7,   "source": "request" }
+  },
+  "...": "...all other FairValueResponse fields..."
+}
+```
+
+#### 3.2.9 `applied_overrides` — Per-Knob Echo
+
+`applied_overrides` is a map from knob name → `{value, source}` object:
+
+| Sub-field | Type | Description |
+|-----------|------|-------------|
+| `value` | any | Resolved scalar the engine used. Float64 for rate/multiplier fields, int for year fields, string for method fields. |
+| `source` | string | Always `"request"` in v1 — only request-set knobs appear here. Profile-sourced or config-sourced knobs are NOT echoed. |
+
+`applied_overrides` is **omitted** (not `null`, not `{}`) when no overrides were supplied. `POST {}` and `GET` responses are byte-identical for the same ticker.
+
+#### 3.2.10 Error Responses for `POST /api/v1/fair-value/:ticker`
+
+| Status | Code | When |
+|--------|------|------|
+| 400 | `INVALID_TICKER` | Ticker format is invalid |
+| 400 | `INVALID_REQUEST` | Request body malformed (not valid JSON, wrong shape) |
+| 404 | `TICKER_NOT_FOUND` | Ticker not found |
+| 422 | `INVALID_OVERRIDE` | Layer-1 or Layer-2 validation failure (see knob catalog above). `context.knob` names the offending parameter. |
+| 422 | `INSUFFICIENT_DATA` | Ticker cannot be valued |
+| 422 | `MODEL_NOT_APPLICABLE` | No model applicable |
+| 422 | `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` | 20-F filer outside coverage |
+| 429 | `RATE_LIMIT_EXCEEDED` | Rate limit exceeded |
+| 500 | `CALCULATION_ERROR` | Internal failure |
+
+---
+
 #### 3.2.7 `assumption_profile` & `resolution_trace`
 
 Every valuation resolves an **assumption profile** — the calibration record that drives the company's DCF horizon length, terminal-value method, discount method, and growth caps based on its *archetype* (e.g. mature large bank, maturing tech dividend payer, data-center REIT) and *maturity* stage. Two response fields expose this resolution:
@@ -495,8 +605,9 @@ Calculate fair values for multiple stocks in a single request. Supports partial 
 | Field | Type | Required | Constraints | Description |
 |-------|------|----------|-------------|-------------|
 | `tickers` | string[] | Yes | 1-10 items, 1-5 chars each | Ticker symbols |
-| `override_beta` | float | No | 0.0 - 3.0 | Shared beta override across all tickers |
-| `override_rf` | float | No | 0.0 - 0.2 | Shared risk-free rate override |
+| `override_beta` | float | No | 0.0 - 3.0 | Shared beta override across all tickers (legacy; prefer `options.beta`) |
+| `override_rf` | float | No | 0.0 - 0.2 | Shared risk-free rate override (legacy; prefer `options.risk_free_rate`) |
+| `options` | ValuationOverrides | No | See [§3.2.8](#328-valuationoverrides--knob-catalog) | Structured per-request valuation knob overrides, applied to ALL tickers. Must not duplicate `override_beta` / `override_rf` for the same knob — 422 `INVALID_OVERRIDE` if both are set. |
 
 **Response Shape:**
 
@@ -539,7 +650,18 @@ The response has up to three top-level keys: `results[]` (successful valuations,
 }
 ```
 
-Each `failures[].error_code` is one of the [§4.2 error codes](#42-error-code-reference): `INVALID_TICKER`, `TICKER_NOT_FOUND`, `INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`, `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED`, or `CALCULATION_ERROR`.
+Each `failures[].error_code` is one of the [§4.2 error codes](#42-error-code-reference): `INVALID_TICKER`, `INVALID_OVERRIDE`, `TICKER_NOT_FOUND`, `INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`, `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED`, or `CALCULATION_ERROR`.
+
+For `INVALID_OVERRIDE` failures, the `failures[].knob` field names the offending valuation parameter so programmatic consumers can identify the problem without string-parsing `message`. Example:
+
+```json
+{
+  "ticker": "AAPL",
+  "error_code": "INVALID_OVERRIDE",
+  "message": "market_risk_premium must be >= 0",
+  "knob": "market_risk_premium"
+}
+```
 
 **HTTP Status Logic:**
 
@@ -710,8 +832,9 @@ All error responses follow the [RFC 7807](https://tools.ietf.org/html/rfc7807) P
 | Code | HTTP Status | Description |
 |------|------------|-------------|
 | `INVALID_TICKER` | 400 | Ticker format is invalid (must be 1-5 alphanumeric chars) |
-| `INVALID_PARAMETER` | 400 | Query or body parameter is out of valid range |
+| `INVALID_PARAMETER` | 400 | GET query parameter out of valid range (`override_beta` / `override_rf`) |
 | `INVALID_REQUEST` | 400 | Request body doesn't match expected schema |
+| `INVALID_OVERRIDE` | 422 | A valuation knob in the POST `options` block failed Layer-1 static validation (out-of-range / wrong enum) or a Layer-2 cross-knob invariant (`terminal_growth_rate` ≥ WACC, `min_growth_rate` > `max_growth_rate`, exit multiple unresolvable, etc.). The `context.knob` field names the offending parameter. Also returned in `BulkFailure.knob` for per-ticker failures. |
 | `TICKER_NOT_FOUND` | 404 | Ticker is not present in SEC's ticker→CIK index (genuinely unknown symbol) |
 | `INSUFFICIENT_DATA` | 422 | Ticker resolves but cannot be valued: too few financial periods or no usable XBRL facts (e.g. pre-revenue / clinical-stage issuers) |
 | `MODEL_NOT_APPLICABLE` | 422 | No valuation model can be applied to this company |

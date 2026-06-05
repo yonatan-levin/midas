@@ -181,6 +181,91 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Calculate intrinsic fair value for a stock; optional JSON body accepts per-request valuation knob overrides",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "fair-value"
+                ],
+                "summary": "Post fair value for a stock with optional overrides",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Stock ticker symbol (e.g., AAPL)",
+                        "name": "ticker",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional override options",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.SingleFairValueRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.FairValueResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid ticker or parameters",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid API key",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Insufficient permissions",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Ticker not found",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "422": {
+                        "description": "Invalid override knob value",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limit exceeded",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    }
+                }
             }
         }
     },
@@ -273,10 +358,27 @@ const docTemplate = `{
                 "SourceFallback"
             ]
         },
+        "internal_api_v1_handlers.AppliedOverride": {
+            "description": "Per-knob override echo in the applied_overrides response field",
+            "type": "object",
+            "properties": {
+                "source": {
+                    "description": "Source is the precedence layer that supplied this value. Always \"request\" in v1.",
+                    "type": "string"
+                },
+                "value": {
+                    "description": "Value is the resolved scalar that the engine used. Type matches the knob:\nfloat64 for rate/multiplier fields, int for year fields, string for method fields."
+                }
+            }
+        },
         "internal_api_v1_handlers.BulkFailure": {
             "type": "object",
             "properties": {
                 "error_code": {
+                    "type": "string"
+                },
+                "knob": {
+                    "description": "Knob is the name of the override parameter that caused an INVALID_OVERRIDE\nerror. Empty (and omitted) for non-override error codes. Mirrors the\ncontext.knob field in the single-ticker 422 ErrorResponse.",
                     "type": "string"
                 },
                 "message": {
@@ -294,13 +396,21 @@ const docTemplate = `{
                 "tickers"
             ],
             "properties": {
+                "options": {
+                    "description": "Options carries structured per-request valuation knob overrides applied to\nALL tickers in the batch. When set, it must not duplicate any knob that is\nalso set via the legacy OverrideBeta / OverrideRiskFree fields — the\nrequest is rejected 422 with code \"INVALID_OVERRIDE\" if both are present\nfor the same knob.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ValuationOverrides"
+                        }
+                    ]
+                },
                 "override_beta": {
-                    "description": "Optional beta override",
+                    "description": "Optional beta override (legacy; prefer options.beta)",
                     "type": "number",
                     "example": 1.2
                 },
                 "override_rf": {
-                    "description": "Optional risk-free rate override",
+                    "description": "Optional risk-free rate override (legacy; prefer options.risk_free_rate)",
                     "type": "number",
                     "example": 0.045
                 },
@@ -412,6 +522,13 @@ const docTemplate = `{
                     "description": "ADRRatioApplied is the ordinary-shares-per-ADR multiplier that the\nvaluation engine divided SEC-reported share counts by before\ncomputing per-share values, so the resulting fair value compares\nlike-for-like with the listed ADR price. 1 for domestic 10-K filers\n(and any ticker absent from config/adr_ratios.json); non-1 for\nconfigured ADRs (TSM=5, BABA=8, …). Phase B10 of the IFRS-FPI plan.\nOmitted from the JSON when zero (defensive — the service always\nstamps a positive int via ADRRatios.Get, but omitempty keeps the\nresponse clean if a future bug produces 0).",
                     "type": "integer",
                     "example": 5
+                },
+                "applied_overrides": {
+                    "description": "AppliedOverrides echoes the valuation knobs that were explicitly set by\nthe request, each with the resolved value and source \"request\". Absent\n(omitempty) when no overrides were supplied — default GET responses and\nPOST{} requests are byte-identical (TestPostFairValue_EmptyBody_EqualsGET\npins this). Only request-sourced knobs are echoed in v1 (design §8 R5).\n\nEach entry:\n  \"knob_name\": { \"value\": \u003cresolved scalar\u003e, \"source\": \"request\" }\n\nExample with two overrides:\n  \"applied_overrides\": {\n    \"tax_rate\":    { \"value\": 0.21,  \"source\": \"request\" },\n    \"horizon_years\": { \"value\": 7,   \"source\": \"request\" }\n  }",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/internal_api_v1_handlers.AppliedOverride"
+                    }
                 },
                 "as_of": {
                     "description": "Timestamp of calculation",
@@ -560,6 +677,24 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_v1_handlers.GrowthStages": {
+            "description": "Three-stage growth estimator duration overrides",
+            "type": "object",
+            "properties": {
+                "stage1_years": {
+                    "type": "integer",
+                    "example": 3
+                },
+                "stage2_years": {
+                    "type": "integer",
+                    "example": 4
+                },
+                "stage3_years": {
+                    "type": "integer",
+                    "example": 0
+                }
+            }
+        },
         "internal_api_v1_handlers.Industry": {
             "description": "Dual industry classification (SIC + heuristic) with a Match flag",
             "type": "object",
@@ -588,6 +723,89 @@ const docTemplate = `{
                     "description": "Raw SIC code from SEC (may be empty if SEC data lacked it)",
                     "type": "string",
                     "example": "3674"
+                }
+            }
+        },
+        "internal_api_v1_handlers.SingleFairValueRequest": {
+            "description": "POST body for single-ticker fair-value calculation with optional overrides",
+            "type": "object",
+            "properties": {
+                "options": {
+                    "description": "Options carries per-request valuation knob overrides. Nil or absent means\n\"use engine defaults\" — identical to calling the GET endpoint.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ValuationOverrides"
+                        }
+                    ]
+                }
+            }
+        },
+        "internal_api_v1_handlers.ValuationOverrides": {
+            "description": "Per-request valuation knob overrides (all fields optional)",
+            "type": "object",
+            "properties": {
+                "beta": {
+                    "description": "Beta is the equity beta used in the CAPM cost-of-equity calculation.\nNegative values are allowed (inverse-correlated assets).\nConflicts with the legacy override_beta field on the bulk request.",
+                    "type": "number",
+                    "example": 1.2
+                },
+                "growth_stages": {
+                    "description": "GrowthStages overrides the three-stage growth estimator configuration.\nWhen any sub-field is set a per-request estimator is built instead of\nreusing the shared service-level estimator.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/internal_api_v1_handlers.GrowthStages"
+                        }
+                    ]
+                },
+                "horizon_years": {
+                    "description": "DCF forecast horizon in years. When omitted the engine uses the length of\nthe growth-rate slice produced by the estimator (legacy signal).",
+                    "type": "integer",
+                    "example": 5
+                },
+                "market_risk_premium": {
+                    "description": "MarketRiskPremium is the equity risk premium (ERP) added to the risk-free\nrate in CAPM. Must be ≥ 0; a negative ERP is economically unsound and\nwill be caught by Layer-1 validation (T7).",
+                    "type": "number",
+                    "example": 0.05
+                },
+                "max_growth_rate": {
+                    "description": "MaxGrowthRate is the upper clamp applied inside the growth estimator.\nDefaults to 0.5 (50%). Negative values are meaningless here but accepted.",
+                    "type": "number",
+                    "example": 0.5
+                },
+                "min_growth_rate": {
+                    "description": "MinGrowthRate is the lower clamp applied inside the growth estimator.\nDefaults to -0.3 (-30%). Negative values represent contraction scenarios.",
+                    "type": "number",
+                    "example": -0.3
+                },
+                "risk_free_rate": {
+                    "description": "RiskFreeRate is the nominal risk-free rate (e.g. 10-year Treasury yield).\nNegative values are allowed (EUR/JPY/CHF regimes).\nConflicts with the legacy override_rf field on the bulk request and the\noverride_rf query parameter on the GET single-ticker endpoint.",
+                    "type": "number",
+                    "example": 0.045
+                },
+                "tax_rate": {
+                    "description": "TaxRate is the effective corporate tax rate applied to FCF, WACC, and the\nalt-model ModelInput. Negative values are allowed (NOLs / tax credits).",
+                    "type": "number",
+                    "example": 0.21
+                },
+                "terminal_growth_cap": {
+                    "description": "Cap applied during auto-derivation of the terminal growth rate.\nDefaults to 0.03 (3%). Has no effect when terminal_growth_rate is set explicitly.",
+                    "type": "number",
+                    "example": 0.03
+                },
+                "terminal_growth_rate": {
+                    "description": "Terminal growth rate — explicit absolute value for g in Gordon Growth Model.\nNegative values are allowed (real-terms decline). If omitted the engine\nauto-derives g from historical CAGR, capped by terminal_growth_cap.",
+                    "type": "number",
+                    "example": -0.01
+                },
+                "terminal_method": {
+                    "description": "TerminalMethod selects the terminal-value calculation model.\nAllowed values: \"gordon_growth\" (default) | \"exit_multiple\".\n\"exit_multiple\" requires that a multiple is resolvable (via terminal_multiple\nor the industry default); if neither is available the request is rejected 422.",
+                    "type": "string",
+                    "example": "exit_multiple"
+                },
+                "terminal_multiple": {
+                    "description": "TerminalMultiple is the EV/EBITDA (or analogous) exit multiple used when\nterminal_method is \"exit_multiple\". When omitted the engine falls back to\nthe industry default looked up at resolution time.",
+                    "type": "number",
+                    "example": 14
                 }
             }
         }

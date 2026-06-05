@@ -224,7 +224,26 @@ cache-keying on overrides, any UI, persisting override presets.
   itself can be overridden (beta/rf/MRP). Order matters: resolve WACC inputs →
   compute WACC → then validate terminal growth against it. The plan must sequence this.
 
-## 13. Phasing (for the implementation plan)
+## 13. Reconciliation note — profile-sourced `terminal_method=exit_multiple` vs. default-path DCF averaging
+
+**Background (from Phase-2 review ARCH ruling).** §3.5 describes a future profile field `TerminalMethod` that could be set to `exit_multiple`. §5/§6 define the exact wiring: the terminal method is read from `params.TerminalMethod`, which is resolved from `profile.TerminalMethod ← request override`.
+
+**Authoritative behavior (as shipped, T1-T10):**
+
+The default-path DCF averaging in `service.go::calculateTerminalValue` uses the **industry-multiple lookup** from `config/industry_multiples.json` for the exit multiple — it does NOT consult `params.TerminalMethod` on the default path. This is intentional:
+
+1. **Byte-identity preservation** — the default path produces outputs bit-for-bit identical to pre-feature behavior. `TestDDM_LegacyPath_BitForBit` and `cmd/replay --diff-stages` pin this. Wiring `params.TerminalMethod` on the default path would have required every existing fixture to be regenerated.
+
+2. **REQUEST override drives exit multiple into the averaging path** — when a caller sets `options.terminal_method = "exit_multiple"` (with or without `options.terminal_multiple`), `params.TerminalMethod` is `"exit_multiple"` and the resolver selects the exit multiple path, falling back to the industry default for the multiple when `options.terminal_multiple` is absent.
+
+3. **Profile-sourced `terminal_method`** — when an `AssumptionProfile` sets `TerminalMethod = exit_multiple`, the profile's value is loaded into `params.TerminalMethod`. However, the DCF averaging path has NOT been wired to read `params.TerminalMethod` on the default (no-request-override) case in T1-T10. A future task (post-T11) must wire the default path to read `params.TerminalMethod` for profiles that set `exit_multiple`, while re-proving the bit-for-bit invariant on the DDM golden fixtures. Until that wire-up lands, a profile with `TerminalMethod=exit_multiple` and no request override will produce Gordon Growth output, not exit-multiple output. This is a **known gap**, not a bug in the override path.
+
+**Summary for consumers:**
+- Request override `options.terminal_method = "exit_multiple"` → works as specified.
+- Profile-driven `terminal_method = exit_multiple` without a request override → deferred (produces Gordon Growth today).
+- The `applied_overrides` response field correctly omits `terminal_method` when it was not request-set.
+
+## 14. Phasing (for the implementation plan)
 
 1. `params` package: struct + named-default constants + `Resolve()` (default-path only) + precedence tests — prove byte-identity first.
 2. Rewire consumption sites to read `params` on the default path; replay/DDM green.

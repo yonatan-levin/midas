@@ -52,6 +52,8 @@ internal/
   api/
     server.go                  # HTTP server, middleware, routes
     server_test.go             # Server middleware + handler tests (96.2%)
+  api/v1/handlers/
+    fair_value_handler_overrides_test.go  # POST handler + override validation tests (T7-T10)
   services/
     valuation/
       service.go              # Implementation
@@ -59,6 +61,9 @@ internal/
       service_bench_test.go    # Benchmarks
       service_perf_test.go     # Performance tests
       service_concurrent_test.go # Concurrency tests
+    valuation/params/
+      params_test.go           # params.Overrides + projectOverrides unit tests
+      resolve_test.go          # params.Resolve* knob resolution unit tests (Layer-2 invariants)
   integration/                 # Cross-service integration tests
     api_routes_test.go         # API endpoint tests
     api_contract_fuzz_test.go  # Contract fuzz testing
@@ -299,6 +304,20 @@ the third assertion immediately. Pattern applies any time a load-bearing
 the bit-equality assertion is the strongest possible guard because ANY arithmetic
 involving the field would surface as bit drift, even if the resulting value
 rounds back to the original via float coincidence.
+
+**Byte-identity acceptance method (request-valuation-overrides T9/T10).** The
+contract "empty POST body produces a response byte-identical to GET for the same
+ticker" is pinned by `TestPostFairValue_EmptyBody_EqualsGET` at
+`internal/api/v1/handlers/fair_value_handler_overrides_test.go`. The test runs
+both handlers against the same mock service, marshals both responses to JSON, and
+asserts `bytes.Equal` on the two byte slices — not `reflect.DeepEqual`, not
+string equality, but actual byte identity. Any code path that sets a new field in
+`buildFairValueResponse` without gating on nil/zero would fail this test
+immediately. The companion test `TestPostFairValue_WithOverrides_AppliedOverridesPresent`
+asserts `applied_overrides` is populated when overrides are supplied and exactly
+matches the set of overrides that were provided (no phantom fields, no missing
+fields). New handler features that touch `FairValueResponse` or
+`buildFairValueResponse` MUST maintain both of these tests.
 
 ### 3. Mock-Based Tests (Service Layer)
 

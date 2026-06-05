@@ -81,15 +81,29 @@ paths:
         - name: override_beta
           in: query
           required: false
+          description: |
+            Override calculated beta for WACC computation.
+            Out-of-range values return **400** `INVALID_PARAMETER`
+            (legacy GET range check — distinct from the POST options-path
+            which returns 422 `INVALID_OVERRIDE`).
           schema:
             type: number
             format: float
+            minimum: 0
+            maximum: 3
         - name: override_rf
           in: query
           required: false
+          description: |
+            Override risk-free rate.
+            Out-of-range values return **400** `INVALID_PARAMETER`
+            (legacy GET range check — distinct from the POST options-path
+            which returns 422 `INVALID_OVERRIDE`).
           schema:
             type: number
             format: float
+            minimum: 0
+            maximum: 0.2
         - name: trace
           in: query
           required: false
@@ -156,6 +170,99 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
           description: Internal calculation error (CALCULATION_ERROR) or recovered panic (INTERNAL)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    post:
+      summary: Calculate fair value with optional per-request overrides
+      description: |
+        Accepts an optional JSON body with an `options` block of per-request
+        valuation knob overrides. An empty body or `{}` produces a response
+        byte-identical to `GET /api/v1/fair-value/{ticker}` for the same ticker.
+
+        **Validation asymmetry (important for clients):**
+        The legacy GET query parameters (`override_beta`, `override_rf`) use
+        simple range checks that return **400** on invalid input. The POST
+        `options` block uses Layer-1 static range + enum validation followed by
+        Layer-2 cross-knob invariant checks (terminal_growth < WACC, min ≤ max,
+        stage-sum ≥ 1, etc.) — all of which return **422** `INVALID_OVERRIDE`.
+
+        The `applied_overrides` field in the response echoes only the knobs
+        that were explicitly set in the request (request-sourced knobs, not
+        profile-or-config-sourced ones). Absent when no overrides were supplied.
+      tags: [valuation]
+      parameters:
+        - name: ticker
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 5
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SingleFairValueRequest'
+      responses:
+        '200':
+          description: Fair value metrics (with applied_overrides when overrides were supplied)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FairValueResponse'
+        '400':
+          description: Invalid ticker or malformed request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Authentication required or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient permissions for this endpoint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Ticker not present in SEC's ticker→CIK index
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: |
+            Override validation failed or ticker cannot be valued. The `code`
+            field distinguishes the cases:
+
+            * `INVALID_OVERRIDE` — a knob value failed Layer-1 static range /
+              enum validation (e.g. `market_risk_premium` < 0), or a Layer-2
+              cross-knob invariant was violated (e.g. `terminal_growth_rate` >=
+              WACC, `min_growth_rate` > `max_growth_rate`, `horizon_years` <
+              stage-sum, `exit_multiple` requested but no multiple resolvable).
+              The `context.knob` field names the offending parameter.
+            * `INSUFFICIENT_DATA` — SEC has no usable XBRL facts.
+            * `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` — 20-F filer.
+            * `MODEL_NOT_APPLICABLE` — no model produced a result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded (see Retry-After header)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal calculation error
           content:
             application/json:
               schema:
@@ -527,6 +634,20 @@ components:
             Omitted when no profile registry is wired (legacy/test paths).
         resolution_trace:
           $ref: '#/components/schemas/ResolutionTrace'
+        applied_overrides:
+          type: object
+          description: |
+            Echoes the valuation knobs that were explicitly set by the request,
+            each with the resolved value and source `"request"`. Absent
+            (omitempty) when no overrides were supplied — default GET responses
+            and `POST {}` requests are byte-identical. Only request-sourced
+            knobs appear here in v1; profile-sourced or config-sourced knobs
+            are NOT echoed.
+
+            Keys are knob names (e.g. `"tax_rate"`, `"horizon_years"`);
+            values are `AppliedOverride` objects.
+          additionalProperties:
+            $ref: '#/components/schemas/AppliedOverride'
     BulkFairValueRequest:
       type: object
       required: [tickers]
@@ -540,9 +661,22 @@ components:
         override_beta:
           type: number
           format: float
+          description: |
+            Legacy beta override applied to all tickers. Mutually exclusive with
+            `options.beta` — supplying both returns 422 `INVALID_OVERRIDE`.
         override_rf:
           type: number
           format: float
+          description: |
+            Legacy risk-free rate override applied to all tickers. Mutually
+            exclusive with `options.risk_free_rate` — supplying both returns
+            422 `INVALID_OVERRIDE`.
+        options:
+          $ref: '#/components/schemas/ValuationOverrides'
+          description: |
+            Structured per-request valuation knob overrides applied to all
+            tickers in the batch. When set, must not duplicate any knob that
+            is also set via the legacy `override_beta` / `override_rf` fields.
     BulkSummary:
       type: object
       properties:
@@ -564,11 +698,20 @@ components:
           example: "XYZA1"
         error_code:
           type: string
-          enum: [INVALID_TICKER, TICKER_NOT_FOUND, INSUFFICIENT_DATA, MODEL_NOT_APPLICABLE, FOREIGN_PRIVATE_ISSUER_UNSUPPORTED, CALCULATION_ERROR]
+          enum: [INVALID_TICKER, INVALID_OVERRIDE, TICKER_NOT_FOUND, INSUFFICIENT_DATA, MODEL_NOT_APPLICABLE, FOREIGN_PRIVATE_ISSUER_UNSUPPORTED, CALCULATION_ERROR]
           example: "TICKER_NOT_FOUND"
         message:
           type: string
           example: "Ticker not found in any data source"
+        knob:
+          type: string
+          description: |
+            Name of the override parameter that caused an `INVALID_OVERRIDE`
+            error. Empty and omitted for all other error codes. Mirrors the
+            `context.knob` field in the single-ticker 422 error response, so
+            programmatic consumers can identify the offending knob without
+            string-parsing the `message`.
+          example: "market_risk_premium"
     BulkFairValueResponse:
       type: object
       properties:
@@ -685,5 +828,167 @@ components:
         human_reason:
           type: string
           description: Human-readable one-line summary of the resolution decision.
+    SingleFairValueRequest:
+      type: object
+      description: |
+        POST body for `POST /api/v1/fair-value/{ticker}`. An empty or absent
+        `options` block produces a response byte-identical to the GET endpoint.
+      properties:
+        options:
+          $ref: '#/components/schemas/ValuationOverrides'
+    ValuationOverrides:
+      type: object
+      description: |
+        Per-request valuation knob overrides. All fields are optional; omitted
+        means "use the resolved default". Validated in two layers:
+        - **Layer 1 (static):** Per-knob range and enum checks. Violations
+          return 422 `INVALID_OVERRIDE` immediately.
+        - **Layer 2 (cross-knob):** Checked by the params resolver after static
+          validation passes. Examples: `terminal_growth_rate >= WACC`,
+          `min_growth_rate > max_growth_rate`, `horizon_years < stage-sum`,
+          `terminal_method = exit_multiple` but no multiple resolvable.
+          Violations return 422 `INVALID_OVERRIDE` with the offending knob in
+          `context.knob`.
 
+        **Knob resolution order (single, authoritative path):**
+        config defaults → assumption profile → request override (`params.Resolve*`).
+        The `applied_overrides` response field echoes only the request-layer knobs.
+      properties:
+        terminal_growth_rate:
+          type: number
+          format: float
+          example: -0.01
+          description: |
+            Explicit absolute terminal growth rate (g) for the Gordon Growth
+            formula. Negative values allowed (real-terms decline scenario).
+            When omitted the engine auto-derives g from historical CAGR,
+            capped by `terminal_growth_cap`. Layer-2 invariant: must be <
+            WACC − 2% (Gordon stability spread).
+        terminal_growth_cap:
+          type: number
+          format: float
+          example: 0.03
+          description: |
+            Cap applied during auto-derivation of the terminal growth rate.
+            Default: 0.03 (3%). No effect when `terminal_growth_rate` is set.
+        horizon_years:
+          type: integer
+          example: 5
+          description: |
+            DCF forecast horizon in years. When omitted the engine uses the
+            archetype profile's horizon (typically 3, 5, 7, or 10).
+            Layer-2 invariant: must be ≥ sum of growth-stage years when
+            growth stages are also overridden.
+        growth_stages:
+          $ref: '#/components/schemas/GrowthStages'
+        max_growth_rate:
+          type: number
+          format: float
+          example: 0.5
+          description: |
+            Upper clamp applied inside the growth estimator. Default: 0.5 (50%).
+            Layer-2 invariant: must be ≥ `min_growth_rate`.
+        min_growth_rate:
+          type: number
+          format: float
+          example: -0.3
+          description: |
+            Lower clamp applied inside the growth estimator. Default: −0.3
+            (−30%). Negative values represent contraction scenarios.
+            Layer-2 invariant: must be ≤ `max_growth_rate`.
+        terminal_method:
+          type: string
+          enum: [gordon_growth, exit_multiple]
+          example: exit_multiple
+          description: |
+            Terminal-value calculation model. `gordon_growth` = Gordon
+            perpetual-growth formula (default). `exit_multiple` = year-N
+            EBITDA × exit multiple (requires `terminal_multiple` or an
+            industry default to be resolvable; Layer-2 error if neither
+            is available).
+
+            **Profile-sourced `exit_multiple`**: a profile may set this as
+            its default terminal method (e.g. high-growth tech). However, the
+            default-path DCF averaging still uses the industry lookup for the
+            multiple unless a request override explicitly sets
+            `terminal_multiple`. Only a REQUEST override drives the exit
+            multiple into the averaging path.
+        terminal_multiple:
+          type: number
+          format: float
+          example: 14.0
+          description: |
+            EV/EBITDA (or analogous) exit multiple used when
+            `terminal_method = exit_multiple`. When omitted the engine falls
+            back to the industry default from `config/industry_multiples.json`.
+        tax_rate:
+          type: number
+          format: float
+          example: 0.21
+          description: |
+            Effective corporate tax rate applied to FCF, WACC, and the
+            alt-model ModelInput. Negative values allowed (NOL / tax-credit
+            scenarios). Layer-1 range: no lower bound enforced; no upper bound.
+        beta:
+          type: number
+          format: float
+          example: 1.2
+          description: |
+            Equity beta for the CAPM cost-of-equity calculation. Negative
+            values allowed (inverse-correlated assets). Conflicts with the
+            legacy `override_beta` field on the bulk request body — supplying
+            both returns 422 `INVALID_OVERRIDE`.
+        risk_free_rate:
+          type: number
+          format: float
+          example: 0.045
+          description: |
+            Nominal risk-free rate (e.g. 10-year Treasury yield). Negative
+            values allowed (EUR/JPY/CHF negative-rate regimes). Conflicts with
+            the legacy `override_rf` bulk field and the `override_rf` GET query
+            parameter — supplying both returns 422 `INVALID_OVERRIDE`.
+        market_risk_premium:
+          type: number
+          format: float
+          example: 0.05
+          description: |
+            Equity risk premium (ERP) added to the risk-free rate in CAPM.
+            Layer-1 constraint: must be ≥ 0 (negative ERP is economically
+            unsound and is rejected with 422 `INVALID_OVERRIDE`).
+    GrowthStages:
+      type: object
+      description: |
+        Three-stage growth-estimator duration overrides (all optional). Stage
+        durations are in years. When any sub-field is set a per-request
+        estimator is built instead of reusing the shared service-level one.
+      properties:
+        stage1_years:
+          type: integer
+          example: 3
+          description: High-growth phase duration (default 3).
+        stage2_years:
+          type: integer
+          example: 4
+          description: Fade / transition phase duration (default 4).
+        stage3_years:
+          type: integer
+          example: 0
+          description: Long-tail extension duration (default 0 — legacy 7-year horizon).
+    AppliedOverride:
+      type: object
+      description: |
+        Per-knob payload within the `applied_overrides` response map. Source
+        is always `"request"` in v1 — only request-sourced knobs appear here.
+      required: [value, source]
+      properties:
+        value:
+          description: |
+            Resolved scalar the engine used. Type matches the knob: float64
+            for rate/multiplier/multiple fields, integer for year fields,
+            string for method fields.
+        source:
+          type: string
+          example: request
+          description: |
+            Precedence layer that supplied the value. Always `"request"` in v1.
 

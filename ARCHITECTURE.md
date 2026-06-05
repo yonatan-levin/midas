@@ -224,7 +224,9 @@ Two-tier caching with Redis (primary) and in-memory (fallback):
 | Macro Data | 4h | Treasury rates change slowly |
 | Default | 30m | General cache entries |
 
-**Design principle**: Caching is done at the valuation layer (final result) and per-credential layer (auth tokens). The DataFetcher always fetches fresh data from external APIs to avoid serving stale market prices. Requests with override parameters (`override_beta`, `override_rf`) bypass the valuation cache entirely to prevent cache poisoning.
+**Design principle**: Caching is done at the valuation layer (final result) and per-credential layer (auth tokens). The DataFetcher always fetches fresh data from external APIs to avoid serving stale market prices. Requests with override parameters (`override_beta`, `override_rf`, or any structured `options` knob) bypass the valuation cache entirely to prevent cache poisoning.
+
+**Valuation knob resolution (single, authoritative path)**: Every valuation parameter (beta, risk-free rate, terminal growth, horizon, tax rate, etc.) flows through `internal/services/valuation/params/`. The precedence chain is: config defaults → assumption profile → request override. `params.Resolve*` functions are the ONLY place knobs are resolved — no handler or model reads config or profile directly for knob values. Handlers project the `ValuationOverrides` DTO into `params.Overrides` via `projectOverrides`; the service passes them to `params.Resolve*` for final resolution.
 
 Cache keys are versioned and pattern-based: `valuation:v4:{ticker}`. The version prefix is bumped when the calculation engine changes (e.g., Phase 4 upgrade), automatically invalidating stale cached results without a manual flush.
 
@@ -239,7 +241,7 @@ Cache keys are versioned and pattern-based: `valuation:v4:{ticker}`. The version
 ### Authorization (Permission Model)
 | Permission | Grants Access To |
 |------------|-----------------|
-| `read:fair_value` | `GET /api/v1/fair-value/{ticker}`, `POST /api/v1/fair-value/bulk` |
+| `read:fair_value` | `GET /api/v1/fair-value/{ticker}`, `POST /api/v1/fair-value/{ticker}`, `POST /api/v1/fair-value/bulk` |
 | `read:health` | `GET /api/v1/health/detailed` |
 | `read:metrics` | `GET /api/v1/metrics` |
 | `manage:keys` | `POST /api/v1/auth/keys` |

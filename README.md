@@ -108,6 +108,7 @@ Invoke-RestMethod -Method GET -Uri http://localhost:8080/api/v1/fair-value/AAPL 
 | Method | Path | Permission | Description |
 |--------|------|------------|-------------|
 | GET | `/api/v1/fair-value/{ticker}` | `read:fair_value` | Fair value for single ticker |
+| POST | `/api/v1/fair-value/{ticker}` | `read:fair_value` | Fair value with optional valuation overrides (empty body = GET semantics) |
 | POST | `/api/v1/fair-value/bulk` | `read:fair_value` | Fair value for multiple tickers (max 10) |
 | GET | `/api/v1/health/detailed` | `read:health` | Detailed component health |
 | GET | `/api/v1/metrics` | `read:metrics` | Application and business metrics (JSON) |
@@ -170,11 +171,16 @@ Response (HTTP 207 Multi-Status — partial success):
 - **Quality Score**: 0–100 score indicating data reliability and adjustment transparency
 - **Quality Grade**: Letter grade (A/B/C/D/F) derived from the quality score
 
-#### Query Parameter Overrides
+#### Valuation Overrides
 
-Both fair-value endpoints accept optional overrides:
-- `override_beta` (float) - Override the calculated beta for WACC computation
-- `override_rf` (float) - Override the risk-free rate
+The GET endpoint accepts legacy scalar overrides as query parameters:
+- `override_beta` (float, 0-3.0) - Override the calculated beta for WACC computation
+- `override_rf` (float, 0-0.2) - Override the risk-free rate
+- Out-of-range values return **400** `INVALID_PARAMETER`.
+
+The POST endpoint (`POST /api/v1/fair-value/{ticker}`) accepts a structured `options` block with 12 knobs including `terminal_growth_rate`, `horizon_years`, `tax_rate`, `terminal_method`, `market_risk_premium`, and others. An empty body produces a response byte-identical to GET. Invalid `options` values return **422** `INVALID_OVERRIDE` (note the different status code from GET). See `docs/API_DOCUMENTATION.md` §3.2.8 for the full knob catalog.
+
+The `applied_overrides` field in the response echoes which knobs were set by the request (omitted when none).
 
 #### Industry-Specific Adjustments
 

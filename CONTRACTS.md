@@ -40,10 +40,13 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 | `AUTH_007` | 500 | Invalid authentication information |
 | `AUTH_008` | 403 | Insufficient permissions |
 | `INVALID_TICKER` | 400 | Empty or invalid ticker |
-| `INVALID_PARAMETER` | 400 | Override parameter out of valid range |
+| `INVALID_PARAMETER` | 400 | GET query override parameter out of valid range |
+| `INVALID_REQUEST` | 400 | Request body malformed |
+| `INVALID_OVERRIDE` | 422 | POST `options` knob failed Layer-1 static range/enum check or Layer-2 cross-knob invariant. `context.knob` names the offending parameter. Also returned in `BulkFailure.knob`. |
 | `TICKER_NOT_FOUND` | 404 | Ticker not found in any data source |
 | `INSUFFICIENT_DATA` | 422 | Not enough financial data for reliable valuation |
 | `MODEL_NOT_APPLICABLE` | 422 | Standard DCF not applicable (e.g., negative operating income) |
+| `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` | 422 | 20-F filer using unsupported taxonomy/currency |
 | `CALCULATION_ERROR` | 500 | Internal valuation calculation failure |
 | `RATE_LIMIT_EXCEEDED` | 429 | Rate limit exceeded |
 
@@ -115,8 +118,69 @@ Out-of-range values return 400 `INVALID_PARAMETER`.
 | `dcf_terminal_growth_used` | float | Terminal growth rate after the WACC-spread guardrail clamp. Omitted on non-DCF models |
 | `assumption_profile` | string | Resolved profile ID in `archetype:maturity` form (e.g. `mature_large_bank:mature`). Omitted on legacy/test paths |
 | `resolution_trace` | object | Audit trail of profile selection: `profile_id`, `source` (explicit/inferred/fallback), `resolver_version`, `config_version`, `config_hash`, `matched_rule_id`, `fallback_reason`, `missing_facts`, `human_reason`. Omitted on legacy/test paths |
+| `applied_overrides` | map | Echoes request-sourced valuation knobs. Keys are knob names; values are `{value: <scalar>, source: "request"}`. **Omitted** when no overrides were supplied — `POST {}` and GET responses are byte-identical. Only present on the POST single-ticker endpoint. |
 
 **Error Responses**: 400 (`INVALID_TICKER`, `INVALID_PARAMETER`), 401, 403, 404 (`TICKER_NOT_FOUND`), 422 (`INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`, `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED`), 429, 500
+
+---
+
+### 1b. POST /api/v1/fair-value/{ticker}
+
+**Auth**: Required (`read:fair_value` permission)
+
+**Path Parameters**: Same as GET — `ticker` (string, 1-5 alphanumeric chars).
+
+**Request Body** (`application/json`, optional):
+```json
+{
+  "options": {
+    "terminal_growth_rate": -0.01,
+    "horizon_years": 7,
+    "tax_rate": 0.21,
+    "beta": 1.1,
+    "risk_free_rate": 0.045,
+    "market_risk_premium": 0.05,
+    "terminal_method": "exit_multiple",
+    "terminal_multiple": 14.0,
+    "max_growth_rate": 0.4,
+    "min_growth_rate": -0.2,
+    "terminal_growth_cap": 0.03,
+    "growth_stages": { "stage1_years": 3, "stage2_years": 4, "stage3_years": 0 }
+  }
+}
+```
+
+**Request Schema** (`SingleFairValueRequest`):
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `options` | ValuationOverrides | No | Per-request knob overrides. Nil/absent = engine defaults = GET semantics. |
+
+**`ValuationOverrides` knob catalog:**
+| Knob | Type | Constraint | Notes |
+|------|------|-----------|-------|
+| `terminal_growth_rate` | float | Any (neg ok) | Layer-2: must be < WACC − 2% |
+| `terminal_growth_cap` | float | Any | Cap for auto-derived terminal g. Default 0.03 |
+| `horizon_years` | int | ≥ 1 | Layer-2: must be ≥ stage-sum |
+| `growth_stages.stage{1,2,3}_years` | int | ≥ 0 | Per-stage duration in years |
+| `max_growth_rate` | float | ≥ min | Upper growth estimator clamp. Default 0.5 |
+| `min_growth_rate` | float | ≤ max (neg ok) | Lower growth estimator clamp. Default −0.3 |
+| `terminal_method` | string | `gordon_growth` \| `exit_multiple` | Layer-2: `exit_multiple` requires resolvable multiple |
+| `terminal_multiple` | float | > 0 | EV/EBITDA exit multiple; falls back to industry default |
+| `tax_rate` | float | Any (neg ok) | Effective corporate tax rate |
+| `beta` | float | Any (neg ok) | CAPM beta. Conflicts with bulk `override_beta` |
+| `risk_free_rate` | float | Any (neg ok) | Nominal risk-free rate. Conflicts with bulk `override_rf` and GET `override_rf` |
+| `market_risk_premium` | float | **≥ 0** | CAPM equity risk premium. MRP < 0 → 422 |
+
+**Validation order** (single, authoritative path through `params.Resolve*`):
+1. Layer-1: per-knob static range + enum checks → 422 `INVALID_OVERRIDE`
+2. Layer-2: cross-knob invariants (resolver) → 422 `INVALID_OVERRIDE`
+3. Service: ticker-level errors (404, 422 INSUFFICIENT_DATA, etc.)
+
+**Important asymmetry**: GET `override_beta`/`override_rf` out-of-range → **400** `INVALID_PARAMETER`. POST `options` validation → **422** `INVALID_OVERRIDE`.
+
+**Response 200**: Same `FairValueResponse` as GET (§1 above), with `applied_overrides` added when overrides were supplied.
+
+**Error Responses**: 400 (`INVALID_TICKER`, `INVALID_REQUEST`), 401, 403, 404 (`TICKER_NOT_FOUND`), 422 (`INVALID_OVERRIDE`, `INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`, `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED`), 429, 500
 
 ---
 
@@ -137,10 +201,11 @@ Out-of-range values return 400 `INVALID_PARAMETER`.
 | Field | Type | Required | Constraints |
 |-------|------|----------|-------------|
 | `tickers` | string[] | Yes | 1-10 items, each 1-5 chars |
-| `override_beta` | float | No | Override beta for all tickers (0 - 3.0) |
-| `override_rf` | float | No | Override risk-free rate (0 - 0.20) |
+| `override_beta` | float | No | Legacy beta override for all tickers (0 - 3.0). Mutually exclusive with `options.beta`. |
+| `override_rf` | float | No | Legacy risk-free rate override for all tickers (0 - 0.20). Mutually exclusive with `options.risk_free_rate`. |
+| `options` | ValuationOverrides | No | Structured per-request knob overrides applied to all tickers. Must not duplicate `override_beta`/`override_rf` for the same knob — 422 `INVALID_OVERRIDE` if both set for the same knob. See §1b knob catalog. |
 
-Out-of-range overrides return 400 `INVALID_PARAMETER` (same bounds as single endpoint).
+Out-of-range legacy overrides return 400 `INVALID_PARAMETER`. Structured `options` validation returns 422 `INVALID_OVERRIDE`.
 
 **Response 200** (all succeed) / **207** (partial) / **422** (all fail):
 ```json
@@ -202,7 +267,15 @@ Out-of-range overrides return 400 `INVALID_PARAMETER` (same bounds as single end
 | 207 | Partial success — some succeeded, some failed |
 | 422 | All tickers failed |
 
-**Error Responses**: 400 (`INVALID_REQUEST`, `INVALID_PARAMETER`), 401
+Per-ticker `BulkFailure` schema:
+| Field | Type | Description |
+|-------|------|-------------|
+| `ticker` | string | Ticker that failed |
+| `error_code` | string | One of: `INVALID_TICKER`, `INVALID_OVERRIDE`, `TICKER_NOT_FOUND`, `INSUFFICIENT_DATA`, `MODEL_NOT_APPLICABLE`, `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED`, `CALCULATION_ERROR` |
+| `message` | string | Human-readable failure description |
+| `knob` | string | For `INVALID_OVERRIDE` only — names the offending parameter. Omitted for all other error codes. |
+
+**Error Responses**: 400 (`INVALID_REQUEST`, `INVALID_PARAMETER`, `INVALID_OVERRIDE`), 401, 422 (all tickers failed)
 
 ---
 
