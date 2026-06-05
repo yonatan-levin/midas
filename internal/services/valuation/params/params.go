@@ -116,6 +116,16 @@ type EffectiveValuationParams struct {
 	// request override.
 	TaxRate float64
 
+	// --- Diagnostics ---
+
+	// Warnings collects non-fatal advisories raised during resolution (e.g. an
+	// explicit terminal_growth_rate within 1% of WACC, or a profile-sourced
+	// horizon that had to be clamped to the available growth-rate length). The
+	// service drains these into result.Warnings so the caller sees them; they are
+	// never returned as errors. Nil/empty on the clean default path, preserving
+	// byte-identity (an empty slice adds nothing to result.Warnings).
+	Warnings []string
+
 	// --- Provenance ---
 
 	// Provenance maps knob names (matching the options JSON field names) to the
@@ -154,6 +164,18 @@ const (
 	// Replaces the inline literal
 	//   terminalGrowth = wacc - 0.02   (service.go:1737-1738)
 	DefaultTerminalWACCSpread = 0.02
+
+	// DefaultTerminalGrowthDegenWACCFloor is the absolute floor applied on the
+	// auto-derive path AFTER the WACC-spread clamp, for the degenerate case where
+	// WACC is so low that (wacc − DefaultTerminalWACCSpread) would drop the terminal
+	// growth below 1%. Replaces the inner inline literal
+	//   if terminalGrowth < 0.01 { terminalGrowth = 0.01 }   (service.go:1739-1741)
+	//
+	// This is DISTINCT from DefaultTerminalGrowthFloor (0.02): that floor guards the
+	// ≤0 auto-derived rate ("viable businesses grow with prices"); THIS floor guards
+	// the post-WACC-spread degenerate case (low-WACC regimes). They must NOT be
+	// merged — using 0.02 here would change byte-identity in low-WACC rows.
+	DefaultTerminalGrowthDegenWACCFloor = 0.01
 
 	// DefaultStage1Years is the high-growth stage duration in the multi-stage
 	// growth estimator. Mirrors DefaultEstimatorConfig() Stage1Years: 3
@@ -212,7 +234,7 @@ type Defaults struct {
 	// MaxGrowthRate / MinGrowthRate are the config-layer growth-rate bounds
 	// (ValuationConfig.DCFMaxGrowthRate / DCFMinGrowthRate).
 	// Zero → resolver falls back to DefaultMaxGrowthRate / DefaultMinGrowthRate.
-	MaxGrowthRate float64
+	MaxGrowthRate float64 // "zero" means "no config value"; resolver uses DefaultMaxGrowthRate
 	MinGrowthRate float64 // negative is meaningful; "zero" means "no config override"
 
 	// Stage{1,2,3}Years are the estimator-config defaults (from DefaultEstimatorConfig).

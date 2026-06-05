@@ -49,6 +49,19 @@ func TestDefaultConstants_EqualVerifiedSourceValues(t *testing.T) {
 			"must match wacc-0.02 guard at service.go:1737")
 	})
 
+	t.Run("DefaultTerminalGrowthDegenWACCFloor", func(t *testing.T) {
+		assert.Equal(t, 0.01, DefaultTerminalGrowthDegenWACCFloor,
+			"must match the inner post-WACC-spread floor `if terminalGrowth < 0.01` at service.go:1739")
+	})
+
+	t.Run("DegenWACCFloor_DistinctFromGrowthFloor", func(t *testing.T) {
+		// Carry-forward I1: the post-WACC-spread degenerate floor (0.01) must NOT
+		// be merged with the ≤0 inflation floor (0.02). Using 0.02 for the inner
+		// branch would break byte-identity in low-WACC rows.
+		assert.NotEqual(t, DefaultTerminalGrowthFloor, DefaultTerminalGrowthDegenWACCFloor,
+			"the degenerate-WACC floor (0.01) and the inflation floor (0.02) must stay distinct")
+	})
+
 	t.Run("DefaultStage1Years", func(t *testing.T) {
 		assert.Equal(t, 3, DefaultStage1Years,
 			"must match DefaultEstimatorConfig().Stage1Years at growth/estimator.go:40")
