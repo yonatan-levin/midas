@@ -143,6 +143,36 @@ type ValuationResult struct {
 	DCFTerminalPctOfEV    float64   `json:"dcf_terminal_pct_of_ev,omitempty"`
 	DCFPerYearPV          []float64 `json:"dcf_per_year_pv,omitempty"`
 	DCFTerminalGrowthUsed float64   `json:"dcf_terminal_growth_used,omitempty"`
+
+	// AppliedOverrides carries the set of knobs that were explicitly set by the
+	// request (source=="request"). Populated only when the request supplied at
+	// least one override; nil/omitted on the default path so default-path
+	// responses are byte-identical (omitempty).
+	//
+	// The carrier type is defined in this package to keep the import boundary
+	// clean: entities must NOT import internal/services/valuation/params (that
+	// package is a leaf). The service maps params.EffectiveValuationParams →
+	// AppliedOverrideValue using plain interface{} + string fields, which is
+	// all the handler needs to build the applied_overrides JSON object.
+	AppliedOverrides map[string]AppliedOverrideValue `json:"applied_overrides,omitempty"`
+}
+
+// AppliedOverrideValue is the per-knob payload carried on ValuationResult when
+// a request explicitly supplied that knob. Value holds the resolved scalar (the
+// type mirrors the knob — float64, int, or string); Source is always "request"
+// in v1 (the R5 design decision: echo only request-sourced knobs).
+//
+// Defined in entities rather than in the params or handlers packages to avoid
+// import cycles: entities is imported by both the service layer and the handler
+// layer, while params is a service-layer leaf and handlers is a transport leaf.
+type AppliedOverrideValue struct {
+	// Value is the resolved knob value as it was used by the engine (after any
+	// layer-precedence merge). The concrete Go type matches the knob (float64
+	// for rate/multiplier fields, int for year fields, string for method fields).
+	Value interface{} `json:"value"`
+	// Source is the precedence layer that supplied this value. Always "request"
+	// for v1 (only request-set knobs are echoed per design §8 R5).
+	Source string `json:"source"`
 }
 
 // SanityCheck contains cross-check multiples that compare the DCF-implied valuation

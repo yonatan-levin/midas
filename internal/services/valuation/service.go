@@ -1541,6 +1541,21 @@ func (s *Service) performValuation(
 		result.Warnings = append(result.Warnings, p.Warnings...)
 	}
 
+	// T10: stamp applied_overrides on the result for request-sourced knobs only.
+	// On the default path (no overrides) hasOverrides is false and RequestOverrides()
+	// returns nil, so the omitempty field is absent — byte-identity preserved.
+	if hasOverrides {
+		if kvs := p.RequestOverrides(); kvs != nil {
+			result.AppliedOverrides = make(map[string]entities.AppliedOverrideValue, len(kvs))
+			for k, v := range kvs {
+				result.AppliedOverrides[k] = entities.AppliedOverrideValue{
+					Value:  v,
+					Source: "request",
+				}
+			}
+		}
+	}
+
 	if len(gf.Warnings) > 0 {
 		result.Warnings = append(result.Warnings, gf.Warnings...)
 	}
@@ -1821,6 +1836,21 @@ func (s *Service) performAlternativeValuation(
 
 	if len(gf.Warnings) > 0 {
 		result.Warnings = append(result.Warnings, gf.Warnings...)
+	}
+
+	// T10: stamp applied_overrides on the alt-model result, mirroring the DCF path.
+	// resolvedParams is nil on test/internal paths that skip the resolver entirely;
+	// the nil guard keeps those paths byte-identical (no field stamped, omitempty drops it).
+	if resolvedParams != nil {
+		if kvs := resolvedParams.RequestOverrides(); kvs != nil {
+			result.AppliedOverrides = make(map[string]entities.AppliedOverrideValue, len(kvs))
+			for k, v := range kvs {
+				result.AppliedOverrides[k] = entities.AppliedOverrideValue{
+					Value:  v,
+					Source: "request",
+				}
+			}
+		}
 	}
 
 	// Tier-3 artifact bundle: snapshot the alt-model valuation result and

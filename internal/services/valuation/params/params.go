@@ -210,6 +210,71 @@ const (
 	DefaultTerminalMethod = "gordon_growth"
 )
 
+// RequestOverrides returns a map from knob name to its resolved value for every
+// knob whose Source in Provenance is SourceRequest. This is the compact
+// representation the service uses to populate entities.ValuationResult.AppliedOverrides.
+//
+// The map is nil (not empty) when no knob was request-sourced. Callers can store
+// the result directly on the result struct; omitempty drops it from JSON when nil.
+//
+// Why here: the mapping from knob-name constant → resolved field value lives inside
+// the params package, where both the constants (knobXxx) and the resolved fields
+// (EffectiveValuationParams.Xxx) are defined. Keeping it here avoids a second
+// mapping table in the service layer that would silently drift when new knobs are added.
+//
+// The returned values use concrete Go types that match the knob semantics:
+// float64 for rate/multiplier fields, int for year fields, string for method fields.
+// The service wraps these in entities.AppliedOverrideValue{Value: v, Source: "request"}.
+func (p *EffectiveValuationParams) RequestOverrides() map[string]interface{} {
+	var out map[string]interface{}
+	for knob, src := range p.Provenance {
+		if src != SourceRequest {
+			continue
+		}
+		// Lazy-init: only allocate when at least one request-sourced knob is found.
+		if out == nil {
+			out = make(map[string]interface{})
+		}
+		// Map knob name → the resolved field value from this struct.
+		// The switch covers every knob constant defined in resolve.go.
+		// Adding a new knob in resolve.go MUST be matched here to avoid silent omission.
+		switch knob {
+		case knobTerminalGrowthRate:
+			out[knob] = p.TerminalGrowthRate
+		case knobTerminalGrowthCap:
+			out[knob] = p.TerminalGrowthCap
+		case knobHorizonYears:
+			out[knob] = p.HorizonYears
+		case knobStage1Years:
+			out[knob] = p.Stage1Years
+		case knobStage2Years:
+			out[knob] = p.Stage2Years
+		case knobStage3Years:
+			out[knob] = p.Stage3Years
+		case knobMaxGrowthRate:
+			out[knob] = p.MaxGrowthRate
+		case knobMinGrowthRate:
+			out[knob] = p.MinGrowthRate
+		case knobTerminalMethod:
+			out[knob] = p.TerminalMethod
+		case knobTerminalMultiple:
+			out[knob] = p.TerminalMultiple
+		case knobTaxRate:
+			out[knob] = p.TaxRate
+		case knobBeta:
+			out[knob] = p.Beta
+		case knobRiskFreeRate:
+			out[knob] = p.RiskFreeRate
+		case knobMarketRiskPremium:
+			out[knob] = p.MarketRiskPremium
+			// knobGrowthStages is a virtual grouping knob — it is never individually
+			// request-sourced (individual stage1/2/3 knobs carry SourceRequest instead).
+			// It appears in validateStaging errors only; no corresponding field to echo.
+		}
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // Defaults — the resolver's lower-precedence input (plan §3.4)
 //

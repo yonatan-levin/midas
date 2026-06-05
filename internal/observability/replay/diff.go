@@ -444,6 +444,10 @@ var goFieldToJSON = map[string]string{
 	"DCFTerminalPctOfEV":    "dcf_terminal_pct_of_ev",
 	"DCFPerYearPV":          "dcf_per_year_pv",
 	"DCFTerminalGrowthUsed": "dcf_terminal_growth_used",
+	// T10: applied_overrides echoes request-sourced knobs. Omitempty — absent
+	// on default GET and POST{} paths. Added in the same commit as the struct
+	// field to keep this map and the field count in sync.
+	"AppliedOverrides": "applied_overrides",
 	// SanityCheck
 	"ImpliedPE":            "implied_pe",
 	"SectorMedianPE":       "sector_median_pe",
@@ -515,10 +519,8 @@ func nilOrType(p any) string {
 // guard above asserts the constant and reflection agree at package
 // load time.
 //
-// Tier 2 P0b: 30 (FairValueResponse, post-Graham + 7 Tier-2 additive
-// fields: AssumptionProfile, ResolutionTrace, and the 5 DCF diagnostic
-// fields declared for schema ownership) + 5 (Industry) + 8 (SanityCheck)
-// = 43.
+// T10: 31 (FairValueResponse — 30 pre-T10 + 1 AppliedOverrides) +
+// 5 (Industry) + 8 (SanityCheck) = 44.
 //
 // When a future commit extends FairValueResponse, Industry, or
 // SanityCheck:
@@ -528,8 +530,8 @@ func nilOrType(p any) string {
 //  3. Add an entry to goFieldToJSON for the new field's snake_case
 //     name (otherwise camelToSnake's best-effort conversion runs).
 func countFairValueFields() int {
-	// FairValueResponse: 30 top-level public fields (Graham + Tier 2 P0b).
+	// FairValueResponse: 31 top-level public fields (30 pre-T10 + AppliedOverrides).
 	// Industry: 5 fields.
 	// SanityCheck: 8 fields.
-	return 30 + 5 + 8
+	return 31 + 5 + 8
 }

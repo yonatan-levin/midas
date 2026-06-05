@@ -238,6 +238,36 @@ type FairValueResponse struct {
 	DCFTerminalPctOfEV    float64                  `json:"dcf_terminal_pct_of_ev,omitempty"`
 	DCFPerYearPV          []float64                `json:"dcf_per_year_pv,omitempty"`
 	DCFTerminalGrowthUsed float64                  `json:"dcf_terminal_growth_used,omitempty"`
+
+	// AppliedOverrides echoes the valuation knobs that were explicitly set by
+	// the request, each with the resolved value and source "request". Absent
+	// (omitempty) when no overrides were supplied — default GET responses and
+	// POST{} requests are byte-identical (TestPostFairValue_EmptyBody_EqualsGET
+	// pins this). Only request-sourced knobs are echoed in v1 (design §8 R5).
+	//
+	// Each entry:
+	//   "knob_name": { "value": <resolved scalar>, "source": "request" }
+	//
+	// Example with two overrides:
+	//   "applied_overrides": {
+	//     "tax_rate":    { "value": 0.21,  "source": "request" },
+	//     "horizon_years": { "value": 7,   "source": "request" }
+	//   }
+	AppliedOverrides map[string]AppliedOverride `json:"applied_overrides,omitempty"`
+}
+
+// AppliedOverride is the per-knob payload in the applied_overrides response
+// object. It mirrors entities.AppliedOverrideValue but lives in the handlers
+// package to keep the transport layer self-contained. buildFairValueResponse
+// maps entities → this type.
+//
+// @Description Per-knob override echo in the applied_overrides response field
+type AppliedOverride struct {
+	// Value is the resolved scalar that the engine used. Type matches the knob:
+	// float64 for rate/multiplier fields, int for year fields, string for method fields.
+	Value interface{} `json:"value"`
+	// Source is the precedence layer that supplied this value. Always "request" in v1.
+	Source string `json:"source"`
 }
 
 // BulkFairValueRequest represents the request structure for bulk fair value requests
@@ -595,10 +625,26 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 // response shape, shared by GetFairValue (GET) and PostFairValue (POST) to
 // guarantee byte-identical output for the same service result.
 //
-// T10 note: when applied_overrides is added to the response it should be
-// injected here as an extra parameter (e.g. appliedKnobs []string) so both
-// callers pass it in from their own override-tracking context.
+// T10: applied_overrides is populated by copying result.AppliedOverrides
+// (entities.AppliedOverrideValue map) into the handler-layer AppliedOverride map.
+// Both are nil/omitempty when no overrides were applied, preserving byte-identity
+// for default GET responses and POST{} requests.
 func (h *FairValueHandler) buildFairValueResponse(ticker string, result *entities.ValuationResult) FairValueResponse {
+	// Copy the applied overrides from the service-layer entity carrier to the
+	// handler-layer response type. The two structs are identical in shape but
+	// defined in separate packages to respect the import boundary. Nil when the
+	// result carries no overrides (default path) — omitempty drops the field.
+	var appliedOverrides map[string]AppliedOverride
+	if len(result.AppliedOverrides) > 0 {
+		appliedOverrides = make(map[string]AppliedOverride, len(result.AppliedOverrides))
+		for k, v := range result.AppliedOverrides {
+			appliedOverrides[k] = AppliedOverride{
+				Value:  v.Value,
+				Source: v.Source,
+			}
+		}
+	}
+
 	return FairValueResponse{
 		Ticker:                ticker,
 		WACC:                  result.WACC,
@@ -639,6 +685,9 @@ func (h *FairValueHandler) buildFairValueResponse(ticker string, result *entitie
 		DCFTerminalPctOfEV:    result.DCFTerminalPctOfEV,
 		DCFPerYearPV:          result.DCFPerYearPV,
 		DCFTerminalGrowthUsed: result.DCFTerminalGrowthUsed,
+		// T10: copy applied_overrides from the service-layer entity carrier.
+		// Nil when result carries no overrides (default path); omitempty drops it.
+		AppliedOverrides: appliedOverrides,
 	}
 }
 
