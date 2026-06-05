@@ -496,6 +496,28 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 			zap.Error(err))
 
 		// Classify error using sentinel types for reliable matching.
+		//
+		// Layer-2 cross-knob invariants (T8): params.ParamError surfaces when the
+		// resolver finds terminal_growth >= WACC, min > max, stage-sum < 1, horizon
+		// out of range, or exit-multiple unresolvable AFTER Layer-1 static ranges
+		// passed (T7). These are caller errors — map to 422 INVALID_OVERRIDE.
+		// Checked first so a specific invariant message is never masked by the
+		// generic TICKER_NOT_FOUND / CALCULATION_ERROR fallthrough.
+		//
+		// NOTE: GET /fair-value/{ticker} only accepts the legacy scalar overrides
+		// (beta/rf via query params) which have no Layer-2 cross-knob invariants
+		// today. This branch is defensive and enables T9 (POST endpoint) to call
+		// the same sendError path by sharing paramErrorResponse.
+		if errResp, ok := paramErrorResponse(err); ok {
+			errResp.Instance = c.Request.URL.Path
+			errResp.Timestamp = time.Now().UTC().Format(time.RFC3339)
+			errResp.Method = c.Request.Method
+			c.Header("Content-Type", "application/problem+json")
+			c.JSON(http.StatusUnprocessableEntity, errResp)
+			c.Abort()
+			return
+		}
+
 		// FPI MUST be checked before ErrInsufficientData — both produce 422
 		// but FPI carries a more specific code/message that helps users
 		// understand we have data, just in a taxonomy we don't yet parse.
@@ -817,7 +839,25 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 
 // classifyBulkError maps a valuation service error to a BulkFailure with
 // an appropriate error code and human-readable message.
+//
+// Layer-2 cross-knob invariant violations (params.ParamError) are checked first
+// so that a per-ticker bad override is surfaced as INVALID_OVERRIDE rather than
+// CALCULATION_ERROR, preserving failure isolation: one ticker's invariant breach
+// does not affect the rest of the batch.
 func classifyBulkError(ticker string, err error) BulkFailure {
+	// Layer-2 cross-knob invariants (T8): terminal_growth >= WACC, min > max,
+	// stage-sum < 1, horizon out of range, exit-multiple unresolvable. These are
+	// caller errors — map to INVALID_OVERRIDE with the offending knob name so
+	// the consumer can fix the request without contacting the operator.
+	var pe *params.ParamError
+	if errors.As(err, &pe) {
+		return BulkFailure{
+			Ticker:    ticker,
+			ErrorCode: "INVALID_OVERRIDE",
+			Message:   pe.Error(),
+		}
+	}
+
 	switch {
 	case errors.Is(err, valuation.ErrTickerNotFound):
 		return BulkFailure{
@@ -851,6 +891,37 @@ func classifyBulkError(ticker string, err error) BulkFailure {
 			Message:   "Valuation calculation failed",
 		}
 	}
+}
+
+// paramErrorResponse inspects err for a *params.ParamError and, when found,
+// builds the RFC 7807 422 INVALID_OVERRIDE problem-detail body ready for the
+// handler to send. Returns (nil, false) when err is not (or does not wrap) a
+// *params.ParamError, so callers can fall through to their own error routing.
+//
+// T9 (POST single-ticker) should call this after its CalculateValuation call
+// using the same pattern:
+//
+//	if errResp, ok := paramErrorResponse(err); ok {
+//	    c.Header("Content-Type", "application/problem+json")
+//	    c.JSON(http.StatusUnprocessableEntity, errResp)
+//	    c.Abort()
+//	    return
+//	}
+func paramErrorResponse(err error) (*ErrorResponse, bool) {
+	var pe *params.ParamError
+	if !errors.As(err, &pe) {
+		return nil, false
+	}
+	return &ErrorResponse{
+		Type:   "https://problems.midas.dev/INVALID_OVERRIDE",
+		Title:  "Invalid valuation override",
+		Status: http.StatusUnprocessableEntity,
+		Detail: pe.Reason,
+		Code:   "INVALID_OVERRIDE",
+		Context: map[string]interface{}{
+			"knob": pe.Knob,
+		},
+	}, true
 }
 
 // ---------------------------------------------------------------------------
