@@ -44,7 +44,11 @@ type TestContainer struct {
 	WatchlistRepo    ports.WatchlistRepository
 	Logger           *zap.Logger
 	Database         *sqlx.DB
-	cleanup          func()
+	// CacheRepo is the live cache repository wired by the DI container.
+	// Tests can use it to inspect cache state (e.g. verify cache bypass on
+	// override requests) via Exists/Get/Delete.
+	CacheRepo ports.CacheRepository
+	cleanup   func()
 }
 
 // SetupTestEnvironment creates a complete test environment with real infrastructure
@@ -78,6 +82,7 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 	var metricsService *metrics.Service
 	var logger *zap.Logger
 	var watchlistRepo ports.WatchlistRepository
+	var cacheRepo ports.CacheRepository
 
 	// Step 4: Create DI container with real services
 	app := fxtest.New(t,
@@ -93,7 +98,7 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 		fx.Provide(handlers.NewFairValueHandler),
 
 		// Extract handlers and database for testing
-		fx.Populate(&fairValueHandler, &authService, &database, &valuationService, &rateLimiter, &healthHandler, &metricsService, &logger, &watchlistRepo),
+		fx.Populate(&fairValueHandler, &authService, &database, &valuationService, &rateLimiter, &healthHandler, &metricsService, &logger, &watchlistRepo, &cacheRepo),
 	)
 
 	// Step 5: Start the DI container
@@ -128,6 +133,7 @@ func SetupTestEnvironment(t *testing.T) *TestContainer {
 		WatchlistRepo:    watchlistRepo,
 		Logger:           logger,
 		Database:         database,
+		CacheRepo:        cacheRepo,
 		cleanup:          cleanup,
 	}
 }
