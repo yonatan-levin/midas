@@ -16,6 +16,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/params"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
@@ -242,8 +243,15 @@ type FairValueResponse struct {
 // @Description Bulk fair value calculation request for multiple tickers
 type BulkFairValueRequest struct {
 	Tickers          []string `json:"tickers" binding:"required,min=1,max=10" example:"[\"AAPL\",\"MSFT\",\"GOOGL\"]"` // Stock ticker symbols (max 10)
-	OverrideBeta     *float64 `json:"override_beta,omitempty" example:"1.2"`                                           // Optional beta override
-	OverrideRiskFree *float64 `json:"override_rf,omitempty" example:"0.045"`                                           // Optional risk-free rate override
+	OverrideBeta     *float64 `json:"override_beta,omitempty" example:"1.2"`                                           // Optional beta override (legacy; prefer options.beta)
+	OverrideRiskFree *float64 `json:"override_rf,omitempty" example:"0.045"`                                           // Optional risk-free rate override (legacy; prefer options.risk_free_rate)
+
+	// Options carries structured per-request valuation knob overrides applied to
+	// ALL tickers in the batch. When set, it must not duplicate any knob that is
+	// also set via the legacy OverrideBeta / OverrideRiskFree fields — the
+	// request is rejected 422 with code "INVALID_OVERRIDE" if both are present
+	// for the same knob.
+	Options *ValuationOverrides `json:"options,omitempty"`
 }
 
 // BulkFailure describes why a single ticker failed during bulk valuation.
@@ -267,6 +275,100 @@ type BulkSummary struct {
 	TotalRequested int `json:"total_requested"`
 	Successful     int `json:"successful"`
 	Failed         int `json:"failed"`
+}
+
+// ValuationOverrides is the request-body transport for per-request valuation
+// knob overrides. All fields are optional pointers; nil means "use the resolved
+// default". JSON names follow the design §5 catalog exactly.
+//
+// This struct is a transport DTO only — it is projected into params.Overrides via
+// projectOverrides before being passed to the domain layer. Wire-format details
+// must never reach the valuation service or params package directly.
+//
+// @Description Per-request valuation knob overrides (all fields optional)
+type ValuationOverrides struct {
+	// Terminal growth rate — explicit absolute value for g in Gordon Growth Model.
+	// Negative values are allowed (real-terms decline). If omitted the engine
+	// auto-derives g from historical CAGR, capped by terminal_growth_cap.
+	TerminalGrowthRate *float64 `json:"terminal_growth_rate,omitempty" example:"-0.01"`
+
+	// Cap applied during auto-derivation of the terminal growth rate.
+	// Defaults to 0.03 (3%). Has no effect when terminal_growth_rate is set explicitly.
+	TerminalGrowthCap *float64 `json:"terminal_growth_cap,omitempty" example:"0.03"`
+
+	// DCF forecast horizon in years. When omitted the engine uses the length of
+	// the growth-rate slice produced by the estimator (legacy signal).
+	HorizonYears *int `json:"horizon_years,omitempty" example:"5"`
+
+	// GrowthStages overrides the three-stage growth estimator configuration.
+	// When any sub-field is set a per-request estimator is built instead of
+	// reusing the shared service-level estimator.
+	GrowthStages *GrowthStages `json:"growth_stages,omitempty"`
+
+	// MaxGrowthRate is the upper clamp applied inside the growth estimator.
+	// Defaults to 0.5 (50%). Negative values are meaningless here but accepted.
+	MaxGrowthRate *float64 `json:"max_growth_rate,omitempty" example:"0.5"`
+
+	// MinGrowthRate is the lower clamp applied inside the growth estimator.
+	// Defaults to -0.3 (-30%). Negative values represent contraction scenarios.
+	MinGrowthRate *float64 `json:"min_growth_rate,omitempty" example:"-0.3"`
+
+	// TerminalMethod selects the terminal-value calculation model.
+	// Allowed values: "gordon_growth" (default) | "exit_multiple".
+	// "exit_multiple" requires that a multiple is resolvable (via terminal_multiple
+	// or the industry default); if neither is available the request is rejected 422.
+	TerminalMethod *string `json:"terminal_method,omitempty" example:"exit_multiple"`
+
+	// TerminalMultiple is the EV/EBITDA (or analogous) exit multiple used when
+	// terminal_method is "exit_multiple". When omitted the engine falls back to
+	// the industry default looked up at resolution time.
+	TerminalMultiple *float64 `json:"terminal_multiple,omitempty" example:"14.0"`
+
+	// TaxRate is the effective corporate tax rate applied to FCF, WACC, and the
+	// alt-model ModelInput. Negative values are allowed (NOLs / tax credits).
+	TaxRate *float64 `json:"tax_rate,omitempty" example:"0.21"`
+
+	// Beta is the equity beta used in the CAPM cost-of-equity calculation.
+	// Negative values are allowed (inverse-correlated assets).
+	// Conflicts with the legacy override_beta field on the bulk request.
+	Beta *float64 `json:"beta,omitempty" example:"1.2"`
+
+	// RiskFreeRate is the nominal risk-free rate (e.g. 10-year Treasury yield).
+	// Negative values are allowed (EUR/JPY/CHF regimes).
+	// Conflicts with the legacy override_rf field on the bulk request and the
+	// override_rf query parameter on the GET single-ticker endpoint.
+	RiskFreeRate *float64 `json:"risk_free_rate,omitempty" example:"0.045"`
+
+	// MarketRiskPremium is the equity risk premium (ERP) added to the risk-free
+	// rate in CAPM. Must be ≥ 0; a negative ERP is economically unsound and
+	// will be caught by Layer-1 validation (T7).
+	MarketRiskPremium *float64 `json:"market_risk_premium,omitempty" example:"0.05"`
+}
+
+// GrowthStages carries the three-stage growth-estimator duration configuration.
+// All fields optional; nil means "keep the engine default for that stage".
+//
+// Stage durations are in years:
+//   - Stage1Years: high-growth phase (default 3)
+//   - Stage2Years: fade/transition phase (default 4)
+//   - Stage3Years: long-tail extension (default 0 — legacy 7-year horizon)
+//
+// @Description Three-stage growth estimator duration overrides
+type GrowthStages struct {
+	Stage1Years *int `json:"stage1_years,omitempty" example:"3"`
+	Stage2Years *int `json:"stage2_years,omitempty" example:"4"`
+	Stage3Years *int `json:"stage3_years,omitempty" example:"0"`
+}
+
+// SingleFairValueRequest is the POST body for the single-ticker fair-value
+// endpoint (POST /api/v1/fair-value/{ticker}). An empty or omitted `options`
+// block produces a response byte-identical to the GET endpoint.
+//
+// @Description POST body for single-ticker fair-value calculation with optional overrides
+type SingleFairValueRequest struct {
+	// Options carries per-request valuation knob overrides. Nil or absent means
+	// "use engine defaults" — identical to calling the GET endpoint.
+	Options *ValuationOverrides `json:"options,omitempty"`
 }
 
 // ErrorResponse represents an error response structure
@@ -550,6 +652,29 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		return
 	}
 
+	// Detect conflicts between legacy top-level fields and the structured options
+	// block. A conflict means the same knob is supplied twice with potentially
+	// different values — we reject rather than silently resolve (design §4.1/F4).
+	if conflicts := detectOverrideConflicts(request.OverrideBeta, request.OverrideRiskFree, request.Options); len(conflicts) > 0 {
+		// Report the first conflict; the detail message names both the legacy field
+		// and the options path so the caller knows exactly what to remove.
+		conflictKnob := "beta"
+		if strings.Contains(conflicts[0], "risk_free_rate") {
+			conflictKnob = "risk_free_rate"
+		}
+		h.sendError(c, http.StatusUnprocessableEntity, "INVALID_OVERRIDE",
+			"Invalid valuation override",
+			conflicts[0],
+			map[string]interface{}{"knob": conflictKnob})
+		return
+	}
+
+	// Project the structured options DTO into the domain-layer Overrides once,
+	// at the request level. The same projected overrides apply to every ticker.
+	// projectOverrides is nil-safe: if request.Options is nil, projectedOverrides
+	// is a zero params.Overrides (all nil pointers) — equivalent to no override.
+	projectedOverrides := projectOverrides(request.Options)
+
 	logctx.From(c.Request.Context()).Info("Processing bulk fair value request",
 		zap.Int("ticker_count", len(request.Tickers)),
 		zap.Strings("tickers", request.Tickers))
@@ -575,12 +700,21 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 			continue
 		}
 
-		// Build valuation options from bulk request overrides
+		// Build valuation options from legacy bulk request fields plus the
+		// structured options block. Legacy fields still work for backward
+		// compatibility; the structured Overrides carries the new knobs.
+		//
+		// Only allocate opts when at least one override is actually present —
+		// a nil *ValuationOptions signals "no overrides" to the cache layer and
+		// the service. anyBulkOverride checks the same conditions as
+		// ValuationOptions.hasAnyOverride (package-private) but at the handler
+		// layer so we don't cross the package boundary.
 		var opts *valuation.ValuationOptions
-		if request.OverrideBeta != nil || request.OverrideRiskFree != nil {
+		if anyBulkOverride(request.OverrideBeta, request.OverrideRiskFree, request.Options) {
 			opts = &valuation.ValuationOptions{
 				OverrideBeta:     request.OverrideBeta,
 				OverrideRiskFree: request.OverrideRiskFree,
+				Overrides:        projectedOverrides,
 			}
 		}
 
@@ -703,6 +837,106 @@ func classifyBulkError(ticker string, err error) BulkFailure {
 			Message:   "Valuation calculation failed",
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Override helpers (T6)
+// ---------------------------------------------------------------------------
+
+// projectOverrides translates the transport DTO (*ValuationOverrides) into the
+// domain-layer params.Overrides struct. This is the single point where wire
+// names are mapped to domain names, so the domain layer never sees the DTO.
+//
+// Nil-safe: a nil dto returns a zero params.Overrides (all pointers nil).
+// GrowthStages is flattened: dto.GrowthStages.StageNYears → params.StageNYears.
+func projectOverrides(o *ValuationOverrides) params.Overrides {
+	if o == nil {
+		return params.Overrides{}
+	}
+
+	out := params.Overrides{
+		TerminalGrowthRate: o.TerminalGrowthRate,
+		TerminalGrowthCap:  o.TerminalGrowthCap,
+		HorizonYears:       o.HorizonYears,
+		MaxGrowthRate:      o.MaxGrowthRate,
+		MinGrowthRate:      o.MinGrowthRate,
+		TerminalMethod:     o.TerminalMethod,
+		TerminalMultiple:   o.TerminalMultiple,
+		TaxRate:            o.TaxRate,
+		Beta:               o.Beta,
+		RiskFreeRate:       o.RiskFreeRate,
+		MarketRiskPremium:  o.MarketRiskPremium,
+	}
+
+	// Flatten GrowthStages sub-struct into the flat Overrides fields.
+	if o.GrowthStages != nil {
+		out.Stage1Years = o.GrowthStages.Stage1Years
+		out.Stage2Years = o.GrowthStages.Stage2Years
+		out.Stage3Years = o.GrowthStages.Stage3Years
+	}
+
+	return out
+}
+
+// anyBulkOverride reports whether a bulk request carries any per-request override
+// via the legacy fields or the structured options block. This mirrors the logic
+// of valuation.ValuationOptions.hasAnyOverride (which is unexported) but operates
+// on the raw request fields so the handler can decide whether to allocate opts
+// before crossing the package boundary.
+func anyBulkOverride(legacyBeta, legacyRF *float64, o *ValuationOverrides) bool {
+	if legacyBeta != nil || legacyRF != nil {
+		return true
+	}
+	if o == nil {
+		return false
+	}
+	return o.Beta != nil ||
+		o.RiskFreeRate != nil ||
+		o.MarketRiskPremium != nil ||
+		o.TaxRate != nil ||
+		o.TerminalGrowthRate != nil ||
+		o.TerminalGrowthCap != nil ||
+		o.HorizonYears != nil ||
+		o.MaxGrowthRate != nil ||
+		o.MinGrowthRate != nil ||
+		o.TerminalMethod != nil ||
+		o.TerminalMultiple != nil ||
+		(o.GrowthStages != nil && (o.GrowthStages.Stage1Years != nil ||
+			o.GrowthStages.Stage2Years != nil ||
+			o.GrowthStages.Stage3Years != nil))
+}
+
+// detectOverrideConflicts checks whether any knob is supplied BOTH through a
+// legacy field (OverrideBeta / OverrideRiskFree) AND through the structured
+// options block. Returns one string per conflicting knob naming exactly which
+// pair conflicts, e.g.:
+//
+//	"beta set in both override_beta and options.beta; supply only one"
+//
+// The caller is responsible for deciding what to do with conflicts; for the
+// bulk path a non-empty slice means 422.
+//
+// Design §4.1 / plan §5 T6: "conflict detection" — only beta and risk_free_rate
+// have legacy counterparts in the bulk request. MarketRiskPremium and all other
+// knobs are available only via options, so they never conflict here.
+func detectOverrideConflicts(legacyBeta, legacyRF *float64, o *ValuationOverrides) []string {
+	if o == nil {
+		return nil
+	}
+
+	var conflicts []string
+
+	if legacyBeta != nil && o.Beta != nil {
+		conflicts = append(conflicts,
+			"beta set in both override_beta and options.beta; supply only one")
+	}
+
+	if legacyRF != nil && o.RiskFreeRate != nil {
+		conflicts = append(conflicts,
+			"risk_free_rate set in both override_rf and options.risk_free_rate; supply only one")
+	}
+
+	return conflicts
 }
 
 // Helper functions
