@@ -656,10 +656,41 @@ func (s *Service) performValuation(
 		sustainableGrowth = growth.CalculateSustainableGrowth(nopat, investedCapital, s.growthEstimator.Config().DefaultPayoutRatio)
 	}
 
+	// --- Request-valuation-overrides (T5/S3): per-request growth estimator. ---
+	//
+	// §3.7 ordering: the estimator's staging config (stage1/2/3, max, min) must be
+	// resolved BEFORE the estimator runs, but ResolveInputs runs later (after the
+	// estimate, when growthRateLen is known). So we normalize the request Overrides
+	// here and, ONLY when a staging/min/max knob is overridden, build a per-request
+	// estimator with the overridden config. When NO such override is present we
+	// reuse the shared s.growthEstimator EXACTLY as before — the fast/default path
+	// is untouched and byte-identical.
+	//
+	// The Overrides carrier is normalized once here (legacy OverrideBeta/RiskFree
+	// folded in idempotently) and reused below for ResolveInputs, so the two never
+	// diverge on which knobs the request set.
+	overrides := s.normalizeOverrides(opts)
+
+	// estimator selects the Estimator used for THIS request's growth estimate.
+	// Default: the shared, pre-built s.growthEstimator (no allocation, no behavior
+	// change). Override: a per-request Estimator (see growthEstimatorFor).
+	estimator := s.growthEstimator
+	if overridesAffectEstimator(overrides) {
+		// Layer-2 pre-check (T2 ValidateEstimatorConfig): reject an invalid staging
+		// config (min > max, or stage-sum < 1) BEFORE the estimator runs, so it never
+		// executes with a nonsensical config. ResolveInputs re-asserts the same
+		// invariants idempotently afterwards. Propagate the typed *params.ParamError
+		// so the handler maps it to 422 (T8); never a 500.
+		if err := params.ValidateEstimatorConfig(s.estimatorDefaults(), overrides); err != nil {
+			return nil, err
+		}
+		estimator = s.growthEstimatorFor(overrides)
+	}
+
 	// Produce multi-stage growth estimate (analyst + historical blend).
 	// ctx is passed through so EstimateGrowthRates can emit stage-5 "growth" trace.
 	// Ticker is threaded in so the emitted trace carries it self-describingly (M-1a).
-	growthEstimate := s.growthEstimator.EstimateGrowthRates(ctx, historicalData.Ticker, analystData, historicalGrowth, sustainableGrowth)
+	growthEstimate := estimator.EstimateGrowthRates(ctx, historicalData.Ticker, analystData, historicalGrowth, sustainableGrowth)
 
 	// Tier-1 narrate: growth.estimated. Spec §5 row 12 fields. Reports
 	// year-1 + terminal growth and the actual analyst/historical blend
@@ -918,22 +949,10 @@ func (s *Service) performValuation(
 	// A zero-value params.Overrides has all-nil pointer fields, so the resolver
 	// takes every default — preserving the legacy nil-opts behavior exactly.
 	//
-	// Normalize the legacy scalar override fields (OverrideBeta/OverrideRiskFree)
-	// into the Overrides carrier here too. CalculateValuation already does this at
-	// its entry, but performValuation is also called directly (tests, and any
-	// future caller), so this idempotent fold keeps the legacy scalar fields
-	// honored on every path. Rule (matches T3): legacy wins only when the
-	// corresponding Overrides field is still nil (no double-set).
-	var overrides params.Overrides
-	if opts != nil {
-		overrides = opts.Overrides
-		if opts.OverrideBeta != nil && overrides.Beta == nil {
-			overrides.Beta = opts.OverrideBeta
-		}
-		if opts.OverrideRiskFree != nil && overrides.RiskFreeRate == nil {
-			overrides.RiskFreeRate = opts.OverrideRiskFree
-		}
-	}
+	// `overrides` was already normalized above (before the growth estimate) by
+	// s.normalizeOverrides — including folding the legacy OverrideBeta/RiskFree
+	// scalars into the carrier — and is reused here so the estimator-selection
+	// path and the resolver path never diverge on which knobs the request set.
 
 	// growthRateLen mirrors the legacy projectionYears computation
 	// (len(growthEstimate.ProjectedGrowthRates), with the 0→5 fallback) so the
@@ -964,10 +983,13 @@ func (s *Service) performValuation(
 		profileTerminalMultiple = resolvedProfile.TerminalMultiple
 	}
 
-	// Estimator stage years: the shared s.growthEstimator's configured stages
-	// (DefaultEstimatorConfig 3/4/0). T4 reuses the shared estimator (the
-	// per-request estimator is T5); these feed the resolver's staging invariants.
-	estCfg := s.growthEstimator.Config()
+	// Estimator stage years: the configured stages of the estimator that ACTUALLY
+	// ran this request (shared default 3/4/0, OR the per-request override config
+	// when staging/min/max was overridden — T5/S3). Feeding the resolver the same
+	// estimator's config keeps the resolved Stage*/Max/Min in lock-step with the
+	// growth slice the estimator just produced. On the default path estimator ==
+	// s.growthEstimator, so this is byte-identical to T4.
+	estCfg := estimator.Config()
 
 	resolverDefaults := params.Defaults{
 		TerminalGrowthCap: s.config.Valuation.DefaultTerminalGrowthCap,
@@ -1021,14 +1043,22 @@ func (s *Service) performValuation(
 	// (the EV→Equity bridge), NOT into the capital-structure denominator. This
 	// is the substantive accuracy correction: contingent/lease/pension claims
 	// are shareholder claims, not interest-bearing capital. C6 capitalized
-	// interest restates InterestExpense via the Restated view. TaxRate is not
-	// Restater-touched (and not a view field) and stays on the entity.
+	// interest restates InterestExpense via the Restated view.
+	//
+	// CF-2 (T5): the Hamada unlever/relever tax shield reads the resolved
+	// p.TaxRate (was latestFinancialData.TaxRate) so a tax_rate override moves the
+	// beta-ladder tax shield COHERENTLY with WACC (which already reads p.TaxRate at
+	// the cost-of-debt step). DEFAULT-PATH BYTE-IDENTICAL: with no tax override
+	// p.TaxRate == latestFinancialData.TaxRate, so the unlevered / relevered betas
+	// — and thus WACC — are unchanged bit-for-bit. TaxRate is not Restater-touched
+	// (and not a view field), which is why the resolver's default source for it is
+	// the entity read.
 	waccRestated := restatedViewOr(cleaned, latestFinancialData)
 	marketEquity := marketData.CalculateMarketValue()
 	if marketEquity > 0 && waccRestated.InterestBearingDebt > 0 {
 		debtEquityRatio := waccRestated.InterestBearingDebt / marketEquity
-		unleveredBeta = wacc.UnleveredBeta(blumeBeta, latestFinancialData.TaxRate, debtEquityRatio)
-		releveredBeta = wacc.RelleveredBeta(unleveredBeta, latestFinancialData.TaxRate, debtEquityRatio)
+		unleveredBeta = wacc.UnleveredBeta(blumeBeta, p.TaxRate, debtEquityRatio)
+		releveredBeta = wacc.RelleveredBeta(unleveredBeta, p.TaxRate, debtEquityRatio)
 		beta = releveredBeta
 	}
 
@@ -1161,7 +1191,7 @@ func (s *Service) performValuation(
 			ctx, selectedModel, historicalData, marketData, macroData,
 			growthEstimate, waccResult, latestFinancialData, latestPeriod,
 			tangibleValuePerShare, sharesOutstanding, industryCode,
-			resolvedProfile, cleaned,
+			resolvedProfile, cleaned, &p,
 		)
 		if errors.Is(altErr, errFallbackToDCF) {
 			s.log(ctx).Info("Falling back to standard DCF after alternative model failure",
@@ -1631,6 +1661,7 @@ func (s *Service) performAlternativeValuation(
 	industryCode string,
 	resolvedProfile *profile.ResolvedProfile,
 	cleaned *cleaneddata.CleanedFinancialData,
+	resolvedParams *params.EffectiveValuationParams,
 ) (*entities.ValuationResult, error) {
 
 	s.log(ctx).Info("Using alternative valuation model",
@@ -1679,6 +1710,18 @@ func (s *Service) performAlternativeValuation(
 	// Restated view above — see the modelIBD comment for the safety argument.)
 	modelDebtLikeClaims := investedCapitalOr(cleaned, latestFinancialData).DebtLikeClaims
 
+	// CF-1 (T5, R6 completion): the alt-model tax rate reads the resolved
+	// p.TaxRate so a tax_rate override reaches every model uniformly (coherent
+	// with WACC + the DCF FCF tax). DEFAULT-PATH BYTE-IDENTICAL: with no override
+	// resolvedParams.TaxRate == latestFinancialData.TaxRate. resolvedParams may be
+	// nil on defensive/test paths (no resolver wired) — fall back to the entity
+	// read then. DDM ignores this field for its dividend math (legacy path), so
+	// the JPM/BAC/WFC bit-for-bit invariant is unaffected.
+	modelTaxRate := latestFinancialData.TaxRate
+	if resolvedParams != nil {
+		modelTaxRate = resolvedParams.TaxRate
+	}
+
 	modelInput := &models.ModelInput{
 		HistoricalData:         historicalData,
 		MarketData:             marketData,
@@ -1687,7 +1730,7 @@ func (s *Service) performAlternativeValuation(
 		Industry:               industryCode,
 		WACC:                   waccResult.WACC,
 		CostOfEquity:           waccResult.CostOfEquity,
-		TaxRate:                latestFinancialData.TaxRate,
+		TaxRate:                modelTaxRate,
 		SharesOutstanding:      sharesOutstanding,
 		InterestBearingDebt:    modelIBD,
 		CashAndCashEquivalents: modelCash,
@@ -1705,6 +1748,11 @@ func (s *Service) performAlternativeValuation(
 		// P0b downstream consumers are nil-safe NO-OPs; P1/P3/P4 will read
 		// calibration values (horizon, caps, terminal method, payout path).
 		Profile: resolvedProfile,
+		// T5/S8: stamp the resolved EffectiveValuationParams (additive). Alt
+		// models that consume overridable horizon/terminal/tax knobs may read it;
+		// DDM ignores it (legacy path). nil-safe — may be nil on test/internal
+		// paths. Full alt-model override consumption is a documented follow-up.
+		Params: resolvedParams,
 	}
 
 	// Execute the alternative model
@@ -1837,6 +1885,93 @@ func (s *Service) calculateTangibleValuePerShare(financial *cleaneddata.Financia
 	}
 
 	return tangibleEquity / shares
+}
+
+// normalizeOverrides projects opts into a params.Overrides carrier, folding the
+// legacy scalar fields (OverrideBeta / OverrideRiskFree) into Beta / RiskFreeRate
+// idempotently. CalculateValuation already does this at its entry, but
+// performValuation is also called directly (tests, scheduler, any future caller),
+// so this fold keeps the legacy scalars honored on every path. Rule (matches T3):
+// the legacy scalar wins only when the corresponding Overrides field is still nil
+// (no double-set). opts may be nil — a nil opts yields a zero-value Overrides
+// (all-nil pointers), so the resolver takes every default, preserving the legacy
+// nil-opts behavior exactly.
+func (s *Service) normalizeOverrides(opts *ValuationOptions) params.Overrides {
+	if opts == nil {
+		return params.Overrides{}
+	}
+	ov := opts.Overrides
+	if opts.OverrideBeta != nil && ov.Beta == nil {
+		ov.Beta = opts.OverrideBeta
+	}
+	if opts.OverrideRiskFree != nil && ov.RiskFreeRate == nil {
+		ov.RiskFreeRate = opts.OverrideRiskFree
+	}
+	return ov
+}
+
+// overridesAffectEstimator reports whether any request override changes the growth
+// estimator's configuration (staging durations or the min/max growth clamps). Only
+// these knobs require a per-request estimator; every other override (beta/rf/MRP/
+// tax/terminal/horizon) is consumed downstream of the estimate and does NOT trigger
+// a rebuild. The default (no staging/min/max override) path therefore reuses the
+// shared s.growthEstimator unchanged.
+func overridesAffectEstimator(o params.Overrides) bool {
+	return o.Stage1Years != nil ||
+		o.Stage2Years != nil ||
+		o.Stage3Years != nil ||
+		o.MaxGrowthRate != nil ||
+		o.MinGrowthRate != nil
+}
+
+// estimatorDefaults projects the shared estimator's config into a params.Defaults
+// carrying only the estimator-config fields (staging + min/max). It is the
+// lower-precedence input for the pre-estimator ValidateEstimatorConfig pre-check
+// (T5/S3). The WACC/tax/profile/industry fields are intentionally left zero — that
+// pre-check only validates the staging invariants (min ≤ max, stage-sum ≥ 1).
+func (s *Service) estimatorDefaults() params.Defaults {
+	cfg := s.growthEstimator.Config()
+	return params.Defaults{
+		MaxGrowthRate: s.config.Valuation.DCFMaxGrowthRate,
+		MinGrowthRate: s.config.Valuation.DCFMinGrowthRate,
+		Stage1Years:   cfg.Stage1Years,
+		Stage2Years:   cfg.Stage2Years,
+		Stage3Years:   cfg.Stage3Years,
+	}
+}
+
+// growthEstimatorFor builds a per-request growth Estimator whose config is the
+// shared estimator's config with the overridden staging / min / max knobs replaced
+// by the request values. EVERY other config field (FadeTargetRate, terminal
+// growth bounds, DefaultPayoutRatio) is copied verbatim from the shared estimator,
+// so only the explicitly-overridden knobs change.
+//
+// No hidden shared mutable state: growthsvc.Estimator is {config (a value copy),
+// logger, calcEmitter}. The config is copied by value here; the logger and
+// calcEmitter are shared read-only sinks (the per-request estimator emits traces
+// through the same request-scoped calcEmitter via ctx, which is correct). Building
+// one per request is cheap (no I/O) and cannot mutate the shared estimator.
+//
+// Callers MUST gate this on overridesAffectEstimator — the default path reuses the
+// shared s.growthEstimator and never reaches here.
+func (s *Service) growthEstimatorFor(o params.Overrides) *growthsvc.Estimator {
+	cfg := s.growthEstimator.Config() // value copy of the shared config
+	if o.Stage1Years != nil {
+		cfg.Stage1Years = *o.Stage1Years
+	}
+	if o.Stage2Years != nil {
+		cfg.Stage2Years = *o.Stage2Years
+	}
+	if o.Stage3Years != nil {
+		cfg.Stage3Years = *o.Stage3Years
+	}
+	if o.MaxGrowthRate != nil {
+		cfg.MaxGrowthRate = *o.MaxGrowthRate
+	}
+	if o.MinGrowthRate != nil {
+		cfg.MinGrowthRate = *o.MinGrowthRate
+	}
+	return growthsvc.NewEstimator(cfg, s.logger, s.calcEmitter)
 }
 
 // calculateTerminalGrowthRate calculates a conservative terminal growth rate.

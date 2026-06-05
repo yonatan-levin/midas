@@ -11,6 +11,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/cleaneddata"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/params"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
@@ -91,6 +92,20 @@ type ModelInput struct {
 	// behavior — P0b ships every model with nil-safe access since the
 	// per-model wiring lands in P1/P2/P3/P4. Spec §2.3, §3.1.
 	Profile *profile.ResolvedProfile
+
+	// Params is the resolved per-request EffectiveValuationParams stamped by
+	// service.go::performAlternativeValuation (request-valuation-overrides T5,
+	// S8). It is ADDITIVE plumbing: alt models that consume overridable
+	// horizon/terminal/tax knobs may read it, but no model is REQUIRED to.
+	// May be nil on test/internal paths; consumers MUST nil-check.
+	//
+	// DDM deliberately IGNORES this field: it stays on its legacy path (gated
+	// by Profile.IsLegacyMatureLargeBankDDM) so TestDDM_LegacyPath_BitForBit
+	// remains green. Routing DDM math through params is explicitly out of scope.
+	// Full alt-model override consumption (horizon/terminal) is a documented
+	// follow-up, not part of T5. The params package is a leaf (imports only
+	// fmt), so importing it here introduces no cycle.
+	Params *params.EffectiveValuationParams
 }
 
 // ModelResult contains the standardized output from any valuation model.
