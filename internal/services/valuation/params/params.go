@@ -191,6 +191,22 @@ const (
 	// both; a drift test could pin this if the duplication ever proves fragile.
 	MinTerminalWACCSpread = 0.01
 
+	// MaxDCFProjectionYears is the maximum DCF explicit-forecast horizon the engine
+	// will compute. It MUST equal the upper rail in pkg/finance/dcf.validateInputs
+	//   if inputs.ProjectionYears < 1 || inputs.ProjectionYears > 50 { ... }
+	// and the Layer-1 horizon_years contract ceiling (handlers.horizonYearsMax).
+	// ResolveInputs enforces it as the COMPLETE gatekeeper: a request-driven horizon
+	// that exceeds it becomes a typed *ParamError → 422 BEFORE CalculateDCF runs, so
+	// the engine's ProjectionYears > 50 guard never fires from the override path (a
+	// 500 there would now indicate a real internal bug). A profile/default-sourced
+	// horizon that somehow exceeds it is silently clamped (the default path never
+	// exceeds 50, so this clamp never fires there — byte-identity preserved).
+	//
+	// Duplicated here (rather than imported from pkg/finance/dcf) to keep the resolver
+	// a pure scalar-only domain package with no calc-package dependency; if the engine
+	// rail changes, change both.
+	MaxDCFProjectionYears = 50
+
 	// DefaultStage1Years is the high-growth stage duration in the multi-stage
 	// growth estimator. Mirrors DefaultEstimatorConfig() Stage1Years: 3
 	// (growth/estimator.go:40)

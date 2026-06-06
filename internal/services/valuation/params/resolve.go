@@ -252,10 +252,11 @@ func ResolveInputs(d Defaults, o Overrides, growthRateLen int) (EffectiveValuati
 	if p.HorizonYears > stageSum {
 		if horizonRequestSourced {
 			return EffectiveValuationParams{}, &ParamError{
-				Knob:   knobHorizonYears,
-				Reason: "must be ≤ stage1_years + stage2_years + stage3_years",
-				Value:  float64(p.HorizonYears),
-				Limit:  float64(stageSum),
+				Knob:     knobHorizonYears,
+				Reason:   "must be ≤ stage1_years + stage2_years + stage3_years",
+				Value:    float64(p.HorizonYears),
+				Limit:    float64(stageSum),
+				HasLimit: true,
 			}
 		}
 		// Profile/default-sourced: clamp + warn (legacy behavior).
@@ -271,10 +272,11 @@ func ResolveInputs(d Defaults, o Overrides, growthRateLen int) (EffectiveValuati
 	if growthRateLen > 0 && p.HorizonYears > growthRateLen {
 		if horizonRequestSourced {
 			return EffectiveValuationParams{}, &ParamError{
-				Knob:   knobHorizonYears,
-				Reason: "must be ≤ the number of projected growth rates",
-				Value:  float64(p.HorizonYears),
-				Limit:  float64(growthRateLen),
+				Knob:     knobHorizonYears,
+				Reason:   "must be ≤ the number of projected growth rates",
+				Value:    float64(p.HorizonYears),
+				Limit:    float64(growthRateLen),
+				HasLimit: true,
 			}
 		}
 		// Profile/default-sourced: clamp + warn (legacy service.go:1117 behavior).
@@ -284,6 +286,47 @@ func ResolveInputs(d Defaults, o Overrides, growthRateLen int) (EffectiveValuati
 		p.HorizonYears = growthRateLen
 	}
 
+	// Engine-horizon ceiling (DYNAMIC engine constraint). The effective horizon must
+	// not exceed MaxDCFProjectionYears (== dcf.validateInputs' ProjectionYears > 50
+	// rail). Even with horizon_years OMITTED, request-sourced growth_stages can drive
+	// the default-sourced horizon (== growthRateLen == stage-sum) above the ceiling —
+	// dcf.validateInputs would then reject it with an UNTYPED error → HTTP 500. We are
+	// the COMPLETE gatekeeper, so attribute the excess to the request and 422 here:
+	//   - horizon_years request-sourced → knob horizon_years
+	//   - else any stage knob request-sourced → knob growth_stages (the request input
+	//     that grew the horizon past the rail)
+	// A purely profile/default-sourced horizon over the ceiling is clamped + warned
+	// (the default path never produces > 50, so this clamp never fires there).
+	if p.HorizonYears > MaxDCFProjectionYears {
+		stageRequestSourced := p.Provenance[knobStage1Years] == SourceRequest ||
+			p.Provenance[knobStage2Years] == SourceRequest ||
+			p.Provenance[knobStage3Years] == SourceRequest
+		switch {
+		case horizonRequestSourced:
+			return EffectiveValuationParams{}, &ParamError{
+				Knob:     knobHorizonYears,
+				Reason:   fmt.Sprintf("must be ≤ %d (the maximum DCF projection horizon)", MaxDCFProjectionYears),
+				Value:    float64(p.HorizonYears),
+				Limit:    float64(MaxDCFProjectionYears),
+				HasLimit: true,
+			}
+		case stageRequestSourced:
+			return EffectiveValuationParams{}, &ParamError{
+				Knob:     knobGrowthStages,
+				Reason:   fmt.Sprintf("stage1_years + stage2_years + stage3_years drive the horizon above the maximum DCF projection horizon (%d)", MaxDCFProjectionYears),
+				Value:    float64(p.HorizonYears),
+				Limit:    float64(MaxDCFProjectionYears),
+				HasLimit: true,
+			}
+		default:
+			// Profile/default-sourced: clamp + warn. Unreachable on the default path.
+			p.Warnings = append(p.Warnings, fmt.Sprintf(
+				"horizon_years (%d) exceeds the maximum DCF projection horizon (%d); clamped to %d",
+				p.HorizonYears, MaxDCFProjectionYears, MaxDCFProjectionYears))
+			p.HorizonYears = MaxDCFProjectionYears
+		}
+	}
+
 	return p, nil
 }
 
@@ -291,14 +334,20 @@ func ResolveInputs(d Defaults, o Overrides, growthRateLen int) (EffectiveValuati
 // the COMPUTED WACC, mutating p in place.
 //
 //   - Explicit path (p.TerminalGrowthExplicit): use p.TerminalGrowthRate as-is;
-//     assert it is strictly < computedWACC (else 422). The cap is NOT applied on
-//     the explicit path (design §5 / §8 R8). A value within 1% of WACC (but still
-//     below it) appends a near-WACC advisory to p.Warnings — it is NOT an error.
+//     assert it stays at least MinTerminalWACCSpread (1%) below computedWACC (else a
+//     typed 422). A value WITHIN that spread of WACC (including ≥ WACC) is a HARD
+//     error, NOT an advisory — the resolver is the complete gatekeeper for this
+//     DYNAMIC constraint so the engine's denominator guard never fires from the
+//     override path. The cap is NOT applied on the explicit path (design §5 / §8 R8).
 //   - Auto-derive path: a FAITHFUL, VERBATIM port of
 //     service.go::calculateTerminalGrowthRate, using p.TerminalGrowthCap as the cap,
 //     DefaultTerminalGrowthFloor as the ≤0 floor, DefaultTerminalWACCSpread as the
 //     spread, and DefaultTerminalGrowthDegenWACCFloor as the post-spread degenerate
 //     floor. Byte-identical to the legacy function when p.TerminalGrowthCap == 0.03.
+//     A final spread gate (HIGH-1) upgrades the rare low-WACC (0 < WACC < 0.02) case —
+//     where even the degenerate floor leaves (WACC − g) < MinTerminalWACCSpread — into
+//     a typed 422 rather than letting it 500 in the engine. Unreachable on the default
+//     path (real-ticker WACC ≥ 0.02), so byte-identity is preserved.
 //
 // Provenance for terminal_growth_rate is set to SourceDefault on the auto-derive
 // path (it was set to SourceRequest in ResolveInputs on the explicit path).
@@ -333,10 +382,11 @@ func ResolveTerminal(p *EffectiveValuationParams, computedWACC, historicalCAGR f
 		// real internal bug. Applies regardless of cap (design §5 / §8 R8).
 		if p.TerminalGrowthRate > computedWACC-MinTerminalWACCSpread {
 			return &ParamError{
-				Knob:   knobTerminalGrowthRate,
-				Reason: fmt.Sprintf("must be at least %g below WACC", MinTerminalWACCSpread),
-				Value:  p.TerminalGrowthRate,
-				Limit:  computedWACC,
+				Knob:     knobTerminalGrowthRate,
+				Reason:   fmt.Sprintf("must be at least %g below WACC", MinTerminalWACCSpread),
+				Value:    p.TerminalGrowthRate,
+				Limit:    computedWACC - MinTerminalWACCSpread,
+				HasLimit: true,
 			}
 		}
 		return nil
@@ -385,6 +435,25 @@ func ResolveTerminal(p *EffectiveValuationParams, computedWACC, historicalCAGR f
 		terminalGrowth = growthCap
 	}
 
+	// Final DYNAMIC-constraint gate (HIGH-1): in a low-WACC regime (0 < WACC < 0.02)
+	// the degenerate floor (0.01) can leave terminalGrowth too close to — or above —
+	// WACC, so (WACC − terminalGrowth) < MinTerminalWACCSpread. dcf.validateInputs
+	// would then reject it with an UNTYPED error → HTTP 500. We are the COMPLETE
+	// gatekeeper for this constraint, so generalize the explicit-path spread 422 to
+	// the auto-derive path and surface a typed *ParamError → 422 instead. The
+	// default path never produces WACC < 0.02 for real tickers, so this is unreachable
+	// on the default path (pinned by the byte-identity terminal grid). The earlier
+	// computedWACC ≤ 0 guard handles the non-positive case; this covers (0, 0.02).
+	if computedWACC > 0 && terminalGrowth > computedWACC-MinTerminalWACCSpread {
+		return &ParamError{
+			Knob:     knobTerminalGrowthRate,
+			Reason:   "auto-derived terminal growth cannot stay at least 1% below WACC at this WACC; set terminal_growth_rate or adjust the CAPM inputs",
+			Value:    terminalGrowth,
+			Limit:    computedWACC - MinTerminalWACCSpread,
+			HasLimit: true,
+		}
+	}
+
 	p.TerminalGrowthRate = terminalGrowth
 	p.Provenance[knobTerminalGrowthRate] = SourceDefault
 	return nil
@@ -398,19 +467,21 @@ func ResolveTerminal(p *EffectiveValuationParams, computedWACC, historicalCAGR f
 func validateStaging(minGrowth, maxGrowth float64, stage1, stage2, stage3 int) error {
 	if minGrowth > maxGrowth {
 		return &ParamError{
-			Knob:   knobMinGrowthRate,
-			Reason: "must be ≤ max_growth_rate",
-			Value:  minGrowth,
-			Limit:  maxGrowth,
+			Knob:     knobMinGrowthRate,
+			Reason:   "must be ≤ max_growth_rate",
+			Value:    minGrowth,
+			Limit:    maxGrowth,
+			HasLimit: true,
 		}
 	}
 
 	if stage1+stage2+stage3 < 1 {
 		return &ParamError{
-			Knob:   knobGrowthStages,
-			Reason: "stage1_years + stage2_years + stage3_years must be ≥ 1",
-			Value:  float64(stage1 + stage2 + stage3),
-			Limit:  1,
+			Knob:     knobGrowthStages,
+			Reason:   "stage1_years + stage2_years + stage3_years must be ≥ 1",
+			Value:    float64(stage1 + stage2 + stage3),
+			Limit:    1,
+			HasLimit: true,
 		}
 	}
 

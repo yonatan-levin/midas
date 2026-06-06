@@ -258,6 +258,72 @@ func TestResolveInputs_ExitMultipleResolvableFromOverride_OK(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// HIGH-2: effective horizon > MaxDCFProjectionYears (engine DCF max) → 422
+// ---------------------------------------------------------------------------
+
+// TestResolveInputs_HorizonExceedsDCFMax_RequestHorizon_Returns422 pins HIGH-2 for a
+// request-sourced horizon. horizon_years=51 with stages that sum to 51 passes the
+// stage-sum + growth-len checks but exceeds the engine's ProjectionYears ≤ 50 rail.
+// Before the fix this reached dcf.validateInputs as an UNTYPED error → 500.
+func TestResolveInputs_HorizonExceedsDCFMax_RequestHorizon_Returns422(t *testing.T) {
+	d := legacyDefaults()
+	_, err := ResolveInputs(d, Overrides{
+		HorizonYears: i(51),
+		Stage1Years:  i(50), Stage2Years: i(1), Stage3Years: i(0),
+	}, 51)
+	assertParamErrorKnob(t, err, knobHorizonYears)
+}
+
+// TestResolveInputs_HorizonExceedsDCFMax_StageDerived_Returns422 pins HIGH-2 for the
+// SUBTLE case the directive names: horizon_years OMITTED, but request-sourced
+// growth_stages summing > 50 drive the DEFAULT-sourced horizon (== growthRateLen ==
+// stage-sum == 51) above the engine rail. The excess is attributed to growth_stages
+// (the request input that grew the horizon), not horizon_years.
+func TestResolveInputs_HorizonExceedsDCFMax_StageDerived_Returns422(t *testing.T) {
+	d := legacyDefaults()
+	// horizon omitted; stage1=50 + stage2=1 → stage-sum 51; estimator emits 51 rates.
+	_, err := ResolveInputs(d, Overrides{
+		Stage1Years: i(50), Stage2Years: i(1), Stage3Years: i(0),
+	}, 51)
+	assertParamErrorKnob(t, err, knobGrowthStages)
+}
+
+// TestResolveInputs_HorizonAtDCFMax_Computes is the boundary partner: a request
+// horizon of exactly 50 (with stages summing to 50 and 50 growth rates) is at the
+// rail and must NOT 422.
+func TestResolveInputs_HorizonAtDCFMax_Computes(t *testing.T) {
+	d := legacyDefaults()
+	p, err := ResolveInputs(d, Overrides{
+		HorizonYears: i(50),
+		Stage1Years:  i(43), Stage2Years: i(7), Stage3Years: i(0),
+	}, 50)
+	require.NoError(t, err)
+	assert.Equal(t, 50, p.HorizonYears)
+}
+
+// TestResolveInputs_ProfileHorizonExceedsDCFMax_ClampsNot422 confirms a
+// profile/default-sourced horizon over the rail CLAMPS + WARNs (never 422), preserving
+// the byte-identity contract for non-request horizons. To reach this branch the prior
+// stage-sum + length clamps must NOT have already pulled the horizon below 51 — so the
+// stage durations come from DEFAULTS (not request overrides) and sum past the rail.
+// This configuration is synthetic (production defaults sum to 7, never > 50), which is
+// exactly why the default-path clamp branch never fires in production — it is here only
+// to pin the non-request fallback behavior.
+func TestResolveInputs_ProfileHorizonExceedsDCFMax_ClampsNot422(t *testing.T) {
+	d := legacyDefaults()
+	d.Stage1Years = 60 // DEFAULT-sourced stage durations (not request overrides)
+	d.Stage2Years = 0
+	d.Stage3Years = 0
+	d.ProfileHorizonYears = 60 // profile-sourced, over the 50 rail
+	// growthRateLen 60 so the length check passes (60 ≤ 60); no request stages, so the
+	// DCF-max excess clamps to 50 with a warning instead of 422.
+	p, err := ResolveInputs(d, Overrides{}, 60)
+	require.NoError(t, err, "profile-sourced horizon over the DCF max must clamp, not 422")
+	assert.Equal(t, MaxDCFProjectionYears, p.HorizonYears, "clamped to the engine DCF max")
+	require.NotEmpty(t, p.Warnings, "a clamp warning must be recorded")
+}
+
+// ---------------------------------------------------------------------------
 // ResolveTerminal invariants
 // ---------------------------------------------------------------------------
 
@@ -372,6 +438,17 @@ func legacyCalculateTerminalGrowthRate(historicalCAGR, wacc float64) float64 {
 // WACC ≤ 0). The legacy oracle's wacc==0 "skip the spread clamp" branch is therefore
 // unreachable through ResolveTerminal and is covered separately by the
 // non-positive-WACC 422 test.
+//
+// HIGH-1: ResolveTerminal now applies a FINAL spread gate on the auto-derive path —
+// when even the degenerate floor leaves (WACC − g) < MinTerminalWACCSpread (a low-WACC
+// regime, WACC < 0.02), the result is a typed 422 on terminal_growth_rate instead of a
+// value that would 500 in dcf.validateInputs. So the grid splits into two regimes per
+// row, keyed off the SAME oracle the engine would have seen:
+//   - rows where (WACC − legacyG) ≥ MinTerminalWACCSpread  → byte-identity (Float64bits)
+//   - rows where (WACC − legacyG) <  MinTerminalWACCSpread  → typed 422 (knob
+//     terminal_growth_rate). These are exactly the low-WACC degenerate rows the engine
+//     would have rejected; the gate moves that rejection to a clean 422. Production WACC
+//     for real tickers is ≥ 0.02, so the 422 regime is unreachable on the default path.
 func TestResolveTerminal_EmptyOverride_MatchesCalculateTerminalGrowthRate(t *testing.T) {
 	cagrs := []float64{-0.50, -0.10, 0.0, 0.005, 0.02, 0.04, 0.06, 0.10, 0.30, 1.00}
 	waccs := []float64{0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.05, 0.08, 0.094, 0.12, 0.20}
@@ -385,6 +462,14 @@ func TestResolveTerminal_EmptyOverride_MatchesCalculateTerminalGrowthRate(t *tes
 				Provenance:        map[string]Source{},
 			}
 			err := ResolveTerminal(&p, wacc, cagr)
+
+			// Low-WACC degenerate regime: the legacy arithmetic produced a g that
+			// leaves < MinTerminalWACCSpread below WACC. The new gate 422s it.
+			if wacc-want < MinTerminalWACCSpread {
+				assertParamErrorKnob(t, err, knobTerminalGrowthRate)
+				continue
+			}
+
 			require.NoError(t, err)
 			got := p.TerminalGrowthRate
 
@@ -428,6 +513,45 @@ func TestResolveTerminal_NonPositiveWACC_Returns422(t *testing.T) {
 			assertParamErrorKnob(t, err, knobWACC)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// HIGH-1: low-WACC (0 < WACC < 0.02) auto-derive spread gate → typed 422
+// ---------------------------------------------------------------------------
+
+// TestResolveTerminal_AutoDerive_LowWACC_Returns422 pins the HIGH-1 fix: with
+// terminal_growth_rate OMITTED (auto-derive), a small-but-positive WACC drives the
+// degenerate floor (0.01) to within < MinTerminalWACCSpread of WACC (or above it).
+// Before the fix the resolver returned that value and dcf.validateInputs then
+// rejected (WACC − g) < MinWACCTerminalSpread with an UNTYPED error → HTTP 500. The
+// resolver is now the COMPLETE gatekeeper: it returns a typed *ParamError on knob
+// terminal_growth_rate so the caller gets a 422, never an engine 500.
+func TestResolveTerminal_AutoDerive_LowWACC_Returns422(t *testing.T) {
+	for _, wacc := range []float64{0.005, 0.01, 0.015, 0.019} {
+		t.Run("", func(t *testing.T) {
+			p := EffectiveValuationParams{
+				TerminalGrowthCap: DefaultTerminalGrowthCap, // 0.03 — default cap
+				Provenance:        map[string]Source{},
+			}
+			// historicalCAGR=0.10 → auto-derive lands at the degenerate 0.01 floor for
+			// each of these WACCs; (WACC − 0.01) < 0.01, so the spread gate fires.
+			err := ResolveTerminal(&p, wacc, 0.10)
+			assertParamErrorKnob(t, err, knobTerminalGrowthRate)
+		})
+	}
+}
+
+// TestResolveTerminal_AutoDerive_WACCAtThreshold_Computes is the boundary partner:
+// at WACC == 0.02 the degenerate floor (0.01) sits EXACTLY MinTerminalWACCSpread
+// below WACC, so the gate does NOT fire (strict >) and the auto-derive value computes.
+func TestResolveTerminal_AutoDerive_WACCAtThreshold_Computes(t *testing.T) {
+	p := EffectiveValuationParams{
+		TerminalGrowthCap: DefaultTerminalGrowthCap,
+		Provenance:        map[string]Source{},
+	}
+	err := ResolveTerminal(&p, 0.02, 0.10)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.01, p.TerminalGrowthRate, 1e-12)
 }
 
 // ---------------------------------------------------------------------------

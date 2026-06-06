@@ -108,13 +108,14 @@ func TestSource_Values(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestParamError_Error_WithLimit confirms the Error() string includes the knob,
-// value, reason, and limit when a limit is provided.
+// value, reason, and limit when a limit is provided (HasLimit set).
 func TestParamError_Error_WithLimit(t *testing.T) {
 	err := &ParamError{
-		Knob:   "terminal_growth_rate",
-		Reason: "must be strictly less than WACC",
-		Value:  0.12,
-		Limit:  0.094,
+		Knob:     "terminal_growth_rate",
+		Reason:   "must be strictly less than WACC",
+		Value:    0.12,
+		Limit:    0.094,
+		HasLimit: true,
 	}
 	msg := err.Error()
 	assert.Contains(t, msg, "terminal_growth_rate")
@@ -124,7 +125,7 @@ func TestParamError_Error_WithLimit(t *testing.T) {
 }
 
 // TestParamError_Error_WithoutLimit confirms the Error() string is clean when
-// no limit is applicable (e.g. structural or enum errors).
+// no limit is applicable (e.g. structural or enum errors) — HasLimit unset.
 func TestParamError_Error_WithoutLimit(t *testing.T) {
 	err := &ParamError{
 		Knob:   "terminal_method",
@@ -133,7 +134,23 @@ func TestParamError_Error_WithoutLimit(t *testing.T) {
 	}
 	msg := err.Error()
 	assert.Contains(t, msg, "terminal_method")
-	assert.NotContains(t, msg, "limit=0", "zero limit must be suppressed")
+	assert.NotContains(t, msg, "limit=", "an unset HasLimit must suppress the limit clause")
+}
+
+// TestParamError_Error_ZeroLimit confirms a REAL zero limit (HasLimit set, Limit
+// exactly 0) is surfaced rather than dropped — the LOW sentinel fix. Before
+// HasLimit, `Limit != 0` silently lost a legitimate zero threshold (e.g.
+// min_growth > max_growth with max == 0).
+func TestParamError_Error_ZeroLimit(t *testing.T) {
+	err := &ParamError{
+		Knob:     "min_growth_rate",
+		Reason:   "must be ≤ max_growth_rate",
+		Value:    0.5,
+		Limit:    0,
+		HasLimit: true,
+	}
+	msg := err.Error()
+	assert.Contains(t, msg, "limit=0", "a real zero limit must be surfaced, not dropped")
 }
 
 // TestParamError_ImplementsError confirms *ParamError satisfies the error interface.

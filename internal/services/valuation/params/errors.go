@@ -14,7 +14,7 @@ import (
 //
 //	var pe *ParamError
 //	if errors.As(err, &pe) {
-//	    // pe.Knob, pe.Reason, pe.Value, pe.Limit are all available
+//	    // pe.Knob, pe.Reason, pe.Value, pe.Limit (when pe.HasLimit) are all available
 //	}
 type ParamError struct {
 	// Knob is the JSON field name of the offending knob (e.g. "terminal_growth_rate").
@@ -30,15 +30,22 @@ type ParamError struct {
 	// the float64 representation of the int.
 	Value float64
 
-	// Limit is the threshold the Value violates. Zero when not applicable
-	// (e.g. enum violations or "stage-sum < 1" structural errors).
+	// Limit is the threshold the Value violates. Meaningful ONLY when HasLimit
+	// is true. A real limit of exactly 0 is legitimate (e.g. min_growth > max_growth
+	// with max == 0), so callers MUST gate on HasLimit rather than `Limit != 0`.
 	Limit float64
+
+	// HasLimit reports whether Limit carries a meaningful threshold. Set true at
+	// every construction site that supplies a Limit; left false for enum /
+	// structural violations (and for the non-positive-WACC error) where no single
+	// threshold applies. Distinguishes "no limit" from "limit is exactly 0".
+	HasLimit bool
 }
 
 // Error implements the error interface. The message is intentionally human-
 // readable and safe to surface in RFC 7807 detail fields.
 func (e *ParamError) Error() string {
-	if e.Limit != 0 {
+	if e.HasLimit {
 		return fmt.Sprintf("invalid override for %s (value=%g): %s (limit=%g)",
 			e.Knob, e.Value, e.Reason, e.Limit)
 	}
