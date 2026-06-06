@@ -380,7 +380,13 @@ func ResolveTerminal(p *EffectiveValuationParams, computedWACC, historicalCAGR f
 		// enforces, so the resolver and engine agree. Catching it here means the engine
 		// guard never fires from the override path; a 500 there would now indicate a
 		// real internal bug. Applies regardless of cap (design §5 / §8 R8).
-		if p.TerminalGrowthRate > computedWACC-MinTerminalWACCSpread {
+		//
+		// PREDICATE FORM: use the EXACT same subtraction form as dcf.validateInputs
+		// (dcf.go: "if inputs.WACC-inputs.TerminalGrowthRate < MinWACCTerminalSpread").
+		// The algebraically-equivalent form (terminalGrowth > computedWACC-spread)
+		// can differ at the exact float boundary by 1 ULP — a value that passes the
+		// rearranged form here but fails DCF's form would still produce a 500.
+		if computedWACC-p.TerminalGrowthRate < MinTerminalWACCSpread {
 			return &ParamError{
 				Knob:     knobTerminalGrowthRate,
 				Reason:   fmt.Sprintf("must be at least %g below WACC", MinTerminalWACCSpread),
@@ -444,7 +450,11 @@ func ResolveTerminal(p *EffectiveValuationParams, computedWACC, historicalCAGR f
 	// default path never produces WACC < 0.02 for real tickers, so this is unreachable
 	// on the default path (pinned by the byte-identity terminal grid). The earlier
 	// computedWACC ≤ 0 guard handles the non-positive case; this covers (0, 0.02).
-	if computedWACC > 0 && terminalGrowth > computedWACC-MinTerminalWACCSpread {
+	//
+	// PREDICATE FORM: use the EXACT same subtraction form as dcf.validateInputs
+	// ("if inputs.WACC-inputs.TerminalGrowthRate < MinWACCTerminalSpread") to
+	// eliminate any 1-ULP disagreement at the boundary.
+	if computedWACC > 0 && computedWACC-terminalGrowth < MinTerminalWACCSpread {
 		return &ParamError{
 			Knob:     knobTerminalGrowthRate,
 			Reason:   "auto-derived terminal growth cannot stay at least 1% below WACC at this WACC; set terminal_growth_rate or adjust the CAPM inputs",
