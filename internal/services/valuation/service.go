@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1231,8 +1232,49 @@ func (s *Service) performValuation(
 	// OI the engine actually uses after earnings restatements (C1-C7).
 	dcfRestated := restatedViewOr(cleaned, latestFinancialData)
 	baseOI := effectiveOI(dcfRestated)
+
+	// BUG-015 audit trail: the TTM source tag + lossy-path warning are surfaced
+	// on result.Warnings (mirrors RM-1's "revenue_base: ..." convention) only
+	// when the OI base was actually annualized below (quarter-latest path).
+	var ttmOperatingIncomeSource, ttmOperatingIncomeWarning string
+
+	// BUG-015: when the latest filing is a 10-Q, effectiveOI returns a SINGLE
+	// quarter of operating income (~4× too small) while the other DCF base
+	// terms — averageCapExAndDA and calculateNetWorkingCapitalChange — are
+	// already annual (GetRecentYears over FY periods). Mixing a quarterly OI
+	// base with annual D&A/CapEx/ΔNWC drives projected FCF negative for
+	// 10-Q-latest tickers (e.g. KO, AMD). Annualize ONLY the OI base via the
+	// TTM helper (TTM_4Q / prior-bridge — NOT a crude ×4, which ignores
+	// seasonality). For an FY-latest period we leave baseOI EXACTLY as
+	// effectiveOI(dcfRestated) so FY-latest tickers stay bit-for-bit (the TTM
+	// helper's FY passthrough would read the entity's NormalizedOperatingIncome
+	// rather than the Restated-view OI, which could differ when a C1-C7 Restater
+	// fired on the latest period). Mirrors RM-1's TTM revenue base.
+	//
+	// We annualize ONLY when the latest period is an explicit quarter. An
+	// unknown/malformed suffix is treated like FY (left untouched) — the
+	// conservative choice that preserves existing behavior for any non-standard
+	// period key rather than silently re-basing it.
+	if _, latestSub := parsePeriodSuffix(latestPeriod); latestSub == periodSuffixQuarter {
+		ttmOI, oiSource, oiWarning := historicalData.TrailingTwelveMonthsOperatingIncome()
+		if ttmOI > 0 {
+			baseOI = ttmOI
+			ttmOperatingIncomeSource = oiSource
+			ttmOperatingIncomeWarning = oiWarning
+			s.log(ctx).Info("Using TTM operating income for DCF base (latest filing is a quarter)",
+				zap.String("ticker", historicalData.Ticker),
+				zap.String("latest_period", latestPeriod),
+				zap.String("oi_source", oiSource),
+				zap.Float64("ttm_operating_income", ttmOI),
+				zap.Float64("single_quarter_operating_income", effectiveOI(dcfRestated)))
+		}
+	}
+
 	if baseOI <= 0 {
-		return nil, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, dcfRestated.NormalizedOperatingIncome)
+		// Report baseOI (the value that actually failed the guard) — on the
+		// quarter-latest path this is the TTM-annualized base, not the
+		// single-quarter restated NOI.
+		return nil, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, baseOI)
 	}
 
 	// Calculate net working capital change from historical data if available
@@ -1477,7 +1519,7 @@ func (s *Service) performValuation(
 		CurrentPrice:        marketData.SharePrice,
 		DataFreshnessScore:  dataFreshnessScore,
 		CalculationMethod:   "multi_stage_dcf",
-		CalculationVersion:  "4.5", // BUG-014: DCF working capital now excludes cash & equivalents (operating NWC). Changes dcf_value_per_share engine-wide by design for cash-holding firms. Prior: 4.4 (DC-1 Phase 5 P5-C1 DDM EV-bridge DebtLikeClaims correction).
+		CalculationVersion:  "4.6", // BUG-015: standard-DCF operating-income base annualized to TTM for 10-Q-latest tickers (was a single quarter, ~4× understated). Changes dcf_value_per_share for quarter-latest firms by design; FY-latest bit-for-bit unchanged. Prior: 4.5 (BUG-014 DCF operating NWC excludes cash). The request-valuation-overrides feature is additive and version-neutral (default path byte-identical), so it adopts master's 4.6 stamp unchanged.
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -1537,6 +1579,20 @@ func (s *Service) performValuation(
 	if usingNOPATFallback {
 		result.Warnings = append(result.Warnings,
 			"FCF using NOPAT approximation (D&A/CapEx unavailable from filing). Valuation may be less accurate for capital-intensive companies.")
+	}
+
+	// BUG-015: surface the TTM operating-income base provenance when the OI base
+	// was annualized (quarter-latest path). The source line is always emitted in
+	// that case so downstream dashboards can pivot on it without parsing
+	// free-form text; the lossy-path warning (annualized single-quarter) is
+	// appended only on the lossy tiers. Mirrors RM-1's "revenue_base: ..."
+	// convention. Empty source ⇒ FY-latest, no annualization, no extra warning.
+	if ttmOperatingIncomeSource != "" {
+		result.Warnings = append(result.Warnings,
+			fmt.Sprintf("operating_income_base: source=%s operating_income=$%.0f", ttmOperatingIncomeSource, baseOI))
+		if ttmOperatingIncomeWarning != "" {
+			result.Warnings = append(result.Warnings, ttmOperatingIncomeWarning)
+		}
 	}
 
 	if dcfFallbackWarning != "" {
@@ -1862,7 +1918,7 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:        marketData.SharePrice,
 		DataFreshnessScore:  dataFreshnessScore,
 		CalculationMethod:   modelResult.ModelType,
-		CalculationVersion:  "4.5", // BUG-014: DCF working capital now excludes cash & equivalents (operating NWC). Alt-model numerics (DDM/FFO/revenue_multiple) are unaffected by the NWC change — only calculation_version drifts on those paths (bit-for-bit primary values; see BUG-014 §8 replay evidence). The bump is engine-wide for a single version stamp. Prior: 4.4 (DC-1 Phase 5 P5-C1).
+		CalculationVersion:  "4.6", // BUG-015: standard-DCF operating-income base annualized to TTM for 10-Q-latest tickers. Alt-model numerics (DDM/FFO/revenue_multiple) are unaffected by the OI-base change (those paths do not use the standard-DCF OI base) — only calculation_version drifts here (bit-for-bit primary values). The bump is engine-wide for a single version stamp. Prior: 4.5 (BUG-014). The request-valuation-overrides feature is additive and version-neutral; it adopts master's 4.6 stamp unchanged.
 		Warnings:            modelResult.Warnings,
 	}
 
@@ -2110,6 +2166,44 @@ func effectiveOI(fd *cleaneddata.FinancialDataView) float64 {
 		return fd.NormalizedOperatingIncome
 	}
 	return fd.OperatingIncome
+}
+
+// periodSuffix classifies a period key's reporting cadence. Mirrors the
+// suffix vocabulary parsed by entities.parsePeriodKey ("Q1".."Q4", "FY").
+type periodSuffix int
+
+const (
+	periodSuffixUnknown periodSuffix = iota
+	periodSuffixQuarter
+	periodSuffixFY
+)
+
+// parsePeriodSuffix splits a period key (e.g. "2026Q1", "2025FY") into its
+// numeric year and a cadence classification. BUG-015 uses this to decide
+// whether the DCF operating-income base needs TTM annualization (quarter) or
+// must be left bit-for-bit (FY). The entities package parses the same suffix
+// vocabulary internally (parsePeriodKey), but that helper is unexported and
+// returns an FY-sorts-last ordinal rather than a cadence flag, so the
+// valuation layer keeps this small reader for an explicit quarter-vs-FY signal.
+func parsePeriodSuffix(period string) (year int, suffix periodSuffix) {
+	idx := strings.IndexFunc(period, func(r rune) bool {
+		return r < '0' || r > '9'
+	})
+	if idx <= 0 {
+		return 0, periodSuffixUnknown
+	}
+	y, err := strconv.Atoi(period[:idx])
+	if err != nil {
+		return 0, periodSuffixUnknown
+	}
+	switch period[idx:] {
+	case "Q1", "Q2", "Q3", "Q4":
+		return y, periodSuffixQuarter
+	case "FY":
+		return y, periodSuffixFY
+	default:
+		return y, periodSuffixUnknown
+	}
 }
 
 // keepLatestCleanedSlot writes the post-clean entity into the

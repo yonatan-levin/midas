@@ -129,6 +129,18 @@ func (h *HealthHandler) HealthCheckHandler(c *gin.Context) {
 }
 
 // DetailedHealthCheck handles GET /api/v1/health/detailed
+// @Summary      Detailed health check
+// @Description  Reports component-level health for the database, cache, external APIs (SEC/market/macro), memory, and rate limiter, plus an aggregate status. Returns 200 when healthy, 206 (Partial Content) when degraded, and 503 when any component is unhealthy.
+// @Tags         health
+// @Produce      json
+// @Security     ApiKeyAuth
+// @Success      200  {object}  DetailedHealthCheckResponse  "All components healthy"
+// @Success      206  {object}  DetailedHealthCheckResponse  "One or more components degraded"
+// @Failure      401  {object}  ErrorResponse                "Missing or invalid API key"
+// @Failure      403  {object}  ErrorResponse                "Insufficient permissions"
+// @Failure      429  {object}  ErrorResponse                "Rate limit exceeded"
+// @Failure      503  {object}  DetailedHealthCheckResponse  "One or more components unhealthy"
+// @Router       /health/detailed [get]
 func (h *HealthHandler) DetailedHealthCheck(c *gin.Context) {
 	startTime := time.Now()
 	ctx := c.Request.Context()
@@ -192,6 +204,16 @@ func (h *HealthHandler) DetailedHealthCheck(c *gin.Context) {
 }
 
 // GetMetrics handles GET /api/v1/metrics
+// @Summary      Application & system metrics (JSON)
+// @Description  Returns JSON-formatted system metrics (Go runtime, memory, GC), application metrics (total requests, latency, error and cache-hit rates, DB connections), and business metrics (valuation counts, average WACC and growth, unique tickers served). Distinct from the Prometheus exposition endpoint served at the root GET /metrics.
+// @Tags         metrics
+// @Produce      json
+// @Security     ApiKeyAuth
+// @Success      200  {object}  MetricsResponse
+// @Failure      401  {object}  ErrorResponse  "Missing or invalid API key"
+// @Failure      403  {object}  ErrorResponse  "Insufficient permissions"
+// @Failure      429  {object}  ErrorResponse  "Rate limit exceeded"
+// @Router       /metrics [get]
 func (h *HealthHandler) GetMetrics(c *gin.Context) {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)

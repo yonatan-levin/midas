@@ -1,0 +1,41 @@
+{
+  "quoteResponse": {
+    "error": null,
+    "result": [
+      {
+        "averageDailyVolume3Month": 166389520,
+        "beta": 2.202,
+        "cryptoTradeable": false,
+        "currency": "USD",
+        "customPriceAlertConfidence": "HIGH",
+        "esgPopulated": false,
+        "exchange": "NMS",
+        "exchangeDataDelayedBy": 0,
+        "exchangeTimezoneName": "America/New_York",
+        "exchangeTimezoneShortName": "EDT",
+        "firstTradeDateMilliseconds": 917015400000,
+        "fullExchangeName": "NasdaqGS",
+        "gmtOffSetMilliseconds": -14400000,
+        "hasPrePostMarketData": true,
+        "impliedSharesOutstanding": 24221000000,
+        "language": "en-US",
+        "market": "us_market",
+        "marketCap": 5123709861888,
+        "marketState": "REGULAR",
+        "priceHint": 2,
+        "quoteSourceName": "Nasdaq Real Time Price",
+        "quoteType": "EQUITY",
+        "region": "US",
+        "regularMarketPrice": 211.54,
+        "regularMarketTime": 1780669962,
+        "regularMarketVolume": 43890280,
+        "sharesOutstanding": 24221000000,
+        "sourceInterval": 15,
+        "symbol": "NVDA",
+        "tradeable": false,
+        "triggerable": true,
+        "typeDisp": "Equity"
+      }
+    ]
+  }
+}

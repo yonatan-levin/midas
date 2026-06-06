@@ -100,12 +100,18 @@ go build -o ./bin/dcf-api ./cmd/server/main.go
 # Run database migrations
 echo ""
 echo -e "${YELLOW}Running database migrations...${NC}"
-# TODO: Add migration command when available
+# DB_PATH is the SQLite file migrated + seeded below. If you override it, point the
+# server's DATABASE_* config at the same file too, or it won't see the seeded key.
+DB_PATH="${DB_PATH:-./data/midas.db}"
+mkdir -p "$(dirname "$DB_PATH")"
+go run ./cmd/migrate -db "$DB_PATH"
+echo -e "${GREEN}✓ Migrations applied (${DB_PATH})${NC}"
 
 # Seed demo API key
 echo ""
 echo -e "${YELLOW}Seeding demo data...${NC}"
-# TODO: Add seed script when SQL seed is created
+go run ./cmd/seed-demo-key -db "$DB_PATH"
+echo -e "${GREEN}✓ Demo API key seeded${NC}"
 
 # Start the application
 echo ""

@@ -267,6 +267,104 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/health/detailed": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Reports component-level health for the database, cache, external APIs (SEC/market/macro), memory, and rate limiter, plus an aggregate status. Returns 200 when healthy, 206 (Partial Content) when degraded, and 503 when any component is unhealthy.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "health"
+                ],
+                "summary": "Detailed health check",
+                "responses": {
+                    "200": {
+                        "description": "All components healthy",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.DetailedHealthCheckResponse"
+                        }
+                    },
+                    "206": {
+                        "description": "One or more components degraded",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.DetailedHealthCheckResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid API key",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Insufficient permissions",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limit exceeded",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "One or more components unhealthy",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.DetailedHealthCheckResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/metrics": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    }
+                ],
+                "description": "Returns JSON-formatted system metrics (Go runtime, memory, GC), application metrics (total requests, latency, error and cache-hit rates, DB connections), and business metrics (valuation counts, average WACC and growth, unique tickers served). Distinct from the Prometheus exposition endpoint served at the root GET /metrics.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "metrics"
+                ],
+                "summary": "Application \u0026 system metrics (JSON)",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.MetricsResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Missing or invalid API key",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Insufficient permissions",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Rate limit exceeded",
+                        "schema": {
+                            "$ref": "#/definitions/internal_api_v1_handlers.ErrorResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -357,6 +455,29 @@ const docTemplate = `{
                 "SourceInferred",
                 "SourceFallback"
             ]
+        },
+        "internal_api_v1_handlers.ApplicationMetrics": {
+            "type": "object",
+            "properties": {
+                "active_connections": {
+                    "type": "integer"
+                },
+                "average_response_time": {
+                    "type": "number"
+                },
+                "cache_hit_rate": {
+                    "type": "number"
+                },
+                "database_connections": {
+                    "type": "integer"
+                },
+                "error_rate": {
+                    "type": "number"
+                },
+                "total_requests": {
+                    "type": "integer"
+                }
+            }
         },
         "internal_api_v1_handlers.AppliedOverride": {
             "description": "Per-knob override echo in the applied_overrides response field",
@@ -461,6 +582,59 @@ const docTemplate = `{
                 },
                 "total_requested": {
                     "type": "integer"
+                }
+            }
+        },
+        "internal_api_v1_handlers.BusinessMetrics": {
+            "type": "object",
+            "properties": {
+                "average_growth_rate": {
+                    "type": "number"
+                },
+                "average_wacc": {
+                    "type": "number"
+                },
+                "failed_valuations": {
+                    "type": "integer"
+                },
+                "successful_valuations": {
+                    "type": "integer"
+                },
+                "total_valuations": {
+                    "type": "integer"
+                },
+                "unique_tickers_served": {
+                    "type": "integer"
+                }
+            }
+        },
+        "internal_api_v1_handlers.DetailedHealthCheckResponse": {
+            "type": "object",
+            "properties": {
+                "checks": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/internal_api_v1_handlers.HealthCheck"
+                    }
+                },
+                "metadata": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "service": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "timestamp": {
+                    "type": "string"
+                },
+                "uptime": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
                 }
             }
         },
@@ -695,6 +869,28 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_v1_handlers.HealthCheck": {
+            "type": "object",
+            "properties": {
+                "details": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "duration": {
+                    "$ref": "#/definitions/time.Duration"
+                },
+                "last_checked": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "\"healthy\", \"unhealthy\", \"degraded\"",
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_v1_handlers.Industry": {
             "description": "Dual industry classification (SIC + heuristic) with a Match flag",
             "type": "object",
@@ -726,6 +922,23 @@ const docTemplate = `{
                 }
             }
         },
+        "internal_api_v1_handlers.MetricsResponse": {
+            "type": "object",
+            "properties": {
+                "application": {
+                    "$ref": "#/definitions/internal_api_v1_handlers.ApplicationMetrics"
+                },
+                "business": {
+                    "$ref": "#/definitions/internal_api_v1_handlers.BusinessMetrics"
+                },
+                "system": {
+                    "$ref": "#/definitions/internal_api_v1_handlers.SystemMetrics"
+                },
+                "timestamp": {
+                    "type": "string"
+                }
+            }
+        },
         "internal_api_v1_handlers.SingleFairValueRequest": {
             "description": "POST body for single-ticker fair-value calculation with optional overrides",
             "type": "object",
@@ -737,6 +950,38 @@ const docTemplate = `{
                             "$ref": "#/definitions/internal_api_v1_handlers.ValuationOverrides"
                         }
                     ]
+                }
+            }
+        },
+        "internal_api_v1_handlers.SystemMetrics": {
+            "type": "object",
+            "properties": {
+                "gc_count": {
+                    "type": "integer"
+                },
+                "go_version": {
+                    "type": "string"
+                },
+                "last_gc": {
+                    "type": "string"
+                },
+                "memory_alloc": {
+                    "type": "integer"
+                },
+                "memory_sys": {
+                    "type": "integer"
+                },
+                "memory_total": {
+                    "type": "integer"
+                },
+                "num_cpu": {
+                    "type": "integer"
+                },
+                "num_goroutines": {
+                    "type": "integer"
+                },
+                "uptime_seconds": {
+                    "type": "integer"
                 }
             }
         },
@@ -808,6 +1053,29 @@ const docTemplate = `{
                     "example": 14
                 }
             }
+        },
+        "time.Duration": {
+            "type": "integer",
+            "enum": [
+                -9223372036854775808,
+                9223372036854775807,
+                1,
+                1000,
+                1000000,
+                1000000000,
+                60000000000,
+                3600000000000
+            ],
+            "x-enum-varnames": [
+                "minDuration",
+                "maxDuration",
+                "Nanosecond",
+                "Microsecond",
+                "Millisecond",
+                "Second",
+                "Minute",
+                "Hour"
+            ]
         }
     },
     "securityDefinitions": {

@@ -1,0 +1,12 @@
+{
+  "implied_pe": 17.3079330362283,
+  "sector_median_pe": 16,
+  "implied_ev_ebitda": 21.308312618247857,
+  "sector_median_ev_ebitda": 10,
+  "implied_pfcf": 17.31675911120853,
+  "sector_median_pfcf": 18,
+  "is_reasonable": false,
+  "flags": [
+    "DCF-implied EV/EBITDA (21.3) is \u003e2x sector median (10.0) for MFG"
+  ]
+}

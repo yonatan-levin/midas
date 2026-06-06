@@ -331,16 +331,17 @@ func TestPerformValuation_EquityBridgeSubtractsDebtLikeClaims(t *testing.T) {
 		"the new bridge differs from the legacy 5-arg bridge by exactly the contingent amount")
 }
 
-// CalculationVersion LIVE-stamp coverage (currently 4.5 — bumped from 4.4
-// by BUG-014, which made DCF working capital exclude cash & equivalents):
+// CalculationVersion LIVE-stamp coverage (currently 4.6 — bumped from 4.5
+// by BUG-015, which annualized the standard-DCF operating-income base to TTM
+// for 10-Q-latest tickers; 4.5 itself was BUG-014's exclude-cash NWC change):
 //   - DCF path: service_test.go::TestService_performValuation,
 //     ::TestService_performValuation_TrueFCF, and
 //     ::TestService_performValuation_FINZeroDPS_FallbackToDCF
 //     (FIN → DDM-fail → DCF fallback) all assert
-//     result.CalculationVersion == "4.5".
+//     result.CalculationVersion == "4.6".
 //   - Alt-model path: service_test.go::TestService_performValuation_NegativeOperatingIncome
 //     routes to revenue_multiple (performAlternativeValuation) and
-//     asserts result.CalculationVersion == "4.5".
+//     asserts result.CalculationVersion == "4.6".
 //
 // The previous incarnation of this gate was a self-referential
 // TestCalculationVersion_IsV43/_IsV44 in this file; gpt-5.5 review
