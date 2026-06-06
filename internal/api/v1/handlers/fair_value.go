@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -438,8 +440,8 @@ type ErrorResponse struct {
 // @Produce      json
 // @Security     ApiKeyAuth
 // @Param        ticker         path     string   true  "Stock ticker symbol (e.g., AAPL)"
-// @Param        override_beta  query    number   false "Override beta for WACC calculation" minimum(0) maximum(3)
-// @Param        override_rf    query    number   false "Override risk-free rate" minimum(0) maximum(0.2)
+// @Param        override_beta  query    number   false "Override beta for WACC calculation" minimum(-5) maximum(5)
+// @Param        override_rf    query    number   false "Override risk-free rate" minimum(-0.05) maximum(0.25)
 // @Success      200  {object}  FairValueResponse
 // @Failure      400  {object}  ErrorResponse "Invalid ticker or parameters"
 // @Failure      401  {object}  ErrorResponse "Missing or invalid API key"
@@ -470,22 +472,42 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		b.SetTicker(ticker)
 	}
 
-	// Parse and validate query parameters
-	overrideBeta := parseFloatParam(c, "override_beta")
-	overrideRF := parseFloatParam(c, "override_rf")
-
-	// Validate override ranges (defense in depth — matches Swagger spec bounds)
-	if overrideBeta != nil && (*overrideBeta < 0 || *overrideBeta > 3.0) {
+	// Parse and validate query parameters.
+	// parseFloatParam rejects non-finite values (NaN/±Inf) with a descriptive
+	// error; a present-but-invalid param yields 400, absent params → nil.
+	overrideBeta, err := parseFloatParam(c, "override_beta")
+	if err != nil {
 		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
 			"Invalid override_beta",
-			"Beta override must be between 0 and 3.0",
+			err.Error(),
+			map[string]interface{}{"override_beta": c.Query("override_beta")})
+		return
+	}
+	overrideRF, err := parseFloatParam(c, "override_rf")
+	if err != nil {
+		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
+			"Invalid override_rf",
+			err.Error(),
+			map[string]interface{}{"override_rf": c.Query("override_rf")})
+		return
+	}
+
+	// Validate override ranges (defense in depth).
+	// Bounds are widened to match the structured `options` block (betaMin/betaMax,
+	// riskFreeRateMin/riskFreeRateMax from fair_value_validation.go) so both
+	// entry points accept the same economic range. Legacy scalar checks and the
+	// structured-options validator must always agree.
+	if overrideBeta != nil && (*overrideBeta < betaMin || *overrideBeta > betaMax) {
+		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
+			"Invalid override_beta",
+			fmt.Sprintf("Beta override must be between %.4g and %.4g", betaMin, betaMax),
 			map[string]interface{}{"override_beta": *overrideBeta})
 		return
 	}
-	if overrideRF != nil && (*overrideRF < 0 || *overrideRF > 0.20) {
+	if overrideRF != nil && (*overrideRF < riskFreeRateMin || *overrideRF > riskFreeRateMax) {
 		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
 			"Invalid override_rf",
-			"Risk-free rate override must be between 0 and 0.20",
+			fmt.Sprintf("Risk-free rate override must be between %.4g and %.4g", riskFreeRateMin, riskFreeRateMax),
 			map[string]interface{}{"override_rf": *overrideRF})
 		return
 	}
@@ -918,18 +940,20 @@ func (h *FairValueHandler) GetBulkFairValue(c *gin.Context) {
 		}
 	}
 
-	// Validate override ranges (same bounds as single endpoint)
-	if request.OverrideBeta != nil && (*request.OverrideBeta < 0 || *request.OverrideBeta > 3.0) {
+	// Validate override ranges (same bounds as single endpoint).
+	// Widened to match betaMin/betaMax and riskFreeRateMin/riskFreeRateMax from
+	// fair_value_validation.go so legacy and structured-options paths are consistent.
+	if request.OverrideBeta != nil && (*request.OverrideBeta < betaMin || *request.OverrideBeta > betaMax) {
 		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
 			"Invalid override_beta",
-			"Beta override must be between 0 and 3.0",
+			fmt.Sprintf("Beta override must be between %.4g and %.4g", betaMin, betaMax),
 			map[string]interface{}{"override_beta": *request.OverrideBeta})
 		return
 	}
-	if request.OverrideRiskFree != nil && (*request.OverrideRiskFree < 0 || *request.OverrideRiskFree > 0.20) {
+	if request.OverrideRiskFree != nil && (*request.OverrideRiskFree < riskFreeRateMin || *request.OverrideRiskFree > riskFreeRateMax) {
 		h.sendError(c, http.StatusBadRequest, "INVALID_PARAMETER",
 			"Invalid override_rf",
-			"Risk-free rate override must be between 0 and 0.20",
+			fmt.Sprintf("Risk-free rate override must be between %.4g and %.4g", riskFreeRateMin, riskFreeRateMax),
 			map[string]interface{}{"override_rf": *request.OverrideRiskFree})
 		return
 	}
@@ -1349,16 +1373,27 @@ func bulkArtifactSubject(tickers []string) string {
 	return "BULK_" + strings.Join(parts, "_")
 }
 
-// parseFloatParam safely parses a float query parameter
-func parseFloatParam(c *gin.Context, param string) *float64 {
+// parseFloatParam safely parses a float query parameter.
+//
+// Returns:
+//   - (nil, nil)          — parameter absent; caller should use the default.
+//   - (*float64, nil)     — parameter present and valid.
+//   - (nil, non-nil err)  — parameter present but unparseable or non-finite
+//     (NaN / ±Inf).  strconv.ParseFloat accepts "NaN", "+Inf", "-Inf" without
+//     error, so we must explicitly reject those — a non-finite value silently
+//     propagates into WACC/DCF and produces a non-finite response or a 500.
+func parseFloatParam(c *gin.Context, param string) (*float64, error) {
 	value := c.Query(param)
 	if value == "" {
-		return nil
+		return nil, nil
 	}
 
-	if parsed, err := strconv.ParseFloat(value, 64); err == nil {
-		return &parsed
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be a finite number", param)
 	}
-
-	return nil
+	if math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return nil, fmt.Errorf("%s must be a finite number", param)
+	}
+	return &parsed, nil
 }

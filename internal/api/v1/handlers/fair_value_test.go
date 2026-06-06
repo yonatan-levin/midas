@@ -119,14 +119,17 @@ func Test_parseFloatParam(t *testing.T) {
 		query   string // full query string, e.g. "override_beta=1.2"
 		param   string // param name to parse
 		wantNil bool
+		wantErr bool // new: whether an error is expected (vs. silent nil)
 		wantVal float64
 	}{
 		{name: "present_valid", query: "override_beta=1.2", param: "override_beta", wantNil: false, wantVal: 1.2},
 		{name: "present_zero", query: "override_beta=0", param: "override_beta", wantNil: false, wantVal: 0},
 		{name: "present_negative", query: "override_rf=-0.01", param: "override_rf", wantNil: false, wantVal: -0.01},
-		{name: "absent_param", query: "", param: "override_beta", wantNil: true},
-		{name: "invalid_value", query: "override_beta=abc", param: "override_beta", wantNil: true},
-		{name: "empty_value", query: "override_beta=", param: "override_beta", wantNil: true},
+		{name: "absent_param", query: "", param: "override_beta", wantNil: true, wantErr: false},
+		// After FIX 1: invalid / non-finite values return (nil, error) instead of silent nil.
+		{name: "invalid_value", query: "override_beta=abc", param: "override_beta", wantNil: true, wantErr: true},
+		// An empty query value ("override_beta=") is treated as absent (c.Query returns "").
+		{name: "empty_value", query: "override_beta=", param: "override_beta", wantNil: true, wantErr: false},
 	}
 
 	for _, tt := range tests {
@@ -139,7 +142,12 @@ func Test_parseFloatParam(t *testing.T) {
 			}
 			c.Request = httptest.NewRequest("GET", url, nil)
 
-			result := parseFloatParam(c, tt.param)
+			result, err := parseFloatParam(c, tt.param)
+			if tt.wantErr {
+				assert.Error(t, err, "expected an error for query %q", tt.query)
+			} else {
+				assert.NoError(t, err, "expected no error for query %q", tt.query)
+			}
 			if tt.wantNil {
 				assert.Nil(t, result)
 			} else {
@@ -457,20 +465,11 @@ func TestFairValueHandler_GetFairValue(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:   "with_invalid_override_ignored",
-			ticker: "AAPL",
-			query:  "override_beta=notanumber",
-			setupMock: func(m *mockValuationService) {
-				// Invalid override is ignored (parseFloatParam returns nil), so opts == nil
-				m.On("CalculateValuation", mock.Anything, "AAPL", (*valuation.ValuationOptions)(nil)).
-					Return(sampleValuationResult("AAPL"), nil)
-			},
-			wantStatus: http.StatusOK,
-		},
-		{
-			name:       "override_beta_too_high",
+			// After FIX 1: an unparseable override_beta now returns 400 rather than
+			// being silently ignored and falling through to the default path.
+			name:       "with_invalid_override_rejected",
 			ticker:     "AAPL",
-			query:      "override_beta=4.0",
+			query:      "override_beta=notanumber",
 			setupMock:  func(m *mockValuationService) { /* no call expected */ },
 			wantStatus: http.StatusBadRequest,
 			wantBody: func(t *testing.T, body []byte) {
@@ -480,10 +479,12 @@ func TestFairValueHandler_GetFairValue(t *testing.T) {
 			},
 		},
 		{
-			name:       "override_beta_negative",
+			// After FIX 3: betaMax widened to 5.0. Use 6.0 to still trigger the range
+			// check (4.0 is now within the accepted range [-5, 5]).
+			name:       "override_beta_too_high",
 			ticker:     "AAPL",
-			query:      "override_beta=-0.5",
-			setupMock:  func(m *mockValuationService) {},
+			query:      "override_beta=6.0",
+			setupMock:  func(m *mockValuationService) { /* no call expected */ },
 			wantStatus: http.StatusBadRequest,
 			wantBody: func(t *testing.T, body []byte) {
 				var resp ErrorResponse
@@ -492,10 +493,25 @@ func TestFairValueHandler_GetFairValue(t *testing.T) {
 			},
 		},
 		{
+			// After FIX 3: betaMin widened to -5.0. A negative beta like -0.5 is now
+			// economically valid (gold / inverse-ETF proxy) and must be accepted.
+			name:   "override_beta_negative_now_accepted",
+			ticker: "AAPL",
+			query:  "override_beta=-0.5",
+			setupMock: func(m *mockValuationService) {
+				m.On("CalculateValuation", mock.Anything, "AAPL", mock.MatchedBy(func(opts *valuation.ValuationOptions) bool {
+					return opts != nil && opts.OverrideBeta != nil && *opts.OverrideBeta == -0.5
+				})).Return(sampleValuationResult("AAPL"), nil)
+			},
+			wantStatus: http.StatusOK,
+		},
+		{
+			// After FIX 3: riskFreeRateMax widened to 0.25. Use 0.30 to still trigger
+			// the range check (0.25 is now the exact upper boundary and passes).
 			name:       "override_rf_too_high",
 			ticker:     "AAPL",
-			query:      "override_rf=0.25",
-			setupMock:  func(m *mockValuationService) {},
+			query:      "override_rf=0.30",
+			setupMock:  func(m *mockValuationService) { /* no call expected */ },
 			wantStatus: http.StatusBadRequest,
 			wantBody: func(t *testing.T, body []byte) {
 				var resp ErrorResponse
@@ -504,16 +520,17 @@ func TestFairValueHandler_GetFairValue(t *testing.T) {
 			},
 		},
 		{
-			name:       "override_rf_negative",
-			ticker:     "AAPL",
-			query:      "override_rf=-0.01",
-			setupMock:  func(m *mockValuationService) {},
-			wantStatus: http.StatusBadRequest,
-			wantBody: func(t *testing.T, body []byte) {
-				var resp ErrorResponse
-				require.NoError(t, json.Unmarshal(body, &resp))
-				assert.Equal(t, "INVALID_PARAMETER", extractErrorCode(resp.Type))
+			// After FIX 3: riskFreeRateMin widened to -0.05. Negative nominal rates
+			// (EUR/JPY/CHF) are real and must be accepted.
+			name:   "override_rf_negative_now_accepted",
+			ticker: "AAPL",
+			query:  "override_rf=-0.01",
+			setupMock: func(m *mockValuationService) {
+				m.On("CalculateValuation", mock.Anything, "AAPL", mock.MatchedBy(func(opts *valuation.ValuationOptions) bool {
+					return opts != nil && opts.OverrideRiskFree != nil && *opts.OverrideRiskFree == -0.01
+				})).Return(sampleValuationResult("AAPL"), nil)
 			},
+			wantStatus: http.StatusOK,
 		},
 	}
 
@@ -695,15 +712,16 @@ func TestFairValueHandler_GetBulkFairValue(t *testing.T) {
 			},
 		},
 		{
-			name:       "bulk_override_beta_negative_400",
-			body:       `{"tickers":["AAPL"],"override_beta":-1.0}`,
-			setupMock:  func(m *mockValuationService) {},
-			wantStatus: http.StatusBadRequest,
-			wantBody: func(t *testing.T, body []byte) {
-				var resp ErrorResponse
-				require.NoError(t, json.Unmarshal(body, &resp))
-				assert.Equal(t, "INVALID_PARAMETER", extractErrorCode(resp.Type))
+			// After FIX 3: betaMin widened to -5.0. Negative beta (-1.0) is now valid
+			// (gold / inverse-ETF proxy) and must reach the service, not be rejected.
+			name: "bulk_override_beta_negative_now_accepted",
+			body: `{"tickers":["AAPL"],"override_beta":-1.0}`,
+			setupMock: func(m *mockValuationService) {
+				m.On("CalculateValuation", mock.Anything, "AAPL", mock.MatchedBy(func(opts *valuation.ValuationOptions) bool {
+					return opts != nil && opts.OverrideBeta != nil && *opts.OverrideBeta == -1.0
+				})).Return(sampleValuationResult("AAPL"), nil)
 			},
+			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "bulk_override_rf_too_high_400",
