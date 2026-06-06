@@ -1,9 +1,9 @@
 # Request-Driven Valuation Parameter Overrides — Implementation Plan
 
 - **Date:** 2026-06-05
-- **Status:** Ready for BACKEND execution.
+- **Status:** SHIPPED — merged to master `a9afd97` (2026-06-06), live-verified. Archived.
 - **Role producing this:** ARCH (PLAN_AND_CREATE).
-- **Authoritative design (source of truth):** `docs/refactoring/spec/2026-06-05-request-valuation-overrides-design.md`
+- **Authoritative design (source of truth):** `docs/refactoring/archive/2026-06-05-request-valuation-overrides-design.md`
 - **Engine baseline:** CalculationVersion 4.4 (no bump on the default path — prime directive).
 - **Owner area:** `internal/services/valuation`, `internal/services/valuation/params` (new), `internal/api/v1/handlers`, `internal/api/server.go`.
 

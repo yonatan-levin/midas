@@ -294,4 +294,4 @@ data/                   # SQLite database files (gitignored)
   - **`terminal_method` is a boolean selector:** `"gordon_growth"` SUPPRESSES exit-multiple blending (pure Gordon TV). `"exit_multiple"` BLENDS 50/50 Gordon/exit average (NOT pure exit-multiple TV). See design spec §13.
   - **Validation asymmetry:** GET `override_beta`/`override_rf` out-of-range or non-finite → **400** `INVALID_PARAMETER`; POST `options` validation → **422** `INVALID_OVERRIDE`. Do NOT change the Layer-1/Layer-2 split.
   - `applied_overrides` echoes **request-set knobs only**; `market_risk_premium` entry echoes the RESOLVED MRP (not raw macroData). `BulkFailure.knob` carries the offending knob name for `INVALID_OVERRIDE` per-ticker failures.
-  - **Fix-arc history** (commit ladder + gpt-5.5-pro sign-off): `docs/refactoring/implementations/2026-06-06-request-valuation-overrides-fix-iterations-closeout.md`.
+  - **Fix-arc history** (commit ladder + gpt-5.5-pro sign-off): `docs/refactoring/archive/2026-06-06-request-valuation-overrides-fix-iterations-closeout.md`.

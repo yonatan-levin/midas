@@ -130,7 +130,7 @@ Sign-off confirmed: no Critical/High blockers on the fix iterations. Findings ad
 ## Spec & Design Reference
 
 - Design spec (including §13 terminal_method reconciliation):
-  `docs/refactoring/spec/2026-06-05-request-valuation-overrides-design.md`
+  `docs/refactoring/archive/2026-06-05-request-valuation-overrides-design.md`
 - Implementation plan:
-  `docs/refactoring/implementations/2026-06-05-request-valuation-overrides-implementation-plan.md`
-- This closeout: `docs/refactoring/implementations/2026-06-06-request-valuation-overrides-fix-iterations-closeout.md`
+  `docs/refactoring/archive/2026-06-05-request-valuation-overrides-implementation-plan.md`
+- This closeout: `docs/refactoring/archive/2026-06-06-request-valuation-overrides-fix-iterations-closeout.md`
