@@ -61,11 +61,15 @@ func TestParamErrorResponse_DirectParamError(t *testing.T) {
 
 	assert.Equal(t, http.StatusUnprocessableEntity, resp.Status)
 	assert.Equal(t, "INVALID_OVERRIDE", resp.Code)
-	// detail must carry the human-readable Reason from the ParamError
-	assert.Equal(t, pe.Reason, resp.Detail, "detail must be the ParamError.Reason")
-	// context must carry the knob name
+	// MEDIUM-3: detail must carry the FULL ParamError message (value + limit), not
+	// just the bare Reason — matching the bulk path's pe.Error() and keeping single
+	// and bulk consistent.
+	assert.Equal(t, pe.Error(), resp.Detail, "detail must be the full ParamError.Error()")
+	// context must carry the knob name plus the offending value and limit.
 	require.NotNil(t, resp.Context)
 	assert.Equal(t, "terminal_growth_rate", resp.Context["knob"])
+	assert.Equal(t, 0.095, resp.Context["value"])
+	assert.Equal(t, 0.094, resp.Context["limit"])
 }
 
 // TestParamErrorResponse_WrappedParamError verifies that errors.As traverses the
@@ -351,13 +355,16 @@ func TestGetFairValue_ParamError_Returns422(t *testing.T) {
 	assert.Equal(t, "INVALID_OVERRIDE", errResp.Code,
 		"error code must be INVALID_OVERRIDE for a ParamError")
 	assert.Equal(t, http.StatusUnprocessableEntity, errResp.Status)
-	// Detail must carry the human-readable reason.
-	assert.Equal(t, pe.Reason, errResp.Detail,
-		"detail must be the ParamError.Reason verbatim")
-	// Context must name the offending knob.
+	// MEDIUM-3: detail must carry the FULL ParamError message (value + limit),
+	// consistent with the bulk path.
+	assert.Equal(t, pe.Error(), errResp.Detail,
+		"detail must be the full ParamError.Error()")
+	// Context must name the offending knob and carry the value/limit.
 	require.NotNil(t, errResp.Context)
 	assert.Equal(t, "terminal_growth_rate", errResp.Context["knob"],
 		"context.knob must be the offending knob name")
+	assert.Equal(t, 0.095, errResp.Context["value"])
+	assert.Equal(t, 0.094, errResp.Context["limit"])
 
 	svc.AssertExpectations(t)
 }

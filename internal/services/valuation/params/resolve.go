@@ -20,18 +20,22 @@ const (
 	knobTerminalGrowthRate = "terminal_growth_rate"
 	knobTerminalGrowthCap  = "terminal_growth_cap"
 	knobHorizonYears       = "horizon_years"
-	knobStage1Years        = "stage1_years"
-	knobStage2Years        = "stage2_years"
-	knobStage3Years        = "stage3_years"
-	knobMaxGrowthRate      = "max_growth_rate"
-	knobMinGrowthRate      = "min_growth_rate"
-	knobTerminalMethod     = "terminal_method"
-	knobTerminalMultiple   = "terminal_multiple"
-	knobTaxRate            = "tax_rate"
-	knobBeta               = "beta"
-	knobRiskFreeRate       = "risk_free_rate"
-	knobMarketRiskPremium  = "market_risk_premium"
-	knobGrowthStages       = "growth_stages"
+	// Stage-year knobs echo the NESTED wire path the request used
+	// (ValuationOverrides.growth_stages.stageN_years) so applied_overrides mirrors
+	// the request shape and the Layer-1 validation messages. MEDIUM-2: previously
+	// flat (stageN_years), which did not match the request's nested field.
+	knobStage1Years       = "growth_stages.stage1_years"
+	knobStage2Years       = "growth_stages.stage2_years"
+	knobStage3Years       = "growth_stages.stage3_years"
+	knobMaxGrowthRate     = "max_growth_rate"
+	knobMinGrowthRate     = "min_growth_rate"
+	knobTerminalMethod    = "terminal_method"
+	knobTerminalMultiple  = "terminal_multiple"
+	knobTaxRate           = "tax_rate"
+	knobBeta              = "beta"
+	knobRiskFreeRate      = "risk_free_rate"
+	knobMarketRiskPremium = "market_risk_premium"
+	knobGrowthStages      = "growth_stages"
 
 	// knobWACC names the computed WACC in a ParamError when the resolved CAPM/WACC
 	// inputs drive the cost of capital to a non-positive value (e.g. an extreme

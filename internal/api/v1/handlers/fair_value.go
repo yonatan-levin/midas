@@ -1132,15 +1132,27 @@ func paramErrorResponse(err error) (*ErrorResponse, bool) {
 	if !errors.As(err, &pe) {
 		return nil, false
 	}
+	// MEDIUM-3: use pe.Error() (the full "invalid override for <knob> (value=...):
+	// <reason> (limit=...)" message) rather than pe.Reason alone, so the
+	// single-ticker 422 carries the same value/limit detail the bulk path already
+	// surfaces via pe.Error(). The offending value/limit are also exposed in the
+	// context object for machine consumers.
+	ctx := map[string]interface{}{
+		"knob":  pe.Knob,
+		"value": pe.Value,
+	}
+	// Limit is zero when not applicable (enum / structural errors); omit it then so
+	// consumers do not misread a meaningful "0" threshold.
+	if pe.Limit != 0 {
+		ctx["limit"] = pe.Limit
+	}
 	return &ErrorResponse{
-		Type:   "https://problems.midas.dev/INVALID_OVERRIDE",
-		Title:  "Invalid valuation override",
-		Status: http.StatusUnprocessableEntity,
-		Detail: pe.Reason,
-		Code:   "INVALID_OVERRIDE",
-		Context: map[string]interface{}{
-			"knob": pe.Knob,
-		},
+		Type:    "https://problems.midas.dev/INVALID_OVERRIDE",
+		Title:   "Invalid valuation override",
+		Status:  http.StatusUnprocessableEntity,
+		Detail:  pe.Error(),
+		Code:    "INVALID_OVERRIDE",
+		Context: ctx,
 	}, true
 }
 

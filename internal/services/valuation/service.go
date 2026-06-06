@@ -1451,15 +1451,20 @@ func (s *Service) performValuation(
 		TerminalGrowthRate:    terminalGrowthRate,
 		GrowthSource:          growthEstimate.Source,
 		GrowthConfidence:      growthEstimate.Confidence,
-		MarketRiskPremium:     macroData.MarketRiskPremium,
-		EnterpriseValue:       dcfResult.EnterpriseValue,
-		EquityValue:           equityValue,
-		FinancialDataPeriod:   latestPeriod,
-		MarketDataDate:        marketData.AsOf,
-		CurrentPrice:          marketData.SharePrice,
-		DataFreshnessScore:    dataFreshnessScore,
-		CalculationMethod:     "multi_stage_dcf",
-		CalculationVersion:    "4.5", // BUG-014: DCF working capital now excludes cash & equivalents (operating NWC). Changes dcf_value_per_share engine-wide by design for cash-holding firms. Prior: 4.4 (DC-1 Phase 5 P5-C1 DDM EV-bridge DebtLikeClaims correction).
+		// MEDIUM-4: stamp the RESOLVED MRP (p.MarketRiskPremium) that actually fed
+		// WACC, not the raw macroData value, so the response field, the WACC input,
+		// and applied_overrides.market_risk_premium agree on an MRP override.
+		// Default-path byte-identical: p.MarketRiskPremium == macroData.MarketRiskPremium
+		// when no MRP override is present.
+		MarketRiskPremium:   p.MarketRiskPremium,
+		EnterpriseValue:     dcfResult.EnterpriseValue,
+		EquityValue:         equityValue,
+		FinancialDataPeriod: latestPeriod,
+		MarketDataDate:      marketData.AsOf,
+		CurrentPrice:        marketData.SharePrice,
+		DataFreshnessScore:  dataFreshnessScore,
+		CalculationMethod:   "multi_stage_dcf",
+		CalculationVersion:  "4.5", // BUG-014: DCF working capital now excludes cash & equivalents (operating NWC). Changes dcf_value_per_share engine-wide by design for cash-holding firms. Prior: 4.4 (DC-1 Phase 5 P5-C1 DDM EV-bridge DebtLikeClaims correction).
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -1822,16 +1827,19 @@ func (s *Service) performAlternativeValuation(
 		TerminalGrowthRate:    growthEstimate.TerminalGrowthRate,
 		GrowthSource:          growthEstimate.Source,
 		GrowthConfidence:      modelResult.Confidence,
-		MarketRiskPremium:     macroData.MarketRiskPremium,
-		EnterpriseValue:       modelResult.EnterpriseValue,
-		EquityValue:           modelResult.EquityValue,
-		FinancialDataPeriod:   latestPeriod,
-		MarketDataDate:        marketData.AsOf,
-		CurrentPrice:          marketData.SharePrice,
-		DataFreshnessScore:    dataFreshnessScore,
-		CalculationMethod:     modelResult.ModelType,
-		CalculationVersion:    "4.5", // BUG-014: DCF working capital now excludes cash & equivalents (operating NWC). Alt-model numerics (DDM/FFO/revenue_multiple) are unaffected by the NWC change — only calculation_version drifts on those paths (bit-for-bit primary values; see BUG-014 §8 replay evidence). The bump is engine-wide for a single version stamp. Prior: 4.4 (DC-1 Phase 5 P5-C1).
-		Warnings:              modelResult.Warnings,
+		// MEDIUM-4: stamp the RESOLVED MRP that fed WACC (resolvedParams.MarketRiskPremium),
+		// not the raw macroData value — consistent with the DCF path. Default-path
+		// byte-identical when no MRP override is present.
+		MarketRiskPremium:   resolvedParams.MarketRiskPremium,
+		EnterpriseValue:     modelResult.EnterpriseValue,
+		EquityValue:         modelResult.EquityValue,
+		FinancialDataPeriod: latestPeriod,
+		MarketDataDate:      marketData.AsOf,
+		CurrentPrice:        marketData.SharePrice,
+		DataFreshnessScore:  dataFreshnessScore,
+		CalculationMethod:   modelResult.ModelType,
+		CalculationVersion:  "4.5", // BUG-014: DCF working capital now excludes cash & equivalents (operating NWC). Alt-model numerics (DDM/FFO/revenue_multiple) are unaffected by the NWC change — only calculation_version drifts on those paths (bit-for-bit primary values; see BUG-014 §8 replay evidence). The bump is engine-wide for a single version stamp. Prior: 4.4 (DC-1 Phase 5 P5-C1).
+		Warnings:            modelResult.Warnings,
 	}
 
 	if len(gf.Warnings) > 0 {

@@ -23,6 +23,7 @@ import (
 	growthsvc "github.com/midas/dcf-valuation-api/internal/services/growth"
 	"github.com/midas/dcf-valuation-api/internal/services/metrics"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/models"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/params"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
@@ -1817,6 +1818,68 @@ func TestService_CalculateValuation_OverrideRiskFree(t *testing.T) {
 		"override_rf=0.01 and override_rf=0.08 must produce different WACC values")
 	assert.Less(t, resultLow.WACC, resultHigh.WACC,
 		"lower risk-free rate should produce lower WACC")
+}
+
+// TestService_CalculateValuation_OverrideMarketRiskPremium pins MEDIUM-4: an MRP
+// override must move WACC, AND the result's MarketRiskPremium response field and the
+// applied_overrides echo must reflect the RESOLVED MRP that actually fed WACC (not
+// the raw macroData.MarketRiskPremium). Before the fix the response field was stamped
+// from macroData while WACC used the resolved value, so they disagreed under an
+// override.
+func TestService_CalculateValuation_OverrideMarketRiskPremium(t *testing.T) {
+	historicalData, marketData, macroData := createTestData()
+	// Sanity: the test fixture's macro MRP baseline.
+	require.Equal(t, 0.06, macroData.MarketRiskPremium)
+
+	metricsService := &MockMetricsService{}
+	metricsService.On("IncWACCCalculations").Return()
+	metricsService.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
+	metricsService.On("IncDCFCalculations").Return()
+	metricsService.On("SetAverageGrowthRate", mock.AnythingOfType("float64")).Return()
+
+	cfg := &config.Config{
+		Valuation: config.ValuationConfig{
+			CacheTTL:             1 * time.Hour,
+			SlowRequestThreshold: 500 * time.Millisecond,
+			DataFetchTimeout:     30 * time.Second,
+		},
+	}
+	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, zap.NewNop(), newTestCalcEmitter(), nil)
+
+	// Default (no override): MRP = macro baseline 0.06.
+	defaultResult, err := service.performValuation(context.Background(), historicalData, marketData, macroData, nil, nil)
+	require.NoError(t, err)
+
+	// Override MRP to a higher value (within the contract band [0, 0.30]).
+	overriddenMRP := 0.10
+	overrideResult, err := service.performValuation(context.Background(), historicalData, marketData, macroData,
+		&ValuationOptions{Overrides: params.Overrides{MarketRiskPremium: &overriddenMRP}}, nil)
+	require.NoError(t, err)
+
+	// (1) WACC actually moved: a higher MRP raises cost of equity → higher WACC.
+	assert.Greater(t, overrideResult.WACC, defaultResult.WACC,
+		"a higher MRP override must raise WACC (proves the override fed CAPM/WACC)")
+
+	// (2) The response field reflects the RESOLVED MRP, not the macro baseline.
+	assert.Equal(t, overriddenMRP, overrideResult.MarketRiskPremium,
+		"result.MarketRiskPremium must echo the resolved (overridden) MRP")
+	assert.Equal(t, 0.06, defaultResult.MarketRiskPremium,
+		"default-path MRP response field stays at the macro baseline (byte-identical)")
+
+	// (3) applied_overrides echoes the same resolved MRP under the request source.
+	require.NotNil(t, overrideResult.AppliedOverrides)
+	ao, ok := overrideResult.AppliedOverrides["market_risk_premium"]
+	require.True(t, ok, "applied_overrides must include market_risk_premium")
+	assert.Equal(t, overriddenMRP, ao.Value)
+	assert.Equal(t, "request", ao.Source)
+
+	// All three views agree on the override value.
+	assert.Equal(t, overrideResult.MarketRiskPremium, ao.Value,
+		"response field and applied_overrides echo must agree")
+
+	// Default path stamps no applied_overrides (omitempty preserved).
+	assert.Nil(t, defaultResult.AppliedOverrides,
+		"default path must not stamp applied_overrides")
 }
 
 // TestService_CalculateValuation_NilOptsDefaultBehavior verifies that passing nil opts

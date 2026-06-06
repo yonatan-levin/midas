@@ -316,10 +316,13 @@ func TestPostFairValue_Layer2ParamError_Returns422(t *testing.T) {
 	var errResp ErrorResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
 	assert.Equal(t, "INVALID_OVERRIDE", errResp.Code)
-	assert.Equal(t, pe.Reason, errResp.Detail,
-		"detail must carry the ParamError.Reason verbatim")
+	// MEDIUM-3: detail carries the full ParamError message (value + limit).
+	assert.Equal(t, pe.Error(), errResp.Detail,
+		"detail must carry the full ParamError.Error()")
 	require.NotNil(t, errResp.Context)
 	assert.Equal(t, "terminal_growth_rate", errResp.Context["knob"])
+	assert.Equal(t, 0.095, errResp.Context["value"])
+	assert.Equal(t, 0.094, errResp.Context["limit"])
 
 	svc.AssertExpectations(t)
 }

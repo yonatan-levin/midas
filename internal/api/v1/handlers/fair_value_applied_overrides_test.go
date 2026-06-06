@@ -105,20 +105,20 @@ func TestRequestOverrides_AllKnobTypes(t *testing.T) {
 		RiskFreeRate:       0.045,
 		MarketRiskPremium:  0.055,
 		Provenance: map[string]params.Source{
-			"terminal_growth_rate": params.SourceRequest,
-			"terminal_growth_cap":  params.SourceRequest,
-			"horizon_years":        params.SourceRequest,
-			"stage1_years":         params.SourceRequest,
-			"stage2_years":         params.SourceRequest,
-			"stage3_years":         params.SourceRequest,
-			"max_growth_rate":      params.SourceRequest,
-			"min_growth_rate":      params.SourceRequest,
-			"terminal_method":      params.SourceRequest,
-			"terminal_multiple":    params.SourceRequest,
-			"tax_rate":             params.SourceRequest,
-			"beta":                 params.SourceRequest,
-			"risk_free_rate":       params.SourceRequest,
-			"market_risk_premium":  params.SourceRequest,
+			"terminal_growth_rate":       params.SourceRequest,
+			"terminal_growth_cap":        params.SourceRequest,
+			"horizon_years":              params.SourceRequest,
+			"growth_stages.stage1_years": params.SourceRequest,
+			"growth_stages.stage2_years": params.SourceRequest,
+			"growth_stages.stage3_years": params.SourceRequest,
+			"max_growth_rate":            params.SourceRequest,
+			"min_growth_rate":            params.SourceRequest,
+			"terminal_method":            params.SourceRequest,
+			"terminal_multiple":          params.SourceRequest,
+			"tax_rate":                   params.SourceRequest,
+			"beta":                       params.SourceRequest,
+			"risk_free_rate":             params.SourceRequest,
+			"market_risk_premium":        params.SourceRequest,
 		},
 	}
 
@@ -130,9 +130,9 @@ func TestRequestOverrides_AllKnobTypes(t *testing.T) {
 	assert.Equal(t, 0.025, got["terminal_growth_rate"])
 	assert.Equal(t, 0.04, got["terminal_growth_cap"])
 	assert.Equal(t, 5, got["horizon_years"])
-	assert.Equal(t, 3, got["stage1_years"])
-	assert.Equal(t, 4, got["stage2_years"])
-	assert.Equal(t, 2, got["stage3_years"])
+	assert.Equal(t, 3, got["growth_stages.stage1_years"])
+	assert.Equal(t, 4, got["growth_stages.stage2_years"])
+	assert.Equal(t, 2, got["growth_stages.stage3_years"])
 	assert.Equal(t, 0.5, got["max_growth_rate"])
 	assert.Equal(t, -0.3, got["min_growth_rate"])
 	assert.Equal(t, "exit_multiple", got["terminal_method"])
