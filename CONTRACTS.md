@@ -66,10 +66,12 @@ All error responses follow the [Problem Details](https://datatracker.ietf.org/do
 **Query Parameters**:
 | Name | Type | Required | Description | Constraints |
 |------|------|----------|-------------|-------------|
-| `override_beta` | float | No | Override calculated beta value | 0 - 3.0 |
-| `override_rf` | float | No | Override risk-free rate | 0 - 0.20 |
+| `override_beta` | float | No | Override calculated beta value | −5.0 to 5.0 (negative ok) |
+| `override_rf` | float | No | Override risk-free rate | −0.05 to 0.25 (negative ok) |
 
-Out-of-range values return 400 `INVALID_PARAMETER`.
+Out-of-range and non-finite (NaN, ±Inf) values return 400 `INVALID_PARAMETER`.
+Non-finite strings ("NaN", "+Inf", "−Inf") are accepted by `strconv.ParseFloat` without error,
+so the guard is explicit — they would otherwise propagate into WACC/DCF and corrupt results.
 
 **Response 200** (`application/json`):
 ```json
@@ -104,7 +106,7 @@ Out-of-range values return 400 `INVALID_PARAMETER`.
 | `data_quality_score` | float | Data quality score (0-100) |
 | `data_quality_grade` | string | Quality grade (A/B/C/D/F) |
 | `calculation_method` | string | Valuation model used: `"multi_stage_dcf"`, `"ddm"`, `"ffo"`, or `"revenue_multiple"` (optional) |
-| `calculation_version` | string | Engine version (e.g., `"4.4"`) (optional) |
+| `calculation_version` | string | Engine version (e.g., `"4.5"`) (optional) |
 | `warnings` | string[] | Data quality or assumption warnings (optional, omitted if empty) |
 | `sanity_check` | object | Multiples cross-check: `implied_pe`, `sector_median_pe`, `implied_ev_ebitda`, `sector_median_ev_ebitda`, `is_reasonable`, `flags` (optional) |
 | `industry` | object | Dual classification — `sic_code`, `sic`, `heuristic_code`, `heuristic_name`, `match` flag for drift detection (optional) |
@@ -156,27 +158,34 @@ Out-of-range values return 400 `INVALID_PARAMETER`.
 | `options` | ValuationOverrides | No | Per-request knob overrides. Nil/absent = engine defaults = GET semantics. |
 
 **`ValuationOverrides` knob catalog:**
-| Knob | Type | Constraint | Notes |
-|------|------|-----------|-------|
-| `terminal_growth_rate` | float | Any (neg ok) | Layer-2: must be < WACC − 2% |
-| `terminal_growth_cap` | float | Any | Cap for auto-derived terminal g. Default 0.03 |
-| `horizon_years` | int | ≥ 1 | Layer-2: must be ≥ stage-sum |
-| `growth_stages.stage{1,2,3}_years` | int | ≥ 0 | Per-stage duration in years |
-| `max_growth_rate` | float | ≥ min | Upper growth estimator clamp. Default 0.5 |
-| `min_growth_rate` | float | ≤ max (neg ok) | Lower growth estimator clamp. Default −0.3 |
-| `terminal_method` | string | `gordon_growth` \| `exit_multiple` | Layer-2: `exit_multiple` requires resolvable multiple |
-| `terminal_multiple` | float | > 0 | EV/EBITDA exit multiple; falls back to industry default |
-| `tax_rate` | float | Any (neg ok) | Effective corporate tax rate |
-| `beta` | float | Any (neg ok) | CAPM beta. Conflicts with bulk `override_beta` |
-| `risk_free_rate` | float | Any (neg ok) | Nominal risk-free rate. Conflicts with bulk `override_rf` and GET `override_rf` |
-| `market_risk_premium` | float | **≥ 0** | CAPM equity risk premium. MRP < 0 → 422 |
+| Knob | Type | Layer-1 Range | Notes |
+|------|------|--------------|-------|
+| `terminal_growth_rate` | float | [−20%, 50%] (neg ok) | Layer-2 dynamic: must be ≥ 1% below computed WACC. Real ceiling = `WACC − 1%` (dynamic per ticker, not a fixed bound). |
+| `terminal_growth_cap` | float | [−20%, 50%] | Cap for auto-derived terminal g. Default 0.03. No effect when `terminal_growth_rate` is explicit. |
+| `horizon_years` | int | [1, 50] | Layer-2 dynamic: effective horizon must not exceed 50; must be ≥ stage-sum when stages overridden. |
+| `growth_stages.stage{1,2,3}_years` | int | ≥ 0 | Per-stage duration. Request-sourced stages pushing horizon > 50 → 422 `knob = "growth_stages"`. |
+| `max_growth_rate` | float | [−100%, 1000%] | Upper growth estimator clamp. Default 0.5. Layer-2: ≥ min. |
+| `min_growth_rate` | float | [−100%, 1000%] (neg ok) | Lower growth estimator clamp. Default −0.3. Layer-2: ≤ max. |
+| `terminal_method` | string | `gordon_growth` \| `exit_multiple` | `gordon_growth` SUPPRESSES exit-multiple blending (pure Gordon TV). `exit_multiple` BLENDS 50/50 Gordon/exit average (NOT pure exit-multiple). Layer-2: `exit_multiple` requires resolvable multiple. |
+| `terminal_multiple` | float | [0, 100] | EV/EBITDA exit multiple; falls back to industry default |
+| `tax_rate` | float | [−50%, 100%] (neg ok for NOLs) | Effective corporate tax rate |
+| `beta` | float | [−5, 5] (neg ok) | CAPM beta. Conflicts with bulk `override_beta` |
+| `risk_free_rate` | float | [−5%, 25%] (neg ok) | Nominal risk-free rate. Conflicts with bulk `override_rf` and GET `override_rf` |
+| `market_risk_premium` | float | [0%, 30%] (**floor 0**) | CAPM equity risk premium. MRP < 0 → 422. Layer-2: beta/rf/MRP driving WACC ≤ 0 → 422 `knob = "wacc"`. |
 
 **Validation order** (single, authoritative path through `params.Resolve*`):
 1. Layer-1: per-knob static range + enum checks → 422 `INVALID_OVERRIDE`
-2. Layer-2: cross-knob invariants (resolver) → 422 `INVALID_OVERRIDE`
+2. Layer-2: dynamic cross-knob invariants (resolver) → 422 `INVALID_OVERRIDE`
+   - `terminal_growth_rate` within 1% of computed WACC → `knob = "terminal_growth_rate"`
+   - CAPM inputs driving WACC ≤ 0 → `knob = "wacc"`
+   - Effective horizon > 50 → `knob = "horizon_years"` or `"growth_stages"` (request-sourced)
+   - `min > max`, `horizon < stage-sum`, `exit_multiple` unresolvable
+   - `context.value` = offending value; `context.limit` = numeric threshold (when applicable)
 3. Service: ticker-level errors (404, 422 INSUFFICIENT_DATA, etc.)
 
-**Important asymmetry**: GET `override_beta`/`override_rf` out-of-range → **400** `INVALID_PARAMETER`. POST `options` validation → **422** `INVALID_OVERRIDE`.
+**Important asymmetry**: GET `override_beta`/`override_rf` out-of-range or non-finite (NaN, ±Inf) → **400** `INVALID_PARAMETER`. POST `options` validation → **422** `INVALID_OVERRIDE`.
+
+**Compute-vs-422 boundary**: any override value that passes Layer-1 and Layer-2 validation ALWAYS produces a real valuation (HTTP 200). The engine ranges (`pkg/finance/wacc`, `pkg/finance/dcf`) are aligned with the contract ranges so no 500 can result from a contract-accepted input.
 
 **Response 200**: Same `FairValueResponse` as GET (§1 above), with `applied_overrides` added when overrides were supplied.
 
@@ -201,8 +210,8 @@ Out-of-range values return 400 `INVALID_PARAMETER`.
 | Field | Type | Required | Constraints |
 |-------|------|----------|-------------|
 | `tickers` | string[] | Yes | 1-10 items, each 1-5 chars |
-| `override_beta` | float | No | Legacy beta override for all tickers (0 - 3.0). Mutually exclusive with `options.beta`. |
-| `override_rf` | float | No | Legacy risk-free rate override for all tickers (0 - 0.20). Mutually exclusive with `options.risk_free_rate`. |
+| `override_beta` | float | No | Legacy beta override for all tickers (−5.0 to 5.0). Mutually exclusive with `options.beta`. |
+| `override_rf` | float | No | Legacy risk-free rate override for all tickers (−0.05 to 0.25). Mutually exclusive with `options.risk_free_rate`. |
 | `options` | ValuationOverrides | No | Structured per-request knob overrides applied to all tickers. Must not duplicate `override_beta`/`override_rf` for the same knob — 422 `INVALID_OVERRIDE` if both set for the same knob. See §1b knob catalog. |
 
 Out-of-range legacy overrides return 400 `INVALID_PARAMETER`. Structured `options` validation returns 422 `INVALID_OVERRIDE`.
@@ -224,7 +233,7 @@ Out-of-range legacy overrides return 400 `INVALID_PARAMETER`. Structured `option
       "data_quality_score": 92,
       "data_quality_grade": "A",
       "calculation_method": "multi_stage_dcf",
-      "calculation_version": "4.4",
+      "calculation_version": "4.5",
       "assumption_profile": "maturing_tech_dividend:growth",
       "sanity_check": {
         "implied_pe": 28.5,

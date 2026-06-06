@@ -174,11 +174,11 @@ Response (HTTP 207 Multi-Status — partial success):
 #### Valuation Overrides
 
 The GET endpoint accepts legacy scalar overrides as query parameters:
-- `override_beta` (float, 0-3.0) - Override the calculated beta for WACC computation
-- `override_rf` (float, 0-0.2) - Override the risk-free rate
-- Out-of-range values return **400** `INVALID_PARAMETER`.
+- `override_beta` (float, −5.0 to 5.0) — Override the calculated beta for WACC computation. Negative values allowed (inverse-correlated assets).
+- `override_rf` (float, −0.05 to 0.25) — Override the risk-free rate. Negative values allowed (EUR/JPY/CHF negative-rate regimes).
+- Out-of-range and non-finite values (NaN, ±Inf) return **400** `INVALID_PARAMETER`.
 
-The POST endpoint (`POST /api/v1/fair-value/{ticker}`) accepts a structured `options` block with 12 knobs including `terminal_growth_rate`, `horizon_years`, `tax_rate`, `terminal_method`, `market_risk_premium`, and others. An empty body produces a response byte-identical to GET. Invalid `options` values return **422** `INVALID_OVERRIDE` (note the different status code from GET). See `docs/API_DOCUMENTATION.md` §3.2.8 for the full knob catalog.
+The POST endpoint (`POST /api/v1/fair-value/{ticker}`) accepts a structured `options` block with 12 knobs including `terminal_growth_rate`, `horizon_years`, `tax_rate`, `terminal_method`, `market_risk_premium`, and others. An empty body produces a response byte-identical to GET. Invalid `options` values return **422** `INVALID_OVERRIDE` (note the different status code from GET). Dynamic math-invalidity (e.g. `terminal_growth_rate` within 1% of computed WACC, CAPM inputs driving WACC ≤ 0, effective horizon > 50) also returns 422 — never a 500. See `docs/API_DOCUMENTATION.md` §3.2.8 for the full knob catalog.
 
 The `applied_overrides` field in the response echoes which knobs were set by the request (omitted when none).
 

@@ -236,9 +236,15 @@ Calculate the intrinsic fair value for a single stock.
 
 | Parameter | Type | Range | Description |
 |-----------|------|-------|-------------|
-| `override_beta` | float | 0.0 - 3.0 | Custom beta for WACC calculation |
-| `override_rf` | float | 0.0 - 0.2 | Custom risk-free rate |
+| `override_beta` | float | −5.0 to 5.0 | Custom beta for WACC calculation. Negative values allowed (inverse-correlated assets). |
+| `override_rf` | float | −0.05 to 0.25 | Custom risk-free rate. Negative values allowed (EUR/JPY/CHF negative-rate regimes). |
 | `trace` | bool | `1` to enable | Capture a per-request artifact bundle for debugging — see [§3.3.4](#334-per-request-tracing) |
+
+> **NaN / ±Inf rejection:** `override_beta` and `override_rf` must be finite numbers.
+> Passing `?override_beta=NaN`, `?override_beta=Inf`, or any non-finite value returns
+> **400** `INVALID_PARAMETER`. `strconv.ParseFloat` accepts these strings without error,
+> so the guard is explicit — a non-finite value would otherwise propagate silently into
+> WACC/DCF and produce a non-finite response or an internal error.
 
 **Example Request:**
 ```bash
@@ -270,7 +276,7 @@ curl -H "X-API-Key: <key>" \
   "data_quality_score": 90,
   "data_quality_grade": "A",
   "calculation_method": "multi_stage_dcf",
-  "calculation_version": "4.4",
+  "calculation_version": "4.5",
   "warnings": [],
   "sanity_check": {
     "implied_pe": 18.5,
@@ -442,7 +448,7 @@ The `industry` object exposes both classifiers the engine runs on every request:
 | Status | Code | When |
 |--------|------|------|
 | 400 | `INVALID_TICKER` | Ticker format is invalid |
-| 400 | `INVALID_PARAMETER` | `override_beta` or `override_rf` out of range |
+| 400 | `INVALID_PARAMETER` | `override_beta` or `override_rf` is out of range (beta: [−5, 5]; rf: [−5%, 25%]) OR is a non-finite value (NaN, +Inf, −Inf) |
 | 404 | `TICKER_NOT_FOUND` | Ticker is not present in SEC's ticker→CIK index (genuinely unknown symbol) |
 | 422 | `INSUFFICIENT_DATA` | Ticker exists but cannot be valued — typically pre-revenue issuers, clinical-stage biotechs, or fewer than the required financial periods |
 | 422 | `MODEL_NOT_APPLICABLE` | No valuation model can be applied |
@@ -493,29 +499,34 @@ An empty body or omitted `options` block produces a response **byte-identical** 
 
 All fields are optional pointers. Omitted = use engine default.
 
-| Knob | Type | Range / Allowed | Description |
-|------|------|----------------|-------------|
-| `terminal_growth_rate` | float | Any (negative allowed) | Explicit terminal growth rate for Gordon Growth formula. Layer-2: must be < WACC − 2%. |
-| `terminal_growth_cap` | float | Any | Cap applied during auto-derivation of terminal growth. Default 0.03. No effect when `terminal_growth_rate` is explicit. |
-| `horizon_years` | int | ≥ 1 | DCF forecast horizon. Layer-2: must be ≥ sum of growth-stage years when stages overridden. |
-| `growth_stages.stage1_years` | int | ≥ 0 | High-growth phase duration (default 3). |
+| Knob | Type | Layer-1 Range / Allowed | Description |
+|------|------|------------------------|-------------|
+| `terminal_growth_rate` | float | [−20%, 50%] (negative allowed) | Explicit terminal growth rate for Gordon Growth formula. Layer-2 dynamic: must be at least 1% below computed WACC (`g ≤ WACC − 1%`). A value inside the static band can still fail when WACC is low. |
+| `terminal_growth_cap` | float | [−20%, 50%] | Cap applied during auto-derivation of terminal growth. Default 0.03. No effect when `terminal_growth_rate` is explicit. |
+| `horizon_years` | int | [1, 50] | DCF forecast horizon. Layer-2 dynamic: effective horizon must not exceed 50 (the DCF engine cap); must be ≥ sum of growth-stage years when stages also overridden. |
+| `growth_stages.stage1_years` | int | ≥ 0 | High-growth phase duration (default 3). Request-sourced stages that push the effective horizon > 50 → 422 `knob = "growth_stages"`. |
 | `growth_stages.stage2_years` | int | ≥ 0 | Fade/transition phase duration (default 4). |
 | `growth_stages.stage3_years` | int | ≥ 0 | Long-tail extension (default 0). |
-| `max_growth_rate` | float | ≥ `min_growth_rate` | Upper clamp in the growth estimator. Default 0.5. |
-| `min_growth_rate` | float | ≤ `max_growth_rate` (negative ok) | Lower clamp in the growth estimator. Default −0.3. |
-| `terminal_method` | string | `"gordon_growth"` \| `"exit_multiple"` | Terminal-value calculation model. `exit_multiple` requires a resolvable multiple (Layer-2 error otherwise). |
-| `terminal_multiple` | float | Any positive | EV/EBITDA exit multiple for `terminal_method = exit_multiple`. Falls back to industry default when absent. |
-| `tax_rate` | float | Any (negative ok for NOL scenarios) | Effective corporate tax rate for FCF, WACC, and ModelInput. |
-| `beta` | float | Any (negative ok for inverse-correlated assets) | Equity beta for CAPM. Conflicts with legacy `override_beta` on the bulk endpoint. |
-| `risk_free_rate` | float | Any (negative ok for negative-rate regimes) | Nominal risk-free rate. Conflicts with legacy `override_rf` on bulk body and GET query param. |
-| `market_risk_premium` | float | **≥ 0** (MRP floor — economically required) | Equity risk premium in CAPM. Negative value → 422 `INVALID_OVERRIDE`. |
+| `max_growth_rate` | float | [−100%, 1000%] | Upper clamp in the growth estimator. Default 0.5. Layer-2: must be ≥ `min_growth_rate`. |
+| `min_growth_rate` | float | [−100%, 1000%] (negative ok) | Lower clamp in the growth estimator. Default −0.3. Layer-2: must be ≤ `max_growth_rate`. |
+| `terminal_method` | string | `"gordon_growth"` \| `"exit_multiple"` | Terminal-value model selector. `"gordon_growth"` suppresses exit-multiple blending (pure Gordon TV). `"exit_multiple"` blends a 50/50 Gordon/exit-multiple average (NOT a pure exit-multiple TV). Layer-2: `exit_multiple` requires a resolvable multiple (Layer-2 error otherwise). |
+| `terminal_multiple` | float | [0, 100] | EV/EBITDA exit multiple for `terminal_method = exit_multiple`. Falls back to industry default when absent. |
+| `tax_rate` | float | [−50%, 100%] (negative ok for NOLs) | Effective corporate tax rate for FCF, WACC, and ModelInput. |
+| `beta` | float | [−5, 5] (negative ok for inverse-correlated assets) | Equity beta for CAPM. Conflicts with legacy `override_beta` on the bulk endpoint. |
+| `risk_free_rate` | float | [−5%, 25%] (negative ok for negative-rate regimes) | Nominal risk-free rate. Conflicts with legacy `override_rf` on bulk body and GET query param. |
+| `market_risk_premium` | float | [0%, 30%] (**floor 0** — economically required) | Equity risk premium in CAPM. Negative value → 422 `INVALID_OVERRIDE`. |
 
 **Validation layers:**
-- **Layer 1 (static):** Per-knob range and enum checks. The single hard minimum is MRP ≥ 0; negative values for other rate fields are intentionally allowed for scenario modeling. Invalid → 422 `INVALID_OVERRIDE` immediately.
-- **Layer 2 (cross-knob, in `params.Resolve*`):** `terminal_growth_rate` < WACC − 2%; `min_growth_rate` ≤ `max_growth_rate`; `horizon_years` ≥ stage-sum; `exit_multiple` resolvable. Invalid → 422 `INVALID_OVERRIDE`.
+- **Layer 1 (static):** Per-knob range and enum checks (see table above). Any value inside the static band computes without 500; the engine ranges are aligned with the contract. Invalid → 422 `INVALID_OVERRIDE` immediately.
+- **Layer 2 (dynamic, in `params.Resolve*`):** Invariants that depend on the ticker's computed values:
+  - `terminal_growth_rate` within 1% of computed WACC (real ceiling = `WACC − 1%`, dynamic per ticker).
+  - CAPM inputs (beta/rf/MRP) driving computed WACC ≤ 0 → 422 with `knob = "wacc"`.
+  - Effective horizon > 50 from request-sourced `horizon_years` or `growth_stages` → 422 with `knob = "horizon_years"` or `knob = "growth_stages"`.
+  - `min_growth_rate` > `max_growth_rate`; `horizon_years` < stage-sum; `exit_multiple` unresolvable.
+  All Layer-2 failures → 422 `INVALID_OVERRIDE`; `context.knob` names the offending parameter, `context.value` the rejected value, `context.limit` the numeric threshold when applicable.
 
 > **Validation asymmetry between GET and POST (important for clients):**
-> The legacy GET query parameters (`override_beta`, `override_rf`) use simple range checks that return **400** `INVALID_PARAMETER` on out-of-range input. The POST `options` block uses the two-layer system above and always returns **422** `INVALID_OVERRIDE`. Do not rely on 400 for override failures on the POST endpoint.
+> The legacy GET query parameters (`override_beta`, `override_rf`) use simple range checks that return **400** `INVALID_PARAMETER` on out-of-range or non-finite (NaN, ±Inf) input. The POST `options` block uses the two-layer system above and always returns **422** `INVALID_OVERRIDE`. Do not rely on 400 for override failures on the POST endpoint.
 
 **Success Response (200 OK):**
 
@@ -527,7 +538,7 @@ Same `FairValueResponse` shape as GET, with one additional field when overrides 
   "wacc": 0.092,
   "dcf_value_per_share": 162.10,
   "calculation_method": "multi_stage_dcf",
-  "calculation_version": "4.4",
+  "calculation_version": "4.5",
   "applied_overrides": {
     "tax_rate":    { "value": 0.21,  "source": "request" },
     "horizon_years": { "value": 7,   "source": "request" }
@@ -605,8 +616,8 @@ Calculate fair values for multiple stocks in a single request. Supports partial 
 | Field | Type | Required | Constraints | Description |
 |-------|------|----------|-------------|-------------|
 | `tickers` | string[] | Yes | 1-10 items, 1-5 chars each | Ticker symbols |
-| `override_beta` | float | No | 0.0 - 3.0 | Shared beta override across all tickers (legacy; prefer `options.beta`) |
-| `override_rf` | float | No | 0.0 - 0.2 | Shared risk-free rate override (legacy; prefer `options.risk_free_rate`) |
+| `override_beta` | float | No | −5.0 to 5.0 | Shared beta override across all tickers (legacy; prefer `options.beta`) |
+| `override_rf` | float | No | −0.05 to 0.25 | Shared risk-free rate override (legacy; prefer `options.risk_free_rate`) |
 | `options` | ValuationOverrides | No | See [§3.2.8](#328-valuationoverrides--knob-catalog) | Structured per-request valuation knob overrides, applied to ALL tickers. Must not duplicate `override_beta` / `override_rf` for the same knob — 422 `INVALID_OVERRIDE` if both are set. |
 
 **Response Shape:**

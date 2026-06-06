@@ -121,16 +121,16 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "maximum": 3,
-                        "minimum": 0,
+                        "maximum": 5,
+                        "minimum": -5,
                         "type": "number",
                         "description": "Override beta for WACC calculation",
                         "name": "override_beta",
                         "in": "query"
                     },
                     {
-                        "maximum": 0.2,
-                        "minimum": 0,
+                        "maximum": 0.25,
+                        "minimum": -0.05,
                         "type": "number",
                         "description": "Override risk-free rate",
                         "name": "override_rf",
@@ -798,7 +798,7 @@ const docTemplate = `{
                     "example": -0.01
                 },
                 "terminal_method": {
-                    "description": "TerminalMethod selects the terminal-value calculation model.\nAllowed values: \"gordon_growth\" (default) | \"exit_multiple\".\n\"exit_multiple\" requires that a multiple is resolvable (via terminal_multiple\nor the industry default); if neither is available the request is rejected 422.",
+                    "description": "TerminalMethod selects the terminal-value calculation model.\nAllowed values: \"gordon_growth\" (default) | \"exit_multiple\".\n  - \"gordon_growth\" SUPPRESSES exit-multiple blending: the terminal value is a\n    pure Gordon Growth perpetuity (no exit multiple is mixed in).\n  - \"exit_multiple\" BLENDS an exit-multiple terminal value 50/50 with the Gordon\n    Growth terminal value (the engine AVERAGES the two estimates to reduce\n    single-model dependence; it is NOT a pure exit-multiple terminal value).\n    It requires that a multiple is resolvable (via terminal_multiple or the\n    industry default); if neither is available the request is rejected 422.",
                     "type": "string",
                     "example": "exit_multiple"
                 },

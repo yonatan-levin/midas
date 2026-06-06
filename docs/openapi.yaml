@@ -83,27 +83,29 @@ paths:
           required: false
           description: |
             Override calculated beta for WACC computation.
-            Out-of-range values return **400** `INVALID_PARAMETER`
-            (legacy GET range check — distinct from the POST options-path
-            which returns 422 `INVALID_OVERRIDE`).
+            Non-finite values (NaN, ±Inf) and out-of-range values return **400**
+            `INVALID_PARAMETER` (legacy GET range check — distinct from the POST
+            options-path which returns 422 `INVALID_OVERRIDE`).
+            Negative values are allowed (inverse-correlated assets).
           schema:
             type: number
             format: float
-            minimum: 0
-            maximum: 3
+            minimum: -5
+            maximum: 5
         - name: override_rf
           in: query
           required: false
           description: |
             Override risk-free rate.
-            Out-of-range values return **400** `INVALID_PARAMETER`
-            (legacy GET range check — distinct from the POST options-path
-            which returns 422 `INVALID_OVERRIDE`).
+            Non-finite values (NaN, ±Inf) and out-of-range values return **400**
+            `INVALID_PARAMETER` (legacy GET range check — distinct from the POST
+            options-path which returns 422 `INVALID_OVERRIDE`).
+            Negative values are allowed (EUR/JPY/CHF negative-rate regimes).
           schema:
             type: number
             format: float
-            minimum: 0
-            maximum: 0.2
+            minimum: -0.05
+            maximum: 0.25
         - name: trace
           in: query
           required: false
@@ -122,7 +124,15 @@ paths:
               schema:
                 $ref: '#/components/schemas/FairValueResponse'
         '400':
-          description: Invalid ticker or request
+          description: |
+            Invalid ticker or request parameters. The `code` field distinguishes:
+
+            * `INVALID_TICKER` — ticker format is invalid.
+            * `INVALID_PARAMETER` — `override_beta` or `override_rf` is
+              out-of-range (beta: [−5, 5]; rf: [−5%, 25%]) OR is a non-finite
+              value (NaN, +Inf, −Inf). Non-finite values are explicitly rejected
+              to prevent them from propagating into the WACC/DCF engine and
+              producing a non-finite response or an internal error.
           content:
             application/json:
               schema:
@@ -242,12 +252,33 @@ paths:
             Override validation failed or ticker cannot be valued. The `code`
             field distinguishes the cases:
 
-            * `INVALID_OVERRIDE` — a knob value failed Layer-1 static range /
-              enum validation (e.g. `market_risk_premium` < 0), or a Layer-2
-              cross-knob invariant was violated (e.g. `terminal_growth_rate` >=
-              WACC, `min_growth_rate` > `max_growth_rate`, `horizon_years` <
-              stage-sum, `exit_multiple` requested but no multiple resolvable).
-              The `context.knob` field names the offending parameter.
+            * `INVALID_OVERRIDE` — a knob failed Layer-1 static range/enum
+              validation, or a Layer-2 dynamic invariant was violated.
+              `context.knob` names the offending parameter; `context.value`
+              carries the rejected value; `context.limit` is present when a
+              numeric threshold applies.
+
+              **Dynamic invariants (Layer-2)** — these depend on the ticker's
+              computed values, not a fixed range:
+              - `terminal_growth_rate` within 1% of (or ≥) the computed WACC →
+                422 with `knob = "terminal_growth_rate"`. The real ceiling is
+                `WACC − 1%`, not the static Layer-1 band. A value inside the
+                [−20%, 50%] band can still fail here when WACC is low.
+              - CAPM inputs (beta/risk_free_rate/market_risk_premium) driving
+                computed WACC ≤ 0 → 422 with `knob = "wacc"`. The Gordon
+                perpetuity denominator and discount factors are undefined at
+                non-positive WACC.
+              - Effective horizon > 50 (from request-sourced `horizon_years` or
+                `growth_stages`) → 422 with `knob = "horizon_years"` or
+                `knob = "growth_stages"` respectively.
+              - Other Layer-2 invariants: `min_growth_rate` > `max_growth_rate`;
+                `horizon_years` < growth-stage sum; `exit_multiple` requested but
+                no multiple resolvable.
+
+              Values within the static Layer-1 ranges that do NOT violate a
+              dynamic invariant always produce a real valuation (HTTP 200) — the
+              engine ranges are aligned with the contract so no 500 can result
+              from a contract-accepted input.
             * `INSUFFICIENT_DATA` — SEC has no usable XBRL facts.
             * `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` — 20-F filer.
             * `MODEL_NOT_APPLICABLE` — no model produced a result.
@@ -497,13 +528,15 @@ components:
           example: 0.025
           description: |
             The terminal growth rate that actually fed into the Gordon
-            formula after the WACC-spread guardrail clamped it. The engine
-            requires `terminal_growth <= WACC - 2%` to keep the Gordon
-            denominator stable; when the requested terminal rate (typically
-            3% default or profile-driven) would violate that spread, this
-            field reports the clamped value so consumers can detect when
-            their WACC was tight enough to suppress the input. Omitted on
-            non-DCF model paths.
+            formula. On the default (no-override) path the engine requires
+            `terminal_growth <= WACC − 1%` to keep the Gordon denominator
+            stable; when the auto-derived rate would violate that spread, it
+            is clamped and this field reports the clamped value. When an
+            explicit `terminal_growth_rate` override is supplied and passes
+            the Layer-2 dynamic check (spread ≥ 1%), it is used unchanged and
+            this field reports that override. A request-sourced rate that
+            would violate the 1% spread is rejected as 422 `INVALID_OVERRIDE`
+            before the engine runs. Omitted on non-DCF model paths.
         growth_source:
           type: string
           enum: [analyst_blend, historical_only, default]
@@ -521,12 +554,12 @@ components:
             everything else to `multi_stage_dcf`.
         calculation_version:
           type: string
-          example: "4.4"
+          example: "4.5"
           description: |
             Calculation engine version. Bumped on shape-changing or breaking-numeric
-            changes (e.g., 4.1 added Graham-floor diagnostic fields and flipped the
-            tangible_value_per_share denominator to diluted shares; 4.4 is the
-            current DC-1 parallel-views engine).
+            changes (e.g., 4.1 added Graham-floor diagnostic fields; 4.4 was the
+            DC-1 parallel-views engine; 4.5 corrected operating NWC to exclude cash
+            equivalents — BUG-014).
         warnings:
           type: array
           items:
@@ -843,10 +876,13 @@ components:
         means "use the resolved default". Validated in two layers:
         - **Layer 1 (static):** Per-knob range and enum checks. Violations
           return 422 `INVALID_OVERRIDE` immediately.
-        - **Layer 2 (cross-knob):** Checked by the params resolver after static
-          validation passes. Examples: `terminal_growth_rate >= WACC`,
-          `min_growth_rate > max_growth_rate`, `horizon_years < stage-sum`,
-          `terminal_method = exit_multiple` but no multiple resolvable.
+        - **Layer 2 (cross-knob / dynamic):** Checked by the params resolver
+          after static validation passes. Examples: `terminal_growth_rate`
+          within 1% of computed WACC; CAPM inputs driving WACC ≤ 0;
+          effective horizon > 50; `min_growth_rate > max_growth_rate`;
+          `horizon_years < stage-sum`; `exit_multiple` but no multiple
+          resolvable. These are **dynamic** — they depend on the ticker's
+          computed WACC and growth-stage configuration, not fixed bounds.
           Violations return 422 `INVALID_OVERRIDE` with the offending knob in
           `context.knob`.
 
@@ -861,9 +897,12 @@ components:
           description: |
             Explicit absolute terminal growth rate (g) for the Gordon Growth
             formula. Negative values allowed (real-terms decline scenario).
-            When omitted the engine auto-derives g from historical CAGR,
-            capped by `terminal_growth_cap`. Layer-2 invariant: must be <
-            WACC − 2% (Gordon stability spread).
+            Layer-1 static range: [−20%, 50%]. Layer-2 dynamic invariant:
+            must be at least 1% below the computed WACC (i.e. `g ≤ WACC − 1%`)
+            to keep the Gordon perpetuity denominator stable. A value inside
+            the static band can still fail the dynamic check when WACC is low.
+            When omitted the engine auto-derives g from historical CAGR, capped
+            by `terminal_growth_cap`.
         terminal_growth_cap:
           type: number
           format: float
@@ -877,8 +916,9 @@ components:
           description: |
             DCF forecast horizon in years. When omitted the engine uses the
             archetype profile's horizon (typically 3, 5, 7, or 10).
-            Layer-2 invariant: must be ≥ sum of growth-stage years when
-            growth stages are also overridden.
+            Layer-1 range: [1, 50]. Layer-2 dynamic invariant: must not exceed
+            the sum of growth-stage years when stages are overridden; effective
+            horizon (from stages or this field) must not exceed 50.
         growth_stages:
           $ref: '#/components/schemas/GrowthStages'
         max_growth_rate:
@@ -901,18 +941,19 @@ components:
           enum: [gordon_growth, exit_multiple]
           example: exit_multiple
           description: |
-            Terminal-value calculation model. `gordon_growth` = Gordon
-            perpetual-growth formula (default). `exit_multiple` = year-N
-            EBITDA × exit multiple (requires `terminal_multiple` or an
-            industry default to be resolvable; Layer-2 error if neither
-            is available).
+            Terminal-value calculation model selector. Acts as a boolean switch:
 
-            **Profile-sourced `exit_multiple`**: a profile may set this as
-            its default terminal method (e.g. high-growth tech). However, the
-            default-path DCF averaging still uses the industry lookup for the
-            multiple unless a request override explicitly sets
-            `terminal_multiple`. Only a REQUEST override drives the exit
-            multiple into the averaging path.
+            * `"gordon_growth"` (default) — **SUPPRESSES** exit-multiple blending.
+              The terminal value is a pure Gordon Growth perpetuity on year-N FCF.
+              No exit multiple is mixed in, even when one is industry-available.
+            * `"exit_multiple"` — **BLENDS** an exit-multiple terminal value 50/50
+              with the Gordon Growth terminal value. The engine averages the two
+              estimates to reduce single-model dependence. This is NOT a pure
+              exit-multiple terminal value. Requires that a multiple is resolvable
+              (via `terminal_multiple` or the industry default); Layer-2 error if
+              neither is available.
+
+            Layer-2: `exit_multiple` requires a resolvable multiple.
         terminal_multiple:
           type: number
           format: float
@@ -927,15 +968,16 @@ components:
           example: 0.21
           description: |
             Effective corporate tax rate applied to FCF, WACC, and the
-            alt-model ModelInput. Negative values allowed (NOL / tax-credit
-            scenarios). Layer-1 range: no lower bound enforced; no upper bound.
+            alt-model ModelInput. Negative effective rates are real (NOLs,
+            refundable credits). Layer-1 range: [−50%, 100%].
         beta:
           type: number
           format: float
           example: 1.2
           description: |
             Equity beta for the CAPM cost-of-equity calculation. Negative
-            values allowed (inverse-correlated assets). Conflicts with the
+            values are allowed (inverse-correlated assets such as gold or
+            inverse ETF proxies). Layer-1 range: [−5, 5]. Conflicts with the
             legacy `override_beta` field on the bulk request body — supplying
             both returns 422 `INVALID_OVERRIDE`.
         risk_free_rate:
@@ -944,17 +986,20 @@ components:
           example: 0.045
           description: |
             Nominal risk-free rate (e.g. 10-year Treasury yield). Negative
-            values allowed (EUR/JPY/CHF negative-rate regimes). Conflicts with
-            the legacy `override_rf` bulk field and the `override_rf` GET query
-            parameter — supplying both returns 422 `INVALID_OVERRIDE`.
+            values are allowed (EUR/JPY/CHF negative-rate regimes). Layer-1
+            range: [−5%, 25%]. Conflicts with the legacy `override_rf` bulk
+            field and the `override_rf` GET query parameter — supplying both
+            returns 422 `INVALID_OVERRIDE`.
         market_risk_premium:
           type: number
           format: float
           example: 0.05
           description: |
             Equity risk premium (ERP) added to the risk-free rate in CAPM.
-            Layer-1 constraint: must be ≥ 0 (negative ERP is economically
-            unsound and is rejected with 422 `INVALID_OVERRIDE`).
+            Layer-1 range: [0%, 30%]. Negative ERP is economically unsound
+            and is rejected with 422 `INVALID_OVERRIDE`. Layer-2: beta/rf/MRP
+            inputs that drive computed WACC ≤ 0 are rejected with
+            `knob = "wacc"`.
     GrowthStages:
       type: object
       description: |

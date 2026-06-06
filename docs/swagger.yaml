@@ -479,8 +479,13 @@ definitions:
         description: |-
           TerminalMethod selects the terminal-value calculation model.
           Allowed values: "gordon_growth" (default) | "exit_multiple".
-          "exit_multiple" requires that a multiple is resolvable (via terminal_multiple
-          or the industry default); if neither is available the request is rejected 422.
+            - "gordon_growth" SUPPRESSES exit-multiple blending: the terminal value is a
+              pure Gordon Growth perpetuity (no exit multiple is mixed in).
+            - "exit_multiple" BLENDS an exit-multiple terminal value 50/50 with the Gordon
+              Growth terminal value (the engine AVERAGES the two estimates to reduce
+              single-model dependence; it is NOT a pure exit-multiple terminal value).
+              It requires that a multiple is resolvable (via terminal_multiple or the
+              industry default); if neither is available the request is rejected 422.
         example: exit_multiple
         type: string
       terminal_multiple:
@@ -524,14 +529,14 @@ paths:
         type: string
       - description: Override beta for WACC calculation
         in: query
-        maximum: 3
-        minimum: 0
+        maximum: 5
+        minimum: -5
         name: override_beta
         type: number
       - description: Override risk-free rate
         in: query
-        maximum: 0.2
-        minimum: 0
+        maximum: 0.25
+        minimum: -0.05
         name: override_rf
         type: number
       produces:
