@@ -114,6 +114,70 @@ func validateProfile(id string, p AssumptionProfile) error {
 		return fmt.Errorf("profile %s: payout_path length %d must equal dividend_forecast_horizon %d",
 			id, len(p.PayoutPath), p.DividendForecastHorizon)
 	}
+	// Layer A — reinvestment / margin invariants (spec §6.3). Only enforced for
+	// profiles that opt into a non-legacy method; legacy/empty profiles ignore
+	// these fields entirely so pre-Layer-A config stays valid unchanged.
+	if err := validateReinvestmentFields(id, p); err != nil {
+		return err
+	}
+	return nil
+}
+
+// marginCeiling is the hard validation cap on the converged operating-margin
+// target — no archetype may converge above it (spec §7.3 "margin expansion is
+// capped by archetype/industry"). 60% pre-tax operating margin is already beyond
+// any real public-company sector norm; it is a guardrail, not a calibration.
+const marginCeiling = 0.60
+
+// reinvestmentFieldCeiling bounds the maintenance-capex floor and capex-intensity
+// fractions so a typo (e.g. 30 instead of 0.30) fails loud rather than producing
+// nonsense FCF.
+const reinvestmentFieldCeiling = 0.50
+
+// validateReinvestmentFields enforces the Layer-A range invariants. Enum validity
+// is always checked (a garbage method string is a config error); numeric ranges
+// are checked only for the method that actually consumes them.
+func validateReinvestmentFields(id string, p AssumptionProfile) error {
+	if !isValidReinvestmentMethod(p.ReinvestmentMethod) {
+		return fmt.Errorf("profile %s: invalid reinvestment_method %q", id, p.ReinvestmentMethod)
+	}
+	if !isValidBaseMarginMethod(p.BaseMarginMethod) {
+		return fmt.Errorf("profile %s: invalid base_margin_method %q", id, p.BaseMarginMethod)
+	}
+	// Legacy / empty: the Layer-A fields are ignored; nothing else to check.
+	if p.ReinvestmentMethod == "" || p.ReinvestmentMethod == ReinvestmentLegacyProportional {
+		return nil
+	}
+	if p.ReinvestmentFadeYears < 0 || p.ReinvestmentFadeYears > 15 {
+		return fmt.Errorf("profile %s: reinvestment_fade_years out of range [0,15]: %d", id, p.ReinvestmentFadeYears)
+	}
+	if p.MarginConvergenceYears < 0 || p.MarginConvergenceYears > 15 {
+		return fmt.Errorf("profile %s: margin_convergence_years out of range [0,15]: %d", id, p.MarginConvergenceYears)
+	}
+	if p.MaintenanceCapexFloor < 0 || p.MaintenanceCapexFloor > reinvestmentFieldCeiling {
+		return fmt.Errorf("profile %s: maintenance_capex_floor out of range [0,%.2f]: %.4f", id, reinvestmentFieldCeiling, p.MaintenanceCapexFloor)
+	}
+	if p.TargetOperatingMargin <= 0 || p.TargetOperatingMargin > marginCeiling {
+		return fmt.Errorf("profile %s: target_operating_margin out of range (0,%.2f]: %.4f", id, marginCeiling, p.TargetOperatingMargin)
+	}
+	switch p.ReinvestmentMethod {
+	case ReinvestmentSalesToCapital:
+		if p.SalesToCapitalStart <= 0 {
+			return fmt.Errorf("profile %s: sales_to_capital_start must be > 0 for sales_to_capital", id)
+		}
+		if p.SalesToCapitalTarget < p.SalesToCapitalStart {
+			return fmt.Errorf("profile %s: sales_to_capital_target (%.3f) must be ≥ sales_to_capital_start (%.3f)",
+				id, p.SalesToCapitalTarget, p.SalesToCapitalStart)
+		}
+	case ReinvestmentDecliningCapexIntensity:
+		if p.CapExIntensityStart <= 0 || p.CapExIntensityStart > reinvestmentFieldCeiling {
+			return fmt.Errorf("profile %s: capex_intensity_start out of range (0,%.2f]: %.4f", id, reinvestmentFieldCeiling, p.CapExIntensityStart)
+		}
+		if p.CapExIntensityMature < 0 || p.CapExIntensityMature > p.CapExIntensityStart {
+			return fmt.Errorf("profile %s: capex_intensity_mature (%.4f) must be in [0, capex_intensity_start=%.4f]",
+				id, p.CapExIntensityMature, p.CapExIntensityStart)
+		}
+	}
 	return nil
 }
 
@@ -164,6 +228,26 @@ func isValidTerminalMethod(m TerminalMethod) bool {
 func isValidDiscountMethod(m DiscountMethod) bool {
 	switch m {
 	case DiscountWACC, DiscountCostOfEquity:
+		return true
+	}
+	return false
+}
+
+// isValidReinvestmentMethod accepts the empty string (a pre-Layer-A profile,
+// treated as legacy_proportional) plus the three declared methods.
+func isValidReinvestmentMethod(m ReinvestmentMethod) bool {
+	switch m {
+	case "", ReinvestmentLegacyProportional, ReinvestmentSalesToCapital, ReinvestmentDecliningCapexIntensity:
+		return true
+	}
+	return false
+}
+
+// isValidBaseMarginMethod accepts the empty string (defaults to ttm) plus the
+// three declared base-margin methods.
+func isValidBaseMarginMethod(m BaseMarginMethod) bool {
+	switch m {
+	case "", BaseMarginTTM, BaseMarginTwoYearAvg, BaseMarginMidCycle:
 		return true
 	}
 	return false

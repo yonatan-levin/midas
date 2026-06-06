@@ -134,6 +134,52 @@ func TestLoadFromJSON_NegativeValidation(t *testing.T) {
     "software_like_scaling:standard_growth"`),
 			wantErrPart: "payout_path length 6 must equal dividend_forecast_horizon 3",
 		},
+		{
+			// Layer A (§6.3): a garbage reinvestment_method enum is a config
+			// error, even though the field is optional.
+			name: "invalid_reinvestment_method",
+			config: replaceJSONField(minimalValidConfig,
+				`"stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"stable_dividend_growth": 0.03,
+      "reinvestment_method": "teleport_capital"
+    },
+    "software_like_scaling:standard_growth"`),
+			wantErrPart: "invalid reinvestment_method",
+		},
+		{
+			// Layer A (§6.3): sales_to_capital requires a positive start ratio.
+			name: "sales_to_capital_missing_start",
+			config: replaceJSONField(minimalValidConfig,
+				`"stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"stable_dividend_growth": 0.03,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_target": 3.0,
+      "target_operating_margin": 0.30
+    },
+    "software_like_scaling:standard_growth"`),
+			wantErrPart: "sales_to_capital_start must be > 0",
+		},
+		{
+			// Layer A (§7.3): the converged margin is capped well below any real
+			// sector norm; a 90% target is a typo, not a calibration.
+			name: "target_operating_margin_above_ceiling",
+			config: replaceJSONField(minimalValidConfig,
+				`"stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"stable_dividend_growth": 0.03,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_start": 2.0,
+      "sales_to_capital_target": 3.0,
+      "target_operating_margin": 0.90
+    },
+    "software_like_scaling:standard_growth"`),
+			wantErrPart: "target_operating_margin out of range",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

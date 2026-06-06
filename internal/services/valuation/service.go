@@ -1373,6 +1373,11 @@ func (s *Service) performValuation(
 			zap.Float64("exit_multiple", exitMultiple))
 	}
 
+	// Tier 2 Layer A: derive the reinvestment / operating-leverage trajectory
+	// from the resolved profile and feed it into the DCF (spec §5-§7). No-op on
+	// the legacy proportional path; returns audit source lines for result.Warnings.
+	reinvestmentWarnings := s.applyReinvestmentModel(ctx, &dcfInputs, resolvedProfile, baseOI, historicalData, growthRatesForDCF)
+
 	dcfResult, err := dcf.CalculateDCF(dcfInputs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to calculate DCF: %w", err)
@@ -1400,12 +1405,13 @@ func (s *Service) performValuation(
 	// Stage 8 — "terminal_value" calc trace: emit terminal-value build-up so operators
 	// can see the Gordon Growth vs. exit-multiple averaging outcome.
 	if s.calcEmitter != nil {
-		// gordonTV = terminalYearFCF * (1 + tg) / (wacc - tg) before exit-multiple averaging.
-		// Re-derive it because dcf.Result only exposes the averaged TerminalValueNominal.
-		gordonTV := 0.0
-		if waccResult.WACC > terminalGrowthRate {
-			gordonTV = dcfResult.TerminalYearFCF * (1 + terminalGrowthRate) / (waccResult.WACC - terminalGrowthRate)
-		}
+		// Gordon-Growth TV component before exit-multiple averaging. Read it
+		// directly from the engine (dcf.Result.GordonTV) rather than re-deriving:
+		// the legacy re-derivation assumed terminalFCF = TerminalYearFCF×(1+g),
+		// which is WRONG on the Layer-A reinvestment path (where terminal FCF is
+		// consistency-derived from terminal growth + ROIC). On the legacy path
+		// GordonTV equals the prior re-derivation, so this is bit-for-bit there.
+		gordonTV := dcfResult.GordonTV
 		// exit_multiple_used is true when TerminalValueNominal differs from the pure
 		// Gordon Growth value — i.e. pkg/finance/dcf averaged an exit-multiple TV in.
 		// Post-M-1c the raw exit_multiple_tv component is also persisted on
@@ -1519,7 +1525,7 @@ func (s *Service) performValuation(
 		CurrentPrice:        marketData.SharePrice,
 		DataFreshnessScore:  dataFreshnessScore,
 		CalculationMethod:   "multi_stage_dcf",
-		CalculationVersion:  "4.6", // BUG-015: standard-DCF operating-income base annualized to TTM for 10-Q-latest tickers (was a single quarter, ~4× understated). Changes dcf_value_per_share for quarter-latest firms by design; FY-latest bit-for-bit unchanged. Prior: 4.5 (BUG-014 DCF operating NWC excludes cash). The request-valuation-overrides feature is additive and version-neutral (default path byte-identical), so it adopts master's 4.6 stamp unchanged.
+		CalculationVersion:  "4.7", // Tier 2 Layer A: DCF reinvestment / operating-leverage model — profiles that opt into sales_to_capital project FCF = NOPAT − Reinvestment(ΔRevenue/SalesToCapital) with a converging margin, so FCF can cross positive in-window (changes dcf_value_per_share for opted-in growth archetypes by design). Legacy-proportional profiles + DDM/FFO/revenue_multiple are bit-for-bit. Prior: 4.6 (BUG-015 TTM OI base for 10-Q-latest). The request-valuation-overrides feature is additive + version-neutral.
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -1579,6 +1585,17 @@ func (s *Service) performValuation(
 	if usingNOPATFallback {
 		result.Warnings = append(result.Warnings,
 			"FCF using NOPAT approximation (D&A/CapEx unavailable from filing). Valuation may be less accurate for capital-intensive companies.")
+	}
+
+	// Tier 2 Layer A: surface the reinvestment-model source tag (emitted whenever
+	// the model engaged or fell back) and propagate the engine's
+	// maintenance-capex-floor clamp warning so the §7.1 guardrail is auditable in
+	// the response, not just the calc trace.
+	result.Warnings = append(result.Warnings, reinvestmentWarnings...)
+	for _, w := range dcfResult.Warnings {
+		if strings.HasPrefix(w, "maintenance_capex_floor") {
+			result.Warnings = append(result.Warnings, w)
+		}
 	}
 
 	// BUG-015: surface the TTM operating-income base provenance when the OI base
@@ -1918,7 +1935,7 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:        marketData.SharePrice,
 		DataFreshnessScore:  dataFreshnessScore,
 		CalculationMethod:   modelResult.ModelType,
-		CalculationVersion:  "4.6", // BUG-015: standard-DCF operating-income base annualized to TTM for 10-Q-latest tickers. Alt-model numerics (DDM/FFO/revenue_multiple) are unaffected by the OI-base change (those paths do not use the standard-DCF OI base) — only calculation_version drifts here (bit-for-bit primary values). The bump is engine-wide for a single version stamp. Prior: 4.5 (BUG-014). The request-valuation-overrides feature is additive and version-neutral; it adopts master's 4.6 stamp unchanged.
+		CalculationVersion:  "4.7", // Tier 2 Layer A: DCF reinvestment / operating-leverage model. Alt-model numerics (DDM/FFO/revenue_multiple) are UNAFFECTED — Layer A is DCF-path only — so only calculation_version drifts here (bit-for-bit primary values). The bump is engine-wide for a single version stamp. Prior: 4.6 (BUG-015). The request-valuation-overrides feature is additive + version-neutral.
 		Warnings:            modelResult.Warnings,
 	}
 

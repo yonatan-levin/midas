@@ -1,5 +1,5 @@
 {
-  "config_version": "1.0.0",
+  "config_version": "1.1.0",
   "resolver_version": "1.0.0",
   "profiles": {
     "mature_large_bank:mature": {
@@ -85,7 +85,15 @@
       "dps_growth_cap": 0,
       "payout_path": [],
       "dividend_forecast_horizon": 0,
-      "stable_dividend_growth": 0.03
+      "stable_dividend_growth": 0.03,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_start": 1.5,
+      "sales_to_capital_target": 2.5,
+      "reinvestment_fade_years": 5,
+      "maintenance_capex_floor": 0.03,
+      "base_margin_method": "ttm",
+      "target_operating_margin": 0.30,
+      "margin_convergence_years": 5
     },
     "cyclical_trough:standard_growth": {
       "profile_id": "cyclical_trough:standard_growth",
@@ -119,7 +127,15 @@
       "dps_growth_cap": 0,
       "payout_path": [],
       "dividend_forecast_horizon": 0,
-      "stable_dividend_growth": 0.03
+      "stable_dividend_growth": 0.03,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_start": 1.0,
+      "sales_to_capital_target": 2.0,
+      "reinvestment_fade_years": 7,
+      "maintenance_capex_floor": 0.04,
+      "base_margin_method": "ttm",
+      "target_operating_margin": 0.20,
+      "margin_convergence_years": 7
     },
     "pre_revenue_biotech:high_growth": {
       "profile_id": "pre_revenue_biotech:high_growth",
@@ -170,7 +186,15 @@
       "dps_growth_cap": 0,
       "payout_path": [],
       "dividend_forecast_horizon": 0,
-      "stable_dividend_growth": 0.025
+      "stable_dividend_growth": 0.025,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_start": 3.5,
+      "sales_to_capital_target": 4.5,
+      "reinvestment_fade_years": 3,
+      "maintenance_capex_floor": 0.02,
+      "base_margin_method": "ttm",
+      "target_operating_margin": 0.38,
+      "margin_convergence_years": 3
     },
     "software_like_large_scale:standard_growth": {
       "profile_id": "software_like_large_scale:standard_growth",
@@ -187,7 +211,15 @@
       "dps_growth_cap": 0,
       "payout_path": [],
       "dividend_forecast_horizon": 0,
-      "stable_dividend_growth": 0.03
+      "stable_dividend_growth": 0.03,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_start": 3.0,
+      "sales_to_capital_target": 4.5,
+      "reinvestment_fade_years": 5,
+      "maintenance_capex_floor": 0.02,
+      "base_margin_method": "ttm",
+      "target_operating_margin": 0.38,
+      "margin_convergence_years": 5
     },
     "software_like_large_scale:high_growth": {
       "profile_id": "software_like_large_scale:high_growth",
@@ -204,7 +236,15 @@
       "dps_growth_cap": 0,
       "payout_path": [],
       "dividend_forecast_horizon": 0,
-      "stable_dividend_growth": 0.03
+      "stable_dividend_growth": 0.03,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_start": 2.5,
+      "sales_to_capital_target": 4.5,
+      "reinvestment_fade_years": 6,
+      "maintenance_capex_floor": 0.02,
+      "base_margin_method": "ttm",
+      "target_operating_margin": 0.40,
+      "margin_convergence_years": 6
     },
     "software_like_scaling:high_growth": {
       "profile_id": "software_like_scaling:high_growth",
@@ -221,7 +261,15 @@
       "dps_growth_cap": 0,
       "payout_path": [],
       "dividend_forecast_horizon": 0,
-      "stable_dividend_growth": 0.03
+      "stable_dividend_growth": 0.03,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_start": 2.0,
+      "sales_to_capital_target": 4.0,
+      "reinvestment_fade_years": 6,
+      "maintenance_capex_floor": 0.02,
+      "base_margin_method": "ttm",
+      "target_operating_margin": 0.32,
+      "margin_convergence_years": 6
     },
     "hypergrowth_profitable:high_growth": {
       "profile_id": "hypergrowth_profitable:high_growth",
@@ -238,7 +286,15 @@
       "dps_growth_cap": 0,
       "payout_path": [],
       "dividend_forecast_horizon": 0,
-      "stable_dividend_growth": 0.035
+      "stable_dividend_growth": 0.035,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_start": 1.5,
+      "sales_to_capital_target": 3.0,
+      "reinvestment_fade_years": 8,
+      "maintenance_capex_floor": 0.03,
+      "base_margin_method": "ttm",
+      "target_operating_margin": 0.30,
+      "margin_convergence_years": 8
     },
     "growth_bank:standard_growth": {
       "profile_id": "growth_bank:standard_growth",

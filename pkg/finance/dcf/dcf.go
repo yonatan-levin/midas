@@ -35,6 +35,51 @@ type Inputs struct {
 	// When non-zero, the terminal value is averaged between Gordon Growth TV
 	// and an exit-multiple-based TV to reduce single-model dependency.
 	ExitMultiple float64 // Sector median EV/EBITDA multiple; 0 = use Gordon Growth only
+
+	// --- Layer A: reinvestment / operating-leverage projection (DCF-path only) ---
+	//
+	// When ReinvestmentMethod is "" or "legacy_proportional", the projection uses
+	// the existing proportional × growthFactor scaling and ALL of the fields below
+	// are ignored — output is bit-for-bit identical to the pre-Layer-A engine.
+	//
+	// When ReinvestmentMethod is "sales_to_capital" or "declining_capex_intensity"
+	// (and BaseRevenue > 0), a unified reinvestment term replaces the proportional
+	// CapEx/ΔWC/D&A scaling so projected FCF = NOPAT_t − Reinvestment_t can cross
+	// from negative to positive WITHIN the explicit horizon for reinvestment-heavy,
+	// scaling firms (spec docs/refactoring/spec/dcf-reinvestment-and-filing-intelligence-spec.md §5).
+	//
+	// All fields are plain numerics so pkg/finance/dcf stays config-free; the
+	// service layer derives them from the resolved AssumptionProfile.
+	ReinvestmentMethod string // "" | "legacy_proportional" | "sales_to_capital" | "declining_capex_intensity"
+
+	// Revenue series anchors. Revenue_0 = BaseRevenue; Revenue_t = Revenue_{t-1}×(1+g_t)
+	// where g_t comes from RevenueGrowthRates (falling back to GrowthRates/GrowthRate).
+	BaseRevenue        float64   // TTM / normalized revenue base
+	RevenueGrowthRates []float64 // per-year revenue growth; empty ⇒ reuse GrowthRates
+
+	// sales_to_capital path: Reinvestment_t = ΔRevenue_t / SalesToCapital_t, where
+	// SalesToCapital_t RISES (efficiency improves) from start → target over the fade.
+	SalesToCapitalStart  float64
+	SalesToCapitalTarget float64
+
+	// declining_capex_intensity fallback path: Reinvestment_t = NetReinvestIntensity_t × Revenue_t,
+	// where NetReinvestIntensity_t DECLINES from start → mature norm over the fade.
+	// Interpreted as a NET-reinvestment-to-revenue ratio so it stays in the unified
+	// FCF = NOPAT − Reinvestment frame and avoids the §5.3 "hybrid trap".
+	CapExIntensityStart  float64
+	CapExIntensityMature float64
+
+	ReinvestmentFadeYears int     // years over which sales-to-capital / capex-intensity reaches target
+	MaintenanceCapexFloor float64 // §7.1 — reinvestment may not fall below this × Revenue_t
+
+	// Margin-convergence path. OperatingMargin_t = BaseOperatingMargin +
+	// (TargetOperatingMargin − BaseOperatingMargin) × min(t/MarginConvergenceYears, 1).
+	// NOPAT_t = Revenue_t × OperatingMargin_t × (1 − TaxRate). When base == target
+	// (flat margin) the NOPAT path reduces to BaseOperatingIncome scaled by revenue
+	// growth — identical to the legacy OI-growth path when revenue growth == OI growth.
+	BaseOperatingMargin    float64 // = BaseOperatingIncome / BaseRevenue (pre-tax operating margin)
+	TargetOperatingMargin  float64 // archetype/industry-capped ceiling
+	MarginConvergenceYears int     // years over which margin expands base → target
 }
 
 // Projection represents cash flow projection for a single year
@@ -66,6 +111,14 @@ type Result struct {
 	// operators can audit the two TV estimates separately. Added per M-1c.
 	ExitMultipleTV       float64 `json:"exit_multiple_tv,omitempty"`
 	TerminalValueNominal float64 `json:"terminal_value_nominal"` // Terminal value before discounting
+	// GordonTV is the Gordon-Growth terminal value component (nominal, before
+	// discounting and before any exit-multiple averaging). Surfaced so the
+	// valuation service can render the "terminal_value" calc trace without
+	// re-deriving it (the legacy path's re-derivation assumed terminalFCF =
+	// TerminalYearFCF×(1+g), which is incorrect on the Layer-A reinvestment
+	// path where terminal FCF is derived from terminal growth + ROIC). Equal to
+	// TerminalValueNominal on the Gordon-only path.
+	GordonTV float64 `json:"gordon_tv"`
 
 	// Input validation and quality
 	IsReasonable bool     `json:"is_reasonable"`      // Sanity check result
@@ -95,15 +148,61 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 
 	// Generate yearly projections
 	currentOperatingIncome := inputs.BaseOperatingIncome
+	currentRevenue := inputs.BaseRevenue
+	useReinv := useReinvestmentModel(inputs)
+	floorClampWarned := false
 	explicitPeriodValue := 0.0
 
 	for year := 1; year <= inputs.ProjectionYears; year++ {
-		// Select growth rate: per-year if available, otherwise single rate
+		// Select growth rate: per-year if available, otherwise single rate. On
+		// the reinvestment path a dedicated revenue-growth slice wins when set;
+		// otherwise both paths share GrowthRates (legacy behavior unchanged).
 		rateForYear := inputs.GrowthRate
-		if len(inputs.GrowthRates) >= year {
+		if useReinv && len(inputs.RevenueGrowthRates) >= year {
+			rateForYear = inputs.RevenueGrowthRates[year-1]
+		} else if len(inputs.GrowthRates) >= year {
 			rateForYear = inputs.GrowthRates[year-1]
 		}
 
+		if useReinv {
+			// --- Layer A: unified reinvestment / operating-leverage projection ---
+			// Revenue compounds at the growth rate; the operating margin converges
+			// base→target; NOPAT = Revenue × margin × (1−tax); reinvestment is a
+			// single unified term (§5.2). FCF = NOPAT − Reinvestment can cross
+			// positive in-window because reinvestment efficiency improves while
+			// growth fades — decoupling the FCF sign from the base year (§4).
+			prevRevenue := currentRevenue
+			currentRevenue = prevRevenue * (1 + rateForYear)
+
+			marginFrac := convergeFraction(year, inputs.MarginConvergenceYears)
+			margin := inputs.BaseOperatingMargin + (inputs.TargetOperatingMargin-inputs.BaseOperatingMargin)*marginFrac
+			operatingIncome := currentRevenue * margin
+			nopat := operatingIncome * (1 - inputs.TaxRate)
+
+			reinvest, clamped := reinvestmentForYear(inputs, year, currentRevenue, prevRevenue)
+			if clamped && !floorClampWarned {
+				result.Warnings = append(result.Warnings,
+					"maintenance_capex_floor: projected reinvestment clamped up to the maintenance-capex floor; FCF reflects the floor, not the lower modeled reinvestment")
+				floorClampWarned = true
+			}
+			freeCashFlow := nopat - reinvest
+
+			discountFactor := math.Pow(1+inputs.WACC, float64(year))
+			presentValue := freeCashFlow / discountFactor
+			result.Projections[year-1] = Projection{
+				Year:              year,
+				OperatingIncome:   operatingIncome,
+				NOPAT:             nopat,
+				FreeCashFlow:      freeCashFlow,
+				DiscountFactor:    discountFactor,
+				PresentValue:      presentValue,
+				GrowthRateApplied: rateForYear,
+			}
+			explicitPeriodValue += presentValue
+			continue
+		}
+
+		// --- Legacy proportional projection (unchanged; bit-for-bit) ---
 		// Apply growth to operating income
 		currentOperatingIncome *= (1 + rateForYear)
 
@@ -155,11 +254,30 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 	finalYearProjection := result.Projections[inputs.ProjectionYears-1]
 	result.TerminalYearFCF = finalYearProjection.FreeCashFlow
 
-	// Terminal value = FCF(final year) * (1 + terminal growth) / (WACC - terminal growth)
+	// Terminal value = terminalFCF / (WACC - terminal growth).
 	// The minimum WACC-vs-terminal spread (MinWACCTerminalSpread) is enforced by
 	// validateInputs, and earlier as a typed 422 by the valuation resolver.
-	terminalFCF := result.TerminalYearFCF * (1 + inputs.TerminalGrowthRate)
-	gordonTV := terminalFCF / (inputs.WACC - inputs.TerminalGrowthRate)
+	var gordonTV float64
+	if useReinv {
+		// §7.3 terminal consistency: derive the perpetuity reinvestment from
+		// terminal growth + the MATURED sales-to-capital (or capex-intensity
+		// mature norm), NOT the final explicit-year FCF — which still carries the
+		// last explicit year's elevated growth and reinvestment. Using the matured
+		// efficiency makes the terminal reinvestment rate equal
+		// terminal_growth / terminal_ROIC by construction (ROIC = after-tax target
+		// margin × sales-to-capital), so a firm growing at g in perpetuity also
+		// reinvests the capital that g requires.
+		revNext := currentRevenue * (1 + inputs.TerminalGrowthRate)
+		nopatNext := revNext * inputs.TargetOperatingMargin * (1 - inputs.TaxRate)
+		reinvestNext, _ := terminalReinvestment(inputs, revNext)
+		terminalFCF := nopatNext - reinvestNext
+		gordonTV = terminalFCF / (inputs.WACC - inputs.TerminalGrowthRate)
+	} else {
+		// Legacy: terminalFCF = FCF(final year) × (1 + terminal growth).
+		terminalFCF := result.TerminalYearFCF * (1 + inputs.TerminalGrowthRate)
+		gordonTV = terminalFCF / (inputs.WACC - inputs.TerminalGrowthRate)
+	}
+	result.GordonTV = gordonTV
 	result.TerminalValueNominal = gordonTV
 
 	// When an exit multiple is provided, average Gordon Growth TV with exit-multiple TV.
@@ -282,6 +400,99 @@ func SensitivityAnalysis(baseInputs Inputs, waccRange []float64, growthRange []f
 const MinWACCTerminalSpread = 0.01
 
 // Helper functions
+
+// --- Layer A: reinvestment / operating-leverage helpers ---
+
+// useReinvestmentModel reports whether the Layer-A unified reinvestment
+// projection should run. It requires an explicit non-legacy method AND a
+// positive revenue base (the reinvestment term projects off revenue). Absent
+// either, the projection falls back to the legacy proportional path so the
+// engine never divides by a missing base — this is the runtime half of the
+// legacy_proportional opt-out (the config half is an unset/legacy method).
+func useReinvestmentModel(inputs Inputs) bool {
+	switch inputs.ReinvestmentMethod {
+	case "sales_to_capital", "declining_capex_intensity":
+		return inputs.BaseRevenue > 0
+	default:
+		return false
+	}
+}
+
+// convergeFraction returns the linear convergence fraction at year t for a path
+// that reaches its target at `years`, clamped to [0,1]. years <= 0 means the
+// target is reached immediately (fraction 1.0) — used for flat (mature) profiles.
+func convergeFraction(year, years int) float64 {
+	if years <= 0 {
+		return 1.0
+	}
+	f := float64(year) / float64(years)
+	if f > 1.0 {
+		return 1.0
+	}
+	return f
+}
+
+// reinvestmentForYear computes the explicit-year Layer-A reinvestment and reports
+// whether the §7.1 maintenance-capex floor clamped it up. Both methods yield a
+// NET reinvestment in the unified FCF = NOPAT − Reinvestment frame:
+//
+//   - sales_to_capital:          Reinvestment_t = ΔRevenue_t / SalesToCapital_t,
+//     SalesToCapital_t rising start→target over the fade.
+//   - declining_capex_intensity: Reinvestment_t = NetIntensity_t × Revenue_t,
+//     NetIntensity_t declining start→mature over the fade.
+//
+// The floor (MaintenanceCapexFloor × Revenue) is a LOWER bound on reinvestment —
+// a firm cannot grow on sub-maintenance capital, so it prevents the taper from
+// manufacturing implausibly-high early FCF (§7.1).
+func reinvestmentForYear(inputs Inputs, year int, revenue, prevRevenue float64) (reinvest float64, clamped bool) {
+	fadeFrac := convergeFraction(year, inputs.ReinvestmentFadeYears)
+	switch inputs.ReinvestmentMethod {
+	case "declining_capex_intensity":
+		intensity := inputs.CapExIntensityStart + (inputs.CapExIntensityMature-inputs.CapExIntensityStart)*fadeFrac
+		reinvest = intensity * revenue
+	default: // sales_to_capital
+		s2c := inputs.SalesToCapitalStart + (inputs.SalesToCapitalTarget-inputs.SalesToCapitalStart)*fadeFrac
+		if s2c <= 0 {
+			// Defensive: validation keeps target ≥ start > 0, but never divide by
+			// a non-positive ratio if a caller bypassed validation.
+			s2c = inputs.SalesToCapitalTarget
+		}
+		reinvest = (revenue - prevRevenue) / s2c
+	}
+	return clampToFloor(reinvest, inputs.MaintenanceCapexFloor*revenue)
+}
+
+// terminalReinvestment computes the perpetuity (year n+1) reinvestment using the
+// MATURED efficiency (sales-to-capital target / capex-intensity mature), honoring
+// the §7.1 floor. revNext is the first perpetuity-year revenue (= Revenue_n×(1+g)).
+//
+// For sales_to_capital the reinvestment is the capital that funds the NEXT
+// period's growth off the perpetuity base — Revenue_{n+1}×g / SalesToCapital —
+// which makes the terminal reinvestment rate equal terminal_growth / terminal_ROIC
+// EXACTLY (Damodaran stable-growth FCFF, §7.3), since
+// ROIC = after-tax target margin × sales-to-capital.
+func terminalReinvestment(inputs Inputs, revNext float64) (reinvest float64, clamped bool) {
+	switch inputs.ReinvestmentMethod {
+	case "declining_capex_intensity":
+		reinvest = inputs.CapExIntensityMature * revNext
+	default: // sales_to_capital
+		s2c := inputs.SalesToCapitalTarget
+		if s2c <= 0 {
+			s2c = 1.0
+		}
+		reinvest = revNext * inputs.TerminalGrowthRate / s2c
+	}
+	return clampToFloor(reinvest, inputs.MaintenanceCapexFloor*revNext)
+}
+
+// clampToFloor raises reinvest to floor when it would fall below it, reporting
+// whether the clamp fired.
+func clampToFloor(reinvest, floor float64) (float64, bool) {
+	if reinvest < floor {
+		return floor, true
+	}
+	return reinvest, false
+}
 
 // validateInputs checks that all inputs are within reasonable ranges.
 //

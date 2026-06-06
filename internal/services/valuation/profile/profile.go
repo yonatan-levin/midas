@@ -76,10 +76,39 @@ const (
 	DiscountCostOfEquity DiscountMethod = "cost_of_equity"
 )
 
+// ReinvestmentMethod selects the Layer-A DCF reinvestment / operating-leverage
+// trajectory. The empty value (a profile that predates Layer A) is treated as
+// ReinvestmentLegacyProportional — the bit-for-bit opt-out.
+type ReinvestmentMethod string
+
+const (
+	// ReinvestmentLegacyProportional is the pre-Layer-A path: CapEx/ΔWC/D&A scale
+	// proportionally with cumulative OI growth. Bit-for-bit with the prior engine.
+	ReinvestmentLegacyProportional ReinvestmentMethod = "legacy_proportional"
+	// ReinvestmentSalesToCapital is the recommended unified term:
+	// Reinvestment_t = ΔRevenue_t / SalesToCapital_t (efficiency rising over the fade).
+	ReinvestmentSalesToCapital ReinvestmentMethod = "sales_to_capital"
+	// ReinvestmentDecliningCapexIntensity is the documented fallback:
+	// Reinvestment_t = NetIntensity_t × Revenue_t (intensity declining over the fade).
+	ReinvestmentDecliningCapexIntensity ReinvestmentMethod = "declining_capex_intensity"
+)
+
+// BaseMarginMethod selects how the Layer-A margin-convergence path seeds its base
+// operating margin. The empty value defaults to BaseMarginTTM.
+type BaseMarginMethod string
+
+const (
+	BaseMarginTTM        BaseMarginMethod = "ttm"
+	BaseMarginTwoYearAvg BaseMarginMethod = "two_year_average"
+	BaseMarginMidCycle   BaseMarginMethod = "mid_cycle"
+)
+
 // AssumptionProfile is the full per-(archetype, maturity) calibration record.
-// All 14 fields are populated at JSON load time; values are validated by
-// validation.go. Downstream phases (P1-P4) consume the subset relevant to
-// each model — DCF reads horizon/terminal fields, DDM reads DPS fields, etc.
+// Fields are populated at JSON load time; values are validated by validation.go.
+// Downstream phases consume the subset relevant to each model — DCF reads
+// horizon/terminal + Layer-A reinvestment fields, DDM reads DPS fields, etc. The
+// Layer-A reinvestment/margin block (added 2026-06) is additive and optional:
+// profiles that omit it keep the legacy proportional DCF path bit-for-bit.
 type AssumptionProfile struct {
 	// Identity & key
 	ProfileID string    `json:"profile_id"`
@@ -111,6 +140,26 @@ type AssumptionProfile struct {
 	// ($50B) versus a pre-revenue biotech ($2B); one global threshold
 	// misclassifies one or the other.
 	SizeThresholds *SizeThresholds `json:"size_thresholds,omitempty"`
+
+	// --- Layer A: reinvestment / operating-leverage trajectory (DCF path only) ---
+	//
+	// All fields are ADDITIVE and OPTIONAL. A profile that omits them (every
+	// pre-Layer-A profile) resolves ReinvestmentMethod to "" which the service
+	// layer + engine treat as legacy_proportional — bit-for-bit unchanged. Only
+	// profiles that explicitly set ReinvestmentMethod to a non-legacy value engage
+	// the new projection. Spec §6.1.
+	ReinvestmentMethod    ReinvestmentMethod `json:"reinvestment_method,omitempty"`
+	SalesToCapitalStart   float64            `json:"sales_to_capital_start,omitempty"`  // starting (low) sales-to-capital for scaling firms
+	SalesToCapitalTarget  float64            `json:"sales_to_capital_target,omitempty"` // mature-industry norm the ratio improves toward
+	CapExIntensityStart   float64            `json:"capex_intensity_start,omitempty"`   // fallback path: starting net-reinvestment / revenue
+	CapExIntensityMature  float64            `json:"capex_intensity_mature,omitempty"`  // fallback path: mature net-reinvestment / revenue
+	ReinvestmentFadeYears int                `json:"reinvestment_fade_years,omitempty"` // years over which efficiency reaches target
+	MaintenanceCapexFloor float64            `json:"maintenance_capex_floor,omitempty"` // §7.1 floor as a fraction of revenue
+
+	// Margin-convergence path.
+	BaseMarginMethod       BaseMarginMethod `json:"base_margin_method,omitempty"`       // how to seed the base operating margin
+	TargetOperatingMargin  float64          `json:"target_operating_margin,omitempty"`  // archetype/industry-capped ceiling
+	MarginConvergenceYears int              `json:"margin_convergence_years,omitempty"` // years over which margin expands base → target
 }
 
 // SizeThresholds carries archetype-specific revenue cutoffs used by the

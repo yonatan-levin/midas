@@ -974,7 +974,7 @@ func TestService_performValuation(t *testing.T) {
 		assert.Greater(t, result.GrowthRate, 0.0)
 		assert.Greater(t, result.EnterpriseValue, 0.0)
 		assert.Greater(t, result.DataFreshnessScore, 0)
-		assert.Equal(t, "4.6", result.CalculationVersion) // BUG-015: bumped from 4.5 (DCF OI base annualized to TTM for 10-Q-latest)
+		assert.Equal(t, "4.7", result.CalculationVersion) // Layer A reinvestment model (was 4.6 after BUG-015)
 	})
 
 	t.Run("single period uses default growth rate", func(t *testing.T) {
@@ -2614,7 +2614,7 @@ func TestService_performValuation_NegativeOperatingIncome(t *testing.T) {
 	if result != nil {
 		assert.Equal(t, "revenue_multiple", result.CalculationMethod,
 			"Should use revenue multiple model for negative OI")
-		assert.Equal(t, "4.6", result.CalculationVersion) // BUG-015: bumped from 4.5 (DCF OI base annualized to TTM for 10-Q-latest)
+		assert.Equal(t, "4.7", result.CalculationVersion) // Layer A reinvestment model (was 4.6 after BUG-015)
 		assert.Greater(t, result.DCFValuePerShare, 0.0,
 			"Revenue multiple should produce a positive value when revenue is available")
 	}
@@ -2655,7 +2655,7 @@ func TestService_performValuation_TrueFCF(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Greater(t, result.DCFValuePerShare, 0.0)
 	assert.Greater(t, result.EquityValue, 0.0)
-	assert.Equal(t, "4.6", result.CalculationVersion) // BUG-015: bumped from 4.5 (DCF OI base annualized to TTM for 10-Q-latest)
+	assert.Equal(t, "4.7", result.CalculationVersion) // Layer A reinvestment model (was 4.6 after BUG-015)
 }
 
 func TestService_performValuation_GrowthCapping(t *testing.T) {
@@ -3112,7 +3112,7 @@ func TestService_performValuation_FINZeroDPS_FallbackToDCF(t *testing.T) {
 	if result != nil {
 		assert.Equal(t, "multi_stage_dcf", result.CalculationMethod,
 			"Should fall back to multi_stage_dcf when DDM fails and OI is positive")
-		assert.Equal(t, "4.6", result.CalculationVersion) // BUG-015: bumped from 4.5 (DCF OI base annualized to TTM for 10-Q-latest)
+		assert.Equal(t, "4.7", result.CalculationVersion) // Layer A reinvestment model (was 4.6 after BUG-015)
 		assert.Greater(t, result.DCFValuePerShare, 0.0,
 			"DCF fallback should produce a positive value")
 		// S-2 nit: verify the fallback warning is present

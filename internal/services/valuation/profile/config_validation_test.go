@@ -49,4 +49,22 @@ func TestRealConfig_LoadsAndValidates(t *testing.T) {
 	require.NotNil(t, resolved, "unknown industry must resolve to fallback (never nil)")
 	require.Equal(t, profile.SourceFallback, trace.Source,
 		"unknown industry must take the SourceFallback branch")
+
+	// Layer A: the canonical hypergrowth/cyclical-high-growth profile (AMD/NVDA
+	// route here via mfg_semi) MUST carry a validated sales_to_capital
+	// trajectory — this is the profile whose reinvestment fix turns AMD's FCF
+	// positive in-window. A missing/invalid method would silently demote it to
+	// the legacy proportional path.
+	amd, ok := reg.Lookup(profile.ArchetypeCyclicalMidCycle, profile.MaturityHighGrowth)
+	require.True(t, ok, "cyclical_mid_cycle:high_growth must exist for the AMD/NVDA reinvestment path")
+	require.Equal(t, profile.ReinvestmentSalesToCapital, amd.ReinvestmentMethod,
+		"cyclical_mid_cycle:high_growth must opt into the Layer-A sales_to_capital trajectory")
+	require.Greater(t, amd.SalesToCapitalTarget, amd.SalesToCapitalStart,
+		"sales-to-capital must improve over the horizon")
+	require.Positive(t, amd.TargetOperatingMargin)
+
+	// The legacy mature-large-bank anchor MUST stay on the legacy proportional
+	// path (empty method) so DDM/DCF bit-for-bit is untouched by Layer A.
+	require.Empty(t, p.ReinvestmentMethod,
+		"mature_large_bank:mature must NOT opt into Layer A (preserves bit-for-bit)")
 }
