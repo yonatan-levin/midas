@@ -266,10 +266,19 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 		// efficiency makes the terminal reinvestment rate equal
 		// terminal_growth / terminal_ROIC by construction (ROIC = after-tax target
 		// margin × sales-to-capital), so a firm growing at g in perpetuity also
-		// reinvests the capital that g requires.
+		// reinvests exactly the capital that g requires.
+		//
+		// The §7.1 maintenance-capex floor is deliberately NOT applied here: it is
+		// an EXPLICIT-window guardrail (§7.1 "enforced in the projection loop")
+		// against the fade curve manufacturing implausibly-high early FCF, and in
+		// the net-reinvestment frame maintenance capex is already netted out — so a
+		// terminal floor would double-count it and silently break the g/ROIC
+		// identity above. The terminal efficiency deliberately snaps to the matured
+		// ratio even when ReinvestmentFadeYears exceeds the explicit horizon
+		// (§7.3 forbids free-running the fade past the horizon).
 		revNext := currentRevenue * (1 + inputs.TerminalGrowthRate)
 		nopatNext := revNext * inputs.TargetOperatingMargin * (1 - inputs.TaxRate)
-		reinvestNext, _ := terminalReinvestment(inputs, revNext)
+		reinvestNext := terminalReinvestment(inputs, revNext)
 		terminalFCF := nopatNext - reinvestNext
 		gordonTV = terminalFCF / (inputs.WACC - inputs.TerminalGrowthRate)
 	} else {
@@ -463,26 +472,30 @@ func reinvestmentForYear(inputs Inputs, year int, revenue, prevRevenue float64) 
 }
 
 // terminalReinvestment computes the perpetuity (year n+1) reinvestment using the
-// MATURED efficiency (sales-to-capital target / capex-intensity mature), honoring
-// the §7.1 floor. revNext is the first perpetuity-year revenue (= Revenue_n×(1+g)).
+// MATURED efficiency (sales-to-capital target / capex-intensity mature). revNext is
+// the first perpetuity-year revenue (= Revenue_n×(1+g)).
 //
 // For sales_to_capital the reinvestment is the capital that funds the NEXT
 // period's growth off the perpetuity base — Revenue_{n+1}×g / SalesToCapital —
 // which makes the terminal reinvestment rate equal terminal_growth / terminal_ROIC
 // EXACTLY (Damodaran stable-growth FCFF, §7.3), since
 // ROIC = after-tax target margin × sales-to-capital.
-func terminalReinvestment(inputs Inputs, revNext float64) (reinvest float64, clamped bool) {
+//
+// The §7.1 maintenance-capex floor is NOT applied to the terminal (see the call
+// site): the floor is an explicit-window guardrail, and a terminal floor would
+// double-count maintenance (already netted in this net-reinvestment frame) and
+// break the g/ROIC identity that §7.3 requires.
+func terminalReinvestment(inputs Inputs, revNext float64) float64 {
 	switch inputs.ReinvestmentMethod {
 	case "declining_capex_intensity":
-		reinvest = inputs.CapExIntensityMature * revNext
+		return inputs.CapExIntensityMature * revNext
 	default: // sales_to_capital
 		s2c := inputs.SalesToCapitalTarget
 		if s2c <= 0 {
 			s2c = 1.0
 		}
-		reinvest = revNext * inputs.TerminalGrowthRate / s2c
+		return revNext * inputs.TerminalGrowthRate / s2c
 	}
-	return clampToFloor(reinvest, inputs.MaintenanceCapexFloor*revNext)
 }
 
 // clampToFloor raises reinvest to floor when it would fall below it, reporting

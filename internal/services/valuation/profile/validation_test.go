@@ -180,6 +180,40 @@ func TestLoadFromJSON_NegativeValidation(t *testing.T) {
     "software_like_scaling:standard_growth"`),
 			wantErrPart: "target_operating_margin out of range",
 		},
+		{
+			// Layer A (§6.3): sales-to-capital must IMPROVE (target ≥ start).
+			name: "sales_to_capital_target_below_start",
+			config: replaceJSONField(minimalValidConfig,
+				`"stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"stable_dividend_growth": 0.03,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_start": 3.0,
+      "sales_to_capital_target": 2.0,
+      "target_operating_margin": 0.30
+    },
+    "software_like_scaling:standard_growth"`),
+			wantErrPart: "must be ≥ sales_to_capital_start",
+		},
+		{
+			// Layer A (§7.1/§7.3): a maintenance floor at/above the steady-state
+			// margin forces non-positive FCF — reject it as an incoherent typo.
+			name: "maintenance_floor_at_or_above_margin",
+			config: replaceJSONField(minimalValidConfig,
+				`"stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"stable_dividend_growth": 0.03,
+      "reinvestment_method": "sales_to_capital",
+      "sales_to_capital_start": 2.0,
+      "sales_to_capital_target": 3.0,
+      "maintenance_capex_floor": 0.25,
+      "target_operating_margin": 0.20
+    },
+    "software_like_scaling:standard_growth"`),
+			wantErrPart: "must be < target_operating_margin",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

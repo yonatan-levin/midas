@@ -1,6 +1,7 @@
 package dcf
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -108,7 +109,8 @@ func TestCalculateDCF_SalesToCapital_TerminalConsistency(t *testing.T) {
 	// perpetuity base, so RR = g/ROIC exactly. With the base fixture:
 	//   rev6 = 20908.8 × 1.03 = 21536.064
 	//   nopat6 = 21536.064 × 0.20 × 0.80 = 3445.770
-	//   reinv6 = 21536.064 × 0.03 / 3.0 = 215.361   (floor 0.005×rev6=107.68 < it)
+	//   reinv6 = 21536.064 × 0.03 / 3.0 = 215.361   (pure g/ROIC; the §7.1 floor is
+	//                                                 NOT applied at the terminal)
 	//   terminalFCF = 3445.770 − 215.361 = 3230.410
 	//   gordonTV = 3230.410 / (0.10 − 0.03) = 46148.71
 	result, err := CalculateDCF(salesToCapBaseInputs())
@@ -147,7 +149,7 @@ func TestCalculateDCF_MaintenanceCapexFloor_Clamps(t *testing.T) {
 
 	hasFloorWarning := false
 	for _, w := range result.Warnings {
-		if containsSub(w, "maintenance_capex_floor") {
+		if strings.Contains(w, "maintenance_capex_floor") {
 			hasFloorWarning = true
 		}
 	}
@@ -235,15 +237,4 @@ func TestCalculateDCF_ReinvestmentModel_FallsBackWhenNoRevenue(t *testing.T) {
 	for i, p := range result.Projections {
 		assert.Equal(t, p.NOPAT, p.FreeCashFlow, "year %d falls back to NOPAT when revenue base missing", i+1)
 	}
-}
-
-// containsSub is a tiny substring helper kept local to avoid importing strings
-// just for the warning assertions.
-func containsSub(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }

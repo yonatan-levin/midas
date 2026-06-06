@@ -160,6 +160,16 @@ func validateReinvestmentFields(id string, p AssumptionProfile) error {
 	if p.TargetOperatingMargin <= 0 || p.TargetOperatingMargin > marginCeiling {
 		return fmt.Errorf("profile %s: target_operating_margin out of range (0,%.2f]: %.4f", id, marginCeiling, p.TargetOperatingMargin)
 	}
+	// Cross-field sanity: the maintenance floor (net reinvestment as a fraction of
+	// revenue) must stay below the steady-state operating margin. A floor at/above
+	// the margin means reinvestment ≥ operating income in the late/flat years,
+	// which forces non-positive FCF and is an economically-incoherent calibration
+	// (catches typos like floor=0.30 with margin=0.20). The terminal year is exempt
+	// from the floor entirely (§7.3), so this guards the explicit window.
+	if p.MaintenanceCapexFloor >= p.TargetOperatingMargin {
+		return fmt.Errorf("profile %s: maintenance_capex_floor (%.4f) must be < target_operating_margin (%.4f)",
+			id, p.MaintenanceCapexFloor, p.TargetOperatingMargin)
+	}
 	switch p.ReinvestmentMethod {
 	case ReinvestmentSalesToCapital:
 		if p.SalesToCapitalStart <= 0 {
