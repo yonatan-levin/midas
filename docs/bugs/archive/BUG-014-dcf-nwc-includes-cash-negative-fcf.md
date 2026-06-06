@@ -1,6 +1,6 @@
 # BUG-014 — DCF working-capital term includes cash → negative projected FCF → systematic undervaluation
 
-**Status:** PRIMARY FIX RESOLVED (merging to master) — operating NWC excludes cash; `CalculationVersion` 4.4 → 4.5; regression tests added; DDM bit-for-bit + DC-1 invariants green. Passed full `/execute` B-V-R-Q (VERIFIER VERIFIED, REVIEWER APPROVE_WITH_NITS, QA PASS) + an independent `/code-review` (REVIEWER APPROVE_WITH_NITS, QA PASS). SECONDARY `dcf.go:122` scaling change deliberately NOT applied (see §8). **STILL OPEN (separate follow-up):** the §5 quarterly-base understatement that keeps KO/AMD negative, and an operator fresh-4.5 `cmd/accuracy` baseline capture to quantify the basket-wide gap improvement.
+**Status:** RESOLVED — CLOSED & ARCHIVED 2026-06-06 (live-validated). Operating NWC excludes cash; `CalculationVersion` 4.4 → 4.5 (now 4.6 after BUG-015); regression tests added; DDM bit-for-bit + DC-1 invariants green. Passed full `/execute` B-V-R-Q (VERIFIER VERIFIED, REVIEWER APPROVE_WITH_NITS, QA PASS) + an independent `/code-review` (REVIEWER APPROVE_WITH_NITS, QA PASS). SECONDARY `dcf.go:122` scaling change deliberately NOT applied (see §8). **Live validation (2026-06-06, §9):** a freshly-built server on :8095 hit the live `GET /api/v1/fair-value/{NVDA,KO,AMD}` (all 3 data sources OK, no cache) — NVDA `dcf_per_year_pv` flipped from the bug's all-negative `[-3.85, -4.91, -6.26, -7.58, -8.68]e9` to all-positive `[+79.7, +101.9, +130.3, +158.1, +181.4]e9`, terminal dominance 104% → 81%, intrinsic +$142.05, `calculation_version 4.6`. The former "STILL OPEN" §5 quarterly-base item shipped separately as **BUG-015** (also live-validated & archived); the operator fresh-baseline item is satisfied by this live run + the saved CalcVersion-4.6 baseline (`docs/accuracy/report-2026-06-05.md`).
 **Severity:** HIGH — core DCF valuation is wrong across the whole basket. 9/10 tickers value below market by a mean of −84%; KO and AMD produce **negative** intrinsic values (model breakdown, not conservatism).
 **Filed:** 2026-06-03, from the `/debug` track opened on the finding the new `cmd/accuracy` harness surfaced.
 **Area:** BACKEND — valuation engine (`internal/services/valuation` + `pkg/finance/dcf`).
@@ -103,6 +103,7 @@ A single base-year ΔNWC is multiplied by the **cumulative** operating-income gr
 |---|---|
 | 2026-06-03 | Filed from the `/debug` track. Root cause confirmed from source (`calculateNetWorkingCapitalChange` + `dcf.go:122`) and quantified on captured 4.4 bundles (NVDA NWC $107B incl. cash; KO cash > NWC). Engine fix deferred to a dedicated branch; `cmd/accuracy` is the regression oracle. |
 | 2026-06-04 | PRIMARY fix implemented on `fix/dcf-nwc-cash` (operating NWC excludes cash & equivalents; `CalculationVersion` 4.4 → 4.5). SECONDARY `dcf.go:122` change deliberately NOT applied — see §8. Awaiting VERIFIER + fresh 4.5 baseline capture (operator). |
+| 2026-06-06 | Live-validated through a freshly-built server (see §9) and **CLOSED/ARCHIVED**. NVDA per-year PV all-positive, terminal 81%, calc 4.6. Fix merged to master as `831de9b`. |
 
 ## 8. Implementation outcome (BACKEND, 2026-06-04)
 
@@ -156,3 +157,26 @@ non-determinism**, reproduced with the fix stashed — not attributable to BUG-0
 A fresh 4.5 `cmd/accuracy` mean-gap number requires a re-captured baseline
 (operator follow-up; `cmd/accuracy` reads saved `17-response.json`, not the live
 engine).
+
+## 9. Live validation (2026-06-06) — CLOSED
+
+Built `./cmd/server` from the merged tree (fix at `831de9b`), seeded a demo key,
+ran a cold-cache instance on `:8095`, and hit the **live** API
+(`GET /api/v1/fair-value/{ticker}` — no `trace`, no warm cache; the server log
+confirms `fetch.fanout … sources_ok: 3` for each ticker, i.e. genuine live
+SEC/market/macro fetches, not replay).
+
+| | live 4.6 | bug's captured 4.4 signature |
+|---|---|---|
+| NVDA `dcf_per_year_pv` (e9) | **`[+79.7, +101.9, +130.3, +158.1, +181.4]`** | `[-3.85, -4.91, -6.26, -7.58, -8.68]` (all negative) |
+| NVDA `dcf_terminal_pct_of_ev` | **0.812** | 1.043 |
+| NVDA `dcf_value_per_share` | **+142.05** | 29.60 (pre-fix replay) |
+| NVDA `calculation_version` | **4.6** | 4.4 |
+
+The defining BUG-014 signature — every explicit-year discounted FCF negative and
+growing more negative — is **gone**: all five projection years are now positive.
+KO/AMD intrinsic also positive (KO +15.74, AMD +6.97), though their residual
+negative *per-year* FCF (AMD) is the separate reinvestment/operating-leverage
+issue tracked in `docs/refactoring/spec/dcf-reinvestment-and-filing-intelligence-spec.md`,
+not this ticket. Live numbers match the saved CalcVersion-4.6 baseline
+(`docs/accuracy/report-2026-06-05.md`). **Bug closed and archived.**
