@@ -50,6 +50,34 @@ shipped but a residual TODO remains; **OPEN** = TODO still present (line numbers
 
 ---
 
+## ✅ **2026-06-06 EXECUTION & INVESTIGATION PASS**
+
+Acted on the 2026-06-05 OPEN/PARTIAL items (this section **supersedes** the matching rows above).
+**Engine is now `CalculationVersion 4.6`** — it moved again since 2026-06-05, reinforcing that
+2025-era TODOs must be re-validated, not blindly executed. Work done in worktree
+`worktree-api-docs-swagger`.
+
+### Executed (shipped this pass)
+| Item | Action | Evidence |
+|------|--------|----------|
+| API docs — health & metrics | **DONE** | swaggo annotations on `DetailedHealthCheck` (`/api/v1/health/detailed`) + `GetMetrics` (`/api/v1/metrics`); `docs/swagger.{json,yaml}` regenerated (additive) |
+| API docs — server entry point | **ALREADY DONE** | general `@title`/`@BasePath`/`@securityDefinitions` block already at `cmd/server/main.go:25-42` |
+| API docs — performance dashboard | **REMOVED (dead code)** | `PerformanceHandler` was wired to no route (only its own integration test registered routes); deleted `handlers/performance.go`, `handlers/performance_test.go`, `integration/performance_monitoring_test.go` |
+| `launch_staging.sh` migrate/seed wiring | **DONE** | wired `go run ./cmd/migrate` + `./cmd/seed-demo-key` (DB_PATH-overridable) |
+
+### Investigated → CLOSED (TODO obsolete; the project moved past it)
+| Item | Verdict | Finding |
+|------|---------|---------|
+| Financial Data Extraction (9 sites) | **CLOSED — dead code** | The `applyRule`→`apply{Exclusion,Writedown,Reclassify,TreatAsDebt,Flag}Rule` chain (`service.go:712-1047`) has **zero callers** (`nolint:unused`). 7/9 values are now extracted by DC-1 adjusters (A4 DTA, B1 lease, B2 pension, C1/C2/C3/C6). Genuine residue re-filed below. |
+| Company Size Classification | **CLOSED — obsolete/orphaned** | `getCompanySize` (`service.go:1160`) is producer-only: stamped at `service.go:164`, read by **zero** production consumers. Market cap isn't available to the datacleaner (`entities.MarketData.MarketCap`, not `FinancialData`); profile `Maturity` is revenue-based and independent. |
+
+### Re-filed — the real, narrowly-scoped residue (NOT the obsolete TODOs above)
+- **R1 — Parser gap (HIGH):** the SEC parser never populates `RestructuringCharges` / `LitigationSettlements` / `CapitalizedInterest`, so adjusters C1/C3/C6 don't fire on real data (C1 falls back to a 1.5%-of-revenue estimate). Real work lives in `internal/infra/gateways/sec/parser.go`, not the cleaner.
+- **R2 — Missing adjusters (MEDIUM):** config rules `right_of_use_assets` (A6) and `excess_cash` (A7) are `enabled:true` but have no adjuster; the asset dispatcher silently skips them (`adjustments/assets.go` `default: continue`). Implement A6/A7 or remove the dangling rules.
+- **R3 — Dead-code cleanup (LOW):** delete the unreferenced `applyRule` chain (`service.go:712-1047`, ~335 lines), the orphaned `getCompanySize` + `CleaningContext.CompanySize` + dead `company_size` flag rule + unpopulated `profile.Facts.MarketCap`, and `alerting.IntegrationService` (now orphaned after the performance-handler deletion).
+
+---
+
 ## 🔥 **HIGH PRIORITY TODOS** (Phase 3B-3D Implementation)
 
 ### **Category C: Earnings Normalization** ✅ **COMPLETED**
@@ -107,15 +135,15 @@ shipped but a residual TODO remains; **OPEN** = TODO still present (line numbers
 
 ## ⚠️ **MEDIUM PRIORITY TODOS** (Technical Debt & Enhancements)
 
-### **Phase 2.5 MVP Infrastructure** 🆕 — ⚠️ **PARTIAL (2026-06-05)**
+### **Phase 2.5 MVP Infrastructure** 🆕 — ✅ **migrate/seed wiring DONE (2026-06-06)**
 **Location**: `scripts/launch_staging.sh`
-- [ ] **Add migration command when available** (now Line 103) — ⚠️ tooling DONE (`cmd/migrate/main.go` exists); only the staging-script wiring remains
-- [ ] **Add seed script when SQL seed is created** (now Line 108) — ⚠️ tooling DONE (`cmd/seed-demo-key/main.go` exists); only the staging-script wiring remains
-- [ ] **Add cloud deployment configuration variables** (from Phase 2.5.1) — OPEN (not found in `scripts/`/`config/`)
+- [x] **Add migration command when available** ✅ wired `go run ./cmd/migrate -db "$DB_PATH"` (2026-06-06)
+- [x] **Add seed script when SQL seed is created** ✅ wired `go run ./cmd/seed-demo-key -db "$DB_PATH"` (2026-06-06)
+- [ ] **Add cloud deployment configuration variables** (from Phase 2.5.1) — still OPEN (not found in `scripts/`/`config/`)
 - **Impact**: MVP deployment readiness
 - **Effort**: 1 hour
 
-### **Financial Data Extraction Improvements** — **OPEN (line numbers refreshed 2026-06-05)**
+### **Financial Data Extraction Improvements** — ❌ **CLOSED — DEAD CODE (2026-06-06)** _(applyRule chain has zero callers; 7/9 superseded by DC-1 adjusters; genuine residue re-filed as R1/R2/R3 in the 2026-06-06 pass)_
 **Location**: `internal/services/datacleaner/service.go`
 > ⚠️ All 9 TODOs remain in the live legacy rule path. The DC-1 Adjuster framework
 > (`internal/services/datacleaner/adjustments/`) now extracts several of these for real (B1
@@ -140,9 +168,9 @@ shipped but a residual TODO remains; **OPEN** = TODO still present (line numbers
 - **Impact**: Advanced analytics capability
 - **Effort**: Phase 3B Step 6 (45 minutes)
 
-### **Company Size Classification**
-**Location**: `internal/services/datacleaner/service.go:1161` _(was :871; refreshed 2026-06-05)_
-- [ ] **Implement proper company size classification based on market cap**
+### **Company Size Classification** — ❌ **CLOSED — OBSOLETE/ORPHANED (2026-06-06)**
+**Location**: `internal/services/datacleaner/service.go:1160` _(`getCompanySize`)_
+- [x] ~~**Implement proper company size classification based on market cap**~~ — producer-only (`service.go:164`), read by zero production consumers; market cap unavailable to the datacleaner. Optional removal tracked as R3 in the 2026-06-06 pass.
 - **Impact**: Better risk assessment
 - **Effort**: 30 minutes
 
@@ -209,23 +237,15 @@ shipped but a residual TODO remains; **OPEN** = TODO still present (line numbers
 
 ---
 
-### **Proper API documentation** — ⚠️ **PARTIAL (2026-06-05)**
+### **Proper API documentation** — ✅ **DONE / RESOLVED (2026-06-06)**
 **Location**: `internal/api/v1/handlers/health.go`
-- [ ] **Add proper API documentation for the health check endpoint** — OPEN (no swagger annotations)
-- **Impact**: Better API documentation
-- **Effort**: 15 minutes
+- [x] **API documentation for the health/metrics endpoints** ✅ swaggo `@Summary`/`@Router` added to `DetailedHealthCheck` + `GetMetrics` (2026-06-06)
 **Location**: `internal/api/v1/handlers/performance.go`
-- [ ] **Add proper API documentation for the performance dashboard endpoint** — OPEN (no swagger annotations)
-- **Impact**: Better API documentation
-- **Effort**: 15 minutes
+- [x] **Performance dashboard docs** ✅ **N/A — handler deleted** (wired to no route; dead code removed 2026-06-06)
 **Location**: `internal/api/v1/handlers/fair_value.go`
 - [x] **Add proper API documentation for the fair value endpoint** ✅ swagger `@Summary`/`@Router` at lines 287, 303, 501, 514
-- **Impact**: Better API documentation
-- **Effort**: 15 minutes
-**Location**: `internal/api/server.go`
-- [ ] **Add proper API documentation for the server entry point** — OPEN (no swagger annotations)
-- **Impact**: Better API documentation
-- **Effort**: 15 minutes
+**Location**: `cmd/server/main.go`
+- [x] **API documentation for the server entry point** ✅ general `@title`/`@BasePath`/`@securityDefinitions` already at `cmd/server/main.go:25-42`
 
 ## 📈 **PRIORITY MATRIX**
 
