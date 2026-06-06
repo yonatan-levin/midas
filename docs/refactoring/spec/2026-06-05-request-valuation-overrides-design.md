@@ -110,13 +110,13 @@ Static range = **outer sanity rail** (catch unit errors like `50` vs `0.05`); th
 
 | Knob | `options` JSON field | Source (low→high) | Static range | Hard invariant (→422) |
 |------|----------------------|-------------------|--------------|------------------------|
-| Terminal growth rate | `terminal_growth_rate` | const default ← override | `[-0.20, 0.50]` | **< WACC** (strict; warn if within 1% of WACC) |
+| Terminal growth rate | `terminal_growth_rate` | const default ← override | `[-0.20, 0.50]` | **≥ 1% below WACC** (hard 422 within the 1% spread or ≥ WACC; the resolver is the complete gatekeeper so the engine denominator guard never fires) |
 | Terminal growth cap (auto-derive path) | `terminal_growth_cap` | config `DefaultTerminalGrowthCap` ← override | `[-0.20, 0.50]` | ignored when explicit `terminal_growth_rate` set |
-| Horizon years | `horizon_years` | `profile.HorizonYears` ← override | `[1, 50]` | **≤ stage1+stage2+stage3** — fires as 422 **only when `horizon_years` is request-sourced**; a profile-sourced horizon keeps today's clamp+WARN so the default path stays byte-identical |
-| Growth stage years | `growth_stages.{stage1,stage2,stage3}_years` | estimator default `3/4/0` ← override | each `[0, 50]` | `sum ≥ 1` AND `sum ≥ horizon_years` |
+| Horizon years | `horizon_years` | `profile.HorizonYears` ← override | `[1, 50]` | **≤ stage1+stage2+stage3** AND **≤ 50** (the engine's DCF max) — fires as 422 **only when request-sourced** (horizon OR stages); a profile/default-sourced horizon keeps today's clamp+WARN so the default path stays byte-identical |
+| Growth stage years | `growth_stages.{stage1,stage2,stage3}_years` | estimator default `3/4/0` ← override | each `[0, 50]` | `sum ≥ 1` AND `sum ≥ horizon_years`; if request-set stages drive the effective horizon **> 50** (the engine DCF max) → 422 on `growth_stages` |
 | Max growth rate | `max_growth_rate` | config `DCFMaxGrowthRate` ← override | `[-1.0, 10.0]` | **≥ min_growth_rate** |
 | Min growth rate | `min_growth_rate` | config `DCFMinGrowthRate` ← override | `[-1.0, 10.0]` | **≥ -1.0** (revenue can't shrink past 0) AND `≤ max` |
-| Terminal method | `terminal_method` | `profile.TerminalMethod` ← override | enum `{gordon_growth, exit_multiple}` | `exit_multiple` ⇒ a terminal multiple is resolvable |
+| Terminal method | `terminal_method` | `profile.TerminalMethod` ← override | enum `{gordon_growth, exit_multiple}` | `exit_multiple` ⇒ a terminal multiple is resolvable AND the engine BLENDS it 50/50 with Gordon Growth (averages, not pure exit); `gordon_growth` ⇒ exit multiple SUPPRESSED (pure Gordon) |
 | Terminal multiple | `terminal_multiple` | industry EV/EBITDA lookup ← override | `[0, 100]` | required if method=`exit_multiple` and no industry default |
 | Tax rate | `tax_rate` | `latest.TaxRate` / config ← override | `[-0.5, 1.0]` | — (negative effective rates real: NOLs/credits) |
 | Beta | `beta` | market data / `OverrideBeta` ← override | `[-5, 5]` | — (negative-beta names real) |
@@ -234,7 +234,9 @@ The default-path DCF averaging in `service.go::calculateTerminalValue` uses the 
 
 1. **Byte-identity preservation** — the default path produces outputs bit-for-bit identical to pre-feature behavior. `TestDDM_LegacyPath_BitForBit` and `cmd/replay --diff-stages` pin this. Wiring `params.TerminalMethod` on the default path would have required every existing fixture to be regenerated.
 
-2. **REQUEST override drives exit multiple into the averaging path** — when a caller sets `options.terminal_method = "exit_multiple"` (with or without `options.terminal_multiple`), `params.TerminalMethod` is `"exit_multiple"` and the resolver selects the exit multiple path, falling back to the industry default for the multiple when `options.terminal_multiple` is absent.
+2. **REQUEST override drives the terminal method as a selector** — once a caller sets `options.terminal_method` (or `options.terminal_multiple`), the DCF path branches on the resolved `params.TerminalMethod`:
+   - `terminal_method = "exit_multiple"` → `params.TerminalMethod` is `"exit_multiple"` and the resolver selects the exit multiple (falling back to the industry default for the multiple when `options.terminal_multiple` is absent). The engine then **BLENDS** the exit-multiple terminal value **50/50 with the Gordon Growth terminal value** (`dcf.CalculateDCF` averages the two estimates to reduce single-model dependence). This is NOT a pure exit-multiple terminal value — it is a Gordon/exit average.
+   - `terminal_method = "gordon_growth"` → the exit multiple is **SUPPRESSED** (`exitMultiple = 0`), producing a pure Gordon Growth terminal value with no blending. (Before this fix `gordon_growth` did not suppress the averaging — that was a selector-vs-DTO mismatch, now corrected.)
 
 3. **Profile-sourced `terminal_method`** — when an `AssumptionProfile` sets `TerminalMethod = exit_multiple`, the profile's value is loaded into `params.TerminalMethod`. However, the DCF averaging path has NOT been wired to read `params.TerminalMethod` on the default (no-request-override) case in T1-T10. A future task (post-T11) must wire the default path to read `params.TerminalMethod` for profiles that set `exit_multiple`, while re-proving the bit-for-bit invariant on the DDM golden fixtures. Until that wire-up lands, a profile with `TerminalMethod=exit_multiple` and no request override will produce Gordon Growth output, not exit-multiple output. This is a **known gap**, not a bug in the override path.
 

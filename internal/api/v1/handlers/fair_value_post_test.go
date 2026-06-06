@@ -281,10 +281,11 @@ func TestPostFairValue_Layer2ParamError_Returns422(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	pe := &params.ParamError{
-		Knob:   "terminal_growth_rate",
-		Reason: "must be strictly less than WACC (0.094)",
-		Value:  0.095,
-		Limit:  0.094,
+		Knob:     "terminal_growth_rate",
+		Reason:   "must be strictly less than WACC (0.094)",
+		Value:    0.095,
+		Limit:    0.094,
+		HasLimit: true, // limit is meaningful → handler echoes context.limit
 	}
 	// Mirror the double-wrap applied by CalculateValuation.
 	wrapped := fmt.Errorf("failed to perform valuation: %w", pe)
@@ -545,10 +546,11 @@ func TestDetectOverrideConflicts_NilOptions_NoTypedConflict(t *testing.T) {
 // consumers can read the offending knob without parsing the Message string.
 func TestBulkFailure_Knob_PopulatedForParamError(t *testing.T) {
 	pe := &params.ParamError{
-		Knob:   "min_growth_rate",
-		Reason: "must be ≤ max_growth_rate (0.01)",
-		Value:  0.05,
-		Limit:  0.01,
+		Knob:     "min_growth_rate",
+		Reason:   "must be ≤ max_growth_rate (0.01)",
+		Value:    0.05,
+		Limit:    0.01,
+		HasLimit: true,
 	}
 
 	f := classifyBulkError("AAPL", pe)
@@ -587,10 +589,11 @@ func TestBulkFailure_Knob_EmptyForNonParamErrors(t *testing.T) {
 // JSON output for INVALID_OVERRIDE entries (omitempty keeps it out otherwise).
 func TestBulkFailure_Knob_PresentInJSON(t *testing.T) {
 	pe := &params.ParamError{
-		Knob:   "horizon_years",
-		Reason: "out of range",
-		Value:  99,
-		Limit:  50,
+		Knob:     "horizon_years",
+		Reason:   "out of range",
+		Value:    99,
+		Limit:    50,
+		HasLimit: true,
 	}
 
 	f := classifyBulkError("MSFT", pe)

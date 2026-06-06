@@ -355,8 +355,13 @@ type ValuationOverrides struct {
 
 	// TerminalMethod selects the terminal-value calculation model.
 	// Allowed values: "gordon_growth" (default) | "exit_multiple".
-	// "exit_multiple" requires that a multiple is resolvable (via terminal_multiple
-	// or the industry default); if neither is available the request is rejected 422.
+	//   - "gordon_growth" SUPPRESSES exit-multiple blending: the terminal value is a
+	//     pure Gordon Growth perpetuity (no exit multiple is mixed in).
+	//   - "exit_multiple" BLENDS an exit-multiple terminal value 50/50 with the Gordon
+	//     Growth terminal value (the engine AVERAGES the two estimates to reduce
+	//     single-model dependence; it is NOT a pure exit-multiple terminal value).
+	//     It requires that a multiple is resolvable (via terminal_multiple or the
+	//     industry default); if neither is available the request is rejected 422.
 	TerminalMethod *string `json:"terminal_method,omitempty" example:"exit_multiple"`
 
 	// TerminalMultiple is the EV/EBITDA (or analogous) exit multiple used when
@@ -1141,9 +1146,11 @@ func paramErrorResponse(err error) (*ErrorResponse, bool) {
 		"knob":  pe.Knob,
 		"value": pe.Value,
 	}
-	// Limit is zero when not applicable (enum / structural errors); omit it then so
-	// consumers do not misread a meaningful "0" threshold.
-	if pe.Limit != 0 {
+	// Limit is included only when the ParamError carries a meaningful threshold
+	// (HasLimit). Gating on HasLimit rather than `Limit != 0` preserves a real
+	// zero limit (e.g. min_growth > max_growth with max == 0) that would otherwise
+	// be silently dropped, while still omitting it for enum / structural errors.
+	if pe.HasLimit {
 		ctx["limit"] = pe.Limit
 	}
 	return &ErrorResponse{

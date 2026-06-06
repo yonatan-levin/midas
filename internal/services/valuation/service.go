@@ -1301,13 +1301,26 @@ func (s *Service) performValuation(
 	// cache-bypassed responses where honoring the override is the desired effect.
 	// Using p.TerminalMultiple unconditionally would regress every profiled
 	// ticker (e.g. AAPL profile multiple 5 vs TECH industry 18).
+	//
+	// MEDIUM (terminal_method honored as a selector): once the request has touched
+	// terminal_method or terminal_multiple, branch on the RESOLVED method so the
+	// selector is meaningful (the legacy code ignored it and averaged regardless):
+	//   - "gordon_growth"  → SUPPRESS the exit-multiple component (exitMultiple = 0),
+	//     producing a pure Gordon Growth TV (no blending).
+	//   - "exit_multiple"  → use p.TerminalMultiple, which the engine BLENDS 50/50
+	//     with Gordon Growth TV (dcf.CalculateDCF averages — it is not a pure exit
+	//     multiple; the DTO doc states this truthfully).
 	// TRACKED FOLLOW-UP (design §3.5-vs-§5/§6 reconciliation, sweep in T11):
 	// whether a profile-sourced terminal_method=exit_multiple should drive the
 	// DCF averaging WITHOUT a request override is a deliberate behavior-change
 	// decision, intentionally OUT OF SCOPE here to preserve byte-identity.
 	exitMultiple := industryExitMultiple
 	if overrides.TerminalMultiple != nil || overrides.TerminalMethod != nil {
-		exitMultiple = p.TerminalMultiple
+		if terminalMethodLabel == string(profile.TerminalGordonGrowth) {
+			exitMultiple = 0 // suppress exit-multiple blending; pure Gordon Growth TV
+		} else {
+			exitMultiple = p.TerminalMultiple
+		}
 	}
 	if exitMultiple > 0 {
 		dcfInputs.ExitMultiple = exitMultiple
@@ -1807,6 +1820,17 @@ func (s *Service) performAlternativeValuation(
 	// Calculate data freshness score
 	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
 
+	// MEDIUM-4 / REGRESSION: stamp the RESOLVED MRP that fed WACC, mirroring the DCF
+	// path. resolvedParams may be nil on defensive/test paths that skip the resolver
+	// (same nil-guard as modelTaxRate above + the applied_overrides block below); fall
+	// back to the raw macroData value then to avoid a nil-deref panic. Default-path
+	// byte-identical: with no MRP override resolvedParams.MarketRiskPremium ==
+	// macroData.MarketRiskPremium.
+	modelMRP := macroData.MarketRiskPremium
+	if resolvedParams != nil {
+		modelMRP = resolvedParams.MarketRiskPremium
+	}
+
 	gf := calculateGrahamFloorMetrics(ctx, s.logger, historicalData.Ticker,
 		asReportedViewOr(cleaned, latestFinancialData), sharesOutstanding, marketData.SharePrice)
 
@@ -1827,10 +1851,10 @@ func (s *Service) performAlternativeValuation(
 		TerminalGrowthRate:    growthEstimate.TerminalGrowthRate,
 		GrowthSource:          growthEstimate.Source,
 		GrowthConfidence:      modelResult.Confidence,
-		// MEDIUM-4: stamp the RESOLVED MRP that fed WACC (resolvedParams.MarketRiskPremium),
-		// not the raw macroData value — consistent with the DCF path. Default-path
-		// byte-identical when no MRP override is present.
-		MarketRiskPremium:   resolvedParams.MarketRiskPremium,
+		// MEDIUM-4: stamp the RESOLVED MRP that fed WACC (modelMRP), not the raw
+		// macroData value — consistent with the DCF path. Default-path byte-identical
+		// when no MRP override is present. modelMRP is nil-guarded above.
+		MarketRiskPremium:   modelMRP,
 		EnterpriseValue:     modelResult.EnterpriseValue,
 		EquityValue:         modelResult.EquityValue,
 		FinancialDataPeriod: latestPeriod,

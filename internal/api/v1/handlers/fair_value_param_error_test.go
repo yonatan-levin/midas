@@ -49,10 +49,11 @@ func TestParamErrorResponse_NonParamError(t *testing.T) {
 // TestParamErrorResponse_DirectParamError handles a bare *params.ParamError.
 func TestParamErrorResponse_DirectParamError(t *testing.T) {
 	pe := &params.ParamError{
-		Knob:   "terminal_growth_rate",
-		Reason: "must be strictly less than WACC (0.094)",
-		Value:  0.095,
-		Limit:  0.094,
+		Knob:     "terminal_growth_rate",
+		Reason:   "must be strictly less than WACC (0.094)",
+		Value:    0.095,
+		Limit:    0.094,
+		HasLimit: true,
 	}
 
 	resp, ok := paramErrorResponse(pe)
@@ -77,10 +78,11 @@ func TestParamErrorResponse_DirectParamError(t *testing.T) {
 // (fmt.Errorf("failed to perform valuation: %w", err)).
 func TestParamErrorResponse_WrappedParamError(t *testing.T) {
 	pe := &params.ParamError{
-		Knob:   "min_growth_rate",
-		Reason: "must be ≤ max_growth_rate (0.01)",
-		Value:  0.05,
-		Limit:  0.01,
+		Knob:     "min_growth_rate",
+		Reason:   "must be ≤ max_growth_rate (0.01)",
+		Value:    0.05,
+		Limit:    0.01,
+		HasLimit: true,
 	}
 	// Simulate the double-wrap that CalculateValuation applies:
 	// performValuation returns the ParamError directly, then CalculateValuation wraps it.
@@ -99,10 +101,11 @@ func TestParamErrorResponse_WrappedParamError(t *testing.T) {
 // within Layer-1 static [-1,10] but min>max violates Layer-2).
 func TestParamErrorResponse_MinGrowthGreaterThanMax(t *testing.T) {
 	pe := &params.ParamError{
-		Knob:   "min_growth_rate",
-		Reason: "must be ≤ max_growth_rate (0.01)",
-		Value:  0.05,
-		Limit:  0.01,
+		Knob:     "min_growth_rate",
+		Reason:   "must be ≤ max_growth_rate (0.01)",
+		Value:    0.05,
+		Limit:    0.01,
+		HasLimit: true,
 	}
 
 	resp, ok := paramErrorResponse(pe)
@@ -119,10 +122,11 @@ func TestParamErrorResponse_MinGrowthGreaterThanMax(t *testing.T) {
 // TestClassifyBulkError_ParamError maps a *params.ParamError to INVALID_OVERRIDE.
 func TestClassifyBulkError_ParamError(t *testing.T) {
 	pe := &params.ParamError{
-		Knob:   "horizon_years",
-		Reason: "must be ≤ stage1_years + stage2_years + stage3_years",
-		Value:  20,
-		Limit:  7,
+		Knob:     "horizon_years",
+		Reason:   "must be ≤ stage1_years + stage2_years + stage3_years",
+		Value:    20,
+		Limit:    7,
+		HasLimit: true,
 	}
 
 	f := classifyBulkError("AAPL", pe)
@@ -138,10 +142,11 @@ func TestClassifyBulkError_ParamError(t *testing.T) {
 // TestClassifyBulkError_WrappedParamError propagates through an error chain.
 func TestClassifyBulkError_WrappedParamError(t *testing.T) {
 	pe := &params.ParamError{
-		Knob:   "terminal_growth_rate",
-		Reason: "must be strictly less than WACC (0.094)",
-		Value:  0.095,
-		Limit:  0.094,
+		Knob:     "terminal_growth_rate",
+		Reason:   "must be strictly less than WACC (0.094)",
+		Value:    0.095,
+		Limit:    0.094,
+		HasLimit: true,
 	}
 	wrapped := fmt.Errorf("failed to perform valuation: %w", pe)
 
@@ -211,10 +216,11 @@ func TestGetBulkFairValue_ParamError_FailureIsolation(t *testing.T) {
 	// MSFT fails with a Layer-2 ParamError (min > max), wrapped as CalculateValuation
 	// would wrap it after performValuation returns it directly.
 	pe := &params.ParamError{
-		Knob:   "min_growth_rate",
-		Reason: "must be ≤ max_growth_rate (0.01)",
-		Value:  0.05,
-		Limit:  0.01,
+		Knob:     "min_growth_rate",
+		Reason:   "must be ≤ max_growth_rate (0.01)",
+		Value:    0.05,
+		Limit:    0.01,
+		HasLimit: true,
 	}
 	wrappedParamErr := fmt.Errorf("failed to perform valuation: %w", pe)
 	svc.On("CalculateValuation", mock.Anything, "MSFT", mock.Anything).
@@ -275,10 +281,11 @@ func TestGetBulkFairValue_AllParamErrors_Returns422(t *testing.T) {
 	router := newBulkTestRouter(h)
 
 	pe := &params.ParamError{
-		Knob:   "terminal_growth_rate",
-		Reason: "must be strictly less than WACC (0.094)",
-		Value:  0.095,
-		Limit:  0.094,
+		Knob:     "terminal_growth_rate",
+		Reason:   "must be strictly less than WACC (0.094)",
+		Value:    0.095,
+		Limit:    0.094,
+		HasLimit: true,
 	}
 	wrapped := fmt.Errorf("failed to perform valuation: %w", pe)
 
@@ -331,10 +338,11 @@ func TestGetFairValue_ParamError_Returns422(t *testing.T) {
 	router := newGetFairValueTestRouter(h)
 
 	pe := &params.ParamError{
-		Knob:   "terminal_growth_rate",
-		Reason: "must be strictly less than WACC (0.094)",
-		Value:  0.095,
-		Limit:  0.094,
+		Knob:     "terminal_growth_rate",
+		Reason:   "must be strictly less than WACC (0.094)",
+		Value:    0.095,
+		Limit:    0.094,
+		HasLimit: true,
 	}
 	// Mirror the wrap CalculateValuation applies.
 	wrapped := fmt.Errorf("failed to perform valuation: %w", pe)
