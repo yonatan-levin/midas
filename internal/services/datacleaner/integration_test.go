@@ -23,7 +23,6 @@ func TestPipelineIntegration_RealProcessors(t *testing.T) {
 	// Create test context
 	cleaningCtx := &entities.CleaningContext{
 		IndustryCode:     "technology",
-		CompanySize:      entities.LargeCap,
 		EnableIndustry:   true,
 		QualityThreshold: 80.0,
 	}
@@ -86,7 +85,6 @@ func TestPipelineIntegration_SimpleFlow(t *testing.T) {
 
 	cleaningCtx := &entities.CleaningContext{
 		IndustryCode: "general",
-		CompanySize:  entities.MidCap,
 	}
 
 	ctx := context.Background()

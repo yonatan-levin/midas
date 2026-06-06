@@ -268,7 +268,6 @@ func createDeferredTaxRule() *entities.CleaningRule {
 func createDefaultContext() *entities.CleaningContext {
 	return &entities.CleaningContext{
 		IndustryCode:     "20", // Industrials
-		CompanySize:      entities.LargeCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    true,
@@ -279,7 +278,6 @@ func createDefaultContext() *entities.CleaningContext {
 func createRetailContext() *entities.CleaningContext {
 	return &entities.CleaningContext{
 		IndustryCode:     "25", // Consumer Discretionary
-		CompanySize:      entities.MidCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    true,
@@ -290,7 +288,6 @@ func createRetailContext() *entities.CleaningContext {
 func createTechContext() *entities.CleaningContext {
 	return &entities.CleaningContext{
 		IndustryCode:     "45", // Technology
-		CompanySize:      entities.LargeCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    true,

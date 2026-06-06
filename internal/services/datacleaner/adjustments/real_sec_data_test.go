@@ -146,8 +146,7 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 		// Initialize asset adjuster
 		assetAdjuster := NewAssetAdjuster()
 		context := &entities.CleaningContext{
-			IndustryCode:     "45",             // Technology
-			CompanySize:      entities.MegaCap, // Apple is mega-cap
+			IndustryCode:     "45", // Technology
 			DataVintage:      time.Now(),
 			EnableIndustry:   true,
 			EnableCaching:    false,
@@ -186,8 +185,7 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 		// Initialize liability adjuster
 		liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceRealData{}, nil)
 		context := &entities.CleaningContext{
-			IndustryCode:     "45",             // Technology
-			CompanySize:      entities.MegaCap, // Apple is mega-cap
+			IndustryCode:     "45", // Technology
 			DataVintage:      time.Now(),
 			EnableIndustry:   true,
 			EnableCaching:    false,

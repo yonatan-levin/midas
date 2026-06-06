@@ -57,7 +57,6 @@ func TestProcessEarningsAdjustments(t *testing.T) {
 	adjuster := NewEarningsAdjuster()
 	context := &entities.CleaningContext{
 		IndustryCode:     "45", // Technology
-		CompanySize:      entities.LargeCap,
 		EnableIndustry:   true,
 		QualityThreshold: 70.0,
 	}

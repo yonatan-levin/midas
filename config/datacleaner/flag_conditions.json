@@ -6,9 +6,7 @@
       "fiscal_year": 2024,
       "reporting_standards": "US-GAAP",
       "goodwill_threshold": 0.25,
-      "intangibles_threshold": 0.20,
-      "high_revenue_threshold": 10000000000,
-      "mid_revenue_threshold": 2000000000
+      "intangibles_threshold": 0.20
     },
     "flags": [
       {
@@ -485,42 +483,6 @@
           "category": "asset_quality",
           "severity": "warning",
           "recommendation": "Review intangible asset valuation and amortization policies"
-        }
-      },
-      {
-        "name": "company_size_classification",
-        "description": "Classifies company size based on revenue",
-        "enabled": true,
-        "priority": 50,
-        "conditions": {
-          "operator": "OR",
-          "conditions": [
-            {
-              "type": "numeric",
-              "field": "Revenue",
-              "operator": "gte",
-              "value": "${high_revenue_threshold}"
-            },
-            {
-              "type": "numeric",
-              "field": "Revenue",
-              "operator": "gte",
-              "value": "${mid_revenue_threshold}"
-            }
-          ]
-        },
-        "actions": [
-          {
-            "type": "set_field",
-            "parameters": {
-              "field": "company_size",
-              "value": "${Revenue >= high_revenue_threshold ? 'LargeCap' : (Revenue >= mid_revenue_threshold ? 'MidCap' : 'SmallCap')}"
-            }
-          }
-        ],
-        "metadata": {
-          "category": "classification",
-          "severity": "info"
         }
       }
     ]

@@ -246,7 +246,6 @@ type CleaningResult struct {
 // CleaningContext holds contextual information for cleaning operations
 type CleaningContext struct {
 	IndustryCode     string
-	CompanySize      CompanySize
 	DataVintage      time.Time
 	EnableIndustry   bool
 	EnableCaching    bool
@@ -256,16 +255,6 @@ type CleaningContext struct {
 	FootnoteText string            `json:"footnote_text,omitempty"` // Free-form footnotes for AI analysis
 	AIMetadata   map[string]string `json:"ai_metadata,omitempty"`   // AI service metadata and confidence scores
 }
-
-// CompanySize enum for company size classification
-type CompanySize string
-
-const (
-	SmallCap CompanySize = "small"
-	MidCap   CompanySize = "mid"
-	LargeCap CompanySize = "large"
-	MegaCap  CompanySize = "mega"
-)
 
 // QualityGrade represents the quality grade for financial data
 type QualityGrade string

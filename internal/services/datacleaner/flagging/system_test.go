@@ -422,7 +422,6 @@ func createCleanFinancialData() *entities.FinancialData {
 func createDefaultContext() *entities.CleaningContext {
 	return &entities.CleaningContext{
 		IndustryCode:     "20", // Default industry
-		CompanySize:      entities.LargeCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    true,
@@ -433,7 +432,6 @@ func createDefaultContext() *entities.CleaningContext {
 func createRetailContext() *entities.CleaningContext {
 	return &entities.CleaningContext{
 		IndustryCode:     "25", // Consumer Discretionary (Retail)
-		CompanySize:      entities.MidCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    true,
