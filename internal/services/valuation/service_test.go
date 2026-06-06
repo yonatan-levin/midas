@@ -2090,7 +2090,16 @@ func TestService_CalculateValuation_PerformValuationError(t *testing.T) {
 }
 
 // TestService_performValuation_WACCFailure verifies that when WACC calculation
-// fails (e.g., negative beta via override), performValuation returns the error.
+// fails, performValuation propagates the error.
+//
+// NOTE: a merely-negative beta is now a SUPPORTED override that COMPUTES (negative
+// beta is real — inverse-correlated assets); the engine widening means a negative
+// beta no longer fails WACC validation. We instead drive the failure with a
+// risk-free rate beyond the engine band [-5%, 25%]. Unlike beta, the risk-free
+// rate is NOT transformed by the Blume/relever ladder, so it flows straight into
+// wacc.Inputs and deterministically trips validateInputs. The negative-beta /
+// negative-rf-computes cases are covered by the override 200-or-422 regression
+// matrix in the handler tests.
 func TestService_performValuation_WACCFailure(t *testing.T) {
 	historicalData, marketData, macroData := createTestData()
 
@@ -2107,9 +2116,9 @@ func TestService_performValuation_WACCFailure(t *testing.T) {
 	}
 	service := NewService(nil, nil, nil, nil, nil, nil, metricsService, cfg, logger, newTestCalcEmitter(), nil)
 
-	// Use a negative beta override to trigger WACC validation failure
-	negativeBeta := -1.0
-	result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideBeta: &negativeBeta}, nil)
+	// A risk-free rate beyond the engine cap of 25% still fails WACC validation.
+	outOfRangeRiskFree := 0.30
+	result, err := service.performValuation(context.Background(), historicalData, marketData, macroData, &ValuationOptions{OverrideRiskFree: &outOfRangeRiskFree}, nil)
 
 	assert.Error(t, err)
 	assert.Nil(t, result)

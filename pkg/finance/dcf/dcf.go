@@ -156,7 +156,8 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 	result.TerminalYearFCF = finalYearProjection.FreeCashFlow
 
 	// Terminal value = FCF(final year) * (1 + terminal growth) / (WACC - terminal growth)
-	// The minimum 1% spread is enforced by validateInputs.
+	// The minimum WACC-vs-terminal spread (MinWACCTerminalSpread) is enforced by
+	// validateInputs, and earlier as a typed 422 by the valuation resolver.
 	terminalFCF := result.TerminalYearFCF * (1 + inputs.TerminalGrowthRate)
 	gordonTV := terminalFCF / (inputs.WACC - inputs.TerminalGrowthRate)
 	result.TerminalValueNominal = gordonTV
@@ -270,36 +271,67 @@ func SensitivityAnalysis(baseInputs Inputs, waccRange []float64, growthRange []f
 	return results, nil
 }
 
+// MinWACCTerminalSpread is the minimum required gap between WACC and the terminal
+// growth rate. Below this gap the Gordon perpetuity denominator (WACC - g) becomes
+// numerically unstable and the terminal value explodes. The valuation resolver
+// enforces the SAME spread BEFORE CalculateDCF runs (see
+// internal/services/valuation/params.ResolveTerminal), upgrading an explicit
+// near-WACC terminal_growth_rate into a typed 422 — so this guard should never
+// fire from the override path. It is kept as defense-in-depth: a 500 surfacing
+// here now indicates a real internal bug, not a caller-supplied input.
+const MinWACCTerminalSpread = 0.01
+
 // Helper functions
 
+// validateInputs checks that all inputs are within reasonable ranges.
+//
+// The numeric bounds are reconciled with the request-override contract (the Layer-1
+// ranges in internal/api/v1/handlers/fair_value_validation.go). Any override value
+// the contract accepts MUST compute here rather than producing an untyped error →
+// HTTP 500. The widening only changes WHICH inputs are rejected; it never alters the
+// output for an already-accepted input, so the default (no-override) path stays
+// byte-for-byte identical. The two MATHEMATICAL guards (WACC > 0 and the
+// WACC-vs-terminal spread) are retained as defense-in-depth; the valuation resolver
+// catches both as typed 422s before the engine runs.
 func validateInputs(inputs Inputs) error {
 	if inputs.BaseOperatingIncome <= 0 {
 		return errors.New("base operating income must be positive")
 	}
 
-	if inputs.GrowthRate < -0.5 || inputs.GrowthRate > 1.0 {
-		return errors.New("growth rate must be between -50% and 100%")
+	// Growth rate: contraction floored at -100% (revenue base shrinks to zero but
+	// not negative); ceiling at 10× (1000% CAGR) to catch unit errors. Contract
+	// range [-1.0, 10.0] (max/min_growth).
+	if inputs.GrowthRate < -1.0 || inputs.GrowthRate > 10.0 {
+		return errors.New("growth rate must be between -100% and 1000%")
 	}
 
-	if inputs.TerminalGrowthRate < 0 || inputs.TerminalGrowthRate > 0.05 {
-		return errors.New("terminal growth rate must be between 0% and 5%")
+	// Terminal growth rate: negative terminal growth (real-terms contraction) is a
+	// supported, first-class scenario. Contract range [-20%, 50%].
+	if inputs.TerminalGrowthRate < -0.20 || inputs.TerminalGrowthRate > 0.50 {
+		return errors.New("terminal growth rate must be between -20% and 50%")
 	}
 
-	if inputs.WACC <= 0 || inputs.WACC > 0.5 {
-		return errors.New("WACC must be between 0% and 50%")
+	// WACC must be strictly positive for the discount factors and Gordon denominator
+	// to be well-defined. No upper rail: a large-but-positive WACC discounts heavily
+	// but computes correctly (a high-WACC advisory is surfaced via generateWarnings),
+	// so we do not 500 a WACC purely for being large.
+	if inputs.WACC <= 0 {
+		return errors.New("WACC must be positive")
 	}
 
-	if inputs.WACC-inputs.TerminalGrowthRate < 0.01 {
-		return fmt.Errorf("WACC (%.2f%%) must exceed terminal growth rate (%.2f%%) by at least 1%%",
-			inputs.WACC*100, inputs.TerminalGrowthRate*100)
+	if inputs.WACC-inputs.TerminalGrowthRate < MinWACCTerminalSpread {
+		return fmt.Errorf("WACC (%.2f%%) must exceed terminal growth rate (%.2f%%) by at least %.0f%%",
+			inputs.WACC*100, inputs.TerminalGrowthRate*100, MinWACCTerminalSpread*100)
 	}
 
-	if inputs.TaxRate < 0 || inputs.TaxRate > 1 {
-		return errors.New("tax rate must be between 0% and 100%")
+	// Tax rate: negative effective rates are real (NOLs, credits). Contract range [-50%, 100%].
+	if inputs.TaxRate < -0.5 || inputs.TaxRate > 1 {
+		return errors.New("tax rate must be between -50% and 100%")
 	}
 
-	if inputs.ProjectionYears < 1 || inputs.ProjectionYears > 15 {
-		return errors.New("projection years must be between 1 and 15")
+	// Projection years: contract range [1, 50] (horizon_years).
+	if inputs.ProjectionYears < 1 || inputs.ProjectionYears > 50 {
+		return errors.New("projection years must be between 1 and 50")
 	}
 
 	return nil

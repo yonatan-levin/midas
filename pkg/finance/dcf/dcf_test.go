@@ -342,7 +342,7 @@ func TestCalculateDCF_InvalidInputs(t *testing.T) {
 				TaxRate:             0.25,
 				ProjectionYears:     0,
 			},
-			wantErr: "projection years must be between 1 and 15",
+			wantErr: "projection years must be between 1 and 50",
 		},
 		{
 			name: "Negative WACC",
@@ -354,31 +354,45 @@ func TestCalculateDCF_InvalidInputs(t *testing.T) {
 				TaxRate:             0.25,
 				ProjectionYears:     5,
 			},
-			wantErr: "WACC must be between 0% and 50%",
+			wantErr: "WACC must be positive",
 		},
 		{
-			name: "Terminal growth higher than WACC",
+			name: "Terminal growth too close to WACC violates the spread guard",
 			inputs: Inputs{
 				BaseOperatingIncome: 100.0,
 				GrowthRate:          0.10,
-				TerminalGrowthRate:  0.15, // Higher than WACC
+				TerminalGrowthRate:  0.15, // within the widened [-20%, 50%] band but above WACC
 				WACC:                0.10,
 				TaxRate:             0.25,
 				ProjectionYears:     5,
 			},
-			wantErr: "terminal growth rate must be between 0% and 5%",
+			// The terminal-growth band now accepts 0.15; the mathematical
+			// WACC-vs-terminal spread guard is what rejects it.
+			wantErr: "must exceed terminal growth rate",
+		},
+		{
+			name: "Terminal growth below the widened floor is rejected",
+			inputs: Inputs{
+				BaseOperatingIncome: 100.0,
+				GrowthRate:          0.10,
+				TerminalGrowthRate:  -0.25, // below the contract floor of -20%
+				WACC:                0.10,
+				TaxRate:             0.25,
+				ProjectionYears:     5,
+			},
+			wantErr: "terminal growth rate must be between -20% and 50%",
 		},
 		{
 			name: "Extreme growth rate",
 			inputs: Inputs{
 				BaseOperatingIncome: 100.0,
-				GrowthRate:          2.0, // 200% growth
+				GrowthRate:          11.0, // 1100% growth, beyond the 10× rail
 				TerminalGrowthRate:  0.03,
 				WACC:                0.10,
 				TaxRate:             0.25,
 				ProjectionYears:     5,
 			},
-			wantErr: "growth rate must be between -50% and 100%",
+			wantErr: "growth rate must be between -100% and 1000%",
 		},
 	}
 
@@ -1133,7 +1147,7 @@ func TestInputValidationEdgeCases(t *testing.T) {
 			{
 				inputs: Inputs{
 					BaseOperatingIncome: 100.0,
-					GrowthRate:          -0.51, // Below -50%
+					GrowthRate:          -1.01, // Below -100%
 					TerminalGrowthRate:  0.025,
 					WACC:                0.10,
 					TaxRate:             0.25,
@@ -1145,7 +1159,7 @@ func TestInputValidationEdgeCases(t *testing.T) {
 				inputs: Inputs{
 					BaseOperatingIncome: 100.0,
 					GrowthRate:          0.10,
-					TerminalGrowthRate:  0.051, // Above 5%
+					TerminalGrowthRate:  0.55, // Above the widened 50% cap
 					WACC:                0.10,
 					TaxRate:             0.25,
 					ProjectionYears:     5,
@@ -1157,11 +1171,11 @@ func TestInputValidationEdgeCases(t *testing.T) {
 					BaseOperatingIncome: 100.0,
 					GrowthRate:          0.10,
 					TerminalGrowthRate:  0.025,
-					WACC:                0.51, // Above 50%
+					WACC:                0, // Non-positive WACC is rejected
 					TaxRate:             0.25,
 					ProjectionYears:     5,
 				},
-				reason: "WACC too high",
+				reason: "non-positive WACC",
 			},
 			{
 				inputs: Inputs{
@@ -1181,7 +1195,7 @@ func TestInputValidationEdgeCases(t *testing.T) {
 					TerminalGrowthRate:  0.025,
 					WACC:                0.10,
 					TaxRate:             0.25,
-					ProjectionYears:     16, // Above 15
+					ProjectionYears:     51, // Above the widened cap of 50
 				},
 				reason: "too many projection years",
 			},

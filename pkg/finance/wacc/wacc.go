@@ -106,7 +106,16 @@ func CalculateWithOverrides(inputs Inputs, overrides map[string]float64) (*Resul
 	return Calculate(inputs)
 }
 
-// validateInputs checks that all inputs are within reasonable ranges
+// validateInputs checks that all inputs are within reasonable ranges.
+//
+// The numeric bounds below are deliberately reconciled with the request-override
+// contract (the Layer-1 ranges in internal/api/v1/handlers/fair_value_validation.go).
+// Any override value the contract accepts MUST compute here rather than producing
+// an untyped error → HTTP 500. The widening only changes WHICH inputs are rejected;
+// it never alters the output for an input that was already accepted, so the
+// default (no-override) path stays byte-for-byte identical. Genuine math-invalidity
+// (e.g. a beta/MRP combo that drives WACC ≤ 0) is caught earlier as a typed
+// *params.ParamError → 422 in the valuation resolver, before this runs.
 func validateInputs(inputs Inputs) error {
 	if inputs.MarketValueOfEquity <= 0 {
 		return errors.New("market value of equity must be positive")
@@ -116,20 +125,26 @@ func validateInputs(inputs Inputs) error {
 		return errors.New("market value of debt cannot be negative")
 	}
 
-	if inputs.Beta < 0 {
-		return errors.New("beta cannot be negative")
+	// Beta: negative beta is real (gold, inverse-ETF proxies). Contract range [-5, 5].
+	if inputs.Beta < -5 || inputs.Beta > 5 {
+		return errors.New("beta must be between -5 and 5")
 	}
 
-	if inputs.RiskFreeRate < 0 || inputs.RiskFreeRate > 0.2 {
-		return errors.New("risk-free rate must be between 0% and 20%")
+	// Risk-free rate: negative nominal rates have occurred (EUR/JPY/CHF).
+	// Contract range [-5%, 25%].
+	if inputs.RiskFreeRate < -0.05 || inputs.RiskFreeRate > 0.25 {
+		return errors.New("risk-free rate must be between -5% and 25%")
 	}
 
-	if inputs.MarketRiskPremium < 0 || inputs.MarketRiskPremium > 0.15 {
-		return errors.New("market risk premium must be between 0% and 15%")
+	// Market risk premium: a negative ERP is economically nonsensical (floored at 0).
+	// Contract range [0%, 30%].
+	if inputs.MarketRiskPremium < 0 || inputs.MarketRiskPremium > 0.30 {
+		return errors.New("market risk premium must be between 0% and 30%")
 	}
 
-	if inputs.TaxRate < 0 || inputs.TaxRate > 1 {
-		return errors.New("tax rate must be between 0% and 100%")
+	// Tax rate: negative effective rates are real (NOLs, credits). Contract range [-50%, 100%].
+	if inputs.TaxRate < -0.5 || inputs.TaxRate > 1 {
+		return errors.New("tax rate must be between -50% and 100%")
 	}
 
 	if inputs.MarketValueOfDebt > 0 && inputs.InterestExpense < 0 {

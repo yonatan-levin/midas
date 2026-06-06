@@ -122,16 +122,16 @@ func TestCalculate_InvalidInputs(t *testing.T) {
 			wantErr: "market value of equity must be positive",
 		},
 		{
-			name: "Negative beta",
+			name: "Beta beyond -5 is rejected",
 			inputs: Inputs{
 				MarketValueOfEquity: 1000,
 				MarketValueOfDebt:   100,
-				Beta:                -0.5,
+				Beta:                -5.5, // beyond the contract floor of -5
 				RiskFreeRate:        0.03,
 				MarketRiskPremium:   0.05,
 				TaxRate:             0.21,
 			},
-			wantErr: "beta cannot be negative",
+			wantErr: "beta must be between -5 and 5",
 		},
 		{
 			name: "Extreme risk-free rate",
@@ -139,11 +139,11 @@ func TestCalculate_InvalidInputs(t *testing.T) {
 				MarketValueOfEquity: 1000,
 				MarketValueOfDebt:   100,
 				Beta:                1.0,
-				RiskFreeRate:        0.25, // 25% risk-free rate is unrealistic
+				RiskFreeRate:        0.30, // 30% risk-free rate is beyond the 25% rail
 				MarketRiskPremium:   0.05,
 				TaxRate:             0.21,
 			},
-			wantErr: "risk-free rate must be between 0% and 20%",
+			wantErr: "risk-free rate must be between -5% and 25%",
 		},
 		{
 			name: "Invalid tax rate",
@@ -155,7 +155,7 @@ func TestCalculate_InvalidInputs(t *testing.T) {
 				MarketRiskPremium:   0.05,
 				TaxRate:             1.5, // 150% tax rate
 			},
-			wantErr: "tax rate must be between 0% and 100%",
+			wantErr: "tax rate must be between -50% and 100%",
 		},
 	}
 
@@ -476,40 +476,40 @@ func TestCalculate_InvalidInputs_ExtendedEdgeCases(t *testing.T) {
 			wantErr: "interest expense cannot be negative when debt is positive",
 		},
 		{
-			name: "Negative risk-free rate is rejected",
+			name: "Risk-free rate below -5% is rejected",
 			inputs: Inputs{
 				MarketValueOfEquity: 1000,
 				MarketValueOfDebt:   500,
 				Beta:                1.0,
-				RiskFreeRate:        -0.01,
+				RiskFreeRate:        -0.06, // below the contract floor of -5%
 				MarketRiskPremium:   0.05,
 				TaxRate:             0.21,
 			},
-			wantErr: "risk-free rate must be between 0% and 20%",
+			wantErr: "risk-free rate must be between -5% and 25%",
 		},
 		{
-			name: "Market risk premium above 15% is rejected",
+			name: "Market risk premium above 30% is rejected",
 			inputs: Inputs{
 				MarketValueOfEquity: 1000,
 				MarketValueOfDebt:   100,
 				Beta:                1.0,
 				RiskFreeRate:        0.03,
-				MarketRiskPremium:   0.16,
+				MarketRiskPremium:   0.31, // beyond the 30% rail
 				TaxRate:             0.21,
 			},
-			wantErr: "market risk premium must be between 0% and 15%",
+			wantErr: "market risk premium must be between 0% and 30%",
 		},
 		{
-			name: "Negative tax rate is rejected",
+			name: "Tax rate below -50% is rejected",
 			inputs: Inputs{
 				MarketValueOfEquity: 1000,
 				MarketValueOfDebt:   100,
 				Beta:                1.0,
 				RiskFreeRate:        0.03,
 				MarketRiskPremium:   0.05,
-				TaxRate:             -0.1,
+				TaxRate:             -0.6, // below the contract floor of -50%
 			},
-			wantErr: "tax rate must be between 0% and 100%",
+			wantErr: "tax rate must be between -50% and 100%",
 		},
 		{
 			name: "Negative country risk premium is rejected",
@@ -655,10 +655,11 @@ func TestSensitivityAnalysis_ErrorPropagation(t *testing.T) {
 		TaxRate:             0.21,
 	}
 
-	// Include a negative beta which should fail validation
-	betaRange := []float64{0.5, 1.0, -0.5}
+	// Include an out-of-range beta (beyond the contract floor of -5) which should
+	// fail validation. A merely-negative beta now computes (negative beta is real).
+	betaRange := []float64{0.5, 1.0, -5.5}
 	results, err := SensitivityAnalysis(baseInputs, betaRange)
-	assert.Error(t, err, "negative beta in range should cause error")
+	assert.Error(t, err, "out-of-range beta should cause error")
 	assert.Nil(t, results)
 }
 
