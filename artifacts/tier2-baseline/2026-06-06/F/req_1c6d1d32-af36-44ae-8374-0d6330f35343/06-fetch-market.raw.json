@@ -1,0 +1,40 @@
+{
+  "quoteResponse": {
+    "error": null,
+    "result": [
+      {
+        "averageDailyVolume3Month": 58936492,
+        "beta": 1.798,
+        "cryptoTradeable": false,
+        "currency": "USD",
+        "customPriceAlertConfidence": "HIGH",
+        "esgPopulated": false,
+        "exchange": "NYQ",
+        "exchangeDataDelayedBy": 0,
+        "exchangeTimezoneName": "America/New_York",
+        "exchangeTimezoneShortName": "EDT",
+        "firstTradeDateMilliseconds": 76253400000,
+        "fullExchangeName": "NYSE",
+        "gmtOffSetMilliseconds": -14400000,
+        "hasPrePostMarketData": true,
+        "impliedSharesOutstanding": 3984692630,
+        "language": "en-US",
+        "market": "us_market",
+        "marketCap": 59371921408,
+        "marketState": "CLOSED",
+        "priceHint": 2,
+        "quoteType": "EQUITY",
+        "region": "US",
+        "regularMarketPrice": 14.9,
+        "regularMarketTime": 1780689704,
+        "regularMarketVolume": 42512501,
+        "sharesOutstanding": 3913840554,
+        "sourceInterval": 15,
+        "symbol": "F",
+        "tradeable": false,
+        "triggerable": true,
+        "typeDisp": "Equity"
+      }
+    ]
+  }
+}

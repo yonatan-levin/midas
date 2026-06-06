@@ -1,0 +1,81 @@
+{
+  "ticker": "AAPL",
+  "wacc": 0.09612001112093677,
+  "growth_rate": 0.07675024801531238,
+  "growth_rates": [
+    0.07675024801531236,
+    0.07675024801531236,
+    0.07675024801531236,
+    0.07675024801531236,
+    0.07675024801531236,
+    0.07675024801531236,
+    0.07675024801531236
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 23.447506304040513,
+  "dcf_value_per_share": 188.79774666001921,
+  "current_assets_per_share": 9.786448654011888,
+  "ncav_per_share": -8.181314615439097,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-06-06T19:08:48Z",
+  "data_quality_score": 90,
+  "data_quality_grade": "A",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.7",
+  "warnings": [
+    "terminal_dominance: terminal_pv is 81.1% of enterprise_value (\u003e80% threshold; consider longer horizon or lower terminal growth)",
+    "reinvestment_model: method=sales_to_capital base_margin=32.0% target_margin=38.0% sales_to_capital=3.50→4.50 fade=3y",
+    "maintenance_capex_floor: projected reinvestment clamped up to the maintenance-capex floor; FCF reflects the floor, not the lower modeled reinvestment",
+    "operating_income_base: source=ANNUAL_FY operating_income=$133050000000",
+    "operating_income_base: TTM unavailable, used latest FY ($133050000000 dated 2025-10-31) [2025FY]",
+    "DCF-implied P/E (94.0) is \u003e2x sector median (28.0) for TECH",
+    "DCF-implied EV/EBITDA (66.2) is \u003e2x sector median (18.0) for TECH",
+    "DCF-implied P/FCF (87.2) is \u003e2x sector median (32.0) for TECH"
+  ],
+  "sanity_check": {
+    "implied_pe": 93.99593075940284,
+    "sector_median_pe": 28,
+    "implied_ev_ebitda": 66.23112605203858,
+    "sector_median_ev_ebitda": 18,
+    "implied_pfcf": 87.18950167785046,
+    "sector_median_pfcf": 32,
+    "is_reasonable": false,
+    "flags": [
+      "DCF-implied P/E (94.0) is \u003e2x sector median (28.0) for TECH",
+      "DCF-implied EV/EBITDA (66.2) is \u003e2x sector median (18.0) for TECH",
+      "DCF-implied P/FCF (87.2) is \u003e2x sector median (32.0) for TECH"
+    ]
+  },
+  "industry": {
+    "sic_code": "3571",
+    "sic": "TECH",
+    "heuristic_code": "45",
+    "heuristic_name": "Information Technology",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 307.34,
+  "assumption_profile": "software_like_large_scale:mature",
+  "resolution_trace": {
+    "profile_id": "software_like_large_scale:mature",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.1.0",
+    "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+    "matched_rule_id": "tech_generic",
+    "human_reason": "large_cap_low_growth"
+  },
+  "dcf_horizon_years": 5,
+  "dcf_terminal_method": "gordon_growth",
+  "dcf_terminal_pct_of_ev": 0.8106390729400678,
+  "dcf_per_year_pv": [
+    101566533981.1976,
+    106147618650.84352,
+    110535080395.74373,
+    108581792160.51009,
+    106663020885.10712
+  ],
+  "dcf_terminal_growth_used": 0.03
+}

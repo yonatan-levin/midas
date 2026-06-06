@@ -4,17 +4,8 @@
 **Status:** READY — pick up at Priority 1 below.
 **Scope of this stream:** DCF valuation accuracy/calibration. Distinct from the parallel **TODO burn-down (TDB-1..TDB-10)** stream, which has its own handoff at `docs/reviewer/todo-burndown-next-session-handoff.md` (datacleaner/adjuster/config/deployment work). Coordinate to avoid master collisions — see Gotchas.
 
----
-
-## Starting prompt (paste into the next session)
-
-> Resume the midas **valuation-accuracy** work. First read `docs/refactoring/implementations/valuation-accuracy-next-session-handoff.md` and the spec `docs/refactoring/spec/dcf-reinvestment-and-filing-intelligence-spec.md`.
->
-> Implement **Phase 1 = Layer A** of that spec: the **reinvestment / operating-leverage model** in midas's DCF (sales-to-capital ratio, or declining capex-intensity, parameterized per archetype in the `AssumptionProfile` system) so projected FCF can cross positive within the explicit horizon for hypergrowth, reinvestment-heavy firms. Work on a **fresh worktree/branch off master** and run the full **`/execute` B-V-R-Q** cycle. Bump `CalculationVersion` 4.6 → 4.7. Preserve DDM/FFO/revenue_multiple bit-for-bit (DCF-path only) and the load-bearing invariants (`TestDDM_LegacyPath_BitForBit`, recompute-shadow byte-identity). Honor the accounting-consistency guardrails in spec §7 (maintenance-capex floor; capped margin expansion; terminal reinvestment consistent with terminal growth & ROIC).
->
-> **Validate against the regression oracle:** `go run ./cmd/accuracy --dir artifacts/tier2-baseline/2026-06-05` before vs after — target: AMD's per-year `dcf_per_year_pv` turns positive in-window, terminal-dominance share drops, mean absolute gap shrinks from 59.1%, no regressions. Then do a **live run + log validation** (the user wants this): start the server, value KO/AMD/NVDA, confirm via the narrate/`17-response` logs that FCF/intrinsic improved.
->
-> Before merging: rebase onto latest master (a parallel session is actively committing to master) and use a **guarded** merge. Do not work in the shared main checkout.
+> **P1 / Layer A was executed and SHIPPED 2026-06-06** (its starting prompt has been
+> consumed and removed). See the P1 row below + the closeout.
 
 ---
 
@@ -36,7 +27,12 @@
 
 ## Prioritized next tasks (this stream)
 
-### P1 — Implement Layer A: reinvestment / operating-leverage model  ⬅ start here
+### P1 — Implement Layer A: reinvestment / operating-leverage model  ✅ SHIPPED 2026-06-06
+> **DONE** on `feat/dcf-reinvestment-layer-a` (CalcVersion 4.7; commits `c21e1e6` + `94b529f`).
+> AMD per-year FCF crosses positive at yr 2 (NEG_FCF_YEARS 5→1), terminal 247%→89%; basket
+> mean gap 59.1%→53.2%; DDM/FFO/revenue_multiple bit-for-bit. 4.7 baseline at
+> `artifacts/tier2-baseline/2026-06-06/` + report `docs/accuracy/report-2026-06-06.md`.
+> Closeout: `docs/refactoring/archive/dcf-reinvestment-layer-a-closeout.md`. **Next: P3 (Layer B).**
 - **Why first:** highest leverage, **no new data**, oracle already in place. It's the fix that stops the DCF undervaluing hypergrowth — AMD's intrinsic is positive but its per-year FCF is still negative (terminal = 247% of EV) because the engine scales cost and growth in lockstep (`FCF_t = growth_factor × FCF_base`).
 - **What:** Spec Phase 1 — `pkg/finance/dcf/dcf.go` projection loop (~100–165) + `internal/services/valuation/service.go` `dcf.Inputs` (~1088–1208) + new per-archetype reinvestment params in the `AssumptionProfile` (`profile.go` + `config/assumption_profiles.json`).
 - **Spec:** `docs/refactoring/spec/dcf-reinvestment-and-filing-intelligence-spec.md` §5–§7. Resolve Open Question §12 first: sales-to-capital vs declining-capex-intensity, and surgical-patch vs FCFF refactor.

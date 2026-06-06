@@ -1,8 +1,8 @@
 # DCF Reinvestment / Operating-Leverage Model + Filing-Intelligence Guidance Spec
 
-**Version:** 0.1
+**Version:** 0.2
 **Date:** 2026-06-06
-**Status:** PLANNING — NOT STARTED
+**Status:** Phase 1 (Layer A) SHIPPED 2026-06-06 (`feat/dcf-reinvestment-layer-a`, CalcVersion 4.7). Phases 2–4 PLANNING — NOT STARTED. See `docs/refactoring/archive/dcf-reinvestment-layer-a-closeout.md`.
 **Scope:** Two layers + a cross-cutting policy that together close the *calibration* gap left after BUG-014 + BUG-015: (A) a reinvestment / operating-leverage model inside midas's DCF so FCF can turn positive within the explicit horizon for hypergrowth, reinvestment-heavy firms; (B) an offline, accession-keyed "Filing Intelligence" tool that extracts forward CapEx / margin / revenue guidance from 10-K/10-Q MD&A prose as a provenanced, immutable, replay-captured input; and (X) an explicit assumption-authority hierarchy that governs which source supplies each valuation assumption. Layer A is mandatory and ships first; Layers B/X are sequenced behind it.
 
 > **Provenance.** This plan synthesizes an internal analysis of the `cmd/accuracy` 4.6 baseline (`docs/accuracy/report-2026-06-05.md`) with a cross-model architecture review (gpt-5.5, high reasoning) conducted 2026-06-06. The cross-model review's headline contribution is the assumption-authority hierarchy (§9) and the determinism-boundary requirements for Layer B (§8.3); both are load-bearing and are not optional polish.
@@ -13,7 +13,7 @@
 
 | Phase | Layer | What | Status |
 |-------|-------|------|--------|
-| Phase 1 | A | Reinvestment / operating-leverage model in midas DCF: sales-to-capital (or declining capex-intensity) trajectory, per-archetype `AssumptionProfile` reinvestment + margin-convergence parameters, accounting-consistency guardrails, golden tests, `CalculationVersion` bump. **MANDATORY, no new data.** | **PLANNING — NOT STARTED** |
+| Phase 1 | A | Reinvestment / operating-leverage model in midas DCF: sales-to-capital (or declining capex-intensity) trajectory, per-archetype `AssumptionProfile` reinvestment + margin-convergence parameters, accounting-consistency guardrails, golden tests, `CalculationVersion` bump. **MANDATORY, no new data.** | **SHIPPED 2026-06-06** (CalcVersion 4.7; commits `c21e1e6` + review-fix `94b529f`). AMD per-year FCF crosses positive at yr 2 (NEG_FCF_YEARS 5→1), terminal 247%→89%, basket mean gap 59.1%→53.2%; DDM/FFO/revenue_multiple bit-for-bit. Closeout: `docs/refactoring/archive/dcf-reinvestment-layer-a-closeout.md`. |
 | Phase 2 | B/X | Define the guidance-artifact contract + the assumption-authority hierarchy; make midas consume a **hand-authored fixture** guidance artifact deterministically (incl. replay capture) — BEFORE any LLM exists. | **PLANNING — NOT STARTED** |
 | Phase 3 | B | Build the offline filing-intelligence extraction tool (narrow scope: CapEx + explicit margin/revenue guidance only), accession-keyed, validator-computed confidence, human-in-the-loop, deterministic section extraction. | **PLANNING — NOT STARTED** |
 | Phase 4 | B | *(optional, earn it)* Broaden filing-intelligence scope and/or graduate to a REST service + orchestrator integration — only if reuse demands it. | **PLANNING — NOT STARTED (gated)** |

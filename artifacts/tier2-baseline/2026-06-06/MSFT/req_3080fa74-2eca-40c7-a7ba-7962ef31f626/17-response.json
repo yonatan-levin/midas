@@ -1,0 +1,81 @@
+{
+  "ticker": "MSFT",
+  "wacc": 0.09718631418389773,
+  "growth_rate": 0.09985274822595325,
+  "growth_rates": [
+    0.10783825416895775,
+    0.10783825416895775,
+    0.10783825416895775,
+    0.1022706033351662,
+    0.09670295250137464,
+    0.0911353016675831,
+    0.08556765083379154
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 77.17488247145735,
+  "dcf_value_per_share": 345.24537331640033,
+  "current_assets_per_share": 23.54989926124916,
+  "ncav_per_share": -14.0405641370047,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-06-06T19:08:57Z",
+  "data_quality_score": 100,
+  "data_quality_grade": "A",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.7",
+  "warnings": [
+    "terminal_dominance: terminal_pv is 81.4% of enterprise_value (\u003e80% threshold; consider longer horizon or lower terminal growth)",
+    "reinvestment_model: method=sales_to_capital base_margin=45.6% target_margin=45.6% sales_to_capital=3.00→4.50 fade=5y",
+    "maintenance_capex_floor: projected reinvestment clamped up to the maintenance-capex floor; FCF reflects the floor, not the lower modeled reinvestment",
+    "operating_income_base: source=ANNUAL_FY operating_income=$128528000000",
+    "operating_income_base: TTM unavailable, used latest FY ($128528000000 dated 2025-07-30) [2025FY]",
+    "DCF-implied P/E (80.9) is \u003e2x sector median (28.0) for TECH",
+    "DCF-implied EV/EBITDA (54.9) is \u003e2x sector median (18.0) for TECH",
+    "DCF-implied P/FCF (259.6) is \u003e2x sector median (32.0) for TECH"
+  ],
+  "sanity_check": {
+    "implied_pe": 80.88463101329853,
+    "sector_median_pe": 28,
+    "implied_ev_ebitda": 54.87039124732269,
+    "sector_median_ev_ebitda": 18,
+    "implied_pfcf": 259.5790551747728,
+    "sector_median_pfcf": 32,
+    "is_reasonable": false,
+    "flags": [
+      "DCF-implied P/E (80.9) is \u003e2x sector median (28.0) for TECH",
+      "DCF-implied EV/EBITDA (54.9) is \u003e2x sector median (18.0) for TECH",
+      "DCF-implied P/FCF (259.6) is \u003e2x sector median (32.0) for TECH"
+    ]
+  },
+  "industry": {
+    "sic_code": "7372",
+    "sic": "TECH",
+    "heuristic_code": "45",
+    "heuristic_name": "Information Technology",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 416.67,
+  "assumption_profile": "software_like_large_scale:standard_growth",
+  "resolution_trace": {
+    "profile_id": "software_like_large_scale:standard_growth",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.1.0",
+    "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+    "matched_rule_id": "tech_generic",
+    "human_reason": "default_standard_growth"
+  },
+  "dcf_horizon_years": 5,
+  "dcf_terminal_method": "gordon_growth",
+  "dcf_terminal_pct_of_ev": 0.8135623831641151,
+  "dcf_per_year_pv": [
+    94132103751.02515,
+    95751997431.81372,
+    97284799049.74557,
+    98571320514.31381,
+    99136815447.90666
+  ],
+  "dcf_terminal_growth_used": 0.03
+}

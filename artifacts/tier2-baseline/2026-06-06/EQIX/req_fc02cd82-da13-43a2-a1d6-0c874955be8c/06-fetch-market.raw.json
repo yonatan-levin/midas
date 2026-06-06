@@ -1,0 +1,41 @@
+{
+  "quoteResponse": {
+    "error": null,
+    "result": [
+      {
+        "averageDailyVolume3Month": 571703,
+        "beta": 0.97,
+        "cryptoTradeable": false,
+        "currency": "USD",
+        "customPriceAlertConfidence": "HIGH",
+        "esgPopulated": false,
+        "exchange": "NMS",
+        "exchangeDataDelayedBy": 0,
+        "exchangeTimezoneName": "America/New_York",
+        "exchangeTimezoneShortName": "EDT",
+        "firstTradeDateMilliseconds": 966000600000,
+        "fullExchangeName": "NasdaqGS",
+        "gmtOffSetMilliseconds": -14400000,
+        "hasPrePostMarketData": true,
+        "impliedSharesOutstanding": 98624248,
+        "language": "en-US",
+        "market": "us_market",
+        "marketCap": 106607878144,
+        "marketState": "CLOSED",
+        "priceHint": 2,
+        "quoteSourceName": "Delayed Quote",
+        "quoteType": "EQUITY",
+        "region": "US",
+        "regularMarketPrice": 1080.95,
+        "regularMarketTime": 1780689600,
+        "regularMarketVolume": 524824,
+        "sharesOutstanding": 98624248,
+        "sourceInterval": 15,
+        "symbol": "EQIX",
+        "tradeable": false,
+        "triggerable": true,
+        "typeDisp": "Equity"
+      }
+    ]
+  }
+}

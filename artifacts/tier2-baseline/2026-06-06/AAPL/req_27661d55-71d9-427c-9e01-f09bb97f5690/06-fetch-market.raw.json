@@ -1,0 +1,41 @@
+{
+  "quoteResponse": {
+    "error": null,
+    "result": [
+      {
+        "averageDailyVolume3Month": 44645993,
+        "beta": 1.086,
+        "cryptoTradeable": false,
+        "currency": "USD",
+        "customPriceAlertConfidence": "HIGH",
+        "esgPopulated": false,
+        "exchange": "NMS",
+        "exchangeDataDelayedBy": 0,
+        "exchangeTimezoneName": "America/New_York",
+        "exchangeTimezoneShortName": "EDT",
+        "firstTradeDateMilliseconds": 345479400000,
+        "fullExchangeName": "NasdaqGS",
+        "gmtOffSetMilliseconds": -14400000,
+        "hasPrePostMarketData": true,
+        "impliedSharesOutstanding": 14687356000,
+        "language": "en-US",
+        "market": "us_market",
+        "marketCap": 4514011676672,
+        "marketState": "CLOSED",
+        "priceHint": 2,
+        "quoteSourceName": "Delayed Quote",
+        "quoteType": "EQUITY",
+        "region": "US",
+        "regularMarketPrice": 307.34,
+        "regularMarketTime": 1780689601,
+        "regularMarketVolume": 64824174,
+        "sharesOutstanding": 14687356000,
+        "sourceInterval": 15,
+        "symbol": "AAPL",
+        "tradeable": false,
+        "triggerable": true,
+        "typeDisp": "Equity"
+      }
+    ]
+  }
+}

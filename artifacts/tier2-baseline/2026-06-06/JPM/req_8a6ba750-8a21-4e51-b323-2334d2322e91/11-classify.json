@@ -1,0 +1,14 @@
+{
+  "chosen_industry_code": "FIN_BANK",
+  "heuristic_code": "20",
+  "heuristic_name": "Industrials",
+  "match": true,
+  "sic_classifier": {
+    "Sector": "FIN",
+    "Industry": "FIN_BANK",
+    "SubIndustry": "FIN_BANK",
+    "ModelHint": "FIN_BANK",
+    "NAICS": "",
+    "SIC": "6021"
+  }
+}

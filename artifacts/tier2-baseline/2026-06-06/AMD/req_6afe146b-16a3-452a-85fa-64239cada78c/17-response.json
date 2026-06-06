@@ -1,0 +1,81 @@
+{
+  "ticker": "AMD",
+  "wacc": 0.1445736811169772,
+  "growth_rate": 0.24137235360624754,
+  "growth_rates": [
+    0.308619615083386,
+    0.308619615083386,
+    0.308619615083386,
+    0.26289569206670876,
+    0.2171717690500316,
+    0.17144784603335442,
+    0.1257239230166772
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 23.117575757575757,
+  "dcf_value_per_share": 112.56960536160504,
+  "current_assets_per_share": 17.35030303030303,
+  "ncav_per_share": 8.15030303030303,
+  "graham_floor_per_share": 5.433535353535353,
+  "graham_discount_pct": 84.83361838191553,
+  "as_of": "2026-06-06T19:08:50Z",
+  "data_quality_score": 90,
+  "data_quality_grade": "A",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.7",
+  "warnings": [
+    "terminal_dominance: terminal_pv is 89.1% of enterprise_value (\u003e80% threshold; consider longer horizon or lower terminal growth)",
+    "reinvestment_model: method=sales_to_capital base_margin=10.7% target_margin=30.0% sales_to_capital=1.50→2.50 fade=5y",
+    "operating_income_base: source=ANNUAL_FY operating_income=$3694000000",
+    "operating_income_base: TTM unavailable, used latest FY ($3694000000 dated 2026-02-04) [2025FY]",
+    "DCF-implied P/E (134.3) is \u003e2x sector median (22.0) for MFG_SEMI",
+    "DCF-implied EV/EBITDA (124.1) is \u003e2x sector median (10.0) for MFG_SEMI",
+    "DCF-implied P/FCF (186.9) is \u003e2x sector median (25.0) for MFG_SEMI"
+  ],
+  "sanity_check": {
+    "implied_pe": 134.30213221015788,
+    "sector_median_pe": 22,
+    "implied_ev_ebitda": 124.08661845978884,
+    "sector_median_ev_ebitda": 10,
+    "implied_pfcf": 186.86101493626592,
+    "sector_median_pfcf": 25,
+    "is_reasonable": false,
+    "flags": [
+      "DCF-implied P/E (134.3) is \u003e2x sector median (22.0) for MFG_SEMI",
+      "DCF-implied EV/EBITDA (124.1) is \u003e2x sector median (10.0) for MFG_SEMI",
+      "DCF-implied P/FCF (186.9) is \u003e2x sector median (25.0) for MFG_SEMI"
+    ]
+  },
+  "industry": {
+    "sic_code": "3674",
+    "sic": "MFG_SEMI",
+    "heuristic_code": "20",
+    "heuristic_name": "Industrials",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 466.38,
+  "assumption_profile": "cyclical_mid_cycle:high_growth",
+  "resolution_trace": {
+    "profile_id": "cyclical_mid_cycle:high_growth",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.1.0",
+    "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+    "matched_rule_id": "mfg_semi",
+    "human_reason": "yoy_above_high_growth_threshold"
+  },
+  "dcf_horizon_years": 5,
+  "dcf_terminal_method": "exit_multiple",
+  "dcf_terminal_pct_of_ev": 0.8908579004961997,
+  "dcf_per_year_pv": [
+    -947667709.4463207,
+    961040511.847235,
+    3292349941.1732903,
+    6622718702.20501,
+    10061135865.346685
+  ],
+  "dcf_terminal_growth_used": 0.03
+}
