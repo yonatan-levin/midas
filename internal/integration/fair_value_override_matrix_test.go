@@ -148,6 +148,68 @@ func TestPostFairValue_OverrideContract_NoFiveHundred(t *testing.T) {
 			want:     expect422,
 			wantKnob: "wacc",
 		},
+		{
+			// HIGH-1: a low-but-positive WACC regime (0 < WACC < 0.02). With
+			// terminal_growth_rate OMITTED, auto-derive clamps to the 0.01 degenerate
+			// floor, leaving (WACC − g) below the 1% spread. The resolver upgrades this
+			// to a typed 422 (knob terminal_growth_rate, or "wacc" if the combo lands
+			// WACC ≤ 0) instead of letting dcf.validateInputs 500. wantKnob is left
+			// empty because the exact knob depends on the seeded data's cost-of-debt
+			// contribution — the contract is "typed 422, never 500".
+			name: "low-WACC auto-derive is a typed 422 (HIGH-1)",
+			options: map[string]any{
+				"risk_free_rate":      0.005,
+				"market_risk_premium": 0.0,
+				"beta":                0.0,
+			},
+			want: expect422,
+		},
+		{
+			// HIGH-2: growth_stages summing > 50 with horizon_years OMITTED. The core
+			// contract here is NOT-500. Whether this lands 422 or 200 depends on the
+			// effective horizon's SOURCE:
+			//   - If the horizon is DEFAULT-sourced (== growth-rate length == stage-sum
+			//     == 51), it exceeds the engine's ProjectionYears ≤ 50 rail and the
+			//     resolver 422s on growth_stages BEFORE dcf.validateInputs would 500.
+			//   - In THIS seeded environment AAPL resolves to the fallback profile
+			//     `software_like_scaling`, whose HorizonYears=5 takes precedence over the
+			//     default growth-rate length, pinning the DCF horizon to 5 → 200. The
+			//     stage overrides still reshape the growth curve but never push the
+			//     horizon past the rail.
+			// Either terminal state is contract-valid; the deterministic 422-when-default-
+			// sourced path is pinned by params.TestResolveInputs_HorizonExceedsDCFMax_*.
+			name: "stage-derived horizon > 50 never 500s (HIGH-2)",
+			options: map[string]any{
+				"growth_stages": map[string]any{
+					"stage1_years": 50,
+					"stage2_years": 1,
+				},
+			},
+			want: expectEither,
+		},
+		{
+			// terminal_growth_cap is within Layer-1 [-0.20, 0.50]; 0.10 only raises the
+			// auto-derive ceiling and must COMPUTE.
+			name:    "terminal_growth_cap computes",
+			options: map[string]any{"terminal_growth_cap": 0.10},
+			want:    expectCompute,
+		},
+		{
+			// max_growth_rate at the Layer-1 ceiling (10.0) only widens the estimator
+			// clamp and must COMPUTE.
+			name:    "max_growth_rate at ceiling computes",
+			options: map[string]any{"max_growth_rate": 10.0},
+			want:    expectCompute,
+		},
+		{
+			// MEDIUM: terminal_method=gordon_growth SUPPRESSES exit-multiple blending
+			// (pure Gordon Growth TV). It must COMPUTE for a ticker that has an industry
+			// multiple available (AAPL → TECH). Before the selector fix this still
+			// averaged; now it produces a pure Gordon TV without error.
+			name:    "terminal_method gordon_growth computes (suppresses exit multiple)",
+			options: map[string]any{"terminal_method": "gordon_growth"},
+			want:    expectCompute,
+		},
 	}
 
 	for _, tt := range tests {
