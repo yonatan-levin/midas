@@ -32,6 +32,13 @@ const (
 	knobRiskFreeRate       = "risk_free_rate"
 	knobMarketRiskPremium  = "market_risk_premium"
 	knobGrowthStages       = "growth_stages"
+
+	// knobWACC names the computed WACC in a ParamError when the resolved CAPM/WACC
+	// inputs drive the cost of capital to a non-positive value (e.g. an extreme
+	// negative-beta + high-MRP + zero-rf combo). WACC is not itself an override knob —
+	// it is derived from beta/risk_free_rate/market_risk_premium/tax_rate — so this
+	// is the most actionable label to surface ("your inputs produced WACC ≤ 0").
+	knobWACC = "wacc"
 )
 
 // terminalMethodExitMultiple is the enum value selecting the exit-multiple
@@ -296,47 +303,82 @@ func ResolveTerminal(p *EffectiveValuationParams, computedWACC, historicalCAGR f
 		p.Provenance = make(map[string]Source)
 	}
 
+	// Non-positive WACC guard (Layer-2, post-WACC). An extreme CAPM-input combo
+	// (e.g. a large negative beta with a high MRP and zero/negative risk-free rate)
+	// can drive the resolved cost of capital to ≤ 0, which makes the DCF discount
+	// factors and the Gordon denominator undefined. The engine's dcf/wacc
+	// validateInputs would reject this with an UNTYPED error → HTTP 500; we catch it
+	// HERE as a typed *ParamError → 422 so the caller gets an actionable message.
+	// computedWACC == 0 also trips this (a zero discount rate is degenerate).
+	if computedWACC <= 0 {
+		return &ParamError{
+			Knob:   knobWACC,
+			Reason: "resolved cost of capital is non-positive; check beta / market_risk_premium / risk_free_rate overrides",
+			Value:  computedWACC,
+		}
+	}
+
 	if p.TerminalGrowthExplicit {
-		// Hard invariant: explicit terminal growth must be strictly below WACC to
-		// keep the Gordon perpetuity finite. Applies regardless of cap.
-		if computedWACC > 0 && p.TerminalGrowthRate >= computedWACC {
+		// Hard invariant: an explicit terminal growth must stay at least
+		// MinTerminalWACCSpread below WACC to keep the Gordon perpetuity denominator
+		// (WACC − g) numerically stable. This GENERALIZES the older "must be strictly
+		// < WACC" check (the >= WACC case is the subset where the gap is ≤ 0) and uses
+		// the SAME spread the DCF engine's denominator guard (dcf.MinWACCTerminalSpread)
+		// enforces, so the resolver and engine agree. Catching it here means the engine
+		// guard never fires from the override path; a 500 there would now indicate a
+		// real internal bug. Applies regardless of cap (design §5 / §8 R8).
+		if p.TerminalGrowthRate > computedWACC-MinTerminalWACCSpread {
 			return &ParamError{
 				Knob:   knobTerminalGrowthRate,
-				Reason: "must be strictly less than WACC",
+				Reason: fmt.Sprintf("must be at least %g below WACC", MinTerminalWACCSpread),
 				Value:  p.TerminalGrowthRate,
 				Limit:  computedWACC,
 			}
 		}
-		// Soft advisory: within 1% of WACC (but still below). Surfaced to the caller.
-		if computedWACC > 0 && computedWACC-p.TerminalGrowthRate < 0.01 {
-			p.Warnings = append(p.Warnings, fmt.Sprintf(
-				"terminal_growth_rate (%g) is within 1%% of WACC (%g); terminal value is highly sensitive",
-				p.TerminalGrowthRate, computedWACC))
-		}
 		return nil
 	}
 
-	// --- Auto-derive path: VERBATIM port of calculateTerminalGrowthRate -----
-	// (service.go:1721-1745). The ONLY substitution is the cap literal 0.03 →
-	// p.TerminalGrowthCap; every other literal is replaced by its named constant
-	// of the SAME numeric value, so the result is byte-identical when cap == 0.03.
+	// --- Auto-derive path: port of calculateTerminalGrowthRate (service.go) ---
+	// The legacy order was: cap → ≤0 floor → WACC-spread clamp. MEDIUM-1 fix: apply
+	// the FLOOR first, then the CAP, then re-enforce the CAP after the WACC-spread
+	// adjustment. This makes an explicit low/negative terminal_growth_cap actually
+	// bind (the old order let the 0.02 ≤0-floor overshoot a cap of e.g. 0.01).
+	//
+	// BYTE-IDENTITY for the default cap (0.03): before the WACC-spread step, swapping
+	// floor↔cap leaves the result unchanged for cap=0.03 (the cap branch only fires
+	// when terminalGrowth > 0, where the ≤0 floor is a no-op; the floor branch only
+	// fires when terminalGrowth ≤ 0, where 0.02 < 0.03 so the cap is a no-op). The
+	// WACC-spread clamp only ever LOWERS terminalGrowth (to wacc−spread ≤ cap), and
+	// the degenerate floor raises it to at most 0.01 — both ≤ 0.03 — so the trailing
+	// re-cap is a no-op at cap=0.03. Pinned by the byte-identity terminal test grid.
 	terminalGrowth := historicalCAGR / 2
-	maxTerminalGrowth := p.TerminalGrowthCap // was: 0.03
+	growthCap := p.TerminalGrowthCap // was the literal 0.03 (named to avoid the builtin cap)
 
-	if terminalGrowth > maxTerminalGrowth {
-		terminalGrowth = maxTerminalGrowth
+	// Floor first: a ≤0 auto-derived rate inflates to the floor ("viable businesses
+	// grow at least with prices").
+	if terminalGrowth <= 0 {
+		terminalGrowth = DefaultTerminalGrowthFloor // 0.02
 	}
 
-	if terminalGrowth <= 0 {
-		terminalGrowth = DefaultTerminalGrowthFloor // was: 0.02
+	// Cap second: honor an explicit (possibly low/negative) cap over the floor.
+	if terminalGrowth > growthCap {
+		terminalGrowth = growthCap
 	}
 
 	// Ensure terminal growth stays at least DefaultTerminalWACCSpread below WACC.
 	if computedWACC > 0 && terminalGrowth > computedWACC-DefaultTerminalWACCSpread {
 		terminalGrowth = computedWACC - DefaultTerminalWACCSpread
-		if terminalGrowth < DefaultTerminalGrowthDegenWACCFloor { // was: 0.01
+		if terminalGrowth < DefaultTerminalGrowthDegenWACCFloor { // 0.01
 			terminalGrowth = DefaultTerminalGrowthDegenWACCFloor
 		}
+	}
+
+	// Re-enforce the cap: the WACC-spread/degenerate-floor adjustment above can raise
+	// terminalGrowth back above an explicit low/negative cap (e.g. growthCap = -0.01
+	// with the 0.01 degenerate floor). The cap is a hard ceiling, so clamp once more.
+	// No-op for the default cap (0.03), preserving byte-identity.
+	if terminalGrowth > growthCap {
+		terminalGrowth = growthCap
 	}
 
 	p.TerminalGrowthRate = terminalGrowth

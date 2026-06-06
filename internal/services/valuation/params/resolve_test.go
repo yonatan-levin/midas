@@ -271,16 +271,31 @@ func TestResolveTerminal_Invariant_TerminalGrowthGEWACC_Returns422(t *testing.T)
 	assertParamErrorKnob(t, err, knobTerminalGrowthRate)
 }
 
-func TestResolveTerminal_ExplicitNearWACC_Warns(t *testing.T) {
+// An explicit terminal_growth_rate within the minimum WACC spread (but still below
+// WACC) is now a HARD 422 (Layer-2, Part C-1), not a soft warning — the engine's
+// Gordon denominator would otherwise be numerically unstable. This catches it as a
+// typed *ParamError before CalculateDCF runs (never a 500).
+func TestResolveTerminal_ExplicitNearWACC_Returns422(t *testing.T) {
 	p := EffectiveValuationParams{
-		TerminalGrowthRate:     0.089, // 0.5% below WACC 0.094 → within 1%
+		TerminalGrowthRate:     0.089, // 0.5% below WACC 0.094 → inside the 1% spread
 		TerminalGrowthExplicit: true,
 		Provenance:             map[string]Source{knobTerminalGrowthRate: SourceRequest},
 	}
 	err := ResolveTerminal(&p, 0.094, 0.10)
+	assertParamErrorKnob(t, err, knobTerminalGrowthRate)
+}
+
+// A value comfortably beyond MinTerminalWACCSpread below WACC is accepted as-is.
+// WACC 0.10, spread 0.01 → boundary 0.09; 0.08 is clearly outside the guard.
+func TestResolveTerminal_ExplicitBeyondSpread_OK(t *testing.T) {
+	p := EffectiveValuationParams{
+		TerminalGrowthRate:     0.08, // 0.02 below WACC 0.10 (> 0.01 spread)
+		TerminalGrowthExplicit: true,
+		Provenance:             map[string]Source{knobTerminalGrowthRate: SourceRequest},
+	}
+	err := ResolveTerminal(&p, 0.10, 0.10)
 	require.NoError(t, err)
-	require.NotEmpty(t, p.Warnings, "near-WACC explicit terminal growth must warn")
-	assert.Equal(t, 0.089, p.TerminalGrowthRate, "explicit value used as-is (no cap)")
+	assert.Equal(t, 0.08, p.TerminalGrowthRate, "explicit value used as-is")
 }
 
 func TestResolveTerminal_ExplicitComfortablyBelowWACC_NoWarn(t *testing.T) {
@@ -350,10 +365,16 @@ func legacyCalculateTerminalGrowthRate(historicalCAGR, wacc float64) float64 {
 //   - the WACC-spread clamp (terminalGrowth > wacc-0.02)
 //   - the degenerate 0.01 floor (WACC < 0.02 so wacc-0.02 < 0.01, and WACC slightly
 //     above 0.02 so wacc-0.02 lands between 0.01 and 0.02)
-//   - wacc == 0 (spread guard skipped entirely)
+//
+// The grid uses only POSITIVE WACCs: ResolveTerminal now returns a typed 422 for a
+// non-positive WACC (Part C-2) BEFORE reaching the auto-derive arithmetic, and a
+// production WACC is always positive (the dcf/wacc engine validators already reject
+// WACC ≤ 0). The legacy oracle's wacc==0 "skip the spread clamp" branch is therefore
+// unreachable through ResolveTerminal and is covered separately by the
+// non-positive-WACC 422 test.
 func TestResolveTerminal_EmptyOverride_MatchesCalculateTerminalGrowthRate(t *testing.T) {
 	cagrs := []float64{-0.50, -0.10, 0.0, 0.005, 0.02, 0.04, 0.06, 0.10, 0.30, 1.00}
-	waccs := []float64{0.0, 0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.05, 0.08, 0.094, 0.12, 0.20}
+	waccs := []float64{0.005, 0.01, 0.015, 0.02, 0.025, 0.03, 0.05, 0.08, 0.094, 0.12, 0.20}
 
 	for _, cagr := range cagrs {
 		for _, wacc := range waccs {
@@ -374,6 +395,105 @@ func TestResolveTerminal_EmptyOverride_MatchesCalculateTerminalGrowthRate(t *tes
 			// Auto-derive path tags provenance as default.
 			assert.Equal(t, SourceDefault, p.Provenance[knobTerminalGrowthRate])
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Part C-2: non-positive WACC → typed 422 (not an engine 500)
+// ---------------------------------------------------------------------------
+
+// TestResolveTerminal_NonPositiveWACC_Returns422 pins that a non-positive computed
+// WACC (the degenerate output of an extreme CAPM-input override combo) is caught as
+// a typed *ParamError on knob "wacc" BEFORE the auto-derive arithmetic or the engine
+// runs — so the caller gets a 422, never an engine 500.
+func TestResolveTerminal_NonPositiveWACC_Returns422(t *testing.T) {
+	for _, wacc := range []float64{0.0, -0.01, -0.10} {
+		t.Run("", func(t *testing.T) {
+			// Auto-derive path (no explicit terminal growth).
+			p := EffectiveValuationParams{
+				TerminalGrowthCap: DefaultTerminalGrowthCap,
+				Provenance:        map[string]Source{},
+			}
+			err := ResolveTerminal(&p, wacc, 0.10)
+			assertParamErrorKnob(t, err, knobWACC)
+
+			// Explicit path: the non-positive-WACC guard fires before the
+			// terminal-growth spread check.
+			pe := EffectiveValuationParams{
+				TerminalGrowthRate:     0.01,
+				TerminalGrowthExplicit: true,
+				Provenance:             map[string]Source{knobTerminalGrowthRate: SourceRequest},
+			}
+			err = ResolveTerminal(&pe, wacc, 0.10)
+			assertParamErrorKnob(t, err, knobWACC)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// MEDIUM-1: terminal_growth_cap is honored over the ≤0 inflation floor
+// ---------------------------------------------------------------------------
+
+// TestResolveTerminal_AutoDerive_CapHonoredOverFloor pins the MEDIUM-1 fix: the
+// auto-derive path applies the ≤0 inflation FLOOR first, then the CAP, then re-caps
+// after the WACC-spread adjustment — so an explicit low/negative terminal_growth_cap
+// binds instead of being silently overshot by the 0.02 floor.
+func TestResolveTerminal_AutoDerive_CapHonoredOverFloor(t *testing.T) {
+	tests := []struct {
+		name   string
+		cap    float64
+		cagr   float64
+		wacc   float64
+		wantTG float64
+	}{
+		{
+			// Non-positive CAGR → floor 0.02, but cap 0.01 must bind below it.
+			// Pre-fix bug: the floor produced 0.02, ABOVE the 0.01 cap.
+			name:   "low cap 0.01 with non-positive CAGR binds below floor",
+			cap:    0.01,
+			cagr:   -0.10,
+			wacc:   0.10,
+			wantTG: 0.01,
+		},
+		{
+			// Positive CAGR/2 = 0.05 > cap 0.01 → cap binds. Floor is a no-op.
+			name:   "low cap 0.01 with positive CAGR binds",
+			cap:    0.01,
+			cagr:   0.10,
+			wacc:   0.10,
+			wantTG: 0.01,
+		},
+		{
+			// Negative cap -0.01: floor lifts to 0.02, cap drops to -0.01, WACC-spread
+			// raises to wacc-0.02=0.08 then degenerate-floor min is 0.01, re-cap drops
+			// back to -0.01. The negative cap is a hard ceiling and must be honored.
+			name:   "negative cap -0.01 is honored as a hard ceiling",
+			cap:    -0.01,
+			cagr:   -0.10,
+			wacc:   0.10,
+			wantTG: -0.01,
+		},
+		{
+			// Default cap 0.03 with non-positive CAGR: floor 0.02 (< cap), unchanged
+			// by the reorder — the byte-identity case re-asserted inline here.
+			name:   "default cap 0.03 with non-positive CAGR resolves to floor",
+			cap:    0.03,
+			cagr:   -0.10,
+			wacc:   0.10,
+			wantTG: 0.02,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := EffectiveValuationParams{
+				TerminalGrowthCap: tt.cap,
+				Provenance:        map[string]Source{},
+			}
+			err := ResolveTerminal(&p, tt.wacc, tt.cagr)
+			require.NoError(t, err)
+			assert.InDelta(t, tt.wantTG, p.TerminalGrowthRate, 1e-12)
+		})
 	}
 }
 

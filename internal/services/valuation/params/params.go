@@ -177,6 +177,20 @@ const (
 	// merged — using 0.02 here would change byte-identity in low-WACC rows.
 	DefaultTerminalGrowthDegenWACCFloor = 0.01
 
+	// MinTerminalWACCSpread is the minimum gap an EXPLICIT terminal_growth_rate must
+	// keep below the computed WACC for the Gordon perpetuity denominator (WACC − g)
+	// to stay numerically stable. ResolveTerminal upgrades any explicit value that
+	// violates this gap into a typed *ParamError → HTTP 422, BEFORE CalculateDCF runs.
+	//
+	// This value MUST equal dcf.MinWACCTerminalSpread (the engine's denominator
+	// guard) so the resolver and the engine agree on the boundary — the resolver
+	// catches the violation as a clean 422; the engine guard is then defense-in-depth
+	// that should never fire from the override path. It is duplicated here (rather
+	// than imported from pkg/finance/dcf) to keep the resolver a pure scalar-only
+	// domain package with no dependency on a calc package. If one changes, change
+	// both; a drift test could pin this if the duplication ever proves fragile.
+	MinTerminalWACCSpread = 0.01
+
 	// DefaultStage1Years is the high-growth stage duration in the multi-stage
 	// growth estimator. Mirrors DefaultEstimatorConfig() Stage1Years: 3
 	// (growth/estimator.go:40)
