@@ -1,0 +1,59 @@
+{
+  "schema_version": "1.0.0",
+  "status": "validated",
+  "issuer": {
+    "ticker": "AMD",
+    "cik": "0000002488"
+  },
+  "filing": {
+    "accession": "0000002488-26-000012",
+    "form_type": "10-K",
+    "filing_date": "2026-02-04",
+    "period_end": "2025-12-28",
+    "sec_url": "https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany\u0026CIK=0000002488"
+  },
+  "source_selection": {
+    "sections": [
+      "Item 7 MD\u0026A",
+      "Liquidity and Capital Resources"
+    ],
+    "selected_text_sha256": "043393c9ca8b95a3515667a8f886aa4d68a991b5593dbed201be0943b255b742"
+  },
+  "extraction": {
+    "capex_guidance": {
+      "value_low": 1400000000,
+      "value_high": 1600000000,
+      "unit": "absolute_usd",
+      "period": "FY2026",
+      "basis": {
+        "gross_or_net": "gross",
+        "cash_or_accrual": "cash",
+        "gaap_or_non_gaap": "gaap",
+        "consolidated_or_segment": "consolidated"
+      },
+      "confidence": 0.82,
+      "evidence": [
+        {
+          "quote": "we expect capital expenditures of approximately $1.5 billion in fiscal 2026",
+          "location": "Item 7, ¶ Liquidity and Capital Resources"
+        }
+      ]
+    }
+  },
+  "ai_provenance": {
+    "provider": "hand_authored",
+    "model_name": "fixture",
+    "model_version": "n/a",
+    "temperature": 0,
+    "prompt_sha256": "7b84baa7aa3303c405439cd22f9baa2234fe8fd030f8b4040d9b8661b998162a",
+    "schema_sha256": "9bc27507615085a77ceed1ea6bc53f2de675d8068232b7e630c473ac4425e02d",
+    "raw_response_sha256": "d408504ab842127b84028dcf87b760afece669e51a4765a8d9a1b796a26a65a0"
+  },
+  "validation": {
+    "status": "validated",
+    "confidence": 0.82,
+    "normalization_rules_version": "1.0.0",
+    "validator_version": "fixture-1.0.0"
+  },
+  "artifact_sha256": "ae0cfc150c5d3071a3da88acae4fab02e42df87562348132a48a51293699e295"
+}

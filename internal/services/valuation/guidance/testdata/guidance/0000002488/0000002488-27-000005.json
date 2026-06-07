@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0.0",
+  "status": "validated",
+  "issuer": {
+    "ticker": "AMD",
+    "cik": "0000002488"
+  },
+  "filing": {
+    "accession": "0000002488-27-000005",
+    "form_type": "10-K",
+    "filing_date": "2027-02-03",
+    "period_end": "2026-12-26"
+  },
+  "extraction": {
+    "capex_guidance": {
+      "value_low": 1800000000,
+      "value_high": 2000000000,
+      "unit": "absolute_usd",
+      "period": "FY2027",
+      "basis": {
+        "gross_or_net": "gross",
+        "cash_or_accrual": "cash",
+        "gaap_or_non_gaap": "gaap"
+      },
+      "confidence": 0.8,
+      "evidence": [
+        {
+          "quote": "fiscal 2027 capex of roughly $1.9 billion",
+          "location": "Item 7"
+        }
+      ]
+    }
+  },
+  "validation": {
+    "status": "validated",
+    "confidence": 0.8,
+    "normalization_rules_version": "1.0.0",
+    "validator_version": "fixture-1.0.0"
+  },
+  "artifact_sha256": "109d5703914d82f8e787a7807ed444ccc74d245df9b80098b7ab50f893297f36"
+}

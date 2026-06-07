@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0.0",
+  "status": "validated",
+  "issuer": {
+    "ticker": "AMD",
+    "cik": "0000002488"
+  },
+  "filing": {
+    "accession": "0000002488-26-000020",
+    "form_type": "10-Q",
+    "filing_date": "2026-04-29",
+    "period_end": "2026-03-28"
+  },
+  "extraction": {
+    "capex_guidance": {
+      "value_low": 1200000000,
+      "value_high": 1800000000,
+      "unit": "absolute_usd",
+      "period": "FY2026",
+      "basis": {
+        "gross_or_net": "gross",
+        "cash_or_accrual": "cash",
+        "gaap_or_non_gaap": "gaap"
+      },
+      "confidence": 0.45,
+      "evidence": [
+        {
+          "quote": "capital spending is expected to remain elevated through fiscal 2026",
+          "location": "Item 2, ¶ Liquidity"
+        }
+      ]
+    }
+  },
+  "validation": {
+    "status": "validated",
+    "confidence": 0.45,
+    "warnings": [
+      "low per-envelope confidence; not anchor-eligible"
+    ],
+    "normalization_rules_version": "1.0.0",
+    "validator_version": "fixture-1.0.0"
+  },
+  "artifact_sha256": "5b64d16d3eff31c0f7c19f4060ddbdfdd37d31bd0bd78ec62508b0daa99bf856"
+}
