@@ -155,6 +155,35 @@ type ValuationResult struct {
 	// AppliedOverrideValue using plain interface{} + string fields, which is
 	// all the handler needs to build the applied_overrides JSON object.
 	AppliedOverrides map[string]AppliedOverrideValue `json:"applied_overrides,omitempty"`
+
+	// AssumptionSources carries, per near-term assumption, which authority level
+	// (Layer B Phase 2 §9) supplied the final value — keyed by assumption (e.g.
+	// "capex_year1", "operating_margin_year1"). Populated ONLY when guidance OR a
+	// non-default source actually fired; nil/omitted on the default (absent-
+	// guidance) path so default-path responses stay byte-identical (omitempty —
+	// the NF1 invariant). Mirrors AppliedOverrides' transport-clean shape.
+	//
+	// The carrier type lives in this package (not authority) to keep the import
+	// boundary clean: entities must NOT import the authority/guidance leaf
+	// packages, exactly as it must not import params. The service maps
+	// authority.Resolution.Sources → AssumptionSourceValue.
+	AssumptionSources map[string]AssumptionSourceValue `json:"assumption_sources,omitempty"`
+}
+
+// AssumptionSourceValue is the per-assumption payload on ValuationResult
+// recording which §9 authority level supplied a near-term assumption and a
+// human-readable detail (Layer B Phase 2, Decision 4). Source is one of
+// "user_override" | "guidance" | "profile" | "historical" | "default".
+//
+// Defined in entities rather than authority to avoid an import cycle: entities
+// is imported by both the service and handler layers, while authority is a
+// service-layer leaf (mirrors AppliedOverrideValue / params).
+type AssumptionSourceValue struct {
+	// Source is the precedence layer that supplied this assumption's value.
+	Source string `json:"source"`
+	// Detail is an optional provenance string, e.g.
+	// "accession=0000002488-26-000012 period=FY2026 conf=0.82 midpoint=$1.50B".
+	Detail string `json:"detail,omitempty"`
 }
 
 // AppliedOverrideValue is the per-knob payload carried on ValuationResult when

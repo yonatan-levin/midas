@@ -15,6 +15,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/guidance"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
@@ -830,6 +831,27 @@ func (b *Bundle) SetAssumptionProfileManifest(ctx context.Context, manifest prof
 	}
 	b.Snapshot(ctx, "assumption.profile.resolved", "08-assumption-profile.json", manifest)
 	b.AddSchemaVersion("AssumptionProfileManifest", 1)
+}
+
+// SetGuidanceResolution writes the Layer-B Phase-2 guidance resolution to the
+// bundle as 09-guidance.json (spec Decision 8) — the open slot between
+// 08-assumption-profile.json and 10-clean-*.json, exactly where guidance
+// resolves in the flow. On a hit the stage carries the selected artifact
+// verbatim (including its artifact_sha256) plus a small resolution envelope; on
+// absent / no-guidance it carries the envelope alone, so "no guidance applied"
+// is a captured fact a replay re-derives identically (NF3). Replay consumes it
+// via guidance.LoadFromBundle.
+//
+// Mirrors SetAssumptionProfileManifest: delegates to Snapshot (same worker
+// queue + error accounting), registers a schema version
+// (GuidanceResolution=1), idempotent, and nil-receiver-safe so callers can
+// chain artifact.From(ctx).SetGuidanceResolution(...) without a nil check.
+func (b *Bundle) SetGuidanceResolution(ctx context.Context, stage guidance.BundleStage) {
+	if b == nil {
+		return
+	}
+	b.Snapshot(ctx, "guidance.resolved", "09-guidance.json", stage)
+	b.AddSchemaVersion("GuidanceResolution", 1)
 }
 
 // SnapshotRaw enqueues raw bytes (no Marshal) under filename. Used by gateway

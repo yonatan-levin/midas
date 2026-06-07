@@ -284,6 +284,14 @@ type ValuationConfig struct {
 	DCFMinGrowthRate      float64 `mapstructure:"dcf_min_growth_rate"`     // Minimum allowed growth rate
 	DCFIterationTolerance float64 `mapstructure:"dcf_iteration_tolerance"` // Tolerance for implied growth calculations
 	DCFMaxIterations      int     `mapstructure:"dcf_max_iterations"`      // Max iterations for implied growth calculations
+
+	// GuidanceRoot is the directory root for Layer-B Phase-2 guidance-artifact
+	// fixtures (internal/services/valuation/guidance.Loader). Empty (the
+	// PRODUCTION DEFAULT) disables guidance entirely — every valuation takes the
+	// absent path and is byte-identical to the Layer-A 4.7 engine (NF1). Phase 3
+	// flips this to the real directory once an extraction tool produces
+	// artifacts. Fixtures live under testdata/guidance for Phase 2.
+	GuidanceRoot string `mapstructure:"guidance_root"`
 }
 
 // SchedulerConfig holds scheduler configuration
@@ -567,6 +575,10 @@ func setDefaults() {
 	viper.SetDefault("valuation.dcf_min_growth_rate", -0.3)       // -30% min growth
 	viper.SetDefault("valuation.dcf_iteration_tolerance", 0.0001) // 0.01% tolerance
 	viper.SetDefault("valuation.dcf_max_iterations", 100)         // 100 max iterations
+
+	// Layer B Phase 2: guidance-artifact fixture root. Empty = disabled (the
+	// production default ⇒ absent path ⇒ byte-identical to the 4.7 engine, NF1).
+	viper.SetDefault("valuation.guidance_root", "")
 
 	// DataCleaner defaults
 	viper.SetDefault("datacleaner.rules_path", "./config/datacleaner/rules.json")
