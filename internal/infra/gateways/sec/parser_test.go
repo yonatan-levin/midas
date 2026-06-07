@@ -771,6 +771,9 @@ func TestParser_ParsePeriodData_AllXBRLTags(t *testing.T) {
 		"InventoryNet":                          6331000000,
 		"DeferredTaxAssetsNet":                  17852000000,
 		"OperatingLeaseLiability":               11087000000,
+		// A6 (TDB-2): right-of-use asset (asset-side mirror of the operating
+		// lease liability). Must be stored on OperatingLeaseRightOfUseAsset.
+		"OperatingLeaseRightOfUseAsset": 10500000000,
 		// M-1d: equity bridge correction terms (primary XBRL tags).
 		"MinorityInterest":    250000000,
 		"PreferredStockValue": 100000000,
@@ -813,6 +816,8 @@ func TestParser_ParsePeriodData_AllXBRLTags(t *testing.T) {
 	assert.Equal(t, 6331000000.0, result.Inventory)
 	assert.Equal(t, 17852000000.0, result.DeferredTaxAssets)
 	assert.Equal(t, 11087000000.0, result.OperatingLeaseLiability)
+	// A6 (TDB-2): the right-of-use asset must be stored on its own field.
+	assert.Equal(t, 10500000000.0, result.OperatingLeaseRightOfUseAsset)
 
 	// Verify M-1d equity bridge correction terms (primary XBRL tags).
 	assert.Equal(t, 250000000.0, result.MinorityInterest)

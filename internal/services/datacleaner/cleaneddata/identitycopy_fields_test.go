@@ -28,6 +28,7 @@ import (
 // Exempt fields are view-only (no matching entity field):
 //   - ViewKind: set by accessors, not by identityCopy.
 //   - DebtLikeClaims: InvestedCapital-only, populated by overlays.
+//   - ExcessCash: InvestedCapital-only (TDB-2 A7), populated by overlays.
 //
 // When a future field is added to FinancialDataView, the developer must
 // EITHER update identityCopy to copy the entity counterpart OR add the
@@ -37,6 +38,7 @@ func TestIdentityCopy_CoversEveryViewField(t *testing.T) {
 	exempt := map[string]bool{
 		"ViewKind":       true, // set by accessors
 		"DebtLikeClaims": true, // InvestedCapital-only, populated by overlays
+		"ExcessCash":     true, // TDB-2 A7: InvestedCapital-only, overlay-derived
 	}
 
 	// Build a *entities.FinancialData with a deliberately distinct non-

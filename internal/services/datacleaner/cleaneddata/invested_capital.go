@@ -9,6 +9,8 @@ import "github.com/midas/dcf-valuation-api/internal/core/entities"
 //   - B2 pension underfunding      (Field:"TotalDebt")       → DebtLikeClaims += Amount
 //   - B3 contingent liabilities    (Field:"DebtLikeClaims")  → DebtLikeClaims += Amount  (Phase 4 routing intent realized here)
 //   - A1 goodwill exclusion        (Field:"TotalAssets")     → TotalAssets -= Amount; Goodwill = 0 (Damodaran convention)
+//   - A6 ROU exclusion (TDB-2)     (Field:"InvestedCapitalExclusion") → TotalAssets -= Amount (Goodwill NOT zeroed)
+//   - A7 excess cash (TDB-2)       (Field:"ExcessCash", Replacement)  → ExcessCash = Amount (informational; no bridge effect)
 //
 // AmountSemantics governs the operator: Incremental adds on top of the
 // current value (default for all current overlays); Replacement overwrites;
@@ -84,6 +86,13 @@ func applyOverlayToView(v *FinancialDataView, o entities.OverlaySpec) {
 		v.TotalAssets += signed
 		v.Goodwill = 0
 		v.TangibleAssets = v.TotalAssets - v.OtherIntangibles
+	case "InvestedCapitalExclusion":
+		// A6 ROU exclusion (TDB-2). Subtract from TotalAssets WITHOUT zeroing
+		// Goodwill — distinct from the A1 "TotalAssets" arm, which is
+		// goodwill-specific. TangibleAssets is recomputed from the reduced
+		// TotalAssets minus BOTH intangible buckets (spec §3.2).
+		v.TotalAssets += signed
+		v.TangibleAssets = v.TotalAssets - v.Goodwill - v.OtherIntangibles
 	default:
 		// silently skip; future overlays added before the view
 		// is updated fall through here.
@@ -100,5 +109,10 @@ func applyReplacement(v *FinancialDataView, o entities.OverlaySpec) {
 		v.TotalAssets = o.Amount
 		v.Goodwill = 0
 		v.TangibleAssets = v.TotalAssets - v.OtherIntangibles
+	case "ExcessCash":
+		// A7 excess-cash identification (TDB-2). Replacement semantics: SET the
+		// view's ExcessCash to the identified amount. Informational only — no
+		// other field (TotalAssets / DebtLikeClaims / bridge terms) changes.
+		v.ExcessCash = o.Amount
 	}
 }

@@ -20,6 +20,7 @@
 //	  - DeferredTaxAssets, ValuationAllowance
 //	  - OperatingLeaseLiability, OperatingLeaseLiabilityCurrent,
 //	    OperatingLeaseLiabilityNoncurrent
+//	  - OperatingLeaseRightOfUseAsset (A6 ROU asset; asset-side mirror of the lease)
 //	  - PensionLiabilities, OPEBLiability, PensionPlanAssets,
 //	    ProjectedBenefitObligation
 //	  - ContingentLiabilities, EnvironmentalLiabilities, LitigationLiabilities
@@ -229,6 +230,9 @@ func applyFXRate(fd *entities.FinancialData, rate float64) {
 	fd.Inventory *= rate
 	fd.DeadInventoryWritedown *= rate
 	fd.CashAndCashEquivalents *= rate
+	// A6 (TDB-2): right-of-use asset is a monetary balance-sheet asset; FX-convert
+	// it so FPI tickers (TSM, ASML, …) get a USD ROU value for the A6 overlay.
+	fd.OperatingLeaseRightOfUseAsset *= rate
 
 	// Balance sheet — liabilities & equity
 	fd.CurrentLiabilities *= rate

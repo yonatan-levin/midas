@@ -9,7 +9,7 @@
   "phases_recorded": [],
   "redactions_applied": [],
   "schema_versions": {
-    "FinancialData": 9,
+    "FinancialData": 10,
     "GrowthEstimate": 1,
     "ValuationResult": 2,
     "FairValueResponse": 1,
