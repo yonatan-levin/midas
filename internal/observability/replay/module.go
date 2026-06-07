@@ -103,6 +103,14 @@ func Module(bundleDir string, opts Options) fx.Option {
 			return NewBundleYFinanceGateway(bundleDir, opts.Mode)
 		}),
 
+		// Layer B Phase 2: bundle-backed guidance source. Injected into
+		// replayValuationService (below) which calls SetGuidanceSource so the
+		// engine reads the captured 09-guidance.json instead of the live fixture
+		// directory (NF3). Absent stage ⇒ absent path (old bundles unaffected).
+		fx.Provide(func() *BundleGuidanceGateway {
+			return NewBundleGuidanceGateway(bundleDir)
+		}),
+
 		// --------------------------------------------------------------
 		// NotFound repos. Replace production sqlite/cache repos. All
 		// niladic — no DB or Redis side effects.
@@ -444,6 +452,7 @@ func replayValuationService(
 	calcEmitter *calclog.Emitter,
 	clock valuation.Clock,
 	profileRegistry profile.Registry,
+	guidanceGateway *BundleGuidanceGateway,
 ) *valuation.Service {
 	svc := valuation.NewService(
 		financialRepo,
@@ -462,6 +471,12 @@ func replayValuationService(
 	// RPL-2k (R3 Stage O.9): macroGateway comes through fx.Provide which
 	// never produces nil. The defensive check was dead code.
 	svc.SetMacroGateway(macroGateway)
+	// Layer B Phase 2: replace the production guidance loader (which would scan
+	// the live fixture directory) with a bundle-backed source reading the
+	// captured 09-guidance.json (NF3 hermeticity). An old bundle without the
+	// stage resolves to Absent ⇒ the absent path ⇒ bit-for-bit with the
+	// original valuation.
+	svc.SetGuidanceSource(guidanceGateway)
 	// YFinanceGateway is wired in the fx.Invoke hook after this constructor
 	// returns; doing it here would require an extra parameter the production
 	// constructor doesn't have, so we keep the post-construct hook for
