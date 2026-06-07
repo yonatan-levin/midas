@@ -23,6 +23,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/datafetcher"
 	growthsvc "github.com/midas/dcf-valuation-api/internal/services/growth"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/guidance"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/models"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/params"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
@@ -70,6 +71,25 @@ type Service struct {
 	// this to wallClock{} so every existing test call site is unaffected;
 	// SetClock allows replay to override post-construction.
 	clock Clock
+
+	// guidanceSource resolves the Layer-B Phase-2 guidance artifact for a
+	// (CIK, as-of) valuation (spec Decision 5). NewService binds it to a
+	// *guidance.Loader rooted at cfg.Valuation.GuidanceRoot — EMPTY in
+	// production, so Load always returns Absent ⇒ the resolver produces no
+	// anchor ⇒ applyReinvestmentModel is byte-identical to Layer A (NF1). The
+	// replay path swaps this for a bundle-backed source via SetGuidanceSource
+	// so replay consumes the captured 09-guidance.json rather than the live
+	// fixture directory (NF3). Never nil after NewService.
+	guidanceSource guidanceSource
+}
+
+// guidanceSource is the seam through which performValuation obtains a guidance
+// resolution. Production binds a *guidance.Loader (live fixture directory,
+// empty-root-disabled); replay binds a bundle-backed source reading the
+// captured 09-guidance.json. Kept as a one-method interface so replay can
+// inject a hermetic source without the live filesystem (NF3).
+type guidanceSource interface {
+	Load(cik string, asOf time.Time) (guidance.Resolution, error)
 }
 
 // log returns the appropriate logger for the current execution context.
@@ -182,7 +202,35 @@ func NewService(
 		// don't need to thread anything new because the default is identical
 		// to a direct time.Now() read.
 		clock: NewWallClock(),
+		// Layer B Phase 2: bind the guidance loader to the configured root.
+		// PRODUCTION ships an empty root ⇒ Load always returns Absent ⇒ no
+		// anchor ⇒ byte-identical to the 4.7 engine (NF1). cfg is guaranteed
+		// non-nil by the production constructor; guard for the test paths that
+		// pass a zero-value config.
+		guidanceSource: guidance.NewLoader(guidanceRootFromConfig(cfg)),
 	}
+}
+
+// guidanceRootFromConfig extracts the guidance fixture root from config,
+// tolerating a nil config (some unit-test call sites). A nil config or an unset
+// root yields "" ⇒ guidance disabled (NF1).
+func guidanceRootFromConfig(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Valuation.GuidanceRoot
+}
+
+// SetGuidanceSource overrides the guidance source post-construction. Used by
+// the replay path to inject a bundle-backed source that reads the captured
+// 09-guidance.json (NF3 hermeticity) instead of scanning the live fixture
+// directory. Passing nil is a no-op so a caller that always sets but
+// occasionally passes nil cannot brick the service (mirrors SetClock).
+func (s *Service) SetGuidanceSource(src guidanceSource) {
+	if src == nil {
+		return
+	}
+	s.guidanceSource = src
 }
 
 // SetClock injects a Clock implementation used for the four wall-clock reads
@@ -932,6 +980,25 @@ func (s *Service) performValuation(
 		}
 	}
 
+	// --- Layer B Phase 2: resolve guidance + assumption authority. ---
+	//
+	// Runs AFTER profile resolution and BEFORE DCF-input construction (spec
+	// §"data-flow placement"). The loader is keyed by (CIK, as-of=s.clock.Now()):
+	// the existing Clock seam pins replay determinism (replay binds the clock to
+	// manifest.started_at). On the PRODUCTION default (empty GuidanceRoot) the
+	// loader returns Absent ⇒ no anchors ⇒ the DCF path below is byte-identical
+	// to the Layer-A 4.7 engine (NF1 — the master invariant).
+	//
+	// UserOverriddenKnobs is empty in Phase 2 (params carries no per-near-term-
+	// knob override yet), but is threaded so the §9 level-1 precedence is
+	// structurally correct and future-proof. A content-hash MISMATCH on a present
+	// fixture propagates as a hard error (F2); every other fixture failure
+	// degrades to the absent path inside the resolver (NF4).
+	guidanceResolution, err := s.resolveGuidance(ctx, latestFinancialData.CIK, s.clock.Now(), resolvedProfile, nil)
+	if err != nil {
+		return nil, fmt.Errorf("guidance resolution failed: %w", err)
+	}
+
 	// --- Request-valuation-overrides (T4): resolve the EffectiveValuationParams. ---
 	//
 	// §3.7 ordering: the WACC-independent knobs (beta/rf/MRP/tax, growth staging,
@@ -1218,6 +1285,14 @@ func (s *Service) performValuation(
 				traceCopy := resolutionTrace
 				altResult.ResolutionTrace = &traceCopy
 			}
+			// Layer B Phase 2: surface guidance source tags + per-assumption
+			// sources on the alt-model path too. Guidance is DCF-path-only — it
+			// NEVER anchors a DDM/FFO/revenue_multiple value (those values are
+			// untouched). Both calls are strict no-ops on the absent path (empty
+			// warnings + empty Sources ⇒ omitted field), so DDM/FFO/RM responses
+			// stay byte-identical to the 4.7 engine (NF1).
+			altResult.Warnings = append(altResult.Warnings, guidanceResolution.Warnings...)
+			stampAssumptionSources(altResult, guidanceResolution.Sources)
 			return altResult, nil
 		}
 	}
@@ -1376,7 +1451,7 @@ func (s *Service) performValuation(
 	// Tier 2 Layer A: derive the reinvestment / operating-leverage trajectory
 	// from the resolved profile and feed it into the DCF (spec §5-§7). No-op on
 	// the legacy proportional path; returns audit source lines for result.Warnings.
-	reinvestmentWarnings := s.applyReinvestmentModel(ctx, &dcfInputs, resolvedProfile, baseOI, historicalData, growthRatesForDCF)
+	reinvestmentWarnings := s.applyReinvestmentModel(ctx, &dcfInputs, resolvedProfile, baseOI, historicalData, growthRatesForDCF, guidanceResolution.Anchors)
 
 	dcfResult, err := dcf.CalculateDCF(dcfInputs)
 	if err != nil {
@@ -1597,6 +1672,14 @@ func (s *Service) performValuation(
 			result.Warnings = append(result.Warnings, w)
 		}
 	}
+
+	// Layer B Phase 2: surface the guidance source tags (RM-1 / Layer-A
+	// convention) and stamp the per-assumption authority sources. Both are
+	// strict no-ops on the absent path: resolveGuidance returns no warnings and
+	// an empty Sources map when guidance is disabled/absent, so result.Warnings
+	// and the omitempty assumption_sources field stay byte-identical (NF1).
+	result.Warnings = append(result.Warnings, guidanceResolution.Warnings...)
+	stampAssumptionSources(result, guidanceResolution.Sources)
 
 	// BUG-015: surface the TTM operating-income base provenance when the OI base
 	// was annualized (quarter-latest path). The source line is always emitted in

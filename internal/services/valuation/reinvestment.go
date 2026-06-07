@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/authority"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 	"github.com/midas/dcf-valuation-api/pkg/finance/dcf"
 )
@@ -40,6 +41,7 @@ func (s *Service) applyReinvestmentModel(
 	baseOI float64,
 	hist *entities.HistoricalFinancialData,
 	growthRates []float64,
+	anchors authority.NearTermAnchors,
 ) []string {
 	if rp == nil ||
 		rp.ReinvestmentMethod == "" ||
@@ -79,6 +81,13 @@ func (s *Service) applyReinvestmentModel(
 	in.TargetOperatingMargin = targetMargin
 	in.MarginConvergenceYears = rp.MarginConvergenceYears
 
+	// Layer-B Phase-2 guidance anchors (spec Decision 6). Strict NO-OP when
+	// anchors is empty — every branch below is gated on a non-nil anchor
+	// pointer, so the reinvestment inputs stay byte-identical to Layer A (NF1).
+	// The anchors touch ONLY year 1 (and optionally year 2); the §9.3
+	// near-term-prefix invariant is asserted by applyNearTermAnchors.
+	applyNearTermAnchors(in, anchors)
+
 	s.log(ctx).Info("Using Layer-A reinvestment / operating-leverage DCF model",
 		zap.String("ticker", hist.Ticker),
 		zap.String("profile_id", rp.ProfileID),
@@ -111,4 +120,103 @@ func (s *Service) applyReinvestmentModel(
 		"reinvestment_model: method=%s base_margin=%.1f%% target_margin=%.1f%% sales_to_capital=%.2f→%.2f fade=%dy",
 		rp.ReinvestmentMethod, baseMargin*100, targetMargin*100,
 		rp.SalesToCapitalStart, rp.SalesToCapitalTarget, rp.ReinvestmentFadeYears)}
+}
+
+// applyNearTermAnchors injects the Layer-B Phase-2 guidance midpoint anchors
+// into the already-populated reinvestment dcf.Inputs (spec Decision 6). It is a
+// STRICT NO-OP when anchors is empty: every mutation is gated on a non-nil
+// anchor pointer, so an absent-guidance valuation leaves `in` byte-identical to
+// the Layer-A path (NF1 — the master invariant).
+//
+// Mechanic (each knob, year-1 and optionally year-2):
+//   - RevenueGrowthYearN ⇒ overrides in.RevenueGrowthRates[N-1] (the engine reads
+//     this slice per year). The slice is CLONED before the first write so the
+//     caller's growth-rate slice (also stamped on result.GrowthRates) is never
+//     mutated in place.
+//   - OperatingMarginYear1 ⇒ seeds the year-1 margin start by setting
+//     in.BaseOperatingMargin to the anchor; the convergence schedule then
+//     proceeds from the anchored start toward TargetOperatingMargin (later years
+//     still converge). OperatingMarginYear2 is not directly seedable on the
+//     existing convergence curve without an engine change, so Phase 2 anchors
+//     only the year-1 margin start (the year-2 margin pointer is reserved).
+//   - CapExYearN (absolute USD) ⇒ in.NearTermReinvestmentOverride[N] replaces the
+//     model-computed reinvestment for that year ONLY (the additive engine seam).
+//
+// §9.3 DOMINANCE GUARDRAIL (structural): anchors touch AT MOST year 1 and year 2.
+// The function asserts the anchored year set is a strict near-term prefix —
+// authority.RefuseAnchorIndex(idx) must be false for every anchored index. The
+// NearTermAnchors type structurally cannot carry a year-3+ anchor (it has only
+// Year1/Year2 fields), so this is a belt-and-suspenders panic that can only fire
+// if the type grows an out-of-prefix field without updating the guardrail.
+func applyNearTermAnchors(in *dcf.Inputs, anchors authority.NearTermAnchors) {
+	if anchors.IsEmpty() {
+		return // strict no-op — NF1 byte-identity
+	}
+
+	// Revenue-growth anchors mutate a CLONE of the growth slice (never the
+	// caller's aliased slice). Clone lazily on the first growth anchor.
+	growthCloned := false
+	setGrowth := func(yearIndex int, v float64) {
+		assertNearTermPrefix(yearIndex)
+		if !growthCloned {
+			cloned := make([]float64, len(in.RevenueGrowthRates))
+			copy(cloned, in.RevenueGrowthRates)
+			in.RevenueGrowthRates = cloned
+			growthCloned = true
+		}
+		if yearIndex < len(in.RevenueGrowthRates) {
+			in.RevenueGrowthRates[yearIndex] = v
+		}
+	}
+	if anchors.RevenueGrowthYear1 != nil {
+		setGrowth(0, *anchors.RevenueGrowthYear1)
+	}
+	if anchors.RevenueGrowthYear2 != nil {
+		setGrowth(1, *anchors.RevenueGrowthYear2)
+	}
+
+	// Operating-margin year-1 anchor seeds the convergence start.
+	if anchors.OperatingMarginYear1 != nil {
+		assertNearTermPrefix(0)
+		in.BaseOperatingMargin = *anchors.OperatingMarginYear1
+		// Keep the only-expand margin guard coherent: never let the anchored
+		// start exceed the target (which would invert the convergence). Raise
+		// the target to the anchor so the year-1 margin is honored and later
+		// years hold (rather than contract) — consistent with the §"margin
+		// guard" only-expand contract.
+		if in.TargetOperatingMargin < in.BaseOperatingMargin {
+			in.TargetOperatingMargin = in.BaseOperatingMargin
+		}
+	}
+
+	// CapEx absolute anchors become per-year reinvestment overrides (year 1–2).
+	if anchors.CapExYear1 != nil {
+		assertNearTermPrefix(0)
+		ensureReinvestmentOverride(in)[1] = *anchors.CapExYear1
+	}
+	if anchors.CapExYear2 != nil {
+		assertNearTermPrefix(1)
+		ensureReinvestmentOverride(in)[2] = *anchors.CapExYear2
+	}
+}
+
+// assertNearTermPrefix panics if yearIndex is outside the §9.3 near-term prefix
+// (year 3+). The authority resolver already refuses to PRODUCE such an anchor;
+// this is the post-anchor structural assertion at the consumption seam (spec
+// §"§9.3 dominance guardrail enforced, not just asserted").
+func assertNearTermPrefix(yearIndex int) {
+	if authority.RefuseAnchorIndex(yearIndex) {
+		panic(fmt.Sprintf(
+			"guidance anchor at year index %d violates the §9.3 near-term-prefix guardrail (max index %d)",
+			yearIndex, authority.MaxAnchorYearIndex))
+	}
+}
+
+// ensureReinvestmentOverride lazily allocates the per-year reinvestment override
+// map on the inputs and returns it.
+func ensureReinvestmentOverride(in *dcf.Inputs) map[int]float64 {
+	if in.NearTermReinvestmentOverride == nil {
+		in.NearTermReinvestmentOverride = map[int]float64{}
+	}
+	return in.NearTermReinvestmentOverride
 }

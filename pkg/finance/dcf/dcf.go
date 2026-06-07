@@ -80,6 +80,18 @@ type Inputs struct {
 	BaseOperatingMargin    float64 // = BaseOperatingIncome / BaseRevenue (pre-tax operating margin)
 	TargetOperatingMargin  float64 // archetype/industry-capped ceiling
 	MarginConvergenceYears int     // years over which margin expands base → target
+
+	// NearTermReinvestmentOverride is the Layer-B Phase-2 guidance anchor seam
+	// (spec Decision 6). It maps a 1-based projection YEAR to an ABSOLUTE
+	// reinvestment amount that REPLACES the model-computed reinvestment for that
+	// year ONLY — and is honored ONLY on the reinvestment path (useReinv). It is
+	// the mechanism by which a high-confidence CapEx guidance midpoint steers the
+	// near-term (year 1–2) reinvestment without touching the rest of the
+	// trajectory or the terminal. nil/empty ⇒ NO override ⇒ byte-identical to
+	// the Layer-A reinvestment projection (NF1). The caller
+	// (valuation.applyReinvestmentModel) refuses to populate any year > 2 (§9.3
+	// near-term-prefix guardrail), so the engine never sees a year-3+ key.
+	NearTermReinvestmentOverride map[int]float64
 }
 
 // Projection represents cash flow projection for a single year
@@ -184,6 +196,15 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 				result.Warnings = append(result.Warnings,
 					"maintenance_capex_floor: projected reinvestment clamped up to the maintenance-capex floor; FCF reflects the floor, not the lower modeled reinvestment")
 				floorClampWarned = true
+			}
+			// Layer-B Phase-2 guidance anchor: a near-term (year 1–2)
+			// reinvestment override REPLACES the model-computed reinvestment for
+			// that year only (spec Decision 6). nil map ⇒ no override ⇒
+			// byte-identical to Layer A (NF1). The override deliberately
+			// bypasses the maintenance-capex floor: a management-guided absolute
+			// CapEx figure is authoritative for the near term.
+			if ov, ok := inputs.NearTermReinvestmentOverride[year]; ok {
+				reinvest = ov
 			}
 			freeCashFlow := nopat - reinvest
 
