@@ -715,7 +715,7 @@
                 "calculation_version": {
                     "description": "Engine version that produced this result",
                     "type": "string",
-                    "example": "4.2"
+                    "example": "4.6"
                 },
                 "currency": {
                     "description": "Currency is the ISO-4217 code that dcf_value_per_share and\ntangible_value_per_share are denominated in. Always \"USD\" — the\nvaluation service FX-converts each period's reporting-currency\nmonetary fields to USD via Phase B9 of the IFRS-FPI plan\n(docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md), so\nAPI consumers MUST NOT re-convert. Surfaced so a downstream client\ncan display \"USD\" alongside the per-share value rather than guessing.",

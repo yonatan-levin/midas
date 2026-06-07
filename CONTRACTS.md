@@ -106,7 +106,7 @@ so the guard is explicit — they would otherwise propagate into WACC/DCF and co
 | `data_quality_score` | float | Data quality score (0-100) |
 | `data_quality_grade` | string | Quality grade (A/B/C/D/F) |
 | `calculation_method` | string | Valuation model used: `"multi_stage_dcf"`, `"ddm"`, `"ffo"`, or `"revenue_multiple"` (optional) |
-| `calculation_version` | string | Engine version (e.g., `"4.5"`) (optional) |
+| `calculation_version` | string | Engine version (e.g., `"4.6"`) (optional) |
 | `warnings` | string[] | Data quality or assumption warnings (optional, omitted if empty) |
 | `sanity_check` | object | Multiples cross-check: `implied_pe`, `sector_median_pe`, `implied_ev_ebitda`, `sector_median_ev_ebitda`, `is_reasonable`, `flags` (optional) |
 | `industry` | object | Dual classification — `sic_code`, `sic`, `heuristic_code`, `heuristic_name`, `match` flag for drift detection (optional) |
@@ -233,7 +233,7 @@ Out-of-range legacy overrides return 400 `INVALID_PARAMETER`. Structured `option
       "data_quality_score": 92,
       "data_quality_grade": "A",
       "calculation_method": "multi_stage_dcf",
-      "calculation_version": "4.5",
+      "calculation_version": "4.6",
       "assumption_profile": "maturing_tech_dividend:growth",
       "sanity_check": {
         "implied_pe": 28.5,

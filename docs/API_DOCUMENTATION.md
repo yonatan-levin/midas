@@ -276,7 +276,7 @@ curl -H "X-API-Key: <key>" \
   "data_quality_score": 90,
   "data_quality_grade": "A",
   "calculation_method": "multi_stage_dcf",
-  "calculation_version": "4.5",
+  "calculation_version": "4.6",
   "warnings": [],
   "sanity_check": {
     "implied_pe": 18.5,
@@ -312,7 +312,7 @@ curl -H "X-API-Key: <key>" \
   "ncav_per_share": -0.765,
   "graham_floor_per_share": 0,
   "calculation_method": "revenue_multiple",
-  "calculation_version": "4.4",
+  "calculation_version": "4.6",
   "current_price": 11.20,
   "warnings": [
     "Applied 6.5x EV/Revenue multiple for MFG_SEMI sector",
@@ -362,7 +362,7 @@ When `total_liabilities` cannot be sourced from the underlying filings, the four
 | `data_quality_score` | number | 0-100 score reflecting data freshness and completeness — may be fractional (e.g. `85.5`), not strictly integer (see [§3.2.2](#322-data-quality-score)). |
 | `data_quality_grade` | string | Letter grade derived from `data_quality_score` (see [§3.2.2](#322-data-quality-score)). |
 | `calculation_method` | string | Which valuation model fired (see [§3.2.3](#323-calculation-method-values)). |
-| `calculation_version` | string | Engine math version. Bumped when model math changes; consumers can use this to detect engine upgrades affecting historical comparisons. Current engine: `4.4`. |
+| `calculation_version` | string | Engine math version. Bumped when model math changes; consumers can use this to detect engine upgrades affecting historical comparisons. Current engine: `4.6`. |
 | `assumption_profile` | string | Resolved assumption-profile ID in `archetype:maturity` form (e.g. `mature_large_bank:mature`). Identifies the calibration record (DCF horizon, terminal method, discount method, growth caps) the engine applied to this company. **Omitted** when no profile registry is wired (legacy/test paths). See [§3.2.7](#327-assumption_profile--resolution_trace). |
 | `resolution_trace` | object | Structured audit trail of *how* the assumption profile was selected — matched rule, fallback reason, config hash, missing facts. See [§3.2.7](#327-assumption_profile--resolution_trace). |
 | `sanity_check` | object | Cross-validation against sector median multiples (see [§3.2.4](#324-sanity-check)). |
@@ -538,7 +538,7 @@ Same `FairValueResponse` shape as GET, with one additional field when overrides 
   "wacc": 0.092,
   "dcf_value_per_share": 162.10,
   "calculation_method": "multi_stage_dcf",
-  "calculation_version": "4.5",
+  "calculation_version": "4.6",
   "applied_overrides": {
     "tax_rate":    { "value": 0.21,  "source": "request" },
     "horizon_years": { "value": 7,   "source": "request" }
@@ -632,7 +632,7 @@ The response has up to three top-level keys: `results[]` (successful valuations,
       "wacc": 0.092,
       "dcf_value_per_share": 156.42,
       "calculation_method": "multi_stage_dcf",
-      "calculation_version": "4.4",
+      "calculation_version": "4.6",
       "data_quality_score": 90,
       "data_quality_grade": "A",
       "...": "...full FairValueResponse fields..."

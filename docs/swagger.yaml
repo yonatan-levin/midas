@@ -292,7 +292,7 @@ definitions:
         type: string
       calculation_version:
         description: Engine version that produced this result
-        example: "4.2"
+        example: "4.6"
         type: string
       currency:
         description: |-
