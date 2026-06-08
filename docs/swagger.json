@@ -361,6 +361,19 @@
         }
     },
     "definitions": {
+        "github_com_midas_dcf-valuation-api_internal_core_entities.AssumptionSourceValue": {
+            "type": "object",
+            "properties": {
+                "detail": {
+                    "description": "Detail is an optional provenance string, e.g.\n\"accession=0000002488-26-000012 period=FY2026 conf=0.82 midpoint=$1.50B\".",
+                    "type": "string"
+                },
+                "source": {
+                    "description": "Source is the precedence layer that supplied this assumption's value.",
+                    "type": "string"
+                }
+            }
+        },
         "github_com_midas_dcf-valuation-api_internal_core_entities.SanityCheck": {
             "type": "object",
             "properties": {
@@ -601,6 +614,52 @@
                 }
             }
         },
+        "internal_api_v1_handlers.CleaningAdjustment": {
+            "description": "One datacleaner normalization adjustment that fired on the inputs",
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "description": "Amount is the signed monetary delta the adjuster applied, in USD.",
+                    "type": "number",
+                    "example": 1234.5
+                },
+                "category": {
+                    "description": "Category is the rule family: \"asset_quality\" | \"liability_completeness\" |\n\"earnings_normalization\".",
+                    "type": "string",
+                    "example": "asset_quality"
+                },
+                "from_account": {
+                    "description": "FromAccount is the source balance-sheet / income-statement line item.",
+                    "type": "string",
+                    "example": "Goodwill"
+                },
+                "percentage": {
+                    "description": "Percentage is the proportional change relative to the pre-adjustment\nvalue, when the adjuster reports one (Restater family). Omitted otherwise.",
+                    "type": "number",
+                    "example": 12.5
+                },
+                "reasoning": {
+                    "description": "Reasoning is the human-readable explanation of why the adjuster fired.",
+                    "type": "string",
+                    "example": "Excluded goodwill of $1234.5M from invested capital"
+                },
+                "rule": {
+                    "description": "Rule is the config rule identifier that fired (entities.Adjustment.RuleID),\ne.g. \"goodwill_exclusion\", \"contingent_liabilities\", \"right_of_use_assets\".",
+                    "type": "string",
+                    "example": "goodwill_exclusion"
+                },
+                "to_account": {
+                    "description": "ToAccount is the destination line item for reclassifications; empty for\noverlays and pure exclusions.",
+                    "type": "string",
+                    "example": "EstimatedLiabilities"
+                },
+                "type": {
+                    "description": "Type is the adjustment kind: \"exclude\" | \"writedown\" | \"valuation_allowance\" |\n\"reclassify\" | \"treat_as_debt\" | \"probability_weighted\" | \"flag\".",
+                    "type": "string",
+                    "example": "exclude"
+                }
+            }
+        },
         "internal_api_v1_handlers.DetailedHealthCheckResponse": {
             "type": "object",
             "properties": {
@@ -707,6 +766,13 @@
                     "type": "string",
                     "example": "mature_large_bank:mature"
                 },
+                "assumption_sources": {
+                    "description": "AssumptionSources records, per near-term assumption (e.g. \"capex_year1\"),\nwhich authority level supplied the final value — one of user_override |\nguidance | profile | historical | default — with a provenance detail\n(Layer-B Phase-2 §9.2). Populated ONLY when a non-default source fires (e.g.\na high-confidence guidance fixture anchors year-1); absent (omitempty) on the\ndefault path, so guidance-free responses stay byte-identical to the 4.7\nengine. Example:\n  \"assumption_sources\": {\n    \"capex_year1\": { \"source\": \"guidance\", \"detail\": \"accession=… conf=0.82 midpoint=$1.50B\" }\n  }",
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/github_com_midas_dcf-valuation-api_internal_core_entities.AssumptionSourceValue"
+                    }
+                },
                 "calculation_method": {
                     "description": "Model used: multi_stage_dcf, ddm, ffo, revenue_multiple",
                     "type": "string",
@@ -716,6 +782,13 @@
                     "description": "Engine version that produced this result",
                     "type": "string",
                     "example": "4.6"
+                },
+                "cleaning_adjustments": {
+                    "description": "CleaningAdjustments is the datacleaner audit trail: one entry per\nnormalization adjuster that FIRED on this company's financials (A1–C7,\nthe B1/B2/B3 overlays, and the TDB-2 A6/A7 + TDB-12 contingent\noverlays), projected from result.CleaningAdjustments via\nadjustmentsFromLedger. Lets consumers see which restatements/overlays\nshaped the valuation inputs (e.g. lease capitalization, inventory\nrestatement, excess-cash exclusion). Omitted (omitempty) when no\nadjuster fired, so the default no-adjustment response stays\nbyte-identical to the pre-TDB-11 wire shape. Fired-only — the\nprojection emits only Applied==true entries.",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_api_v1_handlers.CleaningAdjustment"
+                    }
                 },
                 "currency": {
                     "description": "Currency is the ISO-4217 code that dcf_value_per_share and\ntangible_value_per_share are denominated in. Always \"USD\" — the\nvaluation service FX-converts each period's reporting-currency\nmonetary fields to USD via Phase B9 of the IFRS-FPI plan\n(docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md), so\nAPI consumers MUST NOT re-convert. Surfaced so a downstream client\ncan display \"USD\" alongside the per-share value rather than guessing.",

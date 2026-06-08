@@ -268,6 +268,49 @@ type FairValueResponse struct {
 	//     "capex_year1": { "source": "guidance", "detail": "accession=… conf=0.82 midpoint=$1.50B" }
 	//   }
 	AssumptionSources map[string]entities.AssumptionSourceValue `json:"assumption_sources,omitempty"`
+
+	// CleaningAdjustments is the datacleaner audit trail: one entry per
+	// normalization adjuster that FIRED on this company's financials (A1–C7,
+	// the B1/B2/B3 overlays, and the TDB-2 A6/A7 + TDB-12 contingent
+	// overlays), projected from result.CleaningAdjustments via
+	// adjustmentsFromLedger. Lets consumers see which restatements/overlays
+	// shaped the valuation inputs (e.g. lease capitalization, inventory
+	// restatement, excess-cash exclusion). Omitted (omitempty) when no
+	// adjuster fired, so the default no-adjustment response stays
+	// byte-identical to the pre-TDB-11 wire shape. Fired-only — the
+	// projection emits only Applied==true entries.
+	CleaningAdjustments []CleaningAdjustment `json:"cleaning_adjustments,omitempty"`
+}
+
+// CleaningAdjustment is the per-adjuster payload in the cleaning_adjustments
+// response array. It projects the audit-relevant fields of an
+// entities.Adjustment (the cleaner's internal carrier) into the transport
+// layer, omitting bookkeeping fields (ID, Timestamp, Applied) that carry no
+// value to API consumers. buildFairValueResponse maps entities → this type.
+//
+// @Description One datacleaner normalization adjustment that fired on the inputs
+type CleaningAdjustment struct {
+	// Rule is the config rule identifier that fired (entities.Adjustment.RuleID),
+	// e.g. "goodwill_exclusion", "contingent_liabilities", "right_of_use_assets".
+	Rule string `json:"rule" example:"goodwill_exclusion"`
+	// Category is the rule family: "asset_quality" | "liability_completeness" |
+	// "earnings_normalization".
+	Category string `json:"category,omitempty" example:"asset_quality"`
+	// Type is the adjustment kind: "exclude" | "writedown" | "valuation_allowance" |
+	// "reclassify" | "treat_as_debt" | "probability_weighted" | "flag".
+	Type string `json:"type,omitempty" example:"exclude"`
+	// FromAccount is the source balance-sheet / income-statement line item.
+	FromAccount string `json:"from_account,omitempty" example:"Goodwill"`
+	// ToAccount is the destination line item for reclassifications; empty for
+	// overlays and pure exclusions.
+	ToAccount string `json:"to_account,omitempty" example:"EstimatedLiabilities"`
+	// Amount is the signed monetary delta the adjuster applied, in USD.
+	Amount float64 `json:"amount,omitempty" example:"1234.5"`
+	// Percentage is the proportional change relative to the pre-adjustment
+	// value, when the adjuster reports one (Restater family). Omitted otherwise.
+	Percentage float64 `json:"percentage,omitempty" example:"12.5"`
+	// Reasoning is the human-readable explanation of why the adjuster fired.
+	Reasoning string `json:"reasoning,omitempty" example:"Excluded goodwill of $1234.5M from invested capital"`
 }
 
 // AppliedOverride is the per-knob payload in the applied_overrides response
@@ -684,6 +727,12 @@ func (h *FairValueHandler) buildFairValueResponse(ticker string, result *entitie
 		}
 	}
 
+	// Project the cleaner audit trail (fired-only — adjustmentsFromLedger emits
+	// just the adjusters that fired) onto the transport DTO. Nil when no adjuster
+	// fired; omitempty then drops cleaning_adjustments, keeping default responses
+	// byte-identical to the pre-TDB-11 shape.
+	cleaningAdjustments := buildCleaningAdjustments(result.CleaningAdjustments)
+
 	return FairValueResponse{
 		Ticker:                ticker,
 		WACC:                  result.WACC,
@@ -730,7 +779,36 @@ func (h *FairValueHandler) buildFairValueResponse(ticker string, result *entitie
 		// Layer-B Phase-2: copy per-assumption source provenance. Nil/empty on the
 		// default (no-guidance) path; omitempty drops it ⇒ byte-identical responses.
 		AssumptionSources: result.AssumptionSources,
+		// TDB-11: surface the datacleaner audit trail. Nil when no adjuster fired;
+		// omitempty then drops cleaning_adjustments from the wire.
+		CleaningAdjustments: cleaningAdjustments,
 	}
+}
+
+// buildCleaningAdjustments projects the cleaner's internal audit entries
+// (entities.Adjustment) onto the transport-layer CleaningAdjustment DTO. The
+// input is already fired-only (adjustmentsFromLedger emits only adjusters that
+// fired with Applied==true), so this is a straight field projection. Returns
+// nil for an empty/absent trail so the omitempty-tagged response field
+// disappears entirely, preserving byte-identity with pre-TDB-11 captures.
+func buildCleaningAdjustments(adjustments []entities.Adjustment) []CleaningAdjustment {
+	if len(adjustments) == 0 {
+		return nil
+	}
+	out := make([]CleaningAdjustment, 0, len(adjustments))
+	for _, a := range adjustments {
+		out = append(out, CleaningAdjustment{
+			Rule:        a.RuleID,
+			Category:    string(a.Category),
+			Type:        string(a.Type),
+			FromAccount: a.FromAccount,
+			ToAccount:   a.ToAccount,
+			Amount:      a.Amount,
+			Percentage:  a.Percentage,
+			Reasoning:   a.Reasoning,
+		})
+	}
+	return out
 }
 
 // PostFairValue handles POST /api/v1/fair-value/:ticker requests.

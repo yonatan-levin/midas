@@ -681,6 +681,19 @@ components:
             values are `AppliedOverride` objects.
           additionalProperties:
             $ref: '#/components/schemas/AppliedOverride'
+        cleaning_adjustments:
+          type: array
+          description: |
+            Datacleaner audit trail — one entry per normalization adjuster that
+            FIRED on this company's financials (A1–C7, the B1/B2/B3 overlays, and
+            the A6 right-of-use / A7 excess-cash / contingent-liability overlays).
+            Lets consumers see which restatements and overlays shaped the
+            valuation inputs (e.g. lease capitalization, inventory restatement,
+            excess-cash exclusion). Fired-only. Omitted (omitempty) when no
+            adjuster fired, so the default no-adjustment response stays
+            byte-identical to the prior wire shape.
+          items:
+            $ref: '#/components/schemas/CleaningAdjustment'
     BulkFairValueRequest:
       type: object
       required: [tickers]
@@ -1036,4 +1049,59 @@ components:
           example: request
           description: |
             Precedence layer that supplied the value. Always `"request"` in v1.
+    CleaningAdjustment:
+      type: object
+      description: |
+        One datacleaner normalization adjustment that fired on this company's
+        inputs. Projected from the cleaner's internal audit carrier; bookkeeping
+        fields (internal id, timestamp, applied flag) are omitted because the
+        array is already fired-only.
+      required: [rule]
+      properties:
+        rule:
+          type: string
+          example: "goodwill_exclusion"
+          description: |
+            Config rule identifier that fired (entities.Adjustment.RuleID), e.g.
+            "goodwill_exclusion", "contingent_liabilities", "right_of_use_assets".
+        category:
+          type: string
+          enum: [asset_quality, liability_completeness, earnings_normalization]
+          example: "asset_quality"
+          description: |
+            Rule family — "asset_quality" | "liability_completeness" |
+            "earnings_normalization".
+        type:
+          type: string
+          enum: [exclude, writedown, valuation_allowance, reclassify, treat_as_debt, probability_weighted, flag]
+          example: "exclude"
+          description: |
+            Adjustment kind — "exclude" | "writedown" | "valuation_allowance" |
+            "reclassify" | "treat_as_debt" | "probability_weighted" | "flag".
+        from_account:
+          type: string
+          example: "Goodwill"
+          description: Source balance-sheet / income-statement line item.
+        to_account:
+          type: string
+          example: "EstimatedLiabilities"
+          description: |
+            Destination line item for reclassifications; omitted for overlays and
+            pure exclusions.
+        amount:
+          type: number
+          format: float
+          example: 1234.5
+          description: Signed monetary delta the adjuster applied, in USD.
+        percentage:
+          type: number
+          format: float
+          example: 12.5
+          description: |
+            Proportional change relative to the pre-adjustment value, when the
+            adjuster reports one (Restater family). Omitted otherwise.
+        reasoning:
+          type: string
+          example: "Excluded goodwill of $1234.5M from invested capital"
+          description: Human-readable explanation of why the adjuster fired.
 
