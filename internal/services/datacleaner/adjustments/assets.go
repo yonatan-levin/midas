@@ -38,6 +38,13 @@ const (
 	// non-empty Flags as informational only — no equity/asset mutation.
 	adjusterIDARDCapitalizationReview    = "A-RD_capitalization_review"
 	adjusterIDACapitalizedSoftwareReview = "A-capitalized_software_review"
+
+	// TDB-2 OverlayEmitter AdjusterIDs. A6 excludes the ROU asset from the
+	// invested-capital view (mirrors A1 goodwill); A7 identifies non-operating
+	// excess cash. Both emit overlays only — no entity dual-write, no component
+	// delta. See docs/refactoring/spec/tdb-2-a6-a7-asset-adjusters-spec.md.
+	adjusterIDA6RightOfUseExclusion = "A6_right_of_use_exclusion"
+	adjusterIDA7ExcessCash          = "A7_excess_cash"
 )
 
 // a1GoodwillAdjuster is the per-rule adapter that lets AssetAdjuster — which
@@ -403,6 +410,284 @@ func (aa *AssetAdjuster) ApplyA1Goodwill(ctx context.Context, working *entities.
 			Timestamp:      now,
 		})
 	}
+
+	return out, nil
+}
+
+// a6RightOfUseAdjuster is the TDB-2 per-rule adapter for A6 (right-of-use asset
+// exclusion). Mirrors a1GoodwillAdjuster exactly — an OverlayEmitter whose
+// Apply is mutation-free and whose dispatcher arm only drains natives (no
+// dual-write, no tangible recompute, because A6 emits no component delta).
+type a6RightOfUseAdjuster struct {
+	aa *AssetAdjuster
+}
+
+// NewA6RightOfUseAdjuster returns an Adjuster-shaped wrapper around
+// AssetAdjuster's A6 rule.
+func NewA6RightOfUseAdjuster(aa *AssetAdjuster) Adjuster {
+	return &a6RightOfUseAdjuster{aa: aa}
+}
+
+// Compile-time assertion: a6RightOfUseAdjuster MUST implement Adjuster.
+var _ Adjuster = (*a6RightOfUseAdjuster)(nil)
+
+// Name implements Adjuster.
+func (a *a6RightOfUseAdjuster) Name() string {
+	return adjusterIDA6RightOfUseExclusion
+}
+
+// Apply implements Adjuster by delegating to AssetAdjuster.ApplyA6RightOfUseAssets.
+func (a *a6RightOfUseAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return a.aa.ApplyA6RightOfUseAssets(ctx, working, rule, cleaningCtx)
+}
+
+// ApplyA6RightOfUseAssets is the Adjuster-shaped (TDB-2) implementation of the
+// A6 right-of-use-asset exclusion rule. It is MUTATION-FREE — it reads `working`
+// and returns an AdjusterOutput describing the analytical overlay; it does NOT
+// modify any entity field.
+//
+// Role classification: OverlayEmitter (mirrors A1 goodwill). The fired
+// LedgerEntry carries NO Component / DeltaAmount / EquityOffset — the
+// declarative amount lives on the OverlaySpec. The overlay targets a dedicated
+// Field:"InvestedCapitalExclusion" (NOT "TotalAssets") so it does NOT inherit
+// A1's goodwill-zeroing side effect (spec §3.2). InvestedCapital() subtracts
+// the ROU value from TotalAssets without touching the EV→Equity bridge, so
+// dcf_value_per_share is bit-for-bit unchanged (spec §3.4).
+//
+// B1-overlap guard (spec §3.3): the fired LedgerEntry records both rou_value and
+// operating_lease_liability so the A6/B1 (asset vs liability) lease overlap is
+// observable per ticker. A6 does NOT read or alter B1's overlay.
+//
+// Spec: docs/refactoring/spec/tdb-2-a6-a7-asset-adjusters-spec.md §3
+func (aa *AssetAdjuster) ApplyA6RightOfUseAssets(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+	rou := working.OperatingLeaseRightOfUseAsset
+
+	// Skip path 1: no ROU asset present.
+	if rou <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDA6RightOfUseExclusion,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No right-of-use assets present to exclude",
+				SkipReason: "No right-of-use assets present to exclude",
+			}},
+		}, nil
+	}
+
+	rouRatio := rou / working.TotalAssets
+
+	// Skip path 2: below the 5% materiality threshold (code constant mirroring
+	// A1 goodwill; spec §3.5 / Q4 — thresholds stay as code constants).
+	const threshold = 0.05
+	if rouRatio <= threshold {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:   now,
+				AdjusterID:  adjusterIDA6RightOfUseExclusion,
+				RuleID:      rule.ID,
+				Fired:       false,
+				Reasoning:   "ROU ratio below 5% threshold",
+				SkipReason:  fmt.Sprintf("ROU ratio %.1f%% below threshold %.1f%%", rouRatio*100, threshold*100),
+				SkipMetrics: map[string]float64{"rou_ratio": rouRatio, "threshold": threshold},
+			}},
+		}, nil
+	}
+
+	// Fired path: emit the declarative overlay on the dedicated
+	// InvestedCapitalExclusion field + a Fired:true audit LedgerEntry carrying
+	// the B1-overlap guard metrics.
+	overlay := entities.OverlaySpec{
+		OverlayID:       adjusterIDA6RightOfUseExclusion,
+		RuleID:          rule.ID,
+		Field:           "InvestedCapitalExclusion",
+		Operation:       "subtract",
+		Amount:          rou,
+		AmountSemantics: entities.AmountIncremental,
+		Reasoning:       fmt.Sprintf("right_of_use_assets: Excluded %.0f ROU assets (%.1f%% of assets) from invested capital per A6 rule", rou, rouRatio*100),
+	}
+
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:  now,
+			AdjusterID: adjusterIDA6RightOfUseExclusion,
+			RuleID:     rule.ID,
+			Fired:      true,
+			Reasoning:  "A6 right-of-use exclusion overlay emitted",
+			// B1-overlap guard (spec §3.3): record both magnitudes so the
+			// ROU-asset vs lease-liability overlap is observable per ticker.
+			SkipMetrics: map[string]float64{
+				"rou_value":                 rou,
+				"operating_lease_liability": working.OperatingLeaseLiability,
+			},
+		}},
+		Overlays: []entities.OverlaySpec{overlay},
+	}
+
+	// Significance flag — only when ROU >= 10% of assets (mirrors A1's
+	// >= 0.10-gated flag). Config severity:info → entities.Info.
+	if rouRatio >= 0.10 {
+		out.Flags = append(out.Flags, entities.Flag{
+			ID:             fmt.Sprintf("rou-flag-%d", now.UnixNano()),
+			RuleID:         rule.ID,
+			Type:           "right_of_use_exclusion",
+			Severity:       entities.Info,
+			Amount:         rou,
+			Percentage:     rouRatio * 100,
+			Description:    fmt.Sprintf("Excluded significant ROU assets (%.1f%% of assets) from invested capital", rouRatio*100),
+			Recommendation: "Verify lease accounting; ROU assets inflate total assets without adding operating capacity",
+			Timestamp:      now,
+		})
+	}
+
+	return out, nil
+}
+
+// a7ExcessCashAdjuster is the TDB-2 per-rule adapter for A7 (excess-cash
+// identification). OverlayEmitter — Apply is mutation-free; the dispatcher arm
+// only drains natives (no dual-write, no tangible recompute).
+type a7ExcessCashAdjuster struct {
+	aa *AssetAdjuster
+}
+
+// NewA7ExcessCashAdjuster returns an Adjuster-shaped wrapper around
+// AssetAdjuster's A7 rule.
+func NewA7ExcessCashAdjuster(aa *AssetAdjuster) Adjuster {
+	return &a7ExcessCashAdjuster{aa: aa}
+}
+
+// Compile-time assertion: a7ExcessCashAdjuster MUST implement Adjuster.
+var _ Adjuster = (*a7ExcessCashAdjuster)(nil)
+
+// Name implements Adjuster.
+func (a *a7ExcessCashAdjuster) Name() string {
+	return adjusterIDA7ExcessCash
+}
+
+// Apply implements Adjuster by delegating to AssetAdjuster.ApplyA7ExcessCash.
+func (a *a7ExcessCashAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	return a.aa.ApplyA7ExcessCash(ctx, working, rule, cleaningCtx)
+}
+
+// ApplyA7ExcessCash is the Adjuster-shaped (TDB-2) implementation of the A7
+// excess-cash identification rule. It is MUTATION-FREE.
+//
+// Role classification: OverlayEmitter. The overlay records identified
+// non-operating (excess) cash on a dedicated Field:"ExcessCash" with
+// replacement semantics (it SETS view.ExcessCash = amount). It does NOT touch
+// TotalAssets, DebtLikeClaims, or any EV→Equity bridge term — A7 is
+// observability/view only (spec §4.1 / §4.6), so dcf_value_per_share is
+// bit-for-bit unchanged.
+//
+// Excess-cash formula (spec §4.3, Damodaran operating-cash floor):
+//
+//	operatingCashNeed = operatingCashPct * Revenue   (when Revenue>0 and pct>0)
+//	excessCash        = max(0, Cash - operatingCashNeed)
+//
+// operatingCashPct is read from rule.Threshold.PercentageOfRevenue. When the
+// threshold is absent OR Revenue<=0, ALL cash is treated as excess (the
+// engine's existing "all cash is non-operating" stance; safe default).
+//
+// Spec: docs/refactoring/spec/tdb-2-a6-a7-asset-adjusters-spec.md §4
+func (aa *AssetAdjuster) ApplyA7ExcessCash(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
+	_ = ctx
+	_ = cleaningCtx
+
+	now := time.Now()
+	cash := working.CashAndCashEquivalents
+
+	// Skip path 1: no cash to assess.
+	if cash <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDA7ExcessCash,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "No cash present to assess",
+				SkipReason: "No cash present to assess",
+			}},
+		}, nil
+	}
+
+	// Operating-cash floor as a % of revenue (config-driven). Absent threshold
+	// OR non-positive revenue → treat ALL cash as excess (safe default).
+	operatingCashPct := 0.0
+	if rule.Threshold != nil && rule.Threshold.PercentageOfRevenue != nil {
+		operatingCashPct = *rule.Threshold.PercentageOfRevenue
+	}
+	operatingCashNeed := 0.0
+	if working.Revenue > 0 && operatingCashPct > 0 {
+		operatingCashNeed = operatingCashPct * working.Revenue
+	}
+
+	excessCash := cash - operatingCashNeed
+	if excessCash < 0 {
+		excessCash = 0
+	}
+
+	// Skip path 2: all cash is within the operating-cash need; no excess.
+	if excessCash <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDA7ExcessCash,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "All cash within operating-cash need; no excess",
+				SkipReason: fmt.Sprintf("Cash %.0f <= operating need %.0f", cash, operatingCashNeed),
+				SkipMetrics: map[string]float64{
+					"cash":                cash,
+					"operating_cash_need": operatingCashNeed,
+					"operating_cash_pct":  operatingCashPct,
+				},
+			}},
+		}, nil
+	}
+
+	overlay := entities.OverlaySpec{
+		OverlayID:       adjusterIDA7ExcessCash,
+		RuleID:          rule.ID,
+		Field:           "ExcessCash",
+		Operation:       "identify",
+		Amount:          excessCash,
+		AmountSemantics: entities.AmountReplacement, // sets view.ExcessCash = amount
+		Reasoning:       fmt.Sprintf("excess_cash: Identified %.0f excess cash (cash %.0f - operating need %.0f at %.0f%% of revenue) as non-operating per A7 rule", excessCash, cash, operatingCashNeed, operatingCashPct*100),
+	}
+
+	out := AdjusterOutput{
+		LedgerEntries: []entities.LedgerEntry{{
+			Timestamp:  now,
+			AdjusterID: adjusterIDA7ExcessCash,
+			RuleID:     rule.ID,
+			Fired:      true,
+			Reasoning:  "A7 excess-cash identification overlay emitted",
+			SkipMetrics: map[string]float64{
+				"cash":                cash,
+				"operating_cash_need": operatingCashNeed,
+				"excess_cash":         excessCash,
+			},
+		}},
+		Overlays: []entities.OverlaySpec{overlay},
+	}
+
+	// Info flag (config severity:info). A7 always flags on the fired path —
+	// any identified excess cash is a capital-allocation signal.
+	out.Flags = append(out.Flags, entities.Flag{
+		ID:             fmt.Sprintf("excess-cash-flag-%d", now.UnixNano()),
+		RuleID:         rule.ID,
+		Type:           "excess_cash",
+		Severity:       entities.Info,
+		Amount:         excessCash,
+		Description:    fmt.Sprintf("Identified %.0f non-operating (excess) cash", excessCash),
+		Recommendation: "Excess cash is non-operating; consider in capital-allocation analysis",
+		Timestamp:      now,
+	})
 
 	return out, nil
 }
@@ -1232,6 +1517,32 @@ func (aa *AssetAdjuster) ProcessAssetAdjustments(ctx context.Context, data *enti
 				continue
 			}
 
+			allFlags = append(allFlags, out.Flags...)
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
+			continue
+		case "right_of_use_assets":
+			// TDB-2 A6: OverlayEmitter (mirrors A1). Apply is mutation-free; the
+			// dispatcher only drains natives. NO dual-write and NO tangible
+			// recompute — A6 emits an InvestedCapitalExclusion overlay, not a
+			// component delta, so the post-switch recompute must NOT fire (continue).
+			out, err := aa.ApplyA6RightOfUseAssets(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				continue
+			}
+			allFlags = append(allFlags, out.Flags...)
+			nativeLedger = append(nativeLedger, out.LedgerEntries...)
+			nativeOverlays = append(nativeOverlays, out.Overlays...)
+			nativelyEmittedRuleIDs[rule.ID] = true
+			continue
+		case "excess_cash":
+			// TDB-2 A7: OverlayEmitter. Same dispatcher shape as A6 — drain
+			// natives, NO dual-write, NO tangible recompute (continue).
+			out, err := aa.ApplyA7ExcessCash(applyCtx, data, rule, cleaningCtx)
+			if err != nil {
+				continue
+			}
 			allFlags = append(allFlags, out.Flags...)
 			nativeLedger = append(nativeLedger, out.LedgerEntries...)
 			nativeOverlays = append(nativeOverlays, out.Overlays...)

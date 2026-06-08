@@ -844,6 +844,19 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		financialData.OperatingLeaseLiability = val
 	}
 
+	// Right-of-Use assets (ASC 842 / IFRS 16) — A6 (TDB-2). Stored as a parallel
+	// informational field; deliberately NOT folded into computePlugs (see spec §3.7),
+	// so the TotalAssets == sum(components)+plug invariant is unchanged.
+	if val, exists := p.findValue(data, []string{
+		"OperatingLeaseRightOfUseAsset",
+		"RightOfUseAssets",
+		"OperatingLeaseRightOfUseAssetAfterAccumulatedAmortization",
+		// IFRS 16 equivalent
+		"RightofuseAssets",
+	}); exists {
+		financialData.OperatingLeaseRightOfUseAsset = val
+	}
+
 	// Enhanced pension/benefit obligation mapping
 	if val, exists := p.findValue(data, []string{
 		"DefinedBenefitPlanPensionPlansProjectedBenefitObligationIncrease",

@@ -50,7 +50,13 @@ var CurrentSchemaVersions = map[string]int{
 	// Both populations grow the JSON shape produced by the cleaner; replay
 	// drift is expected on tickers that fire either rule. Use
 	// --allow-schema-drift on the first replay sweep after this bump.
-	"FinancialData":     9,
+	//
+	// TDB-2 bumps FinancialData 9 → 10 atomically with the commit that adds the
+	// new omitempty OperatingLeaseRightOfUseAsset field on FinancialData (A6
+	// right-of-use asset). The field is omitempty, so bundles without ROU are
+	// unaffected; replay drift on ROU-carrying tickers is expected → use
+	// --allow-schema-drift on the first sweep after this bump.
+	"FinancialData":     10,
 	"GrowthEstimate":    1,
 	"ValuationResult":   2,
 	"FairValueResponse": 1,

@@ -78,15 +78,22 @@ type FinancialData struct {
 	OperatingLeaseLiabilityNoncurrent float64            `json:"operating_lease_liability_noncurrent"` // Non-current operating lease liabilities (B1)
 	OperatingLeaseLiability           float64            `json:"operating_lease_liability"`            // Total operating lease liability (B1)
 	OperatingLeaseCommitments         map[string]float64 `json:"operating_lease_commitments"`          // Future lease commitments by year (B1)
-	PensionLiabilities                float64            `json:"pension_liabilities"`                  // Defined benefit pension obligations (B2)
-	OPEBLiability                     float64            `json:"opeb_liability"`                       // Other post-employment benefit liabilities (B2)
-	PensionPlanAssets                 float64            `json:"pension_plan_assets"`                  // Plan assets fair value (B2)
-	ProjectedBenefitObligation        float64            `json:"projected_benefit_obligation"`         // PBO for pension plans (B2)
-	ContingentLiabilities             float64            `json:"contingent_liabilities"`               // Disclosed contingent liabilities (B3)
-	EnvironmentalLiabilities          float64            `json:"environmental_liabilities"`            // Environmental remediation liabilities (B3)
-	LitigationLiabilities             float64            `json:"litigation_liabilities"`               // Litigation settlement liabilities (B3)
-	IncrementalBorrowingRate          float64            `json:"incremental_borrowing_rate"`           // IBR for lease capitalization (B1)
-	RiskFreeRate                      float64            `json:"risk_free_rate"`                       // Risk-free rate for discount rate calculations
+	// OperatingLeaseRightOfUseAsset is the ASC 842 / IFRS 16 right-of-use asset
+	// book value (A6, TDB-2). Stored as a PARALLEL informational field: it is the
+	// asset-side mirror of OperatingLeaseLiability (B1) and is NOT a computePlugs
+	// component (it remains absorbed in the OtherNonCurrentAssets plug), so the
+	// TotalAssets == sum(components)+plug invariant is unchanged. Consumed only by
+	// the A6 adjuster's invested-capital-exclusion overlay.
+	OperatingLeaseRightOfUseAsset float64 `json:"operating_lease_right_of_use_asset,omitempty"` // ASC 842 / IFRS 16 ROU asset (A6)
+	PensionLiabilities            float64 `json:"pension_liabilities"`                          // Defined benefit pension obligations (B2)
+	OPEBLiability                 float64 `json:"opeb_liability"`                               // Other post-employment benefit liabilities (B2)
+	PensionPlanAssets             float64 `json:"pension_plan_assets"`                          // Plan assets fair value (B2)
+	ProjectedBenefitObligation    float64 `json:"projected_benefit_obligation"`                 // PBO for pension plans (B2)
+	ContingentLiabilities         float64 `json:"contingent_liabilities"`                       // Disclosed contingent liabilities (B3)
+	EnvironmentalLiabilities      float64 `json:"environmental_liabilities"`                    // Environmental remediation liabilities (B3)
+	LitigationLiabilities         float64 `json:"litigation_liabilities"`                       // Litigation settlement liabilities (B3)
+	IncrementalBorrowingRate      float64 `json:"incremental_borrowing_rate"`                   // IBR for lease capitalization (B1)
+	RiskFreeRate                  float64 `json:"risk_free_rate"`                               // Risk-free rate for discount rate calculations
 
 	// Dividend and earnings data (for DDM and FFO models)
 	DividendsPerShare   float64 `json:"dividends_per_share"`    // Cash dividends declared per common share

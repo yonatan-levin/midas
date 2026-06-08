@@ -167,6 +167,26 @@ var perRuleAdjustmentMeta = map[string]ruleMeta{
 			return "" // placeholder — overridden by the LedgerEntry.Reasoning pull-through.
 		},
 	},
+	// A6 right-of-use exclusion (TDB-2) — OverlayEmitter, no Percentage.
+	// Reasoning sourced from the OverlaySpec at projection time (the
+	// amountOverlayAmount branch in adjustmentsFromLedger).
+	"A6_right_of_use_exclusion": {
+		Category:       entities.AssetQuality,
+		Type:           entities.Exclude,
+		FromAccount:    "OperatingLeaseRightOfUseAsset",
+		ToAccount:      "",
+		PercentageMode: percentageAbsent,
+		AmountSource:   amountOverlayAmount,
+	},
+	// A7 excess cash (TDB-2) — OverlayEmitter, no Percentage.
+	"A7_excess_cash": {
+		Category:       entities.AssetQuality,
+		Type:           entities.Exclude,
+		FromAccount:    "CashAndCashEquivalents",
+		ToAccount:      "",
+		PercentageMode: percentageAbsent,
+		AmountSource:   amountOverlayAmount,
+	},
 	// B1 operating lease capitalization — OverlayEmitter, no Percentage.
 	"B1_operating_lease_capitalization": {
 		Category:       entities.LiabilityCompleteness,

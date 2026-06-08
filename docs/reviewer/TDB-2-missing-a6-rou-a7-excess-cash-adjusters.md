@@ -1,11 +1,47 @@
 # TDB-2 — A6 (ROU assets) and A7 (excess cash) adjusters are enabled in config but unimplemented
 
-**Status:** OPEN — filed 2026-06-06 (TODO-catalog burn-down pass).
+**Status:** IMPLEMENTED 2026-06-07 (branch `worktree-tdb-2-a6-a7-adjusters`) — A6 + A7 OverlayEmitters ship; full validation cycle green (VERIFIER VERIFIED · REVIEWER APPROVE_WITH_NITS · QA PASS); `go test ./... -count=1` = 48/48 ok; shadow snapshots byte-identical; DDM bit-for-bit green; `dcf_value_per_share` bit-for-bit unchanged. **Discovered follow-up (NOT a TDB-2 blocker):** the cleaner audit trail (`ValuationResult.CleaningAdjustments`) is not wired into the HTTP `FairValueResponse` — a PRE-EXISTING gap shared by A1/B1/B2/B3; A6/A7 entries reach the internal result + ledger + cleaner logs + replay bundles but NOT the public API. See "Discovered follow-up" below.
 **Priority:** P1 — Tier 1 (valuation correctness).
 **Type:** Correctness gap / dead config (rule promises behavior the engine never performs).
 **Mirrored as GitHub issue:** `[TDB-2]` (yonatan-levin/midas).
 **Origin:** 2026-06-06 investigation (residue **R2**). Also resolves the dormant catalog item "Adjuster test coverage (A6/A7)" — you cannot test adjusters that do not exist.
 **Related:** TDB-1 (sibling parser/adjuster gap), `config/datacleaner/rules.json`.
+
+---
+
+## DECISION (2026-06-07)
+
+- **TDB-2.0 — DECIDED:** **IMPLEMENT both** A6 + A7 as `Adjuster`-interface impls (human
+  decision; do NOT remove the rules).
+- **Spec:** `docs/refactoring/spec/tdb-2-a6-a7-asset-adjusters-spec.md`
+- **Implementer plan:** `docs/refactoring/implementations/tdb-2-a6-a7-asset-adjusters-implementation-plan.md`
+- **Worktree:** `.claude/worktrees/tdb-2-a6-a7-adjusters` (own `go.mod`; `GOWORK=off`).
+
+### Design summary (full rationale in the spec)
+- **A6 (ROU)** — OverlayEmitter (mirrors A1 goodwill). Emits
+  `OverlaySpec{Field:"InvestedCapitalExclusion", Operation:"subtract", Amount:ROU}`,
+  fires at ROU/TotalAssets > 5%, `info` flag at ≥10%. New entity field
+  `OperatingLeaseRightOfUseAsset` (parser stores it, currency FX-converts it; kept OUT of
+  `computePlugs` as a parallel field → shadow snapshots untouched). Excludes ROU from
+  `InvestedCapital().TotalAssets` ONLY — **does NOT touch the EV→Equity bridge**; B1 lease
+  debt stays on `DebtLikeClaims` (different field/consumer → no arithmetic double-count;
+  B1-overlap recorded on the fired LedgerEntry's SkipMetrics).
+- **A7 (excess cash)** — OverlayEmitter. `excessCash = max(0, Cash − pct*Revenue)` with
+  `pct` from the rule's `Threshold.PercentageOfRevenue` (config `0.1`); all-cash-excess
+  when Revenue≤0. Emits `OverlaySpec{Field:"ExcessCash"}` consumed by the audit-trail
+  projection + a new `InvestedCapital().ExcessCash` view field. **Deliberately does NOT
+  alter the EV→Equity bridge** — the engine already (correctly) credits the full cash
+  balance to equity and nets all cash out of operating NWC (BUG-014); subtracting
+  operating cash from the bridge would be a valuation regression.
+- **Invariants:** `dcf_value_per_share`/`EquityValue`/`EnterpriseValue` bit-for-bit
+  unchanged (no bridge input touched). DDM bit-for-bit green (banks skip A6; A7 can't
+  reach DDM math). Shadow snapshots byte-identical (HARD gate). Basket golden updated
+  ONLY for A6/A7-attributable additions.
+- **Versions:** SchemaVersion `FinancialData` **9 → 10** (new ROU field, atomic bump).
+  CalculationVersion stays **4.6** (no per-share numeric change; verified live value is
+  4.6, not the stale "4.4" in CLAUDE.md).
+- **Blocking open question for execution:** confirm A7 stays observability/view-only and
+  does NOT touch the EV bridge (spec §9 Q1; recommended default: YES).
 
 ---
 
@@ -34,7 +70,10 @@ The asset dispatcher (`adjustments/assets.go`) has no switch arm for either, so 
 | TDB-2.4 | If removing instead: delete the rules + note in config changelog | XS |
 
 ## Acceptance
-- [ ] Decision recorded (implement vs remove)
-- [ ] If implemented: adjusters fire, dispatcher routes them, contract tests pass
-- [ ] No silent `enabled:true`-but-skipped rules remain
-- [ ] Load-bearing invariants stay green
+- [x] Decision recorded (implement — see DECISION above)
+- [x] If implemented: adjusters fire, dispatcher routes them, contract tests pass (`TestA6RightOfUseAdjuster_*`, `TestA7ExcessCashAdjuster_*`, cleaneddata view + projection tests)
+- [x] No silent `enabled:true`-but-skipped rules remain (QA audited all 17 config rules vs dispatcher arms — all routed)
+- [x] Load-bearing invariants stay green (DDM bit-for-bit; shadow byte-identical; ledger basket incl. T2-BS-3; `dcf_value_per_share` unchanged)
+
+## Discovered follow-up (pre-existing, broader than TDB-2)
+- **Wire `cleaning_adjustments` into the HTTP API.** `entities.ValuationResult.CleaningAdjustments` (populated by A1/A6/A7/B-rules via `adjustmentsFromLedger`) is NOT mapped into `FairValueResponse` by `buildFairValueResponse` (`internal/api/v1/handlers/fair_value.go`); the response struct has no `cleaning_adjustments` field. So the cleaner audit trail is internal-only today (visible in `ValuationResult`, the ledger, cleaner logs, and replay bundles). Exposing it would surface all adjuster activity (not just A6/A7) to API consumers. Pre-existing; flagged by the TDB-2 REVIEWER 2026-06-07. Candidate new backlog item.

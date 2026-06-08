@@ -78,6 +78,12 @@ type FinancialDataView struct {
 	// overlay amounts. Zero on AsReported and Restated views.
 	DebtLikeClaims float64
 
+	// ExcessCash is the A7-identified non-operating cash (TDB-2). It is
+	// InvestedCapital-only (populated by the A7 ExcessCash overlay) and zero on
+	// AsReported / Restated. Informational — it does NOT feed the EV→Equity
+	// bridge (spec §4.1). NOT identity-copied (overlay-derived only).
+	ExcessCash float64
+
 	// Earnings (Restater-touched fields are recomputed for Restated).
 	OperatingIncome           float64
 	NormalizedOperatingIncome float64

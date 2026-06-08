@@ -302,7 +302,10 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 		// (Q2 resolution, Task 3.7) and B3 AIProvenance hashes (Q4 resolution,
 		// Task 3.8). Replay drift output stays diagnostic until tier2-baseline
 		// bundles are refreshed.
-		b.AddSchemaVersion("FinancialData", 9)
+		//
+		// TDB-2 bumps 9 → 10 atomically with the new omitempty
+		// OperatingLeaseRightOfUseAsset field (A6 right-of-use asset).
+		b.AddSchemaVersion("FinancialData", 10)
 
 		// Phase 2.B — auto-on-quality-flag trigger. Count flags at or above
 		// the bundle's configured severity threshold and report the count

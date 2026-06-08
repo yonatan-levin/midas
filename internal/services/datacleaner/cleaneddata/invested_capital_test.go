@@ -141,6 +141,89 @@ func TestCleanedFinancialData_InvestedCapital_UnknownFieldSilentlySkipped(t *tes
 	assert.Equal(t, 100.0, ic.TotalDebt, "unknown Field overlay leaves TotalDebt untouched")
 }
 
+// TestCleanedFinancialData_InvestedCapital_A6RightOfUseExclusion pins the
+// TDB-2 A6 overlay arm: Field:"InvestedCapitalExclusion", Operation:"subtract"
+// reduces InvestedCapital().TotalAssets by the ROU amount, recomputes
+// TangibleAssets, and — unlike the A1 "TotalAssets" arm — does NOT zero
+// Goodwill (spec §3.2). AsReported/Restated stay at the as-filed TotalAssets.
+func TestCleanedFinancialData_InvestedCapital_A6RightOfUseExclusion(t *testing.T) {
+	// Seed components so Restated reproduces TotalAssets=1000 (same shape as
+	// the canonical overlay test):
+	//   CurrentAssets  = Cash(50) + Inventory(100) + OtherCA(50)            = 200
+	//   TotalAssets    = CA(200) + Goodwill(200) + OtherIntangibles(50) +
+	//                    DTA(0) + OtherNCA(550)                             = 1000
+	raw := &entities.FinancialData{
+		Ticker:                 "ROUX",
+		CashAndCashEquivalents: 50,
+		Inventory:              100,
+		OtherCurrentAssets:     50,
+		CurrentAssets:          200,
+		Goodwill:               200,
+		OtherIntangibles:       50,
+		DeferredTaxAssets:      0,
+		OtherNonCurrentAssets:  550,
+		TotalAssets:            1_000,
+		TangibleAssets:         750,
+		Overlays: []entities.OverlaySpec{
+			{
+				OverlayID:       "A6_right_of_use_exclusion",
+				Field:           "InvestedCapitalExclusion",
+				Operation:       "subtract",
+				Amount:          150,
+				AmountSemantics: entities.AmountIncremental,
+			},
+		},
+	}
+
+	c := New(raw, raw)
+	ic := c.InvestedCapital()
+	require.NotNil(t, ic)
+
+	assert.Equal(t, 850.0, ic.TotalAssets, "TotalAssets reduced by A6 ROU exclusion (1000 - 150)")
+	assert.Equal(t, 200.0, ic.Goodwill, "A6 must NOT zero Goodwill (distinct from the A1 TotalAssets arm)")
+	assert.Equal(t, 600.0, ic.TangibleAssets, "TangibleAssets = TotalAssets - Goodwill - OtherIntangibles (850 - 200 - 50)")
+	assert.Equal(t, 0.0, ic.DebtLikeClaims, "A6 does not touch DebtLikeClaims (bridge untouched)")
+
+	// AsReported / Restated keep the as-filed TotalAssets (overlay is
+	// InvestedCapital-only).
+	assert.Equal(t, 1_000.0, c.AsReported().TotalAssets)
+	assert.Equal(t, 1_000.0, c.Restated().TotalAssets)
+}
+
+// TestCleanedFinancialData_InvestedCapital_A7ExcessCash pins the TDB-2 A7
+// overlay arm: Field:"ExcessCash" with replacement semantics sets
+// InvestedCapital().ExcessCash to the amount, leaving TotalAssets and
+// DebtLikeClaims untouched. AsReported/Restated have ExcessCash == 0.
+func TestCleanedFinancialData_InvestedCapital_A7ExcessCash(t *testing.T) {
+	raw := &entities.FinancialData{
+		Ticker:                 "CASH",
+		CashAndCashEquivalents: 500,
+		CurrentAssets:          500,
+		TotalAssets:            500,
+		Overlays: []entities.OverlaySpec{
+			{
+				OverlayID:       "A7_excess_cash",
+				Field:           "ExcessCash",
+				Operation:       "identify",
+				Amount:          400,
+				AmountSemantics: entities.AmountReplacement,
+			},
+		},
+	}
+
+	c := New(raw, raw)
+	ic := c.InvestedCapital()
+	require.NotNil(t, ic)
+
+	assert.Equal(t, 400.0, ic.ExcessCash, "A7 sets InvestedCapital().ExcessCash = overlay amount")
+	assert.Equal(t, 500.0, ic.TotalAssets, "A7 must NOT alter TotalAssets")
+	assert.Equal(t, 0.0, ic.DebtLikeClaims, "A7 must NOT alter DebtLikeClaims (bridge untouched)")
+
+	// ExcessCash is overlay-derived only → zero on identity views.
+	assert.Equal(t, 0.0, c.AsReported().ExcessCash, "ExcessCash is zero on AsReported (overlay-derived)")
+	assert.Equal(t, 0.0, c.Restated().ExcessCash, "ExcessCash is zero on Restated (overlay-derived)")
+}
+
 // TestCleanedFinancialData_InvestedCapital_MemoizationIdempotent pins
 // pointer identity across repeated InvestedCapital() calls.
 func TestCleanedFinancialData_InvestedCapital_MemoizationIdempotent(t *testing.T) {
