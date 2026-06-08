@@ -37,8 +37,8 @@ const b3AIMockResponseProbability = 0.30 // mockAIService returns ProbabilityPer
 
 // failingAIService implements the ai.AIService interface but returns an
 // error from AnalyzeFootnote. Used to exercise the B3 AI-failure branch:
-// AIProvenance must be nil because the recorded amount is the rule-based
-// conservative fallback (40%), not an AI-derived value.
+// AIProvenance must be nil because the recorded amount is the deterministic
+// industry-heuristic fallback (TDB-3), not an AI-derived value.
 type failingAIService struct{}
 
 func (f *failingAIService) AnalyzeFootnote(ctx context.Context, request *ai.FootnoteAnalysisRequest) (*ai.FootnoteAnalysisResponse, error) {
@@ -358,10 +358,11 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 	})
 
 	t.Run("fired path with failing AI service produces nil AIProvenance", func(t *testing.T) {
-		// AI enabled + service returns an error. The legacy path
-		// absorbs the failure into a conservative 40% fallback amount
-		// (NOT AI-derived). AIProvenance MUST be nil — only AI-derived
-		// amounts carry provenance.
+		// AI enabled + service returns an error. The legacy path absorbs the
+		// failure into the industry-heuristic fallback amount (TDB-3, NOT
+		// AI-derived). For IndustryCode "45" (Tech) the heuristic rate is
+		// 0.40, so the weighted amount is unchanged at 72k. AIProvenance MUST
+		// be nil — only AI-derived amounts carry provenance.
 		la := NewLiabilityAdjuster(&failingAIService{}, nil).WithAI(true)
 		adj := NewB3ContingentLiabilityAdjuster(la)
 		rule := productionContingentLiabilitiesRule()
@@ -382,12 +383,13 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		require.Len(t, out.Overlays, 1)
 		overlay := out.Overlays[0]
 		assert.Equal(t, "DebtLikeClaims", overlay.Field)
-		// AI failure → legacy uses 40% conservative fallback. Weighted
-		// amount = 180k * 0.40 = 72k.
+		// AI failure → legacy uses the industry-heuristic fallback (TDB-3).
+		// IndustryCode "45" (Tech) heuristic == 0.40, so the weighted amount
+		// stays 180k * 0.40 = 72k.
 		assert.InDelta(t, 72_000.0, overlay.Amount, 1e-9,
-			"AI-failure path uses 40%% conservative fallback (180k * 0.40)")
+			"AI-failure path uses the industry heuristic fallback (Tech 40%%): 180k * 0.40")
 		assert.Nil(t, overlay.AIProvenance,
-			"AI-failure path — AIProvenance must be nil because recorded amount is the conservative fallback, not AI-derived")
+			"AI-failure path — AIProvenance must be nil because recorded amount is the industry heuristic fallback, not AI-derived")
 	})
 
 	t.Run("AI returns map-form ContingentLiabilityEstimate populates AIProvenance", func(t *testing.T) {
