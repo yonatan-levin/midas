@@ -497,11 +497,30 @@ func (s *service) ValidateData(data *entities.FinancialData) error {
 // Private helper methods
 
 func (s *service) loadIndustryRules(industryCode string) error {
-	// Map industry codes to filenames
+	// industryFileMap maps a GICS sector code (from getIndustryCode) to an
+	// industry-specific datacleaner rule-override file. Only 45 (Information
+	// Technology) and 25 (Consumer Discretionary) have override files today.
+	// NOTE: the live IndustryClassifier.ClassifyIndustry only ever emits 45, 20,
+	// or 25 (industry/classifier.go loadDefaultConfigurations; default 20), so the
+	// ONLY reachable-and-uncovered sector today is 20 (Industrials) — it falls
+	// through to the base rule set (rules.json) with a non-fatal warning (see the
+	// EnableIndustry block in CleanFinancialData), a deliberate working default,
+	// NOT a gap to paper over. Every other GICS code (10/15/30/35/40/50/55/60) is
+	// an override-file namespace the classifier cannot currently produce.
+	//
+	// Expansion is gated on a concrete driver — see TDB-9 / #9. To add a sector
+	// (do NOT add a bare mapping line): (1) if the classifier can't yet emit the
+	// code, extend ClassifyIndustry first; (2) author a domain-validated
+	// <sector>.json under config/datacleaner/industry/ (curated rule overrides,
+	// not a no-op); (3) add the code->file entry here; (4) add the file to the
+	// sync list in datacleaner/ledger_invariants_test.go; (5) regenerate + REVIEW
+	// the recompute-shadow snapshots for affected tickers. For Financials (40),
+	// TestDDM_LegacyPath_BitForBit is golden-fixture-pinned (won't catch cleaner
+	// drift) — re-validate JPM/BAC/WFC end-to-end through the live DDM path.
+	// Driver: a sector whose base-rule cleaning is demonstrably wrong, or RM-2.
 	industryFileMap := map[string]string{
 		"45": "technology.json",
 		"25": "retail.json",
-		// TODO: Add more industry mappings as needed
 	}
 
 	filename, exists := industryFileMap[industryCode]
