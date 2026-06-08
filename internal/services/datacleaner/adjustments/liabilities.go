@@ -643,8 +643,10 @@ func (la *LiabilityAdjuster) ProcessOperatingLeaseAdjustment(ctx context.Context
 		presentValueResult.ConfidenceScore*100,
 		presentValueResult.EstimationQuality)
 
-	// TODO: Add monitoring metrics for calculation performance
-	// TODO: Log calculation details for audit trail
+	// Monitoring + audit logging for adjustments now live in the orchestrator
+	// (service.go::applyActiveAdjustments) — one trace.datacleaner.adjustment
+	// log line + one datacleaner_adjustments_total increment per fired
+	// adjustment, sourced from the canonical ledger projection (TDB-4).
 
 	return &AdjustmentResult{
 		Amount:      presentValueResult.PresentValue,

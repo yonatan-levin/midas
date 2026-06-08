@@ -13,6 +13,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
+	"github.com/midas/dcf-valuation-api/internal/observability/logctx"
 	"github.com/midas/dcf-valuation-api/internal/observability/narrate"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/adjustments"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
@@ -20,6 +21,27 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/industry"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner/rules"
 )
+
+// AdjustmentMetrics records per-fired-adjustment counters (TDB-4). The
+// production implementation is *metrics.Service; the datacleaner depends on
+// this narrow port (DIP) rather than importing the metrics package directly.
+// A nil recorder is valid and records nothing (the increment is nil-guarded),
+// so tests and the replay path can run without metrics wiring.
+type AdjustmentMetrics interface {
+	RecordAdjustment(ruleID, category, adjType string)
+}
+
+// Option configures optional dependencies on the datacleaner service without
+// breaking the 3-arg NewDataCleanerService signature that ~20 existing callers
+// rely on (the constructor is variadic in Option).
+type Option func(*service)
+
+// WithAdjustmentMetrics injects an AdjustmentMetrics recorder so each fired
+// adjustment increments datacleaner_adjustments_total (TDB-4). Without this
+// option the recorder stays nil and no metric is emitted.
+func WithAdjustmentMetrics(m AdjustmentMetrics) Option {
+	return func(s *service) { s.adjMetrics = m }
+}
 
 // service implements the DataCleanerService interface
 type service struct {
@@ -34,12 +56,17 @@ type service struct {
 	cacheMu            sync.RWMutex
 	stats              entities.CleaningStats
 	statsMu            sync.RWMutex
-	calcEmitter        *calclog.Emitter // emits stage-2 "data_clean_summary" trace per clean call
+	calcEmitter        *calclog.Emitter  // emits stage-2 "data_clean_summary" trace per clean call
+	adjMetrics         AdjustmentMetrics // nil-safe per-fired-adjustment counter (TDB-4)
 }
 
 // NewDataCleanerService creates a new DataCleaner service instance.
 // calcEmitter may be nil (nop path) — no panic occurs.
-func NewDataCleanerService(cfg *config.Config, aiSvc ai.AIService, calcEmitter *calclog.Emitter) (DataCleanerService, error) {
+//
+// opts is variadic so the established 3-arg signature stays source-compatible
+// for all existing callers; production wiring passes WithAdjustmentMetrics to
+// enable the TDB-4 adjustment counter.
+func NewDataCleanerService(cfg *config.Config, aiSvc ai.AIService, calcEmitter *calclog.Emitter, opts ...Option) (DataCleanerService, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("configuration cannot be nil")
 	}
@@ -112,6 +139,12 @@ func NewDataCleanerService(cfg *config.Config, aiSvc ai.AIService, calcEmitter *
 			CommonAdjustments:   make(map[string]int),
 			CommonFlags:         make(map[string]int),
 		},
+	}
+
+	// Apply optional dependencies (e.g. WithAdjustmentMetrics). Absent options
+	// leave the corresponding fields at their nil/zero value (nil-safe).
+	for _, opt := range opts {
+		opt(svc)
 	}
 
 	return svc, nil
@@ -596,6 +629,41 @@ func (s *service) applyActiveAdjustments(ctx context.Context, data *entities.Fin
 	// trail. The legacy translator chain (per-category XResult.Adjustments)
 	// is unread from here on — P5-C4 deletes it.
 	allAdjustments := adjustmentsFromLedger(data.AdjustmentLedger, data.Overlays, perRuleAdjustmentMeta)
+
+	// TDB-4: per-fired-adjustment observability. Side-effect-only observers
+	// over the already-built projection (one entry == one fired adjuster) —
+	// they read allAdjustments + data.Ticker and never mutate *FinancialData,
+	// data.AdjustmentLedger, data.Overlays, or any return value, so every
+	// load-bearing invariant (DDM bit-for-bit, recompute shadow byte-identity,
+	// ledger ordering, firing-signal parity) holds by construction.
+	//
+	// The audit log is request-scoped via logctx so each line inherits
+	// request_id/user_id/key_id; with no logger injected (tests/replay) it
+	// no-ops. Debug level keeps the volume (up to ~20 lines/request) opt-in.
+	// The trace.<area>.<op> message prefix satisfies lint-logs — datacleaner is
+	// not on the Debug-prefix whitelist. The counter increment is nil-guarded
+	// (no recorder injected → no metric).
+	log := logctx.From(ctx)
+	for i := range allAdjustments {
+		adj := allAdjustments[i]
+		log.Debug("trace.datacleaner.adjustment",
+			zap.String("ticker", data.Ticker),
+			zap.String("rule_id", adj.RuleID),
+			zap.String("category", string(adj.Category)),
+			zap.String("type", string(adj.Type)),
+			zap.Float64("amount", adj.Amount),
+			zap.Float64("percentage", adj.Percentage),
+			zap.String("from_account", adj.FromAccount),
+			zap.String("to_account", adj.ToAccount),
+		)
+		if s.adjMetrics != nil {
+			s.adjMetrics.RecordAdjustment(adj.RuleID, string(adj.Category), string(adj.Type))
+		}
+	}
+	log.Debug("trace.datacleaner.adjustments_summary",
+		zap.String("ticker", data.Ticker),
+		zap.Int("fired_count", len(allAdjustments)),
+	)
 
 	return allAdjustments, allFlags, totalRulesApplied, nil
 }

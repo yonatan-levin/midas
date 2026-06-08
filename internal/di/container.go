@@ -641,8 +641,12 @@ func NewRateLimiterService(cache ports.CacheRepository, logger *zap.Logger) *rat
 	return limiter
 }
 
-func NewDataCleanerService(cfg *config.Config, logger *zap.Logger, aiSvc aiSvc.AIService, calcEmitter *calclog.Emitter) (datacleaner.DataCleanerService, error) {
-	return datacleaner.NewDataCleanerService(cfg, aiSvc, calcEmitter)
+func NewDataCleanerService(cfg *config.Config, logger *zap.Logger, aiSvc aiSvc.AIService, calcEmitter *calclog.Emitter, metricsService *metrics.Service) (datacleaner.DataCleanerService, error) {
+	// TDB-4: inject the adjustment counter. *metrics.Service satisfies
+	// datacleaner.AdjustmentMetrics (RecordAdjustment); the counter registers
+	// on the service-owned per-instance registry, never DefaultRegisterer.
+	return datacleaner.NewDataCleanerService(cfg, aiSvc, calcEmitter,
+		datacleaner.WithAdjustmentMetrics(metricsService))
 }
 
 func NewValuationService(

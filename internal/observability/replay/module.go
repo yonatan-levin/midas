@@ -429,6 +429,13 @@ func replayAIService(cfg *config.Config, logger *zap.Logger) aiSvc.AIService {
 // the same arguments di.NewDataCleanerService does. Re-exported here
 // instead of importing di to avoid pulling di's transitive sqlite/Redis
 // imports into the replay package.
+//
+// TDB-4: the adjustment counter (WithAdjustmentMetrics) is deliberately NOT
+// wired here. Replay never scrapes /metrics, so injecting a recorder would add
+// graph surface for zero observable benefit; leaving it nil keeps the replay
+// composition minimal and the hermeticity argument trivially obvious (the
+// audit log still no-ops because replay injects no request-scoped logger via
+// logctx).
 func replayDataCleanerService(cfg *config.Config, logger *zap.Logger, ai aiSvc.AIService, calc *calclog.Emitter) (datacleaner.DataCleanerService, error) {
 	return datacleaner.NewDataCleanerService(cfg, ai, calc)
 }

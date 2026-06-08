@@ -52,6 +52,10 @@ type Service struct {
 	dataFetchDuration      *prometheus.HistogramVec
 	dataCleaningDuration   *prometheus.HistogramVec
 
+	// Datacleaner adjustment counter (TDB-4). Bounded labels only — NEVER
+	// ticker (high-cardinality; ticker lives in the audit log instead).
+	datacleanerAdjustmentsTotal *prometheus.CounterVec
+
 	// Cache Metrics
 	cacheRequestsTotal *prometheus.CounterVec
 	cacheHitRatio      *prometheus.GaugeVec
@@ -238,6 +242,18 @@ func (s *Service) initMetrics(registry *prometheus.Registry) {
 			Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5},
 		},
 		[]string{"ticker", "industry"},
+	)
+
+	// Datacleaner adjustment counter (TDB-4). Labels are bounded by code: the
+	// fixed adjuster set (rule_id ~16-20), the three rule categories, and the
+	// AdjustmentType enum (~7). No ticker label — cardinality lives in the
+	// audit log, not the metric (see spec §5).
+	s.datacleanerAdjustmentsTotal = factory.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "datacleaner_adjustments_total",
+			Help: "Total datacleaner adjustments applied, by rule/category/type",
+		},
+		[]string{"rule_id", "category", "type"},
 	)
 
 	// Cache Metrics
@@ -439,6 +455,14 @@ func (s *Service) RecordDataCleaning(ticker, industry string, duration time.Dura
 	s.dataCleaningDuration.WithLabelValues(ticker, industry).Observe(duration.Seconds())
 }
 
+// RecordAdjustment counts one fired datacleaner adjustment (TDB-4). Labels are
+// bounded (rule_id/category/type) — never ticker. Satisfies the datacleaner's
+// AdjustmentMetrics port so *metrics.Service can be injected without the
+// datacleaner taking a hard import on this package.
+func (s *Service) RecordAdjustment(ruleID, category, adjType string) {
+	s.datacleanerAdjustmentsTotal.WithLabelValues(ruleID, category, adjType).Inc()
+}
+
 // Cache Metrics Methods
 func (s *Service) RecordCacheRequest(cacheType, operation, result string) {
 	s.cacheRequestsTotal.WithLabelValues(cacheType, operation, result).Inc()
@@ -509,7 +533,7 @@ func (s *Service) GetRegistry() *prometheus.Registry {
 // getMetricsCount returns the total number of metrics registered
 func (s *Service) getMetricsCount() int {
 	// Count all metric families (approximation)
-	return 28 // Approximate count of metric families defined above
+	return 29 // Approximate count of metric families defined above
 }
 
 // Health check for metrics service
