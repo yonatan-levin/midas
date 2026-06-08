@@ -3,6 +3,7 @@ package sec
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"go.uber.org/zap"
@@ -513,6 +514,66 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		financialData.NetIncome = val
 	}
 
+	// Non-recurring earnings-normalization sources (TDB-1).
+	//
+	// These three income-statement fields feed the Category-C earnings
+	// adjusters (C1 restructuring, C3 litigation, C6 capitalized interest).
+	// Each adjuster expects a POSITIVE add-back magnitude; absAddBack
+	// normalizes the JNJ-style credit-presentation case (a debit-balance
+	// charge tagged negative). See
+	// docs/refactoring/spec/tdb-1-parser-nonrecurring-extraction-spec.md.
+
+	// C1 (restructuring) add-back source. Alternative presentations of the
+	// same period total → findValue first-hit (NOT sumValues — they overlap,
+	// summing would double-count). RestructuringAndRelatedCostIncurredCost is a
+	// dimensional/disclosure-axis element (per-restructuring-type axis); it is
+	// last in priority so the two undimensioned totals win first — the
+	// dimension-unaware fact store only reaches it when neither total is
+	// present. TDB-1 spec §3.2.
+	if val, exists := p.findValue(data, []string{
+		"RestructuringCharges",
+		"RestructuringCosts",
+		"RestructuringAndRelatedCostIncurredCost",
+	}); exists {
+		financialData.RestructuringCharges = absAddBack(val)
+	}
+
+	// C3 (litigation) add-back source. LitigationSettlementExpense is the
+	// direct expense line; LossContingencyLossInPeriod is the broader ASC-450
+	// fallback that captures ALL loss contingencies (litigation, environmental,
+	// warranty, product-liability) — so when it is the matched tag, C3 may fire
+	// on a non-litigation contingency BY DESIGN (any material one-time loss
+	// contingency is a defensible normalization; gated by C3's 1%-of-revenue
+	// threshold). GainLossRelatedToLitigationSettlement is DELIBERATELY EXCLUDED
+	// — it is a credit-balance net gain/loss with inverted semantics (a
+	// positive value is a GAIN, the opposite of a settlement charge); mapping
+	// it would corrupt C3 by adding back a gain. TDB-1 spec §3.1 / §3.2 / Q2.
+	if val, exists := p.findValue(data, []string{
+		"LitigationSettlementExpense",
+		"LossContingencyLossInPeriod",
+	}); exists {
+		financialData.LitigationSettlements = absAddBack(val)
+	}
+
+	// C6 (capitalized interest) reclassification source. Both us-gaap variants
+	// are debit-balance income-statement period amounts (period / incurred) →
+	// first-hit. NOTE: us-gaap:InterestPaidCapitalized is DELIBERATELY EXCLUDED
+	// — it is a credit-balance cash-flow supplemental disclosure ("cash paid for
+	// interest capitalized, investing activity"), a different measure than the
+	// period capitalized-interest expense C6 reclassifies; populating it would
+	// fire C6 with the wrong quantity (TDB-1 REVIEWER MAJOR).
+	// ifrs-full:BorrowingCostsCapitalised (British spelling, IAS 23) appended
+	// for IFRS filers — MEDIUM confidence, unverified against a live basket
+	// filer (TDB-1 Q4). TDB-1 spec §3.2.
+	if val, exists := p.findValue(data, []string{
+		"InterestCostsCapitalized",
+		"InterestCostsIncurredCapitalized",
+		// IFRS-full (IAS 23) — note British spelling.
+		"BorrowingCostsCapitalised",
+	}); exists {
+		financialData.CapitalizedInterest = absAddBack(val)
+	}
+
 	// Dividends per share (for DDM model)
 	if val, exists := p.findValue(data, []string{
 		"CommonStockDividendsPerShareDeclared",
@@ -856,6 +917,15 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 	return financialData, nil
 }
 
+// absAddBack normalizes an XBRL charge fact to the positive add-back magnitude
+// the C1/C3/C6 earnings adjusters expect. These concepts are debit-balance
+// charge/cost elements, but filers occasionally sign them as credits (e.g. JNJ
+// tags LitigationSettlementExpense as -379M). A negative tag is the same dollar
+// charge with an inverted presentation sign, not a different line — taking the
+// magnitude yields the intended add-back. See
+// docs/refactoring/spec/tdb-1-parser-nonrecurring-extraction-spec.md §3.1.
+func absAddBack(v float64) float64 { return math.Abs(v) }
+
 // findValue finds a value by trying multiple possible field names
 func (p *Parser) findValue(data map[string]float64, fieldNames []string) (float64, bool) {
 	for _, fieldName := range fieldNames {
@@ -965,6 +1035,18 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"us-gaap:GainLossOnSaleOfProperties",
 		"us-gaap:GainLossOnSaleOfPropertyPlantEquipment",
 
+		// Income Statement - Non-recurring earnings-normalization items (TDB-1).
+		// Feed the C1 (restructuring), C3 (litigation), C6 (capitalized-interest)
+		// earnings adjusters. GainLossRelatedToLitigationSettlement is
+		// deliberately NOT listed (inverted net-gain semantics — TDB-1 Q2).
+		"us-gaap:RestructuringCharges",
+		"us-gaap:RestructuringCosts",
+		"us-gaap:RestructuringAndRelatedCostIncurredCost",
+		"us-gaap:LitigationSettlementExpense",
+		"us-gaap:LossContingencyLossInPeriod",
+		"us-gaap:InterestCostsCapitalized",
+		"us-gaap:InterestCostsIncurredCapitalized",
+
 		// Balance Sheet - Assets
 		"us-gaap:Assets",
 		"us-gaap:AssetsCurrent",
@@ -1025,6 +1107,9 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"ifrs-full:ProfitLoss",
 		"ifrs-full:ProfitLossAttributableToOwnersOfParent",
 		"ifrs-full:FinanceCosts",
+		// Capitalized interest (IAS 23 — British spelling). Feeds C6 for IFRS
+		// filers. MEDIUM confidence — unverified against a live filer (TDB-1 Q4).
+		"ifrs-full:BorrowingCostsCapitalised",
 
 		// Balance Sheet
 		"ifrs-full:CashAndCashEquivalents",

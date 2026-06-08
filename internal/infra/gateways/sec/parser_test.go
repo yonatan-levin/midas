@@ -109,6 +109,184 @@ func TestParser_ParseFinancialData_Success(t *testing.T) {
 	assert.Equal(t, 352755000000.0, data.TotalAssets)
 }
 
+// TestParser_ParseFinancialData_NonRecurringEarningsItems pins TDB-1: the SEC
+// parser must populate the three Category-C earnings-normalization fields
+// (RestructuringCharges → C1, LitigationSettlements → C3, CapitalizedInterest
+// → C6) from real us-gaap / ifrs-full XBRL concepts, in reporting currency,
+// normalized to the POSITIVE add-back magnitude the adjusters expect.
+//
+// Load-bearing sub-cases:
+//   - sign normalization: a NEGATIVE LitigationSettlementExpense (JNJ-style
+//     credit-presentation of a real charge) yields a POSITIVE field (math.Abs).
+//   - first-hit fallback: a fallback tag (RestructuringCosts) populates when
+//     the primary (RestructuringCharges) is absent.
+//   - exclusion guard: GainLossRelatedToLitigationSettlement (inverted net-gain
+//     semantics) must NOT map into LitigationSettlements (Q2).
+//   - IFRS capitalized interest: ifrs-full:BorrowingCostsCapitalised (Q4).
+//   - no false population: absent concepts leave all three fields at 0.
+//
+// Spec: docs/refactoring/spec/tdb-1-parser-nonrecurring-extraction-spec.md
+func TestParser_ParseFinancialData_NonRecurringEarningsItems(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	// usGAAPFact builds a single-fact FY-2023 SECFactGroup (USD, 10-K) so the
+	// period key is "2023FY", matching the existing success-test idiom.
+	usGAAPFact := func(val float64) ports.SECFactGroup {
+		return ports.SECFactGroup{
+			Units: map[string][]ports.SECFact{
+				"USD": {
+					{End: "2023-09-30", Val: val, Accn: "0000320193-23-000106", Fy: 2023, Fp: "FY", Form: "10-K", Filed: "2023-11-03"},
+				},
+			},
+		}
+	}
+	// ifrsFact builds a single-fact FY-2023 SECFactGroup in a non-USD reporting
+	// currency, mirroring the TSM IFRS-full fixture shape.
+	ifrsFact := func(val float64) ports.SECFactGroup {
+		return ports.SECFactGroup{
+			Units: map[string][]ports.SECFact{
+				"EUR": {
+					{End: "2023-12-31", Val: val, Accn: "0001234567-23-000001", Fy: 2023, Fp: "FY", Form: "20-F", Filed: "2024-04-17"},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name               string
+		usGAAP             map[string]ports.SECFactGroup
+		ifrs               map[string]ports.SECFactGroup
+		wantRestructuring  float64
+		wantLitigation     float64
+		wantCapitalizedInt float64
+	}{
+		{
+			name: "restructuring_positive",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":             usGAAPFact(383285000000),
+				"OperatingIncomeLoss":  usGAAPFact(114301000000),
+				"RestructuringCharges": usGAAPFact(745000000),
+			},
+			wantRestructuring: 745000000,
+		},
+		{
+			name: "litigation_negative_abs",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":                    usGAAPFact(383285000000),
+				"OperatingIncomeLoss":         usGAAPFact(114301000000),
+				"LitigationSettlementExpense": usGAAPFact(-379000000),
+			},
+			wantLitigation: 379000000, // math.Abs(-379M) — pins the JNJ-style sign trap.
+		},
+		{
+			name: "capint_positive",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":                 usGAAPFact(383285000000),
+				"OperatingIncomeLoss":      usGAAPFact(114301000000),
+				"InterestCostsCapitalized": usGAAPFact(147000000),
+			},
+			wantCapitalizedInt: 147000000,
+		},
+		{
+			name: "restructuring_fallback",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":            usGAAPFact(383285000000),
+				"OperatingIncomeLoss": usGAAPFact(114301000000),
+				"RestructuringCosts":  usGAAPFact(100000000), // fallback tag, no RestructuringCharges present.
+			},
+			wantRestructuring: 100000000,
+		},
+		{
+			name: "litigation_gain_excluded",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":                              usGAAPFact(383285000000),
+				"OperatingIncomeLoss":                   usGAAPFact(114301000000),
+				"GainLossRelatedToLitigationSettlement": usGAAPFact(100000000), // inverted net-gain — must NOT map (Q2).
+			},
+			wantLitigation: 0,
+		},
+		{
+			name:   "capint_ifrs",
+			usGAAP: map[string]ports.SECFactGroup{
+				// IFRS-full filer: income-statement guard comes from ifrs-full tags.
+			},
+			ifrs: map[string]ports.SECFactGroup{
+				"Revenue":                           ifrsFact(50000000000),
+				"ProfitLossFromOperatingActivities": ifrsFact(10000000000),
+				"BorrowingCostsCapitalised":         ifrsFact(50000000), // IAS 23, British spelling (Q4).
+			},
+			wantCapitalizedInt: 50000000,
+		},
+		{
+			name: "all_absent",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":            usGAAPFact(383285000000),
+				"OperatingIncomeLoss": usGAAPFact(114301000000),
+			},
+			// All three want-fields default to 0 — pins no false population.
+		},
+		{
+			// First-hit priority: when both the primary and a fallback tag are
+			// present, findValue returns the FIRST match and does NOT sum them
+			// (alternative presentations of the same total — TDB-1 spec §3.3).
+			name: "restructuring_firsthit_priority",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":             usGAAPFact(383285000000),
+				"OperatingIncomeLoss":  usGAAPFact(114301000000),
+				"RestructuringCharges": usGAAPFact(745000000),
+				"RestructuringCosts":   usGAAPFact(999000000),
+			},
+			wantRestructuring: 745000000, // primary wins; NOT 745M+999M summed.
+		},
+		{
+			// math.Abs applies to every charge field, not just litigation: a
+			// credit-signed restructuring charge normalizes to a positive add-back.
+			name: "restructuring_negative_abs",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":             usGAAPFact(383285000000),
+				"OperatingIncomeLoss":  usGAAPFact(114301000000),
+				"RestructuringCharges": usGAAPFact(-50000000),
+			},
+			wantRestructuring: 50000000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			factsByTaxonomy := map[string]map[string]ports.SECFactGroup{}
+			if len(tt.usGAAP) > 0 {
+				factsByTaxonomy["us-gaap"] = tt.usGAAP
+			}
+			if len(tt.ifrs) > 0 {
+				factsByTaxonomy["ifrs-full"] = tt.ifrs
+			}
+
+			facts := &ports.SECCompanyFacts{
+				CIK:        "0000320193",
+				EntityName: "Test Filer",
+				Facts:      factsByTaxonomy,
+			}
+
+			ctx := context.Background()
+			historical, err := parser.ParseFinancialData(ctx, facts)
+			require.NoError(t, err)
+			require.NotNil(t, historical)
+
+			data, exists := historical.Data["2023FY"]
+			require.True(t, exists, "expected 2023FY period in historical.Data")
+			require.NotNil(t, data)
+
+			assert.Equal(t, tt.wantRestructuring, data.RestructuringCharges,
+				"RestructuringCharges (C1 source) must match expected add-back magnitude")
+			assert.Equal(t, tt.wantLitigation, data.LitigationSettlements,
+				"LitigationSettlements (C3 source) must match expected add-back magnitude (positive — math.Abs)")
+			assert.Equal(t, tt.wantCapitalizedInt, data.CapitalizedInterest,
+				"CapitalizedInterest (C6 source) must match expected add-back magnitude")
+		})
+	}
+}
+
 func TestParser_ParseFinancialData_NilFacts(t *testing.T) {
 	logger := zap.NewNop()
 	parser := NewParser(logger)
