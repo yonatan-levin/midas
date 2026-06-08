@@ -4,8 +4,15 @@
 **Status:** READY — pick up at Priority 1 below.
 **Scope of this stream:** DCF valuation accuracy/calibration. Distinct from the parallel **TODO burn-down (TDB-1..TDB-10)** stream, which has its own handoff at `docs/reviewer/todo-burndown-next-session-handoff.md` (datacleaner/adjuster/config/deployment work). Coordinate to avoid master collisions — see Gotchas.
 
-> **P1 / Layer A was executed and SHIPPED 2026-06-06** (its starting prompt has been
-> consumed and removed). See the P1 row below + the closeout.
+> **Session 2 (2026-06-08) status:** P1 / Layer A **SHIPPED** (`feat/dcf-reinvestment-layer-a`,
+> CalcVersion 4.7); P2 / DC-1 DebtLikeClaims EV-bridge **VERIFIED LIVE** on the DCF path
+> (tracker updated; in the Layer A branch); P3 / **Layer B Phase 2** (guidance-artifact fixture
+> consumption + assumption-authority hierarchy) **SHIPPED** (`feat/layer-b-phase2-guidance-fixture`,
+> CalcVersion unchanged at 4.7; closeout `docs/refactoring/archive/layer-b-phase2-guidance-fixture-closeout.md`).
+> **Both feature branches are validated + documented but NOT yet merged** — they need a `git rebase master`
+> immediately before the guarded FF (master is co-edited by the TODO-burndown stream and advanced again this
+> session). **Next major item:** Layer B **Phase 3** (the offline LLM extraction tool — a separate Python
+> repo/harness producing artifacts that validate against the Phase-2 contract).
 
 ---
 
