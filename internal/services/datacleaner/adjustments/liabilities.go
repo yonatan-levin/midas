@@ -1117,10 +1117,14 @@ func (la *LiabilityAdjuster) processContingentLiabilityAdjustment(
 
 	switch {
 	case aiResult != nil && aiResult.err != nil:
-		// Caller already attempted the AI call; record the failure mode
-		// in Reasoning and use the conservative 40% fallback.
-		probabilityWeight = 0.40
-		reasoningPrefix = fmt.Sprintf("AI analysis failed (%v), using conservative", aiResult.err)
+		// Caller already attempted the AI call and it failed. Fall back to the
+		// deterministic industry heuristic (TDB-3) — the SAME fallback the
+		// AI-disabled `default` arm uses — so the two fallback modes are
+		// consistent and sector-calibrated rather than a flat 40%. The
+		// heuristic is network-free, so the single-AI-call invariant holds and
+		// AIProvenance stays nil (no AI input produced this amount).
+		probabilityWeight = la.getContingentLiabilityProbability(cleaningCtx.IndustryCode, totalContingentLiability)
+		reasoningPrefix = fmt.Sprintf("AI analysis failed (%v), using industry heuristic fallback", aiResult.err)
 	case aiResult != nil:
 		probabilityWeight = aiResult.probability
 		reasoningPrefix = "AI analysis of footnotes"
@@ -1139,8 +1143,10 @@ func (la *LiabilityAdjuster) processContingentLiabilityAdjustment(
 		// provenance via the pre-computed-aiResult branch above.
 		aiProbability, _, aiMetadata, err := la.analyzeContingentLiabilityWithAI(ctx, data, cleaningCtx, time.Now())
 		if err != nil {
-			probabilityWeight = 0.40
-			reasoningPrefix = fmt.Sprintf("AI analysis failed (%v), using conservative", err)
+			// Legacy direct-call AI failure → same deterministic industry-heuristic
+			// fallback as arm 1 and the AI-disabled default arm (TDB-3).
+			probabilityWeight = la.getContingentLiabilityProbability(cleaningCtx.IndustryCode, totalContingentLiability)
+			reasoningPrefix = fmt.Sprintf("AI analysis failed (%v), using industry heuristic fallback", err)
 		} else {
 			probabilityWeight = aiProbability
 			reasoningPrefix = "AI analysis of footnotes"
@@ -1286,8 +1292,11 @@ func (la *LiabilityAdjuster) getSeverityForContingentRatio(ratio float64, indust
 }
 
 func (la *LiabilityAdjuster) getContingentLiabilityProbability(industryCode string, amount float64) float64 {
-	// Use industry-specific probability from classifier if available
-	// TODO: Replace with AI-powered footnote analysis for more precise estimates
+	// Deterministic industry-heuristic probability. This is the documented
+	// FALLBACK used when the AI footnote analyzer is disabled OR enabled-but-
+	// failed (TDB-3); the primary estimator is analyzeContingentLiabilityWithAI
+	// when AI is enabled and succeeds. Sourced from the industry classifier's
+	// per-sector ContingentLiabilityRate when available, else the GICS switch.
 
 	// Try to get probability from industry classifier first
 	if la.industryClassifier != nil {

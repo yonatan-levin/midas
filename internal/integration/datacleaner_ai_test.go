@@ -143,26 +143,39 @@ func TestDataCleaner_B3_ContingentLiabilities_AIEnabled(t *testing.T) {
 			}
 		}
 
-		if len(fallbackAdjustments) > 0 {
-			totalFallbackAdjustment := 0.0
-			for _, adj := range fallbackAdjustments {
-				totalFallbackAdjustment += adj.Amount
-			}
+		// Non-vacuous: the B3 rule MUST fire on this input (litigation
+		// liabilities disclosed) so the fallback assertions below cannot pass
+		// silently.
+		require.NotEmpty(t, fallbackAdjustments, "B3 must fire on disclosed contingent liabilities so the fallback is exercised")
 
-			// Should fallback to conservative 40% probability (10,000)
-			assert.InDelta(t, 10000.0, totalFallbackAdjustment, 1.0,
-				"With AI failure, should fallback to conservative 40%% probability (10k), got %.0f", totalFallbackAdjustment)
+		// Deterministic: getIndustryCode maps ticker "FAIL_TEST" → GICS "45"
+		// (Tech), whose contingent-liability heuristic rate is 0.40. The
+		// expected amount is therefore 25k * 0.40 = 10,000 — the heuristic
+		// fallback (TDB-3) coincides with the old flat-0.40 number here.
+		require.Equal(t, "45", result.IndustryCode, "FAIL_TEST must classify to GICS 45 (Tech) for a deterministic 0.40 heuristic rate")
 
-			// Reasoning should mention fallback
-			foundFailureReasoning := false
-			for _, adj := range fallbackAdjustments {
-				if assert.Contains(t, adj.Reasoning, "AI analysis failed") || assert.Contains(t, adj.Reasoning, "conservative") {
-					foundFailureReasoning = true
-					break
-				}
-			}
-			assert.True(t, foundFailureReasoning, "Adjustment reasoning should reference AI failure and conservative fallback")
+		totalFallbackAdjustment := 0.0
+		for _, adj := range fallbackAdjustments {
+			totalFallbackAdjustment += adj.Amount
 		}
+
+		// Should fall back to the industry heuristic (Tech 0.40 → 10,000).
+		assert.InDelta(t, 10000.0, totalFallbackAdjustment, 1.0,
+			"With AI failure, should fall back to the Tech industry heuristic (0.40 → 10k), got %.0f", totalFallbackAdjustment)
+
+		// Reasoning should name the failure AND the industry-heuristic fallback.
+		foundFailureReasoning := false
+		foundHeuristicReasoning := false
+		for _, adj := range fallbackAdjustments {
+			if assert.Contains(t, adj.Reasoning, "AI analysis failed") {
+				foundFailureReasoning = true
+			}
+			if assert.Contains(t, adj.Reasoning, "industry heuristic fallback") {
+				foundHeuristicReasoning = true
+			}
+		}
+		assert.True(t, foundFailureReasoning, "Adjustment reasoning should reference the AI failure")
+		assert.True(t, foundHeuristicReasoning, "Adjustment reasoning should reference the industry-heuristic fallback")
 
 		// Should not have AI metadata on failure
 		assert.Empty(t, result.AIMetadata, "Should not capture AI metadata when AI fails")
@@ -337,40 +350,71 @@ func TestDataCleaner_B3_ContingentLiabilities_AIFailureScenarios(t *testing.T) {
 				}
 			}
 
-			if len(fallbackAdjustments) > 0 {
-				totalFallbackAdjustment := 0.0
-				for _, adj := range fallbackAdjustments {
-					totalFallbackAdjustment += adj.Amount
-				}
+			// Non-vacuous: B3 MUST fire on the disclosed litigation liability so
+			// the fallback assertions below cannot pass silently.
+			require.NotEmpty(t, fallbackAdjustments, "B3 must fire on disclosed contingent liabilities so the fallback is exercised")
 
-				// Should fallback to conservative 40% probability (12,000 for 30k liabilities)
-				expectedFallback := 30000 * 0.4 // 12,000
-				assert.InDelta(t, expectedFallback, totalFallbackAdjustment, 100.0,
-					"With AI failure, should fallback to conservative probability, got %.0f", totalFallbackAdjustment)
-
-				// Reasoning should mention AI failure
-				foundFailureReasoning := false
-				for _, adj := range fallbackAdjustments {
-					if assert.Contains(t, adj.Reasoning, scenario.expectedReason) {
-						foundFailureReasoning = true
-						break
-					}
-				}
-				assert.True(t, foundFailureReasoning, "Adjustment reasoning should reference AI failure")
-
-				// Should mention conservative fallback
-				foundConservativeReasoning := false
-				for _, adj := range fallbackAdjustments {
-					if assert.Contains(t, adj.Reasoning, "conservative") {
-						foundConservativeReasoning = true
-						break
-					}
-				}
-				assert.True(t, foundConservativeReasoning, "Adjustment reasoning should reference conservative fallback")
+			totalFallbackAdjustment := 0.0
+			for _, adj := range fallbackAdjustments {
+				totalFallbackAdjustment += adj.Amount
 			}
+
+			// Deterministic: the AI-failed fallback now uses the industry
+			// heuristic (TDB-3), so the expected amount is the disclosed total
+			// (30k) times the heuristic rate for the CLASSIFIED industry code.
+			// Computing the rate from result.IndustryCode (rather than pinning a
+			// literal) keeps the assertion correct regardless of how the
+			// classifier maps each synthetic ticker.
+			const disclosedTotal = 30000.0
+			expectedRate := contingentHeuristicRate(result.IndustryCode)
+			expectedFallback := disclosedTotal * expectedRate
+			assert.InDelta(t, expectedFallback, totalFallbackAdjustment, 100.0,
+				"AI failure should fall back to the industry heuristic (code %q rate %.2f → %.0f), got %.0f",
+				result.IndustryCode, expectedRate, expectedFallback, totalFallbackAdjustment)
+
+			// Reasoning should name the AI failure AND the industry-heuristic fallback.
+			foundFailureReasoning := false
+			foundHeuristicReasoning := false
+			for _, adj := range fallbackAdjustments {
+				if assert.Contains(t, adj.Reasoning, scenario.expectedReason) {
+					foundFailureReasoning = true
+				}
+				if assert.Contains(t, adj.Reasoning, "industry heuristic fallback") {
+					foundHeuristicReasoning = true
+				}
+			}
+			assert.True(t, foundFailureReasoning, "Adjustment reasoning should reference the AI failure")
+			assert.True(t, foundHeuristicReasoning, "Adjustment reasoning should reference the industry-heuristic fallback")
 
 			// Service should remain stable - no panics, no crashes
 			assert.True(t, result.Success, "Data cleaning should succeed despite AI failure")
 		})
+	}
+}
+
+// contingentHeuristicRate mirrors
+// LiabilityAdjuster.getContingentLiabilityProbability's GICS-sector switch
+// so the integration tests can compute the expected fallback amount from the
+// CLASSIFIED industry code without depending on a non-deterministic literal.
+//
+// It must stay in lock-step with the production switch (45→0.40, 20→0.70,
+// 25→0.65, 21→0.60, 62→0.50, default→0.30). The classifier's per-sector
+// ContingentLiabilityRate config values for the loaded sectors (45/20/25)
+// equal these switch values, so this single mirror is correct whether the
+// production helper resolves the rate via the classifier config or the switch.
+func contingentHeuristicRate(industryCode string) float64 {
+	switch industryCode {
+	case "45": // Information Technology
+		return 0.40
+	case "20": // Industrials/Manufacturing
+		return 0.70
+	case "25": // Consumer Discretionary
+		return 0.65
+	case "21": // Energy
+		return 0.60
+	case "62": // Healthcare
+		return 0.50
+	default:
+		return 0.30
 	}
 }

@@ -213,8 +213,8 @@ func TestB3AmountAICall_HonorsContextCancellation(t *testing.T) {
 }
 
 // errorAIService always returns an error, exercising the AI-failure
-// fallback path and verifying the legacy conservative-40% reasoning
-// branch still works end-to-end after the F.2 refactor.
+// fallback path and verifying the industry-heuristic fallback reasoning
+// branch still works end-to-end after the F.2 refactor and the TDB-3 change.
 type errorAIService struct {
 	callCount atomic.Int32
 }
@@ -234,13 +234,15 @@ func (e *errorAIService) GetAnalysisCapabilities() []ai.FootnoteAnalysisType {
 
 func (e *errorAIService) HealthCheck(ctx context.Context) error { return nil }
 
-// TestB3AIFailure_FallsBackToConservativeWithoutProvenance pins that the
-// F.2 refactor preserves the legacy AI-failure fallback semantics:
-// when the unified analyzeContingentLiabilityWithAI errors, ApplyB3Contingent
-// computes the amount via the conservative 40% rule-based path and leaves
-// AIProvenance nil (no AI response → no provenance). The single-call
-// invariant is also preserved: AnalyzeFootnote is invoked EXACTLY ONCE.
-func TestB3AIFailure_FallsBackToConservativeWithoutProvenance(t *testing.T) {
+// TestB3AIFailure_FallsBackToHeuristicWithoutProvenance pins the AI-failure
+// fallback semantics after TDB-3: when the unified
+// analyzeContingentLiabilityWithAI errors, ApplyB3Contingent computes the
+// amount via the deterministic industry-heuristic fallback and leaves
+// AIProvenance nil (no AI response → no provenance). For IndustryCode "45"
+// (Tech) the heuristic rate is 0.40, so the weighted amount is unchanged from
+// the pre-TDB-3 flat-0.40 behavior. The single-call invariant is also
+// preserved: AnalyzeFootnote is invoked EXACTLY ONCE.
+func TestB3AIFailure_FallsBackToHeuristicWithoutProvenance(t *testing.T) {
 	stub := &errorAIService{}
 	la := NewLiabilityAdjuster(stub, nil).WithAI(true)
 	rule := &entities.CleaningRule{ID: "contingent_liabilities"}
@@ -269,8 +271,10 @@ func TestB3AIFailure_FallsBackToConservativeWithoutProvenance(t *testing.T) {
 	assert.Nil(t, overlay.AIProvenance,
 		"AI failure must leave AIProvenance nil — the recorded amount is rule-based, not AI-derived")
 
-	// Conservative 40% applied to total contingent ($1.75M).
+	// Industry-heuristic fallback applied to total contingent ($1.75M). For
+	// IndustryCode "45" (Tech) the heuristic rate is 0.40, so the weighted
+	// amount matches the pre-TDB-3 flat-0.40 behavior.
 	total := data.ContingentLiabilities + data.EnvironmentalLiabilities + data.LitigationLiabilities
 	assert.InDelta(t, total*0.40, overlay.Amount, 0.01,
-		"AI failure must engage the conservative 40% fallback (matching pre-followup behavior)")
+		"AI failure must engage the industry-heuristic fallback (Tech 40%, matching pre-TDB-3 behavior)")
 }
