@@ -22,7 +22,7 @@ Phase 2 makes midas **consume a hand-authored, immutable guidance-artifact fixtu
 1. Finalize the guidance-artifact JSON schema (extending §8.2): exact fields, required-vs-optional, the mandatory `"no_explicit_guidance_found"` status form (§8.3 item 3), and an `ai_provenance` block mirroring midas's existing `AIProvenance` pattern. Versioned via `schema_version`.
 2. Specify accession-keyed identity, immutability, content-addressing, deterministic conflict resolution + staleness, and how the valuation receives an explicit as-of/filing-cutoff so replay pins the exact artifact (§8.3 items 1,2,4,5).
 3. Implement the §9 assumption-authority hierarchy as a deterministic resolver: 5-level precedence, per-assumption source recording (a new diagnostic block + per-assumption source tags consistent with the RM-1 / VAL-1 conventions), and the §9.3 anti-"assumption-laundering" guardrails.
-4. Implement a deterministic, accession-keyed, **immutable** loader that caches "no guidance found" as a first-class result.
+4. Implement a deterministic, accession-keyed, **immutable** loader that returns "no guidance found" as a first-class result (re-resolved deterministically on every call — the loader is stateless, no memoization).
 5. Capture the consumed artifact (or the no-guidance record) as a new numbered stage file in the replay bundle so a guidance-consuming valuation replays bit-for-bit.
 6. Decide §12.4 (the year-1 anchor mechanic) and §12.5 (whether Phase 2 warrants a `CalculationVersion` bump).
 
@@ -40,7 +40,7 @@ Phase 2 makes midas **consume a hand-authored, immutable guidance-artifact fixtu
 
 ### Functional
 
-- **F1.** A deterministic loader resolves, for a `(CIK, as-of)` valuation, at most one guidance artifact — keyed on `(CIK, accession)` — or a cached **absent** result. Same inputs ⇒ same artifact (or same absence) every run.
+- **F1.** A deterministic loader resolves, for a `(CIK, as-of)` valuation, at most one guidance artifact — keyed on `(CIK, accession)` — or a first-class **absent** result. Same inputs ⇒ same artifact (or same absence) every run. The loader is stateless: each call freshly re-scans + re-resolves, so "same inputs ⇒ same absence" holds by deterministic re-derivation, not by a memo/cache.
 - **F2.** Artifacts are immutable and content-addressed: the on-disk `artifact_sha256` is recomputed on load and must match the embedded value; a mismatch is a hard load error (never silently consumed).
 - **F3.** The assumption-authority resolver applies the §9 precedence and records, **per assumption**, which level supplied the final value, surfaced in the response/trace.
 - **F4.** Anti-laundering guardrails (§9.3) are enforced: a numeric override requires `validation.status == "validated"`, `confidence ≥ threshold`, an explicit `value` + an accepted `evidence` quote; vague-prose-only artifacts contribute qualitative context, never a number; guidance anchors near-term (year 1–2) only and never dominates intrinsic value; low-confidence or absent ⇒ fall through to Layer A.
@@ -77,8 +77,9 @@ The resolver produces a **`GuidanceResolution`** value (the selected artifact or
 ```
                         ┌──────────────────────────────┐
    (CIK, as-of) ───────►│  guidance.Loader (immutable, │
-                        │  accession-keyed, caches      │──► *guidance.Artifact  OR  AbsentRecord
-                        │  absent; content-addressed)   │
+                        │  accession-keyed, stateless;  │──► *guidance.Artifact  OR  AbsentRecord
+                        │  absence is a first-class     │
+                        │  result; content-addressed)   │
                         └──────────────┬───────────────┘
                                        │
    ResolvedProfile (Layer A) ─────────►│  authority.Resolver (§9 precedence + §9.3 guardrails)
@@ -151,7 +152,7 @@ A new package **`internal/services/valuation/guidance`** owns the Go types and (
 
 > **Rationale.** Reusing midas's existing `AIProvenance` shape + the `hash.go` canonical-hashing rule (exclude wall-clock, sort map keys, type-tag unsupported values) means the Phase-3 extraction tool's provenance maps 1:1 onto what Phase 2 already consumes — zero contract churn at the Phase-2→3 boundary. The guidance `AIProvenance` is recorded for audit/replay; in Phase 2 it never *drives* a value (the value comes from `extraction`), it just travels with the captured artifact.
 
-**The mandatory `no_explicit_guidance_found` form** (§8.3 item 3) is a complete, valid artifact with `status: "no_explicit_guidance_found"`, populated `issuer` + `filing` (so the absence is *attributed to a specific filing*, making it cacheable and replay-pinnable), `extraction` absent/empty, and `validation.status` mirroring. This is what the loader caches and what the bundle captures when a filing was searched but carried no guidance.
+**The mandatory `no_explicit_guidance_found` form** (§8.3 item 3) is a complete, valid artifact with `status: "no_explicit_guidance_found"`, populated `issuer` + `filing` (so the absence is *attributed to a specific filing*, making it replay-pinnable), `extraction` absent/empty, and `validation.status` mirroring. This is what the loader returns as a first-class result and what the bundle captures when a filing was searched but carried no guidance.
 
 ### Decision 2 — Accession-keyed identity, immutability, content-addressing, conflict, staleness (§8.3)
 
@@ -242,11 +243,11 @@ New **`guidance.Loader`** in `internal/services/valuation/guidance`:
 - Constructed with a `Root string` (the directory; empty = disabled). Production wires empty ⇒ disabled ⇒ absent path everywhere ⇒ NF1.
 - `Load(cik string, asOf time.Time) (Resolution, error)` where `Resolution` is `{Artifact *Artifact; Absent bool; Trace LoadTrace}`:
   1. If `Root == ""` ⇒ return `{Absent: true}` immediately (the production no-op).
-  2. List `Root/<cik>/` in **sorted** order (NF2). No subdir ⇒ `{Absent: true}` (cached as such — absence is a first-class, cacheable result, §8.3 item 3).
+  2. List `Root/<cik>/` in **sorted** order (NF2). No subdir ⇒ `{Absent: true}` — absence is a first-class result, re-derived deterministically each call (§8.3 item 3).
   3. Parse each file; for each, recompute and verify `artifact_sha256` (hard error on mismatch — F2).
   4. Filter to eligible candidates: `filing.filing_date ≤ asOf`.
   5. Apply conflict resolution (Decision 2) per `period_end`, then select the single artifact whose guidance is newest + non-stale relative to `asOf`. If the winner has `status == "no_explicit_guidance_found"` ⇒ return it (a positive "we looked, found nothing" record). If no eligible candidate ⇒ `{Absent: true}`.
-- **Caching of absence:** the loader memoizes per `(cik, asOf-as-eligibility-bucket)` so a re-resolve in the same request is free; absence is cached identically to a hit. (In-process, request-scoped; no cross-request global state — keeps replay hermetic.)
+- **Absence as a first-class result (no memoization):** the loader is STATELESS — it holds no per-`(cik, asOf)` memo and re-scans + re-resolves on every call. Absence is therefore a deterministic RESULT, not a cached entry: F1's "same inputs ⇒ same absence" holds purely by re-derivation (sorted scan + total-order conflict resolution are deterministic), which is simpler and inherently replay-safe (no cross-request or in-request state to leak). A memo was considered and deliberately NOT added — the per-call scan is cheap and the statelessness is the cleaner contract.
 - **Replay seam:** the loader exposes `LoadFromBundle(raw []byte) (Resolution, error)` used by the replay path so it consumes the captured `09-guidance.json` rather than scanning the live directory (NF3). The replay `BundleGuidanceGateway` returns `ErrBundleMissingPayload`-style absence (no panic) when the bundle predates guidance capture — matching the existing replay gateway discipline so an old bundle simply replays on the absent path.
 
 ### Decision 6 (§12.4) — Year-1 anchor mechanic: **MIDPOINT-as-clamp on the modeled near-term value, range → diagnostic**
@@ -290,7 +291,7 @@ Capture the resolution as **`09-guidance.json`** (the open slot between `08-assu
 
 **Create**
 - `internal/services/valuation/guidance/artifact.go` — the `Artifact`/`Envelope`/`Filing`/`AIProvenance`(guidance flavor) types, `schema_version` const, enum constants, canonical-serialization + `ComputeArtifactSHA256`.
-- `internal/services/valuation/guidance/loader.go` — `Loader`, `Load`, `LoadFromBundle`, conflict resolution, staleness, absence caching.
+- `internal/services/valuation/guidance/loader.go` — `Loader`, `Load`, `LoadFromBundle`, conflict resolution, staleness, absence-as-first-class-result (stateless, no memo).
 - `internal/services/valuation/guidance/validate.go` — structural validation (value_low ≤ value_high, period non-empty, margin basis present, evidence-required-for-numeric).
 - `internal/services/valuation/authority/resolver.go` — `Resolver`, `Resolution`, `NearTermAnchors`, the §9 precedence + §9.3 guardrails.
 - `internal/services/valuation/guidance.go` (in the `valuation` package) — `resolveGuidance(ctx, cik, asOf, profile, opts) authority.Resolution`, the thin service-level orchestrator that calls loader+resolver, writes `assumption_sources`, appends warnings, and captures the bundle stage.
@@ -373,7 +374,7 @@ Capture the resolution as **`09-guidance.json`** (the open slot between `08-assu
 
 ## Module Descriptions
 
-- **`internal/services/valuation/guidance`** — pure artifact domain: types, (un)marshal, canonical hashing (reusing the `hash.go` discipline), structural validation, and the deterministic loader (accession-keyed, immutable, content-addressed, conflict/staleness rules, absence caching, bundle seam). No imports of `models`/`entities` beyond what's needed; no DCF math. Leaf-style, like `profile`.
+- **`internal/services/valuation/guidance`** — pure artifact domain: types, (un)marshal, canonical hashing (reusing the `hash.go` discipline), structural validation, and the deterministic loader (accession-keyed, immutable, content-addressed, conflict/staleness rules, absence-as-first-class-result via stateless re-derivation, bundle seam). No imports of `models`/`entities` beyond what's needed; no DCF math. Leaf-style, like `profile`.
 - **`internal/services/valuation/authority`** — the §9 precedence engine + §9.3 guardrails. Input: `*guidance.Artifact` (or absent), `*profile.ResolvedProfile`, the user-override set; output: `authority.Resolution` (per-assumption sources, near-term anchors, warnings, captured artifact, status). The "single authoritative source-decision path", analogous to `params`.
 - **`valuation.resolveGuidance` + `applyReinvestmentModel` changes** — the consumption seam. `resolveGuidance` runs once per valuation between profile resolution and DCF-input build; `applyReinvestmentModel` applies the near-term anchor on the DCF path only, byte-identical when no anchor exists.
 - **`artifact.SetGuidanceResolution` + replay `BundleGuidanceGateway`** — capture + hermetic replay of the resolution.
@@ -385,7 +386,7 @@ Capture the resolution as **`09-guidance.json`** (the open slot between `08-assu
 ### BACKEND (small, reviewable chunks — sequence as listed)
 
 - **B1 — guidance types + hashing + validation.** Create `guidance/artifact.go` + `guidance/validate.go`: `Artifact`/`Envelope`/`Filing`/`AIProvenance` types, enums, `schema_version="1.0.0"`, `ComputeArtifactSHA256` (canonical, wall-clock-free, sorted-key — reuse the `hash.go` rule), structural validators. Tests: round-trip (incl. `no_explicit_guidance_found`), `value_low ≤ value_high`, period-required, margin-basis-required, evidence-required-for-numeric, content-hash determinism.
-- **B2 — loader.** Create `guidance/loader.go`: `Loader{Root}`, `Load(cik, asOf)`, sorted scan, content-hash verify (hard error), filing-date eligibility, conflict resolution (newest → form-rank → accession-lex), staleness, absence-as-first-class + caching, `LoadFromBundle`. Tests: hit, absent (no dir / empty dir), conflict pair resolves deterministically, stale not consumed, hash-mismatch hard-errors, `Root==""` ⇒ always absent.
+- **B2 — loader.** Create `guidance/loader.go`: `Loader{Root}`, `Load(cik, asOf)`, sorted scan, content-hash verify (hard error), filing-date eligibility, conflict resolution (newest → form-rank → accession-lex), staleness, absence-as-first-class-result (stateless re-derivation, no memo), `LoadFromBundle`. Tests: hit, absent (no dir / empty dir), conflict pair resolves deterministically, stale not consumed, hash-mismatch hard-errors, `Root==""` ⇒ always absent.
 - **B3 — authority resolver.** Create `authority/resolver.go`: §9 precedence, §9.3 guardrails (validated+confidence+evidence required for numeric; vague-prose ⇒ context-only; near-term-only enforcement; low-conf/absent ⇒ fall through), midpoint anchor (Decision 6), per-assumption `Sources` + warnings. Tests: each precedence level wins in turn; guardrails reject laundering; anchor index ≥ 3 refused; midpoint computed correctly.
 - **B4 — entities + bundle helper + config.** Add `AssumptionSources`/`AssumptionSourceValue` to `entities/valuation.go` (omitempty); `SetGuidanceResolution` to `artifact/bundle.go`; `Valuation.GuidanceRoot` to `config.go` (default `""`). Tests: default-path JSON omits `assumption_sources` (byte-identity guard); nil-bundle `SetGuidanceResolution` no-ops.
 - **B5 — service wiring.** Add `valuation/guidance.go::resolveGuidance`; call it in `performValuation` after profile resolution; thread anchors into `applyReinvestmentModel`; append warnings; stamp `result.AssumptionSources`; capture `09-guidance.json`. **Critical:** the empty-root path must be byte-identical — add `TestPerformValuation_NoGuidance_ByteIdentical` against a 4.7 golden. Also wire the alt-model path to stamp `assumption_sources` with `source=profile/historical` (no value change).
@@ -431,7 +432,7 @@ Capture the resolution as **`09-guidance.json`** (the open slot between `08-assu
 | Contract round-trips (incl. absent) | Q5 | lossless marshal/unmarshal + re-validate; content-hash mismatch hard-errors; conflict resolves to documented winner |
 | Prompt/content-hash stability (AIProvenance-style) | B1 | `artifact_sha256` + `prompt_sha256` deterministic, wall-clock-free, sorted-key |
 | Validator (structural) | B1/B3 | value_low ≤ value_high; period required; margin basis required; evidence required for numeric; vague-prose ⇒ context-only |
-| Loader determinism | B2 | sorted scan; staleness; conflict total-order; absence cached |
+| Loader determinism | B2 | sorted scan; staleness; conflict total-order; absence re-derived deterministically (stateless) |
 | Byte-identity (NF1) | Q1 | full suite + DDM/FFO/RM + shadow + version pins all green; empty-root production-config identical to 4.7 |
 
 > **Model-quality eval (§11.3 last row)** is explicitly **out of scope for Phase 2** — there is no model. It belongs to Phase 3's quarantined eval set.
@@ -452,7 +453,7 @@ Capture the resolution as **`09-guidance.json`** (the open slot between `08-assu
 1. With empty `GuidanceRoot` (production default), every valuation is byte-identical to the Layer-A 4.7 engine — DDM/FFO/RM primaries, recompute-shadow, version pins, full suite all green (NF1).
 2. A high-confidence AMD fixture + as-of after its filing anchors year-1 (and optionally year-2) capex/margin/growth to the envelope midpoint; `assumption_sources["…_year1"].source == "guidance"`; a `guidance: …` source tag appears in `Warnings`; years ≥ 3 are untouched (§9.3 dominance guardrail holds structurally).
 3. A low-confidence fixture and a `no_explicit_guidance_found` fixture each yield a DCF value byte-identical to the no-fixture Layer-A run, with the resolution captured and a fall-through warning recorded.
-4. The loader is deterministic: sorted scan, content-hash verified (mismatch hard-errors), filing-date eligibility against as-of, conflict resolved by newest → form-rank → accession-lex, staleness excluded from numeric override, absence cached as a first-class result.
+4. The loader is deterministic: sorted scan, content-hash verified (mismatch hard-errors), filing-date eligibility against as-of, conflict resolved by newest → form-rank → accession-lex, staleness excluded from numeric override, absence returned as a first-class result re-derived deterministically on each call (stateless — no memo).
 5. A guidance-consuming valuation captures `09-guidance.json` and replays bit-for-bit via `cmd/replay --from=parsed --diff-stages`; bundles predating guidance capture replay on the absent path unchanged.
 6. Every fixture (incl. the absent form) round-trips and re-validates; the `ai_provenance` block mirrors midas's `AIProvenance` shape and hashing discipline.
 7. `CalculationVersion` is unchanged at `4.7`; no production value changes in Phase 2.

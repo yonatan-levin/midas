@@ -60,7 +60,18 @@ const (
 	StatusNoGuidanceFound = "no_explicit_guidance_found"
 	StatusStale           = "stale"
 	StatusAbsent          = "absent"
-	StatusLowConfidence   = "low_confidence"
+	// StatusLowConfidence marks a VALIDATED artifact whose envelope confidence
+	// fell below the §9.3 anchor threshold — the artifact itself is fine, the
+	// numeric value is just not anchor-eligible. Distinct from a non-validated
+	// artifact (LOW-3): a needs_review / rejected artifact surfaces its OWN
+	// status (StatusNeedsReview / StatusRejected) so a high-confidence-but-
+	// rejected artifact never reads as "low_confidence".
+	StatusLowConfidence = "low_confidence"
+	// StatusNeedsReview / StatusRejected mirror the underlying guidance artifact
+	// statuses verbatim (LOW-3). Both fall through to the Layer-A trajectory
+	// (no numeric anchor) but the diagnostic tag is honest about WHY.
+	StatusNeedsReview = "needs_review"
+	StatusRejected    = "rejected"
 )
 
 // AssumptionSource records the final source + value provenance for one
@@ -167,8 +178,12 @@ func Resolve(in Input) Resolution {
 	// §9.3: ONLY a validated artifact is eligible to supply a numeric override.
 	// A needs_review / rejected artifact contributes qualitative context only
 	// (never a number) — Phase 2 records the fall-through and produces no anchor.
+	// LOW-3: surface the underlying artifact status verbatim rather than
+	// flattening every non-validated status to "low_confidence" — a
+	// high-confidence-but-rejected artifact is NOT low-confidence, and the
+	// diagnostic tag must not say it is.
 	if art.Status != guidance.StatusValidated {
-		res.GuidanceStatus = StatusLowConfidence
+		res.GuidanceStatus = string(art.Status)
 		res.Warnings = append(res.Warnings,
 			fmt.Sprintf("guidance: artifact status=%s (not validated) for accession %s — context only, no numeric anchor",
 				art.Status, art.Filing.Accession))

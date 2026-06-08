@@ -92,6 +92,18 @@ type Inputs struct {
 	// (valuation.applyReinvestmentModel) refuses to populate any year > 2 (§9.3
 	// near-term-prefix guardrail), so the engine never sees a year-3+ key.
 	NearTermReinvestmentOverride map[int]float64
+
+	// NearTermMarginOverride is the symmetric Layer-B Phase-2 guidance anchor
+	// seam for OPERATING MARGIN (LOW-1). It maps a 1-based projection YEAR to an
+	// operating-margin FRACTION that REPLACES the model-computed converged margin
+	// for that year ONLY — honored ONLY on the reinvestment path (useReinv). It
+	// is the margin analogue of NearTermReinvestmentOverride and exists so a
+	// year-2 margin guidance anchor steers year-2 margin "like the other Year2
+	// knobs" (revenue-growth replaces RevenueGrowthRates[1]; capex replaces
+	// reinvestment[2]). nil/empty ⇒ NO override ⇒ byte-identical to the Layer-A
+	// reinvestment projection (NF1). The caller refuses any year > 2 (§9.3
+	// near-term-prefix guardrail), so the engine never sees a year-3+ key.
+	NearTermMarginOverride map[int]float64
 }
 
 // Projection represents cash flow projection for a single year
@@ -188,6 +200,13 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 
 			marginFrac := convergeFraction(year, inputs.MarginConvergenceYears)
 			margin := inputs.BaseOperatingMargin + (inputs.TargetOperatingMargin-inputs.BaseOperatingMargin)*marginFrac
+			// Layer-B Phase-2 guidance margin anchor (LOW-1): a near-term (year
+			// 1–2) margin override REPLACES the model-computed converged margin for
+			// that year only. nil map ⇒ no override ⇒ byte-identical to Layer A
+			// (NF1). Symmetric with NearTermReinvestmentOverride above.
+			if ov, ok := inputs.NearTermMarginOverride[year]; ok {
+				margin = ov
+			}
 			operatingIncome := currentRevenue * margin
 			nopat := operatingIncome * (1 - inputs.TaxRate)
 
@@ -203,6 +222,19 @@ func CalculateDCF(inputs Inputs) (*Result, error) {
 			// byte-identical to Layer A (NF1). The override deliberately
 			// bypasses the maintenance-capex floor: a management-guided absolute
 			// CapEx figure is authoritative for the near term.
+			//
+			// GROSS-AS-NET APPROXIMATION (MEDIUM-2, Phase-2 fixtured path only):
+			// the override value carried here is an `absolute_usd` CapEx figure,
+			// i.e. GROSS capex. It is substituted directly for `reinvest`, which
+			// on the sales_to_capital path is a NET reinvestment term (ΔRevenue /
+			// SalesToCapital, with D&A already netted out). Phase 2 treats the
+			// guided gross capex AS the net reinvestment without subtracting D&A —
+			// a deliberate, documented approximation that lets the fixtured
+			// consumption path move a value without a D&A-bearing conversion. The
+			// precise gross→net conversion (reinvest = grossCapEx − D&A + ΔWC) is
+			// DEFERRED to Phase 3, when real extracted guidance + a D&A series are
+			// available. This affects ONLY the fixtured path; production runs with
+			// an empty GuidanceRoot ⇒ nil map ⇒ this branch never fires (NF1).
 			if ov, ok := inputs.NearTermReinvestmentOverride[year]; ok {
 				reinvest = ov
 			}

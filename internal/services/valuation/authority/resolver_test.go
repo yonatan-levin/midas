@@ -130,15 +130,32 @@ func TestResolve_LowConfidence_NotAnchored(t *testing.T) {
 	assert.Contains(t, res.Warnings[0], "NOT anchored")
 }
 
+// TestResolve_NonValidatedStatus_ContextOnly is the LOW-3 status-precision pin:
+// a needs_review and a rejected artifact must NOT both collapse to the
+// misleading "low_confidence" tag (a high-confidence-but-rejected artifact is
+// not low-confidence). The GuidanceStatus carries the underlying artifact
+// status verbatim so the diagnostic block is honest. Both still fall through to
+// the Layer-A trajectory (no numeric anchor) — the laundering guardrail is
+// unchanged; only the surfaced tag is corrected.
 func TestResolve_NonValidatedStatus_ContextOnly(t *testing.T) {
-	for _, status := range []guidance.Status{guidance.StatusNeedsReview, guidance.StatusRejected} {
-		t.Run(string(status), func(t *testing.T) {
+	cases := []struct {
+		status     guidance.Status
+		wantStatus string
+	}{
+		{guidance.StatusNeedsReview, StatusNeedsReview},
+		{guidance.StatusRejected, StatusRejected},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.status), func(t *testing.T) {
 			art := validatedArtifact()
-			art.Status = status
+			art.Status = tc.status
 			in := Input{Loaded: hit(art, false)}
 			res := Resolve(in)
 
-			assert.Equal(t, StatusLowConfidence, res.GuidanceStatus)
+			assert.Equal(t, tc.wantStatus, res.GuidanceStatus,
+				"the underlying artifact status is surfaced verbatim, not flattened to low_confidence")
+			assert.NotEqual(t, StatusLowConfidence, res.GuidanceStatus,
+				"a non-validated artifact must not masquerade as low_confidence (LOW-3)")
 			assert.True(t, res.Anchors.IsEmpty(), "non-validated ⇒ context only, no numeric anchor (laundering rejected)")
 			require.Len(t, res.Warnings, 1)
 			assert.Contains(t, res.Warnings[0], "context only")

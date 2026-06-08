@@ -5,10 +5,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
+
+// canonicalCIK is the ONLY accepted CIK form: the zero-padded 10-digit string
+// (matches SEC / ports.FlexibleCIK and the on-disk fixture directory layout,
+// Decision 2). Validating against this BEFORE joining the CIK onto Root closes
+// the MEDIUM-1 path-traversal vector — a CIK is an attacker-influenceable key
+// once Phase 3 derives it from request/SEC data, so a payload like "../../etc"
+// or "0000002488/../.." must never reach filepath.Join. The pattern admits no
+// path separators, no dots, and no "..": a matching string cannot escape Root.
+var canonicalCIK = regexp.MustCompile(`^[0-9]{10}$`)
 
 // ErrContentHashMismatch is the ONE hard error the loader raises on a present
 // artifact (F2 / NF4): the recomputed artifact_sha256 does not match the
@@ -36,8 +46,10 @@ type Resolution struct {
 type LoadTrace struct {
 	// SelectedAccession is the accession of the chosen artifact ("" when Absent).
 	SelectedAccession string `json:"selected_accession,omitempty"`
-	// RejectedAccessions lists the eligible-but-not-chosen candidates, sorted
-	// for determinism (NF2).
+	// RejectedAccessions lists the SAME-period_end candidates that competed with
+	// the winner and lost (the genuine conflict group, LOW-4), sorted for
+	// determinism (NF2). Eligible filings from a different period_end never
+	// competed and are deliberately excluded.
 	RejectedAccessions []string `json:"rejected_accessions,omitempty"`
 	// Stale is true when the selected artifact's newest guidance period has
 	// lapsed relative to as-of (still captured, not consumed for a numeric
@@ -94,6 +106,16 @@ func NewLoader(root string) *Loader {
 func (l *Loader) Load(cik string, asOf time.Time) (Resolution, error) {
 	if l == nil || l.Root == "" {
 		return Resolution{Absent: true, Trace: LoadTrace{Reason: "disabled_root"}}, nil
+	}
+
+	// MEDIUM-1 path-traversal guard: reject any CIK that is not the canonical
+	// zero-padded 10-digit form BEFORE it is joined onto Root. A non-canonical
+	// CIK (separators, "..", non-digits) degrades to absence — it never reads a
+	// directory outside Root and never raises a hard error (NF4 discipline). In
+	// Phase 2 this is unreachable in production (empty Root short-circuits above),
+	// but it closes the latent vector for when Phase 3 sets a live root.
+	if !canonicalCIK.MatchString(cik) {
+		return Resolution{Absent: true, Trace: LoadTrace{Reason: "invalid_cik"}}, nil
 	}
 
 	dir := filepath.Join(l.Root, cik)
@@ -256,9 +278,17 @@ func selectArtifact(candidates []*Artifact, asOf time.Time) Resolution {
 	})
 	winner := eligible[0]
 
+	// LOW-4: rejected_accessions lists ONLY the candidates that actually
+	// COMPETED with the winner — i.e. shared the winner's period_end. Eligible
+	// filings from a DIFFERENT period_end never entered the winner's conflict
+	// group (conflict resolution is per-period, Decision 2), so listing them
+	// overstates conflict. Restrict to same-period competitors; the set stays
+	// deterministic via the sort below.
 	rejected := make([]string, 0, len(eligible)-1)
 	for _, c := range eligible[1:] {
-		rejected = append(rejected, c.Filing.Accession)
+		if c.Filing.PeriodEnd == winner.Filing.PeriodEnd {
+			rejected = append(rejected, c.Filing.Accession)
+		}
 	}
 	sort.Strings(rejected)
 

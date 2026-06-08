@@ -136,9 +136,11 @@ func (s *Service) applyReinvestmentModel(
 //   - OperatingMarginYear1 ⇒ seeds the year-1 margin start by setting
 //     in.BaseOperatingMargin to the anchor; the convergence schedule then
 //     proceeds from the anchored start toward TargetOperatingMargin (later years
-//     still converge). OperatingMarginYear2 is not directly seedable on the
-//     existing convergence curve without an engine change, so Phase 2 anchors
-//     only the year-1 margin start (the year-2 margin pointer is reserved).
+//     still converge).
+//   - OperatingMarginYear2 ⇒ in.NearTermMarginOverride[2] REPLACES the
+//     model-computed converged margin for year 2 only (LOW-1 — consumed
+//     symmetrically with the other Year2 knobs via the additive per-year engine
+//     seam, rather than touching the convergence curve).
 //   - CapExYearN (absolute USD) ⇒ in.NearTermReinvestmentOverride[N] replaces the
 //     model-computed reinvestment for that year ONLY (the additive engine seam).
 //
@@ -189,7 +191,26 @@ func applyNearTermAnchors(in *dcf.Inputs, anchors authority.NearTermAnchors) {
 		}
 	}
 
+	// Operating-margin year-2 anchor REPLACES the year-2 converged margin via the
+	// per-year override seam (LOW-1) — symmetric with the CapEx year-2 anchor.
+	if anchors.OperatingMarginYear2 != nil {
+		assertNearTermPrefix(1)
+		ensureMarginOverride(in)[2] = *anchors.OperatingMarginYear2
+	}
+
 	// CapEx absolute anchors become per-year reinvestment overrides (year 1–2).
+	//
+	// GROSS-AS-NET APPROXIMATION (MEDIUM-2, Phase-2 fixtured path only): the
+	// CapEx anchor is an `absolute_usd` figure — GROSS capex. It is written
+	// straight into NearTermReinvestmentOverride, which the engine substitutes
+	// for the NET reinvestment term (ΔRevenue/SalesToCapital with D&A already
+	// netted). Phase 2 deliberately treats guided gross capex AS the net
+	// reinvestment, WITHOUT a D&A-bearing gross→net conversion — a documented
+	// approximation so the fixtured path can move a value before real extracted
+	// guidance + a D&A series exist. The precise conversion
+	// (net = grossCapEx − D&A + ΔWC) is DEFERRED to Phase 3. This is reachable
+	// ONLY when a validated CapEx fixture is present; production (empty
+	// GuidanceRoot) never produces a CapEx anchor ⇒ byte-identical to Layer A.
 	if anchors.CapExYear1 != nil {
 		assertNearTermPrefix(0)
 		ensureReinvestmentOverride(in)[1] = *anchors.CapExYear1
@@ -219,4 +240,14 @@ func ensureReinvestmentOverride(in *dcf.Inputs) map[int]float64 {
 		in.NearTermReinvestmentOverride = map[int]float64{}
 	}
 	return in.NearTermReinvestmentOverride
+}
+
+// ensureMarginOverride lazily allocates the per-year operating-margin override
+// map on the inputs and returns it (LOW-1 — the margin analogue of
+// ensureReinvestmentOverride).
+func ensureMarginOverride(in *dcf.Inputs) map[int]float64 {
+	if in.NearTermMarginOverride == nil {
+		in.NearTermMarginOverride = map[int]float64{}
+	}
+	return in.NearTermMarginOverride
 }

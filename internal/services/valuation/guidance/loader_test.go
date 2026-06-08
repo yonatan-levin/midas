@@ -167,6 +167,53 @@ func TestLoader_ConflictResolution_AccessionLexTieBreak(t *testing.T) {
 	assert.Equal(t, "0000002488-26-000099", res.Trace.SelectedAccession, "lex-largest accession wins the final tie-break")
 }
 
+// TestLoader_RejectedAccessions_SamePeriodOnly is the LOW-4 scope pin:
+// rejected_accessions must list ONLY the candidates that actually COMPETED with
+// the winner — i.e. shared the winner's period_end — not every eligible
+// candidate from unrelated periods. A different-period filing never "lost" to
+// the winner; including it overstates conflict.
+func TestLoader_RejectedAccessions_SamePeriodOnly(t *testing.T) {
+	root := t.TempDir()
+
+	// Winner group: two filings on period_end 2026-12-26 (FY2027). The newer
+	// 10-Q wins; the same-period 10-K is the genuine rejected competitor.
+	winner := validCapExArtifact()
+	winner.Filing.Accession = "0000002488-27-000040"
+	winner.Filing.FormType = "10-Q"
+	winner.Filing.FilingDate = "2027-04-28"
+	winner.Filing.PeriodEnd = "2026-12-26"
+	winner.Extraction.CapExGuidance.Period = "FY2027"
+
+	sameperiodLoser := validCapExArtifact()
+	sameperiodLoser.Filing.Accession = "0000002488-27-000005"
+	sameperiodLoser.Filing.FormType = "10-K"
+	sameperiodLoser.Filing.FilingDate = "2027-02-03"
+	sameperiodLoser.Filing.PeriodEnd = "2026-12-26" // SAME period as the winner
+	sameperiodLoser.Extraction.CapExGuidance.Period = "FY2027"
+
+	// Unrelated group: an older filing on a DIFFERENT period_end (2025-12-28,
+	// FY2026). It is eligible but never competed with the FY2027 winner, so it
+	// must NOT appear in rejected_accessions.
+	otherPeriod := validCapExArtifact() // accession 0000002488-26-000012, period_end 2025-12-28
+
+	writeArtifact(t, root, winner)
+	writeArtifact(t, root, sameperiodLoser)
+	writeArtifact(t, root, otherPeriod)
+
+	l := NewLoader(root)
+	res, err := l.Load(testCIK, mustDate(t, "2027-06-01"))
+	require.NoError(t, err)
+	require.NotNil(t, res.Artifact)
+
+	assert.Equal(t, "0000002488-27-000040", res.Trace.SelectedAccession, "newest filing wins")
+	// ONLY the same-period_end competitor is a rejected accession; the unrelated
+	// FY2026 filing competed in no conflict and is excluded (LOW-4).
+	assert.Equal(t, []string{"0000002488-27-000005"}, res.Trace.RejectedAccessions,
+		"rejected_accessions lists only same-period competitors, not unrelated eligible filings")
+	assert.NotContains(t, res.Trace.RejectedAccessions, "0000002488-26-000012",
+		"a different-period eligible filing never competed and must be excluded")
+}
+
 func TestLoader_Staleness_PeriodLapsed(t *testing.T) {
 	root := t.TempDir()
 	writeArtifact(t, root, validCapExArtifact()) // capex period FY2026
@@ -246,6 +293,64 @@ func TestLoader_StructurallyInvalidFile_Skipped(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res.Artifact)
 	assert.Equal(t, "0000002488-26-000012", res.Trace.SelectedAccession, "structurally-invalid sibling skipped")
+}
+
+// TestLoader_MaliciousCIK_CannotEscapeRoot is the MEDIUM-1 path-traversal guard.
+// A CIK is an attacker-influenced key (Phase 3 will derive it from request /
+// SEC data), so the loader MUST refuse anything that is not the canonical
+// zero-padded 10-digit form BEFORE joining it onto Root. A traversal payload
+// like "../../etc" or "0000002488/../.." must resolve to absence (never read a
+// file outside Root, never error in a way that leaks the path).
+func TestLoader_MaliciousCIK_CannotEscapeRoot(t *testing.T) {
+	// Lay out a tree where a traversal payload would land on a directory that
+	// HOLDS loadable .json artifacts, so an un-sanitized join is observable:
+	//
+	//	<base>/secrets/<accession>.json   ← escape target (loadable artifacts)
+	//	<base>/fixtures/                   ← Root
+	//
+	// A payload like "../secrets" joined onto Root (<base>/fixtures) resolves to
+	// <base>/secrets — a directory full of .json artifacts the loader would read
+	// if it did not validate the CIK. A correct loader refuses every non-canonical
+	// CIK and resolves to absence.
+	base := t.TempDir()
+	root := filepath.Join(base, "fixtures")
+	require.NoError(t, os.MkdirAll(root, 0o755))
+	// Plant loadable artifacts in the escape target directory.
+	writeArtifact(t, base, validCapExArtifact()) // writes base/<cik>/<acc>.json
+
+	l := NewLoader(root)
+	for _, badCIK := range []string{
+		"../../etc",
+		"0000002488/../..",
+		"..",
+		"../" + testCIK,            // lands on base/<cik> (the planted escape target)
+		`..\` + testCIK,            // backslash-separated traversal (Windows)
+		"0000002488/../0000002488", // contains separators ⇒ not the canonical form
+		"abcdefghij",               // 10 chars but non-numeric
+		"000000248",                // 9 digits
+		"00000024888",              // 11 digits
+		"",                         // empty
+	} {
+		t.Run(badCIK, func(t *testing.T) {
+			res, err := l.Load(badCIK, mustDate(t, "2026-03-01"))
+			require.NoError(t, err, "a malicious CIK must degrade to absence, never a hard error")
+			assert.True(t, res.Absent, "malicious CIK must not resolve any artifact")
+			assert.Nil(t, res.Artifact, "malicious CIK must not read outside Root")
+		})
+	}
+}
+
+// TestLoader_CanonicalCIK_StillResolves pins that the MEDIUM-1 sanitization does
+// NOT regress the happy path: a canonical zero-padded 10-digit CIK still loads.
+func TestLoader_CanonicalCIK_StillResolves(t *testing.T) {
+	root := t.TempDir()
+	writeArtifact(t, root, validCapExArtifact())
+
+	l := NewLoader(root)
+	res, err := l.Load(testCIK, mustDate(t, "2026-03-01"))
+	require.NoError(t, err)
+	require.NotNil(t, res.Artifact)
+	assert.Equal(t, "0000002488-26-000012", res.Trace.SelectedAccession)
 }
 
 func TestLoadFromBundle_AbsentPayload(t *testing.T) {
