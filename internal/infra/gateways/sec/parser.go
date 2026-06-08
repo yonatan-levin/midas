@@ -876,6 +876,55 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		financialData.PensionPlanAssets = val
 	}
 
+	// B3 contingent-liability inputs (TDB-12). Recognized ASC 450 / ASC 410
+	// balance-sheet accruals (instant, credit-balance). B3 (ApplyB3Contingent)
+	// SUMS all three as the gross exposure, then probability-weights it into a
+	// DebtLikeClaims overlay (the EV->Equity bridge subtracts it -> lower fair
+	// value for filers carrying material accruals). The three candidate lists
+	// are mutually DISJOINT (general vs environmental vs litigation) and
+	// AGGREGATE-FIRST within each — findValue (first-hit), NOT sumValues — so a
+	// filer reporting both an aggregate AND its current/noncurrent split is not
+	// double-counted (MSFT/MXL report both). Negatives clamp to 0 (val > 0): a
+	// negative recognized liability is a data anomaly, not a credit-presentation
+	// flip, so absAddBack/math.Abs (TDB-1's idiom for income-statement charges)
+	// is deliberately NOT used here. These three fields are parallel B3 inputs —
+	// NOT components of any computePlugs triple or recomputeUmbrellas formula
+	// (same disposition as the A6 RightOfUse asset above). See
+	// docs/refactoring/spec/tdb-12-contingent-liability-parser-extraction-spec.md.
+
+	// General ASC 450 loss-contingency accrual. Aggregate first; the current/
+	// noncurrent split are fallbacks for filers reporting ONLY the split.
+	if val, exists := p.findValue(data, []string{
+		"LossContingencyAccrualAtCarryingValue",
+		"LossContingencyAccrualCarryingValueCurrent",
+		"LossContingencyAccrualCarryingValueNoncurrent",
+	}); exists && val > 0 {
+		financialData.ContingentLiabilities = val
+	}
+
+	// Environmental remediation accrual (ASC 410). Aggregate first, then split.
+	if val, exists := p.findValue(data, []string{
+		"AccrualForEnvironmentalLossContingencies",
+		"AccruedEnvironmentalLossContingenciesNoncurrent",
+		"AccruedEnvironmentalLossContingenciesCurrent",
+	}); exists && val > 0 {
+		financialData.EnvironmentalLiabilities = val
+	}
+
+	// Recognized litigation reserve. NOT LitigationSettlementExpense /
+	// LossContingencyLossInPeriod — those are income-statement charges already
+	// mapped to LitigationSettlements (C3) by TDB-1; reusing them would
+	// double-count the same dollars across two rules. MEDIUM confidence — these
+	// concepts appear in no basket fixture (large filers tag litigation
+	// dimensionally / via custom elements, which the dimension-unaware
+	// companyfacts ingestion does not expose). TDB-12 spec §3.4 / Q5.
+	if val, exists := p.findValue(data, []string{
+		"EstimatedLitigationLiability",
+		"LitigationReserve",
+	}); exists && val > 0 {
+		financialData.LitigationLiabilities = val
+	}
+
 	// Extract share information.
 	// Order: US-GAAP `CommonStock*` first (preserving domestic-filer
 	// priority), then DEI's `EntityCommonStockSharesOutstanding` which is
@@ -1098,6 +1147,21 @@ func (p *Parser) GetSupportedConcepts() []string {
 		// Pension & Benefits
 		"us-gaap:DefinedBenefitPlanPensionPlansProjectedBenefitObligationIncrease",
 		"us-gaap:DefinedBenefitPlanAssets",
+
+		// Balance Sheet - Contingent Liabilities (B3 — TDB-12).
+		// Recognized ASC 450 / ASC 410 accruals B3 probability-weights into a
+		// DebtLikeClaims overlay. Aggregate-first per field; the
+		// income-statement litigation-expense (C3's, via TDB-1) and possible-loss
+		// DISCLOSURE tags are deliberately NOT listed (TDB-12 spec §3.2). No
+		// IFRS-full IAS 37 Provisions mapping ships (TDB-12 Q4 — deferred).
+		"us-gaap:LossContingencyAccrualAtCarryingValue",
+		"us-gaap:LossContingencyAccrualCarryingValueCurrent",
+		"us-gaap:LossContingencyAccrualCarryingValueNoncurrent",
+		"us-gaap:AccrualForEnvironmentalLossContingencies",
+		"us-gaap:AccruedEnvironmentalLossContingenciesNoncurrent",
+		"us-gaap:AccruedEnvironmentalLossContingenciesCurrent",
+		"us-gaap:EstimatedLitigationLiability",
+		"us-gaap:LitigationReserve",
 
 		// Share Information
 		"us-gaap:CommonStockSharesOutstanding",
