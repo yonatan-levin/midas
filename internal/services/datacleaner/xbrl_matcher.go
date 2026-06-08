@@ -5,10 +5,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
@@ -272,8 +274,35 @@ func (s *XBRLTagMatcherService) validateDataType(value interface{}, expectedType
 		if _, ok := value.(bool); !ok {
 			return fmt.Errorf("expected boolean, got %T", value)
 		}
-	case "date", "duration":
-		// TODO: Add date/duration validation
+	case "date":
+		// Accept a time.Time or a parseable date string (incl. the XBRL --09-28 form).
+		// Lenient: only reject clearly-wrong shapes.
+		switch v := value.(type) {
+		case time.Time:
+			return nil
+		case string:
+			if _, ok := parseFlexibleDate(v); ok {
+				return nil
+			}
+			return fmt.Errorf("expected date, got unparseable string %q", v)
+		default:
+			return fmt.Errorf("expected date, got %T", value)
+		}
+	case "duration":
+		// XBRL durations are ISO-8601 (e.g. "P1Y"); period contexts occasionally carry a plain
+		// date string, which we also accept.
+		switch v := value.(type) {
+		case string:
+			if isISO8601Duration(v) {
+				return nil
+			}
+			if _, ok := parseFlexibleDate(v); ok {
+				return nil
+			}
+			return fmt.Errorf("expected duration, got %q", v)
+		default:
+			return fmt.Errorf("expected duration, got %T", value)
+		}
 	}
 
 	return nil
@@ -374,19 +403,106 @@ func (s *XBRLTagMatcherService) validateFormat(value interface{}, params map[str
 		return fmt.Errorf("format validation requires string value, got %T", value)
 	}
 
-	if pattern, ok := params["pattern"].(string); ok {
-		// TODO: Implement regex pattern matching
-		_ = pattern
-		_ = strValue
+	if pattern, ok := params["pattern"].(string); ok && pattern != "" {
+		re, err := s.compiledRegexForPattern(pattern)
+		if err != nil {
+			return fmt.Errorf("invalid format pattern %q: %w", pattern, err)
+		}
+		if !re.MatchString(strValue) {
+			return fmt.Errorf(errorMsg) // nolint:staticcheck — matches validateRange posture
+		}
 	}
 
 	return nil
 }
 
-// validateConsistency validates consistency between multiple fields
+// compiledRegexForPattern compiles a format pattern on first use and caches it on the struct's
+// existing compiledRegexs map (format rules are rare, so lazy compilation keeps the change local).
+func (s *XBRLTagMatcherService) compiledRegexForPattern(pattern string) (*regexp.Regexp, error) {
+	if re, ok := s.compiledRegexs[pattern]; ok {
+		return re, nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil, err
+	}
+	s.compiledRegexs[pattern] = re
+	return re, nil
+}
+
+// validateConsistency honors a single linear-equation consistency rule of the shape
+// "A = B + C [+ ...]" (the shipped balance_sheet_equation rule). It is lenient by design:
+// an unparseable equation is logged and skipped, and a missing operand skips the check rather
+// than failing real partial data. Tolerance is relative (fraction of the larger side, floored
+// at 1.0) to match the config's 0.01 (1%) intent.
 func (s *XBRLTagMatcherService) validateConsistency(data map[string]interface{}, params map[string]interface{}, errorMsg string) error {
-	// TODO: Implement consistency checks (e.g., assets = liabilities + equity)
+	equation, _ := params["equation"].(string)
+	if equation == "" {
+		return nil
+	}
+
+	lhsField, rhsFields, ok := parseLinearEquation(equation)
+	if !ok {
+		// Unsupported equation shape: skip rather than fail valid data on a config we can't parse.
+		s.logger.Printf("validateConsistency: unsupported equation %q, skipping", equation)
+		return nil
+	}
+
+	lhs, ok := s.lookupNumeric(data, lhsField)
+	if !ok {
+		return nil // missing operand → cannot check → lenient skip
+	}
+	var rhs float64
+	for _, f := range rhsFields {
+		v, ok := s.lookupNumeric(data, f)
+		if !ok {
+			return nil // missing operand → lenient skip
+		}
+		rhs += v
+	}
+
+	tolerance := 0.0
+	if t, ok := params["tolerance"].(float64); ok {
+		tolerance = t
+	}
+	denom := math.Max(math.Abs(lhs), 1.0)
+	if math.Abs(lhs-rhs)/denom > tolerance {
+		return fmt.Errorf(errorMsg) // nolint:staticcheck — matches validateRange posture
+	}
 	return nil
+}
+
+// parseLinearEquation parses "<lhs> = <rhs1> + <rhs2> [+ ...]". Returns ok=false for any other shape.
+func parseLinearEquation(eq string) (lhs string, rhs []string, ok bool) {
+	sides := strings.SplitN(eq, "=", 2)
+	if len(sides) != 2 {
+		return "", nil, false
+	}
+	lhs = strings.TrimSpace(sides[0])
+	for _, part := range strings.Split(sides[1], "+") {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			return "", nil, false
+		}
+		rhs = append(rhs, p)
+	}
+	if lhs == "" || len(rhs) == 0 {
+		return "", nil, false
+	}
+	return lhs, rhs, true
+}
+
+// lookupNumeric reads data[field] as a float64. ok=false if absent or non-numeric.
+func (s *XBRLTagMatcherService) lookupNumeric(data map[string]interface{}, field string) (float64, bool) {
+	v, exists := data[field]
+	if !exists {
+		return 0, false
+	}
+	f, err := s.toFloat64(v)
+	if err != nil {
+		return 0, false
+	}
+	return f, true
 }
 
 // toFloat64 converts various numeric types to float64
