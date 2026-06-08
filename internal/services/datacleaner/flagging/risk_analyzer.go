@@ -100,8 +100,38 @@ func (ra *RiskAnalyzer) AssessIntangibleRisk(intangibles, totalAssets, industryT
 	}
 }
 
-// AssessInventoryRisk evaluates inventory levels and potential obsolescence
-func (ra *RiskAnalyzer) AssessInventoryRisk(inventory, totalAssets, industryThreshold float64, industryCode string) *entities.Flag {
+// Inventory turnover thresholds used to refine the concentration-only
+// obsolescence severity. NOTE: the codebase computes InventoryTurnover as
+// Revenue / Inventory (sec/parser.go:958) — NOT the textbook COGS / Inventory
+// (the Revenue-based ratio runs higher by the gross-margin factor). These
+// bounds are deliberately industry-agnostic, conservative, and aligned with the
+// existing Revenue/Inventory thresholds elsewhere in the tree:
+//   - lowInventoryTurnoverThreshold mirrors constants.InventoryTurnoverThreshold
+//     (2.0×/yr — the established "slow-moving / write-down-risk" signal); below
+//     it we ESCALATE the concentration severity one notch.
+//   - At/above healthyInventoryTurnoverThreshold (4.0× — between A5's <3.0 and the
+//     <6.0 applicability gate) inventory is fast-moving and rarely goes obsolete
+//     even at a large share of assets, so we DE-ESCALATE one notch.
+//
+// Between the two bounds, or when turnover is unreported (0), severity is the
+// concentration-only result — preserving pre-TDB-8 behavior for the many filers
+// that do not report a usable turnover figure.
+//
+// FOLLOW-UP (TDB-8 REVIEWER NITs, deferred): make these cutoffs industry-aware
+// via GetIndustryThresholds (a heavy-equipment filer structurally ~2× is
+// over-escalated today); add helper cap/floor + exact-boundary tests; note the
+// FY-vs-Q turnover asymmetry (an FY snapshot runs ~4× a single quarter's).
+const (
+	// Keep in lock-step with constants.InventoryTurnoverThreshold (2.0).
+	lowInventoryTurnoverThreshold     = 2.0
+	healthyInventoryTurnoverThreshold = 4.0
+)
+
+// AssessInventoryRisk evaluates inventory levels and potential obsolescence.
+// inventoryTurnover is annual inventory turns (Revenue / inventory, per
+// sec/parser.go:958); pass 0 when it is not reported, which leaves the
+// assessment on the concentration-only path.
+func (ra *RiskAnalyzer) AssessInventoryRisk(inventory, totalAssets, industryThreshold, inventoryTurnover float64, industryCode string) *entities.Flag {
 	if totalAssets <= 0 || inventory <= 0 {
 		return nil
 	}
@@ -125,7 +155,28 @@ func (ra *RiskAnalyzer) AssessInventoryRisk(inventory, totalAssets, industryThre
 		severity = entities.FlagSeverityLow
 	}
 
-	// TODO: Add inventory turnover analysis for better obsolescence detection
+	// Refine the concentration-only severity with the turnover signal. Only act
+	// when turnover is actually reported (> 0); turnover == 0 means "unknown",
+	// in which case we keep the concentration-only result unchanged.
+	description := fmt.Sprintf("Inventory concentration: %.1f%% of total assets", ratio*100)
+	recommendation := "Analyze inventory turnover and consider writedowns for obsolete stock"
+
+	if inventoryTurnover > 0 {
+		switch {
+		case inventoryTurnover < lowInventoryTurnoverThreshold:
+			// Slow-moving inventory compounds the concentration risk.
+			severity = escalateSeverity(severity)
+			description = fmt.Sprintf(
+				"Inventory concentration: %.1f%% of total assets with low turnover (%.1f turns/yr) indicating slow-moving / potentially obsolete stock",
+				ratio*100, inventoryTurnover,
+			)
+			recommendation = "Slow inventory turnover signals obsolescence risk; review aging and book write-downs for slow-moving stock"
+		case inventoryTurnover >= healthyInventoryTurnoverThreshold:
+			// Fast-moving inventory rarely goes obsolete despite concentration.
+			severity = deescalateSeverity(severity)
+		}
+	}
+
 	return &entities.Flag{
 		ID:             fmt.Sprintf("inventory-risk-%d", time.Now().UnixNano()),
 		RuleID:         "A5", // References inventory rule in SEC guide
@@ -133,11 +184,39 @@ func (ra *RiskAnalyzer) AssessInventoryRisk(inventory, totalAssets, industryThre
 		Severity:       severity,
 		Amount:         inventory,
 		Percentage:     ratio * 100,
-		Description:    fmt.Sprintf("Inventory concentration: %.1f%% of total assets", ratio*100),
-		Recommendation: "Analyze inventory turnover and consider writedowns for obsolete stock",
+		Description:    description,
+		Recommendation: recommendation,
 		Industry:       industryCode,
 		Threshold:      industryThreshold * 100,
 		Timestamp:      time.Now(),
+	}
+}
+
+// escalateSeverity bumps a flag one severity level higher, capped at Critical.
+func escalateSeverity(s entities.FlagSeverity) entities.FlagSeverity {
+	switch s {
+	case entities.FlagSeverityLow:
+		return entities.FlagSeverityMedium
+	case entities.FlagSeverityMedium:
+		return entities.FlagSeverityHigh
+	case entities.FlagSeverityHigh:
+		return entities.FlagSeverityCritical
+	default:
+		return s // already Critical (or unknown) — no further escalation
+	}
+}
+
+// deescalateSeverity lowers a flag one severity level, floored at Low.
+func deescalateSeverity(s entities.FlagSeverity) entities.FlagSeverity {
+	switch s {
+	case entities.FlagSeverityCritical:
+		return entities.FlagSeverityHigh
+	case entities.FlagSeverityHigh:
+		return entities.FlagSeverityMedium
+	case entities.FlagSeverityMedium:
+		return entities.FlagSeverityLow
+	default:
+		return s // already Low (or unknown) — no further de-escalation
 	}
 }
 

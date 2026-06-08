@@ -116,6 +116,7 @@ func (fs *FlaggingSystem) AnalyzeRisks(data *entities.FinancialData, context *en
 		data.Inventory,
 		data.TotalAssets,
 		thresholds["inventory_threshold"],
+		data.InventoryTurnover,
 		context.IndustryCode,
 	); inventoryFlag != nil {
 		flags = append(flags, *inventoryFlag)
