@@ -256,6 +256,18 @@ type FairValueResponse struct {
 	//     "horizon_years": { "value": 7,   "source": "request" }
 	//   }
 	AppliedOverrides map[string]AppliedOverride `json:"applied_overrides,omitempty"`
+
+	// AssumptionSources records, per near-term assumption (e.g. "capex_year1"),
+	// which authority level supplied the final value — one of user_override |
+	// guidance | profile | historical | default — with a provenance detail
+	// (Layer-B Phase-2 §9.2). Populated ONLY when a non-default source fires (e.g.
+	// a high-confidence guidance fixture anchors year-1); absent (omitempty) on the
+	// default path, so guidance-free responses stay byte-identical to the 4.7
+	// engine. Example:
+	//   "assumption_sources": {
+	//     "capex_year1": { "source": "guidance", "detail": "accession=… conf=0.82 midpoint=$1.50B" }
+	//   }
+	AssumptionSources map[string]entities.AssumptionSourceValue `json:"assumption_sources,omitempty"`
 }
 
 // AppliedOverride is the per-knob payload in the applied_overrides response
@@ -715,6 +727,9 @@ func (h *FairValueHandler) buildFairValueResponse(ticker string, result *entitie
 		// T10: copy applied_overrides from the service-layer entity carrier.
 		// Nil when result carries no overrides (default path); omitempty drops it.
 		AppliedOverrides: appliedOverrides,
+		// Layer-B Phase-2: copy per-assumption source provenance. Nil/empty on the
+		// default (no-guidance) path; omitempty drops it ⇒ byte-identical responses.
+		AssumptionSources: result.AssumptionSources,
 	}
 }
 

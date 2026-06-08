@@ -5,20 +5,37 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
 
-// canonicalCIK is the ONLY accepted CIK form: the zero-padded 10-digit string
-// (matches SEC / ports.FlexibleCIK and the on-disk fixture directory layout,
-// Decision 2). Validating against this BEFORE joining the CIK onto Root closes
-// the MEDIUM-1 path-traversal vector — a CIK is an attacker-influenceable key
-// once Phase 3 derives it from request/SEC data, so a payload like "../../etc"
-// or "0000002488/../.." must never reach filepath.Join. The pattern admits no
-// path separators, no dots, and no "..": a matching string cannot escape Root.
-var canonicalCIK = regexp.MustCompile(`^[0-9]{10}$`)
+// normalizeCIK converts an SEC CIK from any serialization to the canonical
+// zero-padded 10-digit form used by the on-disk fixture directory layout
+// (Decision 2). SEC serializes CIK inconsistently — AMD as un-padded "2488",
+// AAPL as "320193", some filers as the already-padded "0000002488" (see
+// ports.FlexibleCIK) — so the valuation legitimately passes an un-padded CIK.
+// We strip to digits and left-pad to 10; ok=false for an empty, non-numeric, or
+// over-10-digit CIK.
+//
+// This is ALSO the MEDIUM-1 path-traversal guard: only an all-digit, ≤10-char
+// input survives, so the result can carry no path separators, dots, or "..", and
+// a payload like "../../etc" or "0000002488/../.." degrades to ok=false (absence)
+// rather than reaching filepath.Join. Normalizing BEFORE the join was the bug the
+// live run caught — the prior `^[0-9]{10}$` reject-only guard turned every
+// un-padded production CIK (the common case) into a false "absent".
+func normalizeCIK(cik string) (string, bool) {
+	cik = strings.TrimSpace(cik)
+	if cik == "" || len(cik) > 10 {
+		return "", false
+	}
+	for _, r := range cik {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return strings.Repeat("0", 10-len(cik)) + cik, true
+}
 
 // ErrContentHashMismatch is the ONE hard error the loader raises on a present
 // artifact (F2 / NF4): the recomputed artifact_sha256 does not match the
@@ -108,17 +125,18 @@ func (l *Loader) Load(cik string, asOf time.Time) (Resolution, error) {
 		return Resolution{Absent: true, Trace: LoadTrace{Reason: "disabled_root"}}, nil
 	}
 
-	// MEDIUM-1 path-traversal guard: reject any CIK that is not the canonical
-	// zero-padded 10-digit form BEFORE it is joined onto Root. A non-canonical
-	// CIK (separators, "..", non-digits) degrades to absence — it never reads a
-	// directory outside Root and never raises a hard error (NF4 discipline). In
-	// Phase 2 this is unreachable in production (empty Root short-circuits above),
-	// but it closes the latent vector for when Phase 3 sets a live root.
-	if !canonicalCIK.MatchString(cik) {
+	// Normalize the incoming CIK to the canonical zero-padded 10-digit form
+	// (un-padded "2488" → "0000002488") and reject anything non-numeric / empty /
+	// over-long. This both (a) matches the fixture directory layout for the common
+	// un-padded production CIK and (b) is the MEDIUM-1 path-traversal guard (only
+	// digits survive — no separators/"..", so the join cannot escape Root). A
+	// rejected CIK degrades to first-class absence (NF4), never a hard error.
+	normCIK, ok := normalizeCIK(cik)
+	if !ok {
 		return Resolution{Absent: true, Trace: LoadTrace{Reason: "invalid_cik"}}, nil
 	}
 
-	dir := filepath.Join(l.Root, cik)
+	dir := filepath.Join(l.Root, normCIK)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		// No directory for this CIK (the common case) ⇒ first-class absence.

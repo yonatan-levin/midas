@@ -448,6 +448,11 @@ var goFieldToJSON = map[string]string{
 	// on default GET and POST{} paths. Added in the same commit as the struct
 	// field to keep this map and the field count in sync.
 	"AppliedOverrides": "applied_overrides",
+	// Layer-B Phase-2: assumption_sources records per-assumption authority
+	// provenance. Omitempty — absent on the default (no-guidance) path. Added in
+	// the same commit as the struct field to keep this map and the field count
+	// in sync (the init() drift guard enforces it).
+	"AssumptionSources": "assumption_sources",
 	// SanityCheck
 	"ImpliedPE":            "implied_pe",
 	"SectorMedianPE":       "sector_median_pe",
@@ -530,8 +535,9 @@ func nilOrType(p any) string {
 //  3. Add an entry to goFieldToJSON for the new field's snake_case
 //     name (otherwise camelToSnake's best-effort conversion runs).
 func countFairValueFields() int {
-	// FairValueResponse: 31 top-level public fields (30 pre-T10 + AppliedOverrides).
+	// FairValueResponse: 32 top-level public fields (30 pre-T10 + AppliedOverrides
+	// + AssumptionSources [Layer-B Phase-2]).
 	// Industry: 5 fields.
 	// SanityCheck: 8 fields.
-	return 31 + 5 + 8
+	return 32 + 5 + 8
 }

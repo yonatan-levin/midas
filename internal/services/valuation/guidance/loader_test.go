@@ -353,6 +353,34 @@ func TestLoader_CanonicalCIK_StillResolves(t *testing.T) {
 	assert.Equal(t, "0000002488-26-000012", res.Trace.SelectedAccession)
 }
 
+// TestLoader_UnpaddedCIK_NormalizesAndResolves is the regression pin for the
+// live-run defect (2026-06-08): SEC serializes AMD's CIK as the un-padded "2488"
+// (see ports.FlexibleCIK / CLAUDE.md) but the fixture directory is the
+// zero-padded "0000002488". The loader MUST normalize the incoming CIK before
+// lookup; the prior reject-only `^[0-9]{10}$` guard turned every un-padded
+// production CIK into a false "absent", so a fixture was never consumed live even
+// though every unit test (which used the padded form) passed.
+func TestLoader_UnpaddedCIK_NormalizesAndResolves(t *testing.T) {
+	root := t.TempDir()
+	writeArtifact(t, root, validCapExArtifact()) // issuer.cik "0000002488"
+
+	l := NewLoader(root)
+	for _, cik := range []string{"2488", "0000002488", "002488"} {
+		res, err := l.Load(cik, mustDate(t, "2026-03-01"))
+		require.NoError(t, err, "cik=%q", cik)
+		assert.Falsef(t, res.Absent, "cik=%q must normalize to 0000002488 and resolve", cik)
+		require.NotNilf(t, res.Artifact, "cik=%q", cik)
+		assert.Equal(t, "0000002488-26-000012", res.Trace.SelectedAccession)
+	}
+
+	// A non-numeric / traversal payload still degrades to absence (MEDIUM-1).
+	for _, bad := range []string{"../../etc", "0000002488/../..", "abc", "", "12345678901"} {
+		res, err := l.Load(bad, mustDate(t, "2026-03-01"))
+		require.NoError(t, err, "cik=%q", bad)
+		assert.Truef(t, res.Absent, "cik=%q must be rejected to absence", bad)
+	}
+}
+
 func TestLoadFromBundle_AbsentPayload(t *testing.T) {
 	res, err := LoadFromBundle(nil)
 	require.NoError(t, err)

@@ -200,6 +200,54 @@ func TestBuildFairValueResponse_AppliedOverrides_CopiedWhenPresent(t *testing.T)
 	assert.Equal(t, "request", horizEntry.Source)
 }
 
+// TestBuildFairValueResponse_AssumptionSources_AbsentWhenNil is the byte-identity
+// guard for Layer-B Phase 2: with no guidance, ValuationResult.AssumptionSources
+// is nil and the response field must be omitted (omitempty) so guidance-free
+// responses are byte-identical to the 4.7 engine.
+func TestBuildFairValueResponse_AssumptionSources_AbsentWhenNil(t *testing.T) {
+	h := &FairValueHandler{}
+	result := &entities.ValuationResult{
+		Ticker:       "AAPL",
+		CalculatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		// AssumptionSources deliberately nil (default / no-guidance path)
+	}
+
+	resp := h.buildFairValueResponse("AAPL", result)
+	assert.Nil(t, resp.AssumptionSources, "AssumptionSources must be nil on the default path")
+
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "assumption_sources",
+		"assumption_sources must be absent from JSON when nil (omitempty)")
+}
+
+// TestBuildFairValueResponse_AssumptionSources_CopiedWhenPresent confirms the
+// handler surfaces the per-assumption source provenance on the response when a
+// guidance (or other non-default) source fired — the live-run gap (2026-06-08):
+// the entity carried assumption_sources but the response DTO never exposed it.
+func TestBuildFairValueResponse_AssumptionSources_CopiedWhenPresent(t *testing.T) {
+	h := &FairValueHandler{}
+	result := &entities.ValuationResult{
+		Ticker:       "AMD",
+		CalculatedAt: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		AssumptionSources: map[string]entities.AssumptionSourceValue{
+			"capex_year1": {Source: "guidance", Detail: "accession=0000002488-26-000012 period=FY2026 conf=0.82 midpoint=$1.50B"},
+		},
+	}
+
+	resp := h.buildFairValueResponse("AMD", result)
+	require.NotNil(t, resp.AssumptionSources, "AssumptionSources must be populated when guidance fired")
+	entry, ok := resp.AssumptionSources["capex_year1"]
+	require.True(t, ok, "capex_year1 must be present")
+	assert.Equal(t, "guidance", entry.Source)
+	assert.Contains(t, entry.Detail, "0000002488-26-000012")
+
+	b, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.Contains(t, string(b), "assumption_sources")
+	assert.Contains(t, string(b), `"source":"guidance"`)
+}
+
 // TestBuildFairValueResponse_AppliedOverrides_JSONShape verifies the JSON
 // serialization shape of applied_overrides matches the documented contract:
 //
