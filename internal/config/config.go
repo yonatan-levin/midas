@@ -307,6 +307,11 @@ type DataCleanerConfig struct {
 	RulesPath         string `mapstructure:"rules_path"`          // Path to main rules JSON file
 	IndustryRulesPath string `mapstructure:"industry_rules_path"` // Path to industry rules directory
 	SchemaPath        string `mapstructure:"schema_path"`         // Path to JSON schema file
+	// ThresholdsPath is the optional path to the externalized adjuster
+	// materiality/review gate thresholds (TDB-5). Empty → the loader's default
+	// path (config/datacleaner/adjustment_thresholds.json); a missing/invalid
+	// file falls back to in-code defaults (byte-identical pre-TDB-5 behaviour).
+	ThresholdsPath string `mapstructure:"thresholds_path"`
 
 	// Processing configuration
 	Enabled             bool          `mapstructure:"enabled"`               // Enable/disable data cleaning

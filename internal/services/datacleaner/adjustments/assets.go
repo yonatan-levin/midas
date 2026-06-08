@@ -11,12 +11,25 @@ import (
 // AssetAdjuster handles Category A adjustments from SEC cleaning guide
 // Implements over-stated/low-quality asset adjustments
 type AssetAdjuster struct {
-	// TODO: Add configuration for adjustment thresholds
+	// thresholds holds the resolved (defaulted) materiality / review gate
+	// thresholds for the Category A adjusters (TDB-5). NewAssetAdjuster seeds
+	// it with DefaultAssetThresholds (the pre-TDB-5 constants);
+	// NewAssetAdjusterWithThresholds lets the production path inject overrides
+	// loaded from config/datacleaner/adjustment_thresholds.json.
+	thresholds AssetThresholds
 }
 
-// NewAssetAdjuster creates a new asset adjuster instance
+// NewAssetAdjuster creates a new asset adjuster instance with the default
+// (pre-TDB-5) gate thresholds. Existing zero-arg callers (tests, pipeline.go)
+// are unchanged and observe byte-identical behaviour.
 func NewAssetAdjuster() *AssetAdjuster {
-	return &AssetAdjuster{}
+	return &AssetAdjuster{thresholds: DefaultAssetThresholds()}
+}
+
+// NewAssetAdjusterWithThresholds creates an asset adjuster with explicit gate
+// thresholds (the production wiring path; see NewDataCleanerService).
+func NewAssetAdjusterWithThresholds(t AssetThresholds) *AssetAdjuster {
+	return &AssetAdjuster{thresholds: t}
 }
 
 // AdjusterID constants identify each Category A adjuster on LedgerEntry /
@@ -348,10 +361,10 @@ func (aa *AssetAdjuster) ApplyA1Goodwill(ctx context.Context, working *entities.
 
 	goodwillRatio := working.Goodwill / working.TotalAssets
 
-	// Skip path 2: goodwill below the 5% materiality threshold. Carry the
-	// ratio + threshold as SkipMetrics so downstream dashboards can chart
-	// "how close was A1 to firing on this ticker?".
-	threshold := 0.05
+	// Skip path 2: goodwill below the materiality threshold (TDB-5: default
+	// 0.05). Carry the ratio + threshold as SkipMetrics so downstream
+	// dashboards can chart "how close was A1 to firing on this ticker?".
+	threshold := aa.thresholds.GoodwillMateriality
 	if goodwillRatio <= threshold {
 		return AdjusterOutput{
 			LedgerEntries: []entities.LedgerEntry{{
@@ -394,10 +407,10 @@ func (aa *AssetAdjuster) ApplyA1Goodwill(ctx context.Context, working *entities.
 	}
 
 	// Significance flag — preserve the legacy ProcessGoodwillAdjustment
-	// behavior: only flag when goodwill is >= 10% of assets. Severity is
-	// derived from the existing ratio-bucket helper so the flag taxonomy
-	// stays identical across the migration.
-	if goodwillRatio >= 0.10 {
+	// behavior: only flag when goodwill is >= the significance threshold
+	// (TDB-5: default 0.10). Severity is derived from the existing ratio-bucket
+	// helper so the flag taxonomy stays identical across the migration.
+	if goodwillRatio >= aa.thresholds.GoodwillSignificanceFlag {
 		out.Flags = append(out.Flags, entities.Flag{
 			ID:             fmt.Sprintf("goodwill-flag-%d", now.UnixNano()),
 			RuleID:         rule.ID,
@@ -482,9 +495,11 @@ func (aa *AssetAdjuster) ApplyA6RightOfUseAssets(ctx context.Context, working *e
 
 	rouRatio := rou / working.TotalAssets
 
-	// Skip path 2: below the 5% materiality threshold (code constant mirroring
-	// A1 goodwill; spec §3.5 / Q4 — thresholds stay as code constants).
-	const threshold = 0.05
+	// Skip path 2: below the materiality threshold, mirroring A1 goodwill.
+	// TDB-5 externalized this gate (default 0.05); TDB-2's "thresholds stay as
+	// code constants" note is superseded only for the externalization
+	// mechanism — the default is unchanged, so A6 behaviour is byte-identical.
+	threshold := aa.thresholds.ROUMateriality
 	if rouRatio <= threshold {
 		return AdjusterOutput{
 			LedgerEntries: []entities.LedgerEntry{{
@@ -529,9 +544,10 @@ func (aa *AssetAdjuster) ApplyA6RightOfUseAssets(ctx context.Context, working *e
 		Overlays: []entities.OverlaySpec{overlay},
 	}
 
-	// Significance flag — only when ROU >= 10% of assets (mirrors A1's
-	// >= 0.10-gated flag). Config severity:info → entities.Info.
-	if rouRatio >= 0.10 {
+	// Significance flag — only when ROU >= the significance threshold (TDB-5:
+	// default 0.10), mirroring A1's significance-gated flag. Config
+	// severity:info → entities.Info.
+	if rouRatio >= aa.thresholds.ROUSignificanceFlag {
 		out.Flags = append(out.Flags, entities.Flag{
 			ID:             fmt.Sprintf("rou-flag-%d", now.UnixNano()),
 			RuleID:         rule.ID,
@@ -747,10 +763,10 @@ func (aa *AssetAdjuster) ApplyA2Intangible(ctx context.Context, working *entitie
 	originalIntangibles := working.OtherIntangibles
 	intangibleRatio := originalIntangibles / working.TotalAssets
 
-	// Skip path 2: ratio below the 2% materiality threshold. Carry the ratio
-	// + threshold as SkipMetrics so downstream dashboards can chart "how
-	// close was A2 to firing on this ticker?".
-	threshold := 0.02
+	// Skip path 2: ratio below the materiality threshold (TDB-5: default 0.02).
+	// Carry the ratio + threshold as SkipMetrics so downstream dashboards can
+	// chart "how close was A2 to firing on this ticker?".
+	threshold := aa.thresholds.IntangibleMateriality
 	if intangibleRatio <= threshold {
 		return AdjusterOutput{
 			LedgerEntries: []entities.LedgerEntry{{
@@ -886,10 +902,10 @@ func (aa *AssetAdjuster) ApplyA4DTAValuationAllowance(ctx context.Context, worki
 
 	dtaRatio := working.DeferredTaxAssets / working.TotalAssets
 
-	// Skip path 2: DTA below the 5% materiality threshold. Carry the ratio +
-	// threshold as SkipMetrics so downstream dashboards can chart "how close
-	// was A4 to firing on this ticker?".
-	threshold := 0.05
+	// Skip path 2: DTA below the materiality threshold (TDB-5: default 0.05).
+	// Carry the ratio + threshold as SkipMetrics so downstream dashboards can
+	// chart "how close was A4 to firing on this ticker?".
+	threshold := aa.thresholds.DTAMateriality
 	if dtaRatio <= threshold {
 		return AdjusterOutput{
 			LedgerEntries: []entities.LedgerEntry{{
@@ -926,10 +942,10 @@ func (aa *AssetAdjuster) ApplyA4DTAValuationAllowance(ctx context.Context, worki
 	}
 
 	// Significance flag — preserve the legacy ProcessDeferredTaxAdjustment
-	// behavior: only flag when DTA was >=10% of assets. Severity is derived
-	// from the existing ratio-bucket helper so the flag taxonomy stays
-	// identical across the migration.
-	if dtaRatio >= 0.10 {
+	// behavior: only flag when DTA was >= the significance threshold (TDB-5:
+	// default 0.10). Severity is derived from the existing ratio-bucket helper
+	// so the flag taxonomy stays identical across the migration.
+	if dtaRatio >= aa.thresholds.DTASignificanceFlag {
 		out.Flags = append(out.Flags, entities.Flag{
 			ID:             fmt.Sprintf("dta-flag-%d", now.UnixNano()),
 			RuleID:         rule.ID,
@@ -1137,7 +1153,7 @@ func (aa *AssetAdjuster) ApplyARDCapitalizationReview(ctx context.Context, worki
 	}
 
 	rdRatio := working.ResearchAndDevelopment / working.Revenue
-	threshold := 0.10 // 10% of revenue threshold (legacy parity).
+	threshold := aa.thresholds.RDCapitalizationReview // TDB-5: default 0.10 (10% of revenue, legacy parity).
 
 	// Skip path 2: ratio below the 10% review threshold. Carry the ratio +
 	// threshold as SkipMetrics so downstream dashboards can chart "how close
@@ -1247,7 +1263,7 @@ func (aa *AssetAdjuster) ApplyACapitalizedSoftwareReview(ctx context.Context, wo
 	}
 
 	intangibleRatio := working.OtherIntangibles / working.Revenue
-	threshold := 0.015 // 1.5% of revenue threshold (legacy parity).
+	threshold := aa.thresholds.CapitalizedSoftwareReview // TDB-5: default 0.015 (1.5% of revenue, legacy parity).
 
 	// Skip path 2: ratio below the 1.5% review threshold. Carry the ratio +
 	// threshold as SkipMetrics so downstream dashboards can chart "how close
