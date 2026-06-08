@@ -250,6 +250,151 @@ func TestXBRLTagMatcherDataTypes(t *testing.T) {
 	}
 }
 
+// TestXBRLTagMatcherDateDurationValidation drives validateDataType's date/duration
+// arm (TDB-10 item 1) via MatchSingleTag on the fiscal_year_end mapping (data_type:"date").
+func TestXBRLTagMatcherDateDurationValidation(t *testing.T) {
+	cfg := setupDateDurationTestConfig(t)
+	logger := log.New(io.Discard, "", 0)
+	matcher := datacleaner.NewXBRLTagMatcherService(cfg, logger)
+	ctx := context.Background()
+
+	testCases := []struct {
+		name        string
+		tag         string
+		value       interface{}
+		expectError bool
+	}{
+		{name: "date XBRL fiscal-year-end form", tag: "dei:CurrentFiscalYearEndDate", value: "--09-28", expectError: false},
+		{name: "date ISO calendar string", tag: "dei:CurrentFiscalYearEndDate", value: "2024-01-31", expectError: false},
+		{name: "date time.Time value", tag: "dei:CurrentFiscalYearEndDate", value: time.Date(2024, 1, 31, 0, 0, 0, 0, time.UTC), expectError: false},
+		{name: "date unparseable string", tag: "dei:CurrentFiscalYearEndDate", value: "not-a-date", expectError: true},
+		{name: "date non-string non-time", tag: "dei:CurrentFiscalYearEndDate", value: 12345, expectError: true},
+		{name: "duration ISO-8601", tag: "dei:DocumentPeriodDuration", value: "P1Y", expectError: false},
+		{name: "duration garbage string", tag: "dei:DocumentPeriodDuration", value: "banana", expectError: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := matcher.MatchSingleTag(ctx, tc.tag, tc.value)
+			if tc.expectError {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "data type validation failed")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestXBRLTagMatcherFormatRegex drives validateFormat's regex pattern matching
+// (TDB-10 item 2) through ValidateMatches with a format rule that carries a pattern.
+func TestXBRLTagMatcherFormatRegex(t *testing.T) {
+	cfg := setupFormatRuleTestConfig(t)
+	logger := log.New(io.Discard, "", 0)
+	matcher := datacleaner.NewXBRLTagMatcherService(cfg, logger)
+	ctx := context.Background()
+
+	t.Run("PatternMatches_NoError", func(t *testing.T) {
+		matches := []entities.MatchResult{
+			{InternalField: "ticker_symbol", Value: "AAPL"},
+		}
+		err := matcher.ValidateMatches(ctx, matches)
+		assert.NoError(t, err)
+	})
+
+	t.Run("PatternMismatch_Error", func(t *testing.T) {
+		matches := []entities.MatchResult{
+			{InternalField: "ticker_symbol", Value: "not a ticker 123"},
+		}
+		err := matcher.ValidateMatches(ctx, matches)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Ticker symbol must be 1-5 uppercase letters")
+	})
+}
+
+// TestXBRLTagMatcherConsistencyEquation pins validateConsistency's balance-sheet
+// equation check (TDB-10 item 3): balanced passes, imbalanced fails, missing skips.
+func TestXBRLTagMatcherConsistencyEquation(t *testing.T) {
+	cfg := setupTestConfig(t)
+	logger := log.New(io.Discard, "", 0)
+	matcher := datacleaner.NewXBRLTagMatcherService(cfg, logger)
+	ctx := context.Background()
+
+	t.Run("Balanced_NoError", func(t *testing.T) {
+		matches := []entities.MatchResult{
+			{InternalField: "total_assets", Value: float64(1_000_000)},
+			{InternalField: "total_liabilities", Value: float64(600_000)},
+			{InternalField: "stockholders_equity", Value: float64(400_000)},
+		}
+		err := matcher.ValidateMatches(ctx, matches)
+		assert.NoError(t, err)
+	})
+
+	t.Run("BalanceSheetEquation_Imbalanced_Error", func(t *testing.T) {
+		matches := []entities.MatchResult{
+			{InternalField: "total_assets", Value: float64(1_000_000)},
+			{InternalField: "total_liabilities", Value: float64(600_000)},
+			{InternalField: "stockholders_equity", Value: float64(100_000)}, // 700k != 1.0M
+		}
+		err := matcher.ValidateMatches(ctx, matches)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "Balance sheet does not balance")
+	})
+
+	t.Run("MissingOperand_SkipsLenient", func(t *testing.T) {
+		// total_liabilities absent → cannot check → lenient skip (no error).
+		matches := []entities.MatchResult{
+			{InternalField: "total_assets", Value: float64(1_000_000)},
+			{InternalField: "stockholders_equity", Value: float64(400_000)},
+		}
+		err := matcher.ValidateMatches(ctx, matches)
+		assert.NoError(t, err)
+	})
+}
+
+// setupDateDurationTestConfig is a minimal config exposing a date and a duration mapping.
+func setupDateDurationTestConfig(t *testing.T) *config.XBRLTagConfig {
+	t.Helper()
+	return &config.XBRLTagConfig{
+		Version:          "1.0.0",
+		DefaultNamespace: "us-gaap",
+		TagMappings: map[string]config.XBRLTagMapping{
+			"fiscal_year_end": {
+				XBRLTag:       "dei:CurrentFiscalYearEndDate",
+				InternalField: "fiscal_year_end",
+				DataType:      "date",
+				Required:      false,
+			},
+			"document_period_duration": {
+				XBRLTag:       "dei:DocumentPeriodDuration",
+				InternalField: "document_period_duration",
+				DataType:      "duration",
+				Required:      false,
+			},
+		},
+	}
+}
+
+// setupFormatRuleTestConfig is a minimal config carrying a format validation rule with a pattern.
+func setupFormatRuleTestConfig(t *testing.T) *config.XBRLTagConfig {
+	t.Helper()
+	return &config.XBRLTagConfig{
+		Version:          "1.0.0",
+		DefaultNamespace: "us-gaap",
+		ValidationRules: []config.ValidationRule{
+			{
+				Name:  "ticker_format",
+				Type:  "format",
+				Field: "ticker_symbol",
+				Parameters: map[string]interface{}{
+					"pattern": "^[A-Z]{1,5}$",
+				},
+				ErrorMessage: "Ticker symbol must be 1-5 uppercase letters",
+			},
+		},
+	}
+}
+
 // TestXBRLConfigurationLoading tests configuration loading and validation
 func TestXBRLConfigurationLoading(t *testing.T) {
 	t.Run("LoadValidConfig_Success", func(t *testing.T) {

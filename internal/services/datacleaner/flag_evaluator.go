@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	
+
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
 )
@@ -26,13 +26,13 @@ type FlagConditionEvaluatorService struct {
 func NewFlagConditionEvaluatorService(cfg *config.FlagConditionsConfig, logger *log.Logger) (ports.FlagConditionEvaluator, error) {
 	// Pre-compile regex patterns
 	compiledRegexs := make(map[string]*regexp.Regexp)
-	
+
 	for _, flag := range cfg.Flags {
 		if err := compileRegexForConditions(flag.Conditions, compiledRegexs); err != nil {
 			return nil, fmt.Errorf("failed to compile regex for flag %s: %w", flag.Name, err)
 		}
 	}
-	
+
 	return &FlagConditionEvaluatorService{
 		config:         cfg,
 		logger:         logger,
@@ -55,26 +55,26 @@ func compileRegexForConditions(group config.ConditionGroup, compiled map[string]
 			}
 		}
 	}
-	
+
 	for _, nestedGroup := range group.Groups {
 		if err := compileRegexForConditions(nestedGroup, compiled); err != nil {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 
 // EvaluateFlags evaluates all enabled flags against the provided data
 func (s *FlagConditionEvaluatorService) EvaluateFlags(ctx context.Context, data map[string]interface{}) ([]ports.FlagResult, error) {
 	var results []ports.FlagResult
-	
+
 	// Merge global variables with data
 	mergedData := s.mergeWithGlobalVariables(data)
-	
+
 	// Get enabled flags sorted by priority
 	enabledFlags := s.config.GetEnabledFlags()
-	
+
 	// Evaluate each flag
 	for _, flag := range enabledFlags {
 		result, err := s.evaluateSingleFlag(ctx, flag, mergedData)
@@ -82,15 +82,15 @@ func (s *FlagConditionEvaluatorService) EvaluateFlags(ctx context.Context, data 
 			s.logger.Printf("Error evaluating flag %s: %v", flag.Name, err)
 			continue
 		}
-		
+
 		results = append(results, *result)
-		
+
 		// If flag is triggered, add flag result to data for subsequent evaluations
 		if result.Triggered {
 			mergedData[fmt.Sprintf("flag_%s", flag.Name)] = true
 		}
 	}
-	
+
 	return results, nil
 }
 
@@ -100,7 +100,7 @@ func (s *FlagConditionEvaluatorService) EvaluateFlag(ctx context.Context, flagNa
 	if !found {
 		return nil, fmt.Errorf("flag not found: %s", flagName)
 	}
-	
+
 	if !flag.Enabled {
 		return &ports.FlagResult{
 			FlagName:  flagName,
@@ -109,7 +109,7 @@ func (s *FlagConditionEvaluatorService) EvaluateFlag(ctx context.Context, flagNa
 			Details:   "Flag is disabled",
 		}, nil
 	}
-	
+
 	mergedData := s.mergeWithGlobalVariables(data)
 	return s.evaluateSingleFlag(ctx, *flag, mergedData)
 }
@@ -117,13 +117,13 @@ func (s *FlagConditionEvaluatorService) EvaluateFlag(ctx context.Context, flagNa
 // evaluateSingleFlag evaluates a single flag
 func (s *FlagConditionEvaluatorService) evaluateSingleFlag(ctx context.Context, flag config.FlagConfig, data map[string]interface{}) (*ports.FlagResult, error) {
 	triggered, details := s.evaluateConditionGroup(flag.Conditions, data)
-	
+
 	// Convert FlagAction to interface{} for the result
 	var actions []interface{}
 	for _, action := range flag.Actions {
 		actions = append(actions, action)
 	}
-	
+
 	result := &ports.FlagResult{
 		FlagName:  flag.Name,
 		Triggered: triggered,
@@ -131,11 +131,11 @@ func (s *FlagConditionEvaluatorService) evaluateSingleFlag(ctx context.Context, 
 		Details:   details,
 		Actions:   actions,
 	}
-	
+
 	if triggered {
 		s.logger.Printf("Flag '%s' triggered: %s", flag.Name, details)
 	}
-	
+
 	return result, nil
 }
 
@@ -144,21 +144,21 @@ func (s *FlagConditionEvaluatorService) evaluateConditionGroup(group config.Cond
 	operator := strings.ToUpper(group.Operator)
 	var results []bool
 	var details []string
-	
+
 	// Evaluate individual conditions
 	for _, condition := range group.Conditions {
 		result, detail := s.evaluateCondition(condition, data)
 		results = append(results, result)
 		details = append(details, detail)
 	}
-	
+
 	// Evaluate nested groups
 	for _, nestedGroup := range group.Groups {
 		result, detail := s.evaluateConditionGroup(nestedGroup, data)
 		results = append(results, result)
 		details = append(details, fmt.Sprintf("(%s)", detail))
 	}
-	
+
 	// Apply logical operator
 	var finalResult bool
 	switch operator {
@@ -177,7 +177,7 @@ func (s *FlagConditionEvaluatorService) evaluateConditionGroup(group config.Cond
 			finalResult = !results[0]
 		}
 	}
-	
+
 	detailStr := strings.Join(details, fmt.Sprintf(" %s ", operator))
 	return finalResult, detailStr
 }
@@ -186,7 +186,7 @@ func (s *FlagConditionEvaluatorService) evaluateConditionGroup(group config.Cond
 func (s *FlagConditionEvaluatorService) evaluateCondition(condition config.Condition, data map[string]interface{}) (bool, string) {
 	// Get field value
 	fieldValue, exists := s.getFieldValue(condition.Field, data)
-	
+
 	// Handle null/missing values
 	if !exists {
 		switch condition.NullBehavior {
@@ -198,7 +198,7 @@ func (s *FlagConditionEvaluatorService) evaluateCondition(condition config.Condi
 			return false, fmt.Sprintf("%s is null", condition.Field)
 		}
 	}
-	
+
 	// Evaluate based on condition type
 	switch condition.Type {
 	case "numeric":
@@ -222,20 +222,20 @@ func (s *FlagConditionEvaluatorService) evaluateCondition(condition config.Condi
 func (s *FlagConditionEvaluatorService) getFieldValue(field string, data map[string]interface{}) (interface{}, bool) {
 	parts := strings.Split(field, ".")
 	current := data
-	
+
 	for i, part := range parts {
 		if i == len(parts)-1 {
 			val, exists := current[part]
 			return val, exists
 		}
-		
+
 		if next, ok := current[part].(map[string]interface{}); ok {
 			current = next
 		} else {
 			return nil, false
 		}
 	}
-	
+
 	return nil, false
 }
 
@@ -246,12 +246,12 @@ func (s *FlagConditionEvaluatorService) evaluateNumericCondition(condition confi
 	if err != nil {
 		return false, fmt.Sprintf("cannot convert %s to number", condition.Field)
 	}
-	
+
 	// Handle different value types
 	switch v := condition.Value.(type) {
 	case float64:
-		return s.compareNumeric(fieldNum, v, condition.Operator), 
-		       fmt.Sprintf("%s %.2f %s %.2f", condition.Field, fieldNum, condition.Operator, v)
+		return s.compareNumeric(fieldNum, v, condition.Operator),
+			fmt.Sprintf("%s %.2f %s %.2f", condition.Field, fieldNum, condition.Operator, v)
 	case []interface{}:
 		// For "in" and "between" operators
 		if condition.Operator == "between" && len(v) == 2 {
@@ -276,11 +276,11 @@ func (s *FlagConditionEvaluatorService) evaluateNumericCondition(condition confi
 			if exists {
 				refNum, _ := s.toFloat64(refValue)
 				return s.compareNumeric(fieldNum, refNum, condition.Operator),
-				       fmt.Sprintf("%s %.2f %s %s(%.2f)", condition.Field, fieldNum, condition.Operator, refField, refNum)
+					fmt.Sprintf("%s %.2f %s %s(%.2f)", condition.Field, fieldNum, condition.Operator, refField, refNum)
 			}
 		}
 	}
-	
+
 	return false, "invalid numeric comparison"
 }
 
@@ -308,12 +308,12 @@ func (s *FlagConditionEvaluatorService) compareNumeric(a, b float64, operator st
 func (s *FlagConditionEvaluatorService) evaluateStringCondition(condition config.Condition, fieldValue interface{}) (bool, string) {
 	fieldStr := fmt.Sprintf("%v", fieldValue)
 	compareStr := fmt.Sprintf("%v", condition.Value)
-	
+
 	if !condition.CaseSensitive {
 		fieldStr = strings.ToLower(fieldStr)
 		compareStr = strings.ToLower(compareStr)
 	}
-	
+
 	switch condition.Operator {
 	case "eq":
 		result := fieldStr == compareStr
@@ -344,7 +344,7 @@ func (s *FlagConditionEvaluatorService) evaluateStringCondition(condition config
 			return false, fmt.Sprintf("%s '%s' not in list", condition.Field, fieldStr)
 		}
 	}
-	
+
 	return false, "invalid string comparison"
 }
 
@@ -359,14 +359,14 @@ func (s *FlagConditionEvaluatorService) evaluateBooleanCondition(condition confi
 			return false, fmt.Sprintf("cannot convert %s to boolean", condition.Field)
 		}
 	}
-	
+
 	compareBool, ok := condition.Value.(bool)
 	if !ok {
 		if str, ok := condition.Value.(string); ok {
 			compareBool = strings.ToLower(str) == "true"
 		}
 	}
-	
+
 	switch condition.Operator {
 	case "eq":
 		result := fieldBool == compareBool
@@ -375,27 +375,75 @@ func (s *FlagConditionEvaluatorService) evaluateBooleanCondition(condition confi
 		result := fieldBool != compareBool
 		return result, fmt.Sprintf("%s %v ne %v", condition.Field, fieldBool, compareBool)
 	}
-	
+
 	return false, "invalid boolean comparison"
 }
 
-// evaluateDateCondition evaluates date conditions
+// evaluateDateCondition evaluates date conditions using absolute date operators
+// (before/after/eq/ne/between). Returns (matched, detail) and does NOT log — the caller owns
+// logging. Lenient: a non-date field value or invalid literal returns false with an explanatory
+// detail rather than erroring.
+//
+// DEFERRED (TDB-10 / #10): relative-to-now operators (e.g. "older_than_days", "within_days")
+// are intentionally NOT implemented here. They require an injected clock seam for deterministic
+// tests, which this service does not have today; absolute operators deliver the capability with
+// no clock dependency. Add a clock seam before introducing relative-window operators.
 func (s *FlagConditionEvaluatorService) evaluateDateCondition(condition config.Condition, fieldValue interface{}) (bool, string) {
-	// TODO: Implement date condition evaluation
-	// This would involve parsing dates and comparing them
-	return false, "date conditions not yet implemented"
+	fieldTime, ok := coerceTime(fieldValue)
+	if !ok {
+		return false, fmt.Sprintf("%s is not a date: %v", condition.Field, fieldValue)
+	}
+
+	switch condition.Operator {
+	case "before", "lt":
+		ref, ok := coerceTime(condition.Value)
+		if !ok {
+			return false, "invalid date literal in condition"
+		}
+		return fieldTime.Before(ref), fmt.Sprintf("%s %v before %v", condition.Field, fieldTime, ref)
+	case "after", "gt":
+		ref, ok := coerceTime(condition.Value)
+		if !ok {
+			return false, "invalid date literal in condition"
+		}
+		return fieldTime.After(ref), fmt.Sprintf("%s %v after %v", condition.Field, fieldTime, ref)
+	case "eq":
+		ref, ok := coerceTime(condition.Value)
+		if !ok {
+			return false, "invalid date literal in condition"
+		}
+		return fieldTime.Equal(ref), fmt.Sprintf("%s %v eq %v", condition.Field, fieldTime, ref)
+	case "ne":
+		ref, ok := coerceTime(condition.Value)
+		if !ok {
+			return false, "invalid date literal in condition"
+		}
+		return !fieldTime.Equal(ref), fmt.Sprintf("%s %v ne %v", condition.Field, fieldTime, ref)
+	case "between":
+		if list, ok := condition.Value.([]interface{}); ok && len(list) == 2 {
+			lo, ok1 := coerceTime(list[0])
+			hi, ok2 := coerceTime(list[1])
+			if ok1 && ok2 {
+				inRange := !fieldTime.Before(lo) && !fieldTime.After(hi)
+				return inRange, fmt.Sprintf("%s %v between %v and %v", condition.Field, fieldTime, lo, hi)
+			}
+		}
+		return false, "invalid date range in condition"
+	default:
+		return false, fmt.Sprintf("unsupported date operator: %s", condition.Operator)
+	}
 }
 
 // evaluateRegexCondition evaluates regex conditions
 func (s *FlagConditionEvaluatorService) evaluateRegexCondition(condition config.Condition, fieldValue interface{}) (bool, string) {
 	fieldStr := fmt.Sprintf("%v", fieldValue)
 	pattern := fmt.Sprintf("%v", condition.Value)
-	
+
 	if regex, ok := s.compiledRegexs[pattern]; ok {
 		result := regex.MatchString(fieldStr)
 		return result, fmt.Sprintf("%s matches regex pattern", condition.Field)
 	}
-	
+
 	return false, "regex pattern not compiled"
 }
 
@@ -405,7 +453,7 @@ func (s *FlagConditionEvaluatorService) ExecuteActions(ctx context.Context, resu
 		if !result.Triggered {
 			continue
 		}
-		
+
 		for _, action := range result.Actions {
 			// Convert back to FlagAction
 			if flagAction, ok := action.(config.FlagAction); ok {
@@ -416,7 +464,7 @@ func (s *FlagConditionEvaluatorService) ExecuteActions(ctx context.Context, resu
 			}
 		}
 	}
-	
+
 	return nil
 }
 
@@ -442,16 +490,16 @@ func (s *FlagConditionEvaluatorService) executeSetFieldAction(params map[string]
 	if !ok {
 		return fmt.Errorf("field parameter is required for set_field action")
 	}
-	
+
 	value, ok := params["value"]
 	if !ok {
 		return fmt.Errorf("value parameter is required for set_field action")
 	}
-	
+
 	// Handle dot notation for nested fields
 	parts := strings.Split(field, ".")
 	current := data
-	
+
 	for i, part := range parts {
 		if i == len(parts)-1 {
 			// Last part, set the value
@@ -459,19 +507,19 @@ func (s *FlagConditionEvaluatorService) executeSetFieldAction(params map[string]
 			s.logger.Printf("Set field %s to %v", field, value)
 			return nil
 		}
-		
+
 		// Create nested map if it doesn't exist
 		if _, exists := current[part]; !exists {
 			current[part] = make(map[string]interface{})
 		}
-		
+
 		if next, ok := current[part].(map[string]interface{}); ok {
 			current = next
 		} else {
 			return fmt.Errorf("cannot set nested field %s: parent is not a map", field)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -479,44 +527,55 @@ func (s *FlagConditionEvaluatorService) executeSetFieldAction(params map[string]
 func (s *FlagConditionEvaluatorService) executeLogAction(params map[string]interface{}, result ports.FlagResult) error {
 	level, _ := params["level"].(string)
 	message, _ := params["message"].(string)
-	
+
 	if message == "" {
 		message = fmt.Sprintf("Flag %s triggered", result.FlagName)
 	}
-	
-	// TODO: Implement different log levels
+
+	// DE-SCOPED (TDB-10 / #10): per-level log routing is not implemented because
+	// ExecuteActions has no production caller — the cleaner path uses EvaluateFlags
+	// only (service.go: createRiskWarningFlags) and reads Triggered/Details. This
+	// action dispatcher is exercised solely by integration tests. Revisit if flag
+	// actions are ever wired into the request path (would also require a logctx seam).
 	s.logger.Printf("[%s] %s", level, message)
-	
+
 	return nil
 }
 
 // executeAlertAction sends an alert
 func (s *FlagConditionEvaluatorService) executeAlertAction(params map[string]interface{}, result ports.FlagResult) error {
-	// TODO: Implement alert mechanism (email, webhook, etc.)
+	// DE-SCOPED (TDB-10 / #10): redundant with the real alerting subsystem at
+	// internal/services/alerting/ (configuration.go + regression_detection.go).
+	// ExecuteActions has no production caller, so building email/webhook here would
+	// add untested dead code that duplicates an existing service. If flag-driven
+	// alerts become a real requirement, route them through internal/services/alerting.
 	s.logger.Printf("ALERT: Flag %s triggered - %s", result.FlagName, result.Details)
 	return nil
 }
 
 // executeTransformAction applies a transformation to data
 func (s *FlagConditionEvaluatorService) executeTransformAction(params map[string]interface{}, data map[string]interface{}) error {
-	// TODO: Implement data transformation logic
+	// DE-SCOPED (TDB-10 / #10): aspirational config-action stub with no live config
+	// consumer and no caller (ExecuteActions is test-only). No transformation grammar
+	// is defined and none is needed by the shipped flag_conditions.json. Left as a
+	// no-op intentionally; revisit only if/when ExecuteActions is wired into production.
 	return nil
 }
 
 // mergeWithGlobalVariables merges global variables with data
 func (s *FlagConditionEvaluatorService) mergeWithGlobalVariables(data map[string]interface{}) map[string]interface{} {
 	merged := make(map[string]interface{})
-	
+
 	// Copy global variables
 	for k, v := range s.config.GlobalVariables {
 		merged[k] = v
 	}
-	
+
 	// Copy and override with data
 	for k, v := range data {
 		merged[k] = v
 	}
-	
+
 	return merged
 }
 
@@ -524,7 +583,7 @@ func (s *FlagConditionEvaluatorService) mergeWithGlobalVariables(data map[string
 func (s *FlagConditionEvaluatorService) toFloat64(value interface{}) (float64, error) {
 	v := reflect.ValueOf(value)
 	v = reflect.Indirect(v)
-	
+
 	switch v.Kind() {
 	case reflect.Float64:
 		return v.Float(), nil
