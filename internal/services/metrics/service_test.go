@@ -293,6 +293,48 @@ func TestRecordHTTPRequest_StatusCodeLabel(t *testing.T) {
 	}
 }
 
+// TestRecordAdjustment pins TDB-4: datacleaner_adjustments_total registers on
+// the service-owned registry and increments once per RecordAdjustment call for
+// the {rule_id,category,type} label set.
+func TestRecordAdjustment(t *testing.T) {
+	logger := zap.NewNop()
+	registry := prometheus.NewRegistry()
+	svc := NewServiceWithRegistry(logger, registry)
+
+	assert.NotPanics(t, func() {
+		svc.RecordAdjustment("A1", "asset_quality", "exclude")
+		svc.RecordAdjustment("A1", "asset_quality", "exclude")
+		svc.RecordAdjustment("B1", "liability_completeness", "treat_as_debt")
+	})
+
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatalf("registry.Gather error: %v", err)
+	}
+
+	type key struct{ ruleID, category, typ string }
+	got := map[key]int{}
+	found := false
+	for _, f := range families {
+		if f.GetName() != "datacleaner_adjustments_total" {
+			continue
+		}
+		found = true
+		for _, m := range f.GetMetric() {
+			labels := map[string]string{}
+			for _, lp := range m.GetLabel() {
+				labels[lp.GetName()] = lp.GetValue()
+			}
+			got[key{labels["rule_id"], labels["category"], labels["type"]}] = int(m.GetCounter().GetValue())
+		}
+	}
+
+	assert.True(t, found, "datacleaner_adjustments_total must be registered on the service registry")
+	assert.Equal(t, 2, got[key{"A1", "asset_quality", "exclude"}],
+		"two A1 increments must aggregate on the same label set")
+	assert.Equal(t, 1, got[key{"B1", "liability_completeness", "treat_as_debt"}])
+}
+
 // Benchmark test for metrics recording performance
 func BenchmarkRecordHTTPRequest(b *testing.B) {
 	logger := zap.NewNop()
