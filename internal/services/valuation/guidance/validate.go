@@ -49,12 +49,8 @@ func ValidateStructural(a *Artifact) error {
 		return fmt.Errorf("%w: nil artifact", ErrInvalidArtifact)
 	}
 
-	if a.SchemaVersion == "" {
-		return fmt.Errorf("%w: schema_version is required", ErrInvalidArtifact)
-	}
-	if major := schemaMajor(a.SchemaVersion); major != supportedSchemaMajor {
-		return fmt.Errorf("%w: schema_version=%q (supported major=%q)",
-			ErrUnknownSchemaMajor, a.SchemaVersion, supportedSchemaMajor)
+	if err := checkSchemaMajor(a); err != nil {
+		return err
 	}
 
 	if !knownStatus(a.Status) {
@@ -124,11 +120,24 @@ func ValidateStructural(a *Artifact) error {
 // validateEnvelope enforces the per-envelope structural rules. kind is the
 // JSON-ish field path used in the error for operator legibility.
 func validateEnvelope(kind string, e Envelope) error {
-	if e.ValueLow > e.ValueHigh {
-		return fmt.Errorf("%w: %s value_low (%g) > value_high (%g)", ErrInvalidArtifact, kind, e.ValueLow, e.ValueHigh)
+	// HIGH-2: an explicit numeric value is REQUIRED (§9.3). A pointer bound that
+	// unmarshalled to nil means the JSON omitted the field — reject it rather than
+	// silently anchoring a zero. Only after both bounds are present do we compare.
+	if e.ValueLow == nil || e.ValueHigh == nil {
+		return fmt.Errorf("%w: %s value_low/value_high are required (explicit numeric value, §9.3)", ErrInvalidArtifact, kind)
 	}
-	if e.Unit != UnitAbsoluteUSD && e.Unit != UnitPct {
-		return fmt.Errorf("%w: %s unknown unit %q", ErrInvalidArtifact, kind, e.Unit)
+	if *e.ValueLow > *e.ValueHigh {
+		return fmt.Errorf("%w: %s value_low (%g) > value_high (%g)", ErrInvalidArtifact, kind, *e.ValueLow, *e.ValueHigh)
+	}
+	// HIGH-2: per-envelope confidence is a probability in [0,1] (§8.3 item 6); a
+	// value outside that range is a malformed validator output and is rejected.
+	if e.Confidence < 0 || e.Confidence > 1 {
+		return fmt.Errorf("%w: %s confidence %g must be in [0,1]", ErrInvalidArtifact, kind, e.Confidence)
+	}
+	// HIGH-3: the unit MUST match the envelope kind so a scale error (e.g. a
+	// margin in absolute_usd or a capex in pct) cannot be consumed wrongly (§8.6).
+	if err := validateUnitForKind(kind, e.Unit); err != nil {
+		return err
 	}
 	if e.Period == "" {
 		// §8.6 period-ambiguity rule: an empty period makes the envelope
@@ -179,8 +188,56 @@ func knownStatus(s Status) bool {
 
 // isMarginKind reports whether a kind path names a margin envelope.
 func isMarginKind(kind string) bool {
-	const prefix = "margin_guidance"
+	return hasKindPrefix(kind, "margin_guidance")
+}
+
+// hasKindPrefix reports whether a kind path (e.g. "margin_guidance[0]") begins
+// with the given guidance-kind prefix.
+func hasKindPrefix(kind, prefix string) bool {
 	return len(kind) >= len(prefix) && kind[:len(prefix)] == prefix
+}
+
+// validateUnitForKind enforces the §8.6 scale-error defense at the kind level
+// (HIGH-3): a capex_guidance envelope MUST be absolute_usd, and a margin or
+// revenue envelope MUST be pct. Allowing any known unit for any kind would let a
+// margin in absolute_usd (or a capex in pct) be consumed at the wrong scale.
+func validateUnitForKind(kind string, unit Unit) error {
+	switch {
+	case hasKindPrefix(kind, "capex_guidance"):
+		if unit != UnitAbsoluteUSD {
+			return fmt.Errorf("%w: %s unit %q must be %q for a capex envelope (§8.6)",
+				ErrInvalidArtifact, kind, unit, UnitAbsoluteUSD)
+		}
+	case hasKindPrefix(kind, "margin_guidance"), hasKindPrefix(kind, "revenue_guidance"):
+		if unit != UnitPct {
+			return fmt.Errorf("%w: %s unit %q must be %q for a margin/revenue envelope (§8.6)",
+				ErrInvalidArtifact, kind, unit, UnitPct)
+		}
+	default:
+		// Unknown kind path: fall back to "must be a known unit" so the check
+		// stays total if a new kind is added without a unit rule.
+		if unit != UnitAbsoluteUSD && unit != UnitPct {
+			return fmt.Errorf("%w: %s unknown unit %q", ErrInvalidArtifact, kind, unit)
+		}
+	}
+	return nil
+}
+
+// checkSchemaMajor enforces the forward-compat schema-major gate: schema_version
+// present with the supported MAJOR. An empty schema_version is a structural
+// failure (ErrInvalidArtifact); a present-but-different major is the distinct
+// ErrUnknownSchemaMajor so an old loader refuses to silently misread a v2 shape.
+// Shared by ValidateStructural and the loader's parseAndVerify (HIGH-4 — the
+// loader runs this BEFORE the content-hash check).
+func checkSchemaMajor(a *Artifact) error {
+	if a.SchemaVersion == "" {
+		return fmt.Errorf("%w: schema_version is required", ErrInvalidArtifact)
+	}
+	if major := schemaMajor(a.SchemaVersion); major != supportedSchemaMajor {
+		return fmt.Errorf("%w: schema_version=%q (supported major=%q)",
+			ErrUnknownSchemaMajor, a.SchemaVersion, supportedSchemaMajor)
+	}
+	return nil
 }
 
 // schemaMajor extracts the major component of a semver string ("1.0.0" → "1").

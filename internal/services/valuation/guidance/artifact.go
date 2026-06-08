@@ -120,10 +120,15 @@ type Evidence struct {
 // revenue). value_low <= value_high is an invariant; for a point estimate
 // value_low == value_high.
 type Envelope struct {
-	// ValueLow is the low end of the guidance range.
-	ValueLow float64 `json:"value_low"`
-	// ValueHigh is the high end. Invariant: ValueLow <= ValueHigh.
-	ValueHigh float64 `json:"value_high"`
+	// ValueLow is the low end of the guidance range. POINTER (HIGH-2): a
+	// numeric envelope MUST carry an EXPLICIT value — an omitted JSON field
+	// unmarshals to nil (not 0), so ValidateStructural can reject the
+	// silent-zero anchoring the §9.3 "explicit value required" guardrail
+	// forbids. A float64 field would coerce a missing value_low to 0 and pass.
+	ValueLow *float64 `json:"value_low"`
+	// ValueHigh is the high end. Invariant: *ValueLow <= *ValueHigh. POINTER for
+	// the same explicit-value reason as ValueLow (HIGH-2).
+	ValueHigh *float64 `json:"value_high"`
 	// Unit defends against scale errors (§8.6).
 	Unit Unit `json:"unit"`
 	// Period is the explicit fiscal period, e.g. "FY2026". Ambiguous/empty
@@ -138,10 +143,25 @@ type Envelope struct {
 	Evidence []Evidence `json:"evidence,omitempty"`
 }
 
-// Midpoint returns (ValueLow + ValueHigh) / 2 — the Decision-6 anchor value.
+// Midpoint returns (*ValueLow + *ValueHigh) / 2 — the Decision-6 anchor value.
+// It assumes both bounds are present (ValidateStructural rejects a numeric
+// envelope with a nil bound, HIGH-2); a nil bound is treated as 0 defensively so
+// the function stays total even if called on an unvalidated envelope.
 func (e Envelope) Midpoint() float64 {
-	return (e.ValueLow + e.ValueHigh) / 2
+	var lo, hi float64
+	if e.ValueLow != nil {
+		lo = *e.ValueLow
+	}
+	if e.ValueHigh != nil {
+		hi = *e.ValueHigh
+	}
+	return (lo + hi) / 2
 }
+
+// Float returns a pointer to v. It is the canonical helper for authoring
+// Envelope.ValueLow/ValueHigh (now *float64, HIGH-2) in fixtures and tests
+// without a one-off local variable per value.
+func Float(v float64) *float64 { return &v }
 
 // Extraction holds the three guidance envelopes. Absent/empty when
 // status == no_explicit_guidance_found.

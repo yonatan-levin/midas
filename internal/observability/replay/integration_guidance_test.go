@@ -120,7 +120,7 @@ func validatedCapExStage(t *testing.T, ticker, cik string) guidance.BundleStage 
 		},
 		Extraction: &guidance.Extraction{
 			CapExGuidance: &guidance.Envelope{
-				ValueLow: 1.4e9, ValueHigh: 1.6e9, Unit: guidance.UnitAbsoluteUSD, Period: "FY2026",
+				ValueLow: guidance.Float(1.4e9), ValueHigh: guidance.Float(1.6e9), Unit: guidance.UnitAbsoluteUSD, Period: "FY2026",
 				Basis:      &guidance.Basis{GrossOrNet: "gross", CashOrAccrual: "cash", GAAPOrNonGAAP: "gaap"},
 				Confidence: 0.82,
 				Evidence: []guidance.Evidence{{

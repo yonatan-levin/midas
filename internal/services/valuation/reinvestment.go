@@ -133,10 +133,10 @@ func (s *Service) applyReinvestmentModel(
 //     this slice per year). The slice is CLONED before the first write so the
 //     caller's growth-rate slice (also stamped on result.GrowthRates) is never
 //     mutated in place.
-//   - OperatingMarginYear1 ⇒ seeds the year-1 margin start by setting
-//     in.BaseOperatingMargin to the anchor; the convergence schedule then
-//     proceeds from the anchored start toward TargetOperatingMargin (later years
-//     still converge).
+//   - OperatingMarginYear1 ⇒ in.NearTermMarginOverride[1] REPLACES the
+//     model-computed year-1 margin for year 1 ONLY (HIGH-1). It deliberately does
+//     NOT touch BaseOperatingMargin/TargetOperatingMargin — that would shift the
+//     whole convergence curve (years 3+) and leak into the terminal NOPAT.
 //   - OperatingMarginYear2 ⇒ in.NearTermMarginOverride[2] REPLACES the
 //     model-computed converged margin for year 2 only (LOW-1 — consumed
 //     symmetrically with the other Year2 knobs via the additive per-year engine
@@ -166,9 +166,21 @@ func applyNearTermAnchors(in *dcf.Inputs, anchors authority.NearTermAnchors) {
 			in.RevenueGrowthRates = cloned
 			growthCloned = true
 		}
-		if yearIndex < len(in.RevenueGrowthRates) {
-			in.RevenueGrowthRates[yearIndex] = v
+		// MEDIUM-4: a revenue anchor must NOT silently no-op when
+		// RevenueGrowthRates is empty/short. Extend the slice to yearIndex+1,
+		// seeding each newly-added year from the engine's existing per-year growth
+		// (in.GrowthRates[i]) when available, else the scalar in.GrowthRate — so
+		// the anchored year actually lands AND the seeded years stay coherent with
+		// the model's growth trajectory rather than defaulting to zero.
+		for len(in.RevenueGrowthRates) <= yearIndex {
+			i := len(in.RevenueGrowthRates)
+			seed := in.GrowthRate
+			if i < len(in.GrowthRates) {
+				seed = in.GrowthRates[i]
+			}
+			in.RevenueGrowthRates = append(in.RevenueGrowthRates, seed)
 		}
+		in.RevenueGrowthRates[yearIndex] = v
 	}
 	if anchors.RevenueGrowthYear1 != nil {
 		setGrowth(0, *anchors.RevenueGrowthYear1)
@@ -177,18 +189,17 @@ func applyNearTermAnchors(in *dcf.Inputs, anchors authority.NearTermAnchors) {
 		setGrowth(1, *anchors.RevenueGrowthYear2)
 	}
 
-	// Operating-margin year-1 anchor seeds the convergence start.
+	// Operating-margin year-1 anchor REPLACES the year-1 margin via the per-year
+	// override seam (HIGH-1) — symmetric with the year-2 margin anchor below and
+	// with the CapEx anchors. It deliberately does NOT touch BaseOperatingMargin
+	// or TargetOperatingMargin: mutating BaseOperatingMargin would shift the WHOLE
+	// base→target convergence curve (moving years 3+), and raising
+	// TargetOperatingMargin would leak guidance into the TERMINAL NOPAT — both
+	// violate §9.3 "year 1–2 only, never dominates intrinsic value". Confining the
+	// anchor to NearTermMarginOverride[1] keeps the effect strictly near-term.
 	if anchors.OperatingMarginYear1 != nil {
 		assertNearTermPrefix(0)
-		in.BaseOperatingMargin = *anchors.OperatingMarginYear1
-		// Keep the only-expand margin guard coherent: never let the anchored
-		// start exceed the target (which would invert the convergence). Raise
-		// the target to the anchor so the year-1 margin is honored and later
-		// years hold (rather than contract) — consistent with the §"margin
-		// guard" only-expand contract.
-		if in.TargetOperatingMargin < in.BaseOperatingMargin {
-			in.TargetOperatingMargin = in.BaseOperatingMargin
-		}
+		ensureMarginOverride(in)[1] = *anchors.OperatingMarginYear1
 	}
 
 	// Operating-margin year-2 anchor REPLACES the year-2 converged margin via the

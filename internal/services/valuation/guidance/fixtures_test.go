@@ -44,7 +44,7 @@ func fixtureSet() map[string]*Artifact {
 		},
 		Extraction: &Extraction{
 			CapExGuidance: &Envelope{
-				ValueLow: 1.4e9, ValueHigh: 1.6e9, Unit: UnitAbsoluteUSD, Period: "FY2026",
+				ValueLow: Float(1.4e9), ValueHigh: Float(1.6e9), Unit: UnitAbsoluteUSD, Period: "FY2026",
 				Basis: &Basis{
 					GrossOrNet: "gross", CashOrAccrual: "cash",
 					GAAPOrNonGAAP: "gaap", ConsolidatedOrSegment: "consolidated",
@@ -78,7 +78,7 @@ func fixtureSet() map[string]*Artifact {
 		},
 		Extraction: &Extraction{
 			CapExGuidance: &Envelope{
-				ValueLow: 1.2e9, ValueHigh: 1.8e9, Unit: UnitAbsoluteUSD, Period: "FY2026",
+				ValueLow: Float(1.2e9), ValueHigh: Float(1.8e9), Unit: UnitAbsoluteUSD, Period: "FY2026",
 				Basis:      &Basis{GrossOrNet: "gross", CashOrAccrual: "cash", GAAPOrNonGAAP: "gaap"},
 				Confidence: 0.45, // below the default 0.70 anchor threshold ⇒ context only
 				Evidence: []Evidence{{
@@ -120,7 +120,7 @@ func fixtureSet() map[string]*Artifact {
 		},
 		Extraction: &Extraction{
 			CapExGuidance: &Envelope{
-				ValueLow: 1.8e9, ValueHigh: 2.0e9, Unit: UnitAbsoluteUSD, Period: "FY2027",
+				ValueLow: Float(1.8e9), ValueHigh: Float(2.0e9), Unit: UnitAbsoluteUSD, Period: "FY2027",
 				Basis:      &Basis{GrossOrNet: "gross", CashOrAccrual: "cash", GAAPOrNonGAAP: "gaap"},
 				Confidence: 0.80,
 				Evidence:   []Evidence{{Quote: "fiscal 2027 capex of roughly $1.9 billion", Location: "Item 7"}},
@@ -141,7 +141,7 @@ func fixtureSet() map[string]*Artifact {
 		},
 		Extraction: &Extraction{
 			CapExGuidance: &Envelope{
-				ValueLow: 2.0e9, ValueHigh: 2.2e9, Unit: UnitAbsoluteUSD, Period: "FY2027",
+				ValueLow: Float(2.0e9), ValueHigh: Float(2.2e9), Unit: UnitAbsoluteUSD, Period: "FY2027",
 				Basis:      &Basis{GrossOrNet: "gross", CashOrAccrual: "cash", GAAPOrNonGAAP: "gaap"},
 				Confidence: 0.78,
 				Evidence:   []Evidence{{Quote: "we now expect fiscal 2027 capex near $2.1 billion", Location: "Item 2"}},
@@ -165,7 +165,7 @@ func fixtureSet() map[string]*Artifact {
 		},
 		Extraction: &Extraction{
 			CapExGuidance: &Envelope{
-				ValueLow: 0.9e9, ValueHigh: 1.1e9, Unit: UnitAbsoluteUSD, Period: "FY2024",
+				ValueLow: Float(0.9e9), ValueHigh: Float(1.1e9), Unit: UnitAbsoluteUSD, Period: "FY2024",
 				Basis:      &Basis{GrossOrNet: "gross", CashOrAccrual: "cash", GAAPOrNonGAAP: "gaap"},
 				Confidence: 0.85,
 				Evidence:   []Evidence{{Quote: "fiscal 2024 capex of about $1.0 billion", Location: "Item 7"}},

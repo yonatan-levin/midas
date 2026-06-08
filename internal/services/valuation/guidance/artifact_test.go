@@ -30,8 +30,8 @@ func validCapExArtifact() *Artifact {
 		},
 		Extraction: &Extraction{
 			CapExGuidance: &Envelope{
-				ValueLow:  1.4e9,
-				ValueHigh: 1.6e9,
+				ValueLow:  Float(1.4e9),
+				ValueHigh: Float(1.6e9),
 				Unit:      UnitAbsoluteUSD,
 				Period:    "FY2026",
 				Basis: &Basis{
@@ -157,7 +157,7 @@ func TestComputeArtifactSHA256_SensitiveToContent(t *testing.T) {
 	require.NoError(t, err)
 
 	// Mutate a value-bearing field → different hash.
-	a.Extraction.CapExGuidance.ValueHigh = 1.7e9
+	a.Extraction.CapExGuidance.ValueHigh = Float(1.7e9)
 	h2, err := ComputeArtifactSHA256(a)
 	require.NoError(t, err)
 	assert.NotEqual(t, h1, h2, "content change → hash change")
@@ -169,11 +169,11 @@ func TestComputeArtifactSHA256_NilArtifact(t *testing.T) {
 }
 
 func TestEnvelope_Midpoint(t *testing.T) {
-	e := Envelope{ValueLow: 1.4e9, ValueHigh: 1.6e9}
+	e := Envelope{ValueLow: Float(1.4e9), ValueHigh: Float(1.6e9)}
 	assert.Equal(t, 1.5e9, e.Midpoint())
 
 	// Point estimate: low == high → midpoint == the point.
-	p := Envelope{ValueLow: 0.25, ValueHigh: 0.25}
+	p := Envelope{ValueLow: Float(0.25), ValueHigh: Float(0.25)}
 	assert.Equal(t, 0.25, p.Midpoint())
 }
 
@@ -244,12 +244,68 @@ func TestValidateStructural_Rules(t *testing.T) {
 		},
 		{
 			name:    "value_low > value_high",
-			mutate:  func(a *Artifact) { a.Extraction.CapExGuidance.ValueLow = 2e9 },
+			mutate:  func(a *Artifact) { a.Extraction.CapExGuidance.ValueLow = Float(2e9) },
+			wantErr: ErrInvalidArtifact,
+		},
+		{
+			// HIGH-2: an omitted value_low unmarshals to nil ⇒ explicit-value
+			// guardrail rejects it (a float64 field would have coerced it to 0).
+			name:    "omitted value_low rejected (explicit value required)",
+			mutate:  func(a *Artifact) { a.Extraction.CapExGuidance.ValueLow = nil },
+			wantErr: ErrInvalidArtifact,
+		},
+		{
+			name:    "omitted value_high rejected (explicit value required)",
+			mutate:  func(a *Artifact) { a.Extraction.CapExGuidance.ValueHigh = nil },
+			wantErr: ErrInvalidArtifact,
+		},
+		{
+			// HIGH-2: per-envelope confidence is a probability in [0,1].
+			name:    "confidence above 1 rejected",
+			mutate:  func(a *Artifact) { a.Extraction.CapExGuidance.Confidence = 1.5 },
+			wantErr: ErrInvalidArtifact,
+		},
+		{
+			name:    "confidence below 0 rejected",
+			mutate:  func(a *Artifact) { a.Extraction.CapExGuidance.Confidence = -0.1 },
 			wantErr: ErrInvalidArtifact,
 		},
 		{
 			name:    "unknown unit",
 			mutate:  func(a *Artifact) { a.Extraction.CapExGuidance.Unit = "bushels" },
+			wantErr: ErrInvalidArtifact,
+		},
+		{
+			// HIGH-3: a capex envelope MUST be absolute_usd, never pct.
+			name:    "capex with pct unit rejected (kind/unit mismatch)",
+			mutate:  func(a *Artifact) { a.Extraction.CapExGuidance.Unit = UnitPct },
+			wantErr: ErrInvalidArtifact,
+		},
+		{
+			// HIGH-3: a margin envelope MUST be pct, never absolute_usd.
+			name: "margin with absolute_usd unit rejected (kind/unit mismatch)",
+			mutate: func(a *Artifact) {
+				a.Extraction.CapExGuidance = nil
+				a.Extraction.MarginGuidance = []Envelope{{
+					ValueLow: Float(0.30), ValueHigh: Float(0.32), Unit: UnitAbsoluteUSD, Period: "FY2026",
+					Basis:      &Basis{GAAPOrNonGAAP: "non_gaap"},
+					Confidence: 0.8,
+					Evidence:   []Evidence{{Quote: "gross margin ~31%", Location: "Item 7"}},
+				}}
+			},
+			wantErr: ErrInvalidArtifact,
+		},
+		{
+			// HIGH-3: a revenue envelope MUST be pct, never absolute_usd.
+			name: "revenue with absolute_usd unit rejected (kind/unit mismatch)",
+			mutate: func(a *Artifact) {
+				a.Extraction.CapExGuidance = nil
+				a.Extraction.RevenueGuidance = []Envelope{{
+					ValueLow: Float(0.20), ValueHigh: Float(0.24), Unit: UnitAbsoluteUSD, Period: "FY2026",
+					Confidence: 0.8,
+					Evidence:   []Evidence{{Quote: "revenue growth ~22%", Location: "Item 7"}},
+				}}
+			},
 			wantErr: ErrInvalidArtifact,
 		},
 		{
@@ -272,7 +328,7 @@ func TestValidateStructural_Rules(t *testing.T) {
 			mutate: func(a *Artifact) {
 				a.Extraction.CapExGuidance = nil
 				a.Extraction.MarginGuidance = []Envelope{{
-					ValueLow: 0.30, ValueHigh: 0.32, Unit: UnitPct, Period: "FY2026",
+					ValueLow: Float(0.30), ValueHigh: Float(0.32), Unit: UnitPct, Period: "FY2026",
 					Confidence: 0.8,
 					Evidence:   []Evidence{{Quote: "gross margin ~31%", Location: "Item 7"}},
 					// Basis omitted → must fail.
@@ -285,7 +341,7 @@ func TestValidateStructural_Rules(t *testing.T) {
 			mutate: func(a *Artifact) {
 				a.Extraction.CapExGuidance = nil
 				a.Extraction.MarginGuidance = []Envelope{{
-					ValueLow: 0.30, ValueHigh: 0.32, Unit: UnitPct, Period: "FY2026",
+					ValueLow: Float(0.30), ValueHigh: Float(0.32), Unit: UnitPct, Period: "FY2026",
 					Basis:      &Basis{GAAPOrNonGAAP: "non_gaap"},
 					Confidence: 0.8,
 					Evidence:   []Evidence{{Quote: "gross margin ~31%", Location: "Item 7"}},
@@ -298,7 +354,7 @@ func TestValidateStructural_Rules(t *testing.T) {
 			mutate: func(a *Artifact) {
 				*a = *absentArtifact()
 				a.Extraction = &Extraction{CapExGuidance: &Envelope{
-					ValueLow: 1, ValueHigh: 2, Unit: UnitAbsoluteUSD, Period: "FY2026",
+					ValueLow: Float(1), ValueHigh: Float(2), Unit: UnitAbsoluteUSD, Period: "FY2026",
 					Confidence: 0.5, Evidence: []Evidence{{Quote: "q", Location: "l"}},
 				}}
 			},

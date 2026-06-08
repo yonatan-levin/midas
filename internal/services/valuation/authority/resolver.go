@@ -237,46 +237,84 @@ func applyCapEx(res *Resolution, in Input, art *guidance.Artifact, threshold flo
 	}
 	m := env.Midpoint()
 	anchorYear1(res, KeyCapExYear1, &res.Anchors.CapExYear1, m, art, *env)
+
+	// MEDIUM-6: disclose the Phase-2 gross-as-net approximation on the CapEx
+	// anchor's provenance. The engine substitutes this GROSS `absolute_usd` capex
+	// figure DIRECTLY for the NET reinvestment term (no D&A-bearing gross→net
+	// conversion until Phase 3). A consumer seeing `capex_year1 source=guidance`
+	// would otherwise assume true CapEx semantics — so we append the marker to
+	// the Sources.Detail (the structured diagnostic) AND the just-emitted anchor
+	// warning (the operator-visible signal), in place, to avoid a second warning
+	// line. This is capex-specific; margin/revenue anchors do not carry it.
+	src := res.Sources[KeyCapExYear1]
+	src.Detail += " " + grossAsNetMarker
+	res.Sources[KeyCapExYear1] = src
+	if n := len(res.Warnings); n > 0 {
+		res.Warnings[n-1] += " [" + grossAsNetMarker + "]"
+	}
 }
 
-// applyMargin anchors operating_margin_year1 from the FIRST margin envelope
-// that clears the guardrails.
+// grossAsNetMarker is the provenance marker disclosing that a CapEx guidance
+// anchor's gross `absolute_usd` figure is consumed AS the net reinvestment term
+// in Phase 2 (MEDIUM-6). Replay tooling / dashboards key off this string; do NOT
+// rename without coordinating with consumers.
+const grossAsNetMarker = "gross_capex_as_net_reinvestment_approx=true"
+
+// applyMargin anchors operating_margin_year1 from the first ELIGIBLE margin
+// envelope (MEDIUM-3) — i.e. the first that clears the §9.3 guardrails, scanning
+// in stored (deterministic) order. A leading low-confidence envelope must NOT
+// suppress a later anchorable one; only if NO envelope is eligible does the
+// resolver record a single fall-through warning.
 func applyMargin(res *Resolution, in Input, art *guidance.Artifact, threshold float64) {
 	if len(art.Extraction.MarginGuidance) == 0 {
 		return
 	}
-	env := art.Extraction.MarginGuidance[0]
 	if in.UserOverriddenKnobs[KeyOperatingMarginYear1] {
 		res.Sources[KeyOperatingMarginYear1] = AssumptionSource{Level: SourceUserOverride, Detail: "request override"}
 		return
 	}
-	if !numericEligible(env, threshold) {
-		res.Warnings = append(res.Warnings, guardrailWarning(KeyOperatingMarginYear1, art, env, threshold))
+	env, ok := firstEligible(art.Extraction.MarginGuidance, threshold)
+	if !ok {
+		// None eligible: one fall-through warning keyed to the first envelope
+		// (the representative candidate) rather than the whole list.
+		res.Warnings = append(res.Warnings,
+			guardrailWarning(KeyOperatingMarginYear1, art, art.Extraction.MarginGuidance[0], threshold))
 		return
 	}
-	m := env.Midpoint()
-	anchorYear1(res, KeyOperatingMarginYear1, &res.Anchors.OperatingMarginYear1, m, art, env)
+	anchorYear1(res, KeyOperatingMarginYear1, &res.Anchors.OperatingMarginYear1, env.Midpoint(), art, env)
 }
 
-// applyRevenue anchors revenue_growth_year1 from the FIRST revenue envelope
-// that clears the guardrails. Phase 2 anchors the year-1 GROWTH RATE (staying
-// inside the existing RevenueGrowthRates seam); revenue-LEVEL anchoring is a
-// Phase-3 refinement (non-blocking open question).
+// applyRevenue anchors revenue_growth_year1 from the first ELIGIBLE revenue
+// envelope (MEDIUM-3 — same first-eligible semantics as applyMargin). Phase 2
+// anchors the year-1 GROWTH RATE (staying inside the existing RevenueGrowthRates
+// seam); revenue-LEVEL anchoring is a Phase-3 refinement (non-blocking open
+// question).
 func applyRevenue(res *Resolution, in Input, art *guidance.Artifact, threshold float64) {
 	if len(art.Extraction.RevenueGuidance) == 0 {
 		return
 	}
-	env := art.Extraction.RevenueGuidance[0]
 	if in.UserOverriddenKnobs[KeyRevenueGrowthYear1] {
 		res.Sources[KeyRevenueGrowthYear1] = AssumptionSource{Level: SourceUserOverride, Detail: "request override"}
 		return
 	}
-	if !numericEligible(env, threshold) {
-		res.Warnings = append(res.Warnings, guardrailWarning(KeyRevenueGrowthYear1, art, env, threshold))
+	env, ok := firstEligible(art.Extraction.RevenueGuidance, threshold)
+	if !ok {
+		res.Warnings = append(res.Warnings,
+			guardrailWarning(KeyRevenueGrowthYear1, art, art.Extraction.RevenueGuidance[0], threshold))
 		return
 	}
-	m := env.Midpoint()
-	anchorYear1(res, KeyRevenueGrowthYear1, &res.Anchors.RevenueGrowthYear1, m, art, env)
+	anchorYear1(res, KeyRevenueGrowthYear1, &res.Anchors.RevenueGrowthYear1, env.Midpoint(), art, env)
+}
+
+// firstEligible returns the first envelope (in stored order, deterministic) that
+// clears the §9.3 numeric guardrails, or ok=false if none do (MEDIUM-3).
+func firstEligible(envs []guidance.Envelope, threshold float64) (guidance.Envelope, bool) {
+	for _, env := range envs {
+		if numericEligible(env, threshold) {
+			return env, true
+		}
+	}
+	return guidance.Envelope{}, false
 }
 
 // anchorYear1 writes the midpoint anchor into the year-1 slot (index 0), records

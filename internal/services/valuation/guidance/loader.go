@@ -173,6 +173,13 @@ func (l *Loader) Load(cik string, asOf time.Time) (Resolution, error) {
 			// Structural / schema / unmarshal failures degrade to skip (NF4).
 			continue
 		}
+		// MEDIUM-2: the artifact's own issuer.cik MUST match the directory it was
+		// loaded from. A hash-valid but misplaced artifact (wrong CIK dir) would
+		// otherwise be applied to the wrong issuer, silently corrupting its
+		// valuation. A mismatch (or an unnormalizable issuer.cik) degrades to skip.
+		if c, ok := normalizeCIK(art.Issuer.CIK); !ok || c != normCIK {
+			continue
+		}
 		candidates = append(candidates, art)
 	}
 
@@ -236,19 +243,37 @@ func LoadFromBundle(raw []byte) (Resolution, error) {
 	}, nil
 }
 
-// parseAndVerify unmarshals, structurally-validates, and content-hash-verifies
-// a single artifact payload. A content-hash mismatch returns
-// ErrContentHashMismatch (hard); every other failure returns a wrapped
+// parseAndVerify unmarshals, content-hash-verifies, then structurally-validates
+// a single artifact payload — IN THAT ORDER (HIGH-4). A content-hash mismatch
+// returns ErrContentHashMismatch (hard); every other failure returns a wrapped
 // ErrInvalidArtifact-class error the caller treats as skip.
+//
+// ORDER MATTERS (HIGH-4): the content hash is verified BEFORE structural
+// validation. Running structural validation first would let a tampered artifact
+// that ALSO happens to be structurally invalid degrade to a silent SKIP instead
+// of hard-failing as a content-hash mismatch — weakening immutability (a
+// tampered immutable artifact must never slip through). The ONE exception is the
+// forward-compat schema-major gate: an artifact with an unsupported MAJOR is a
+// SKIP (a future schema this loader cannot read), checked BEFORE the hash so a
+// v2 artifact whose hash would not verify against this loader's v1 struct shape
+// is not mis-reported as a tamper.
 func parseAndVerify(body []byte) (*Artifact, error) {
 	art, err := unmarshalArtifact(body)
 	if err != nil {
 		return nil, err
 	}
-	if err := ValidateStructural(art); err != nil {
+	// Forward-compat gate FIRST: an unsupported schema major is a skip, not a
+	// tamper. Checked before the hash so a different-major shape never surfaces
+	// as a content-hash mismatch.
+	if err := checkSchemaMajor(art); err != nil {
 		return nil, err
 	}
+	// Content-hash verification SECOND (HARD error on mismatch — immutability).
 	if err := verifyArtifactHash(art); err != nil {
+		return nil, err
+	}
+	// Full structural validation LAST (skip on failure — NF4).
+	if err := ValidateStructural(art); err != nil {
 		return nil, err
 	}
 	return art, nil
@@ -365,27 +390,41 @@ func moreAuthoritative(a, b *Artifact) bool {
 	return a.Filing.Accession > b.Filing.Accession
 }
 
-// isStale reports whether the winner's newest guidance period has lapsed
-// relative to asOf (§8.3 item 5). A period parsed to a fiscal-year boundary
-// <= asOf is stale. A no_explicit_guidance_found record carries no period and
-// is never "stale" (it is already an absence). An unparseable / quarter-level
-// period is treated as never-stale in Phase 2 (Phase 3 refines).
+// isStale reports whether the winner's NEWEST guidance period has lapsed
+// relative to asOf (§8.3 item 5). The contract is the newest period, NOT the
+// oldest (MEDIUM-1): an artifact that references both a lapsed FY2024 envelope
+// and a still-current FY2026 envelope is NOT stale while as-of is within FY2026 —
+// the current period is the one that governs. The prior implementation returned
+// stale as soon as ANY included period lapsed, wrongly discarding live guidance.
+//
+// A no_explicit_guidance_found record carries no period and is never "stale" (it
+// is already an absence). An unparseable / quarter-level period is skipped in
+// Phase 2 (Phase 3 refines); if NO period parses, the artifact is never stale.
 func isStale(a *Artifact, asOf time.Time) bool {
 	if a.Status == StatusNoGuidanceFound || a.Extraction == nil {
 		return false
 	}
+	// Take the MAX (newest) parseable fiscal-year boundary across every
+	// referenced period; the artifact is stale only once as-of reaches THAT
+	// boundary. boundary is the first instant of the year AFTER the fiscal year,
+	// so a later period yields a later boundary.
+	var newest time.Time
+	var have bool
 	for _, p := range a.Extraction.allPeriods() {
 		boundary, ok := fiscalYearEnd(p)
 		if !ok {
 			continue
 		}
-		// boundary is the first instant of the year AFTER the fiscal year.
-		// The period has lapsed once asOf reaches (or passes) that boundary.
-		if !asOf.Before(boundary) {
-			return true
+		if !have || boundary.After(newest) {
+			newest = boundary
+			have = true
 		}
 	}
-	return false
+	if !have {
+		return false // no parseable period ⇒ never stale (Phase 2)
+	}
+	// The newest period has lapsed once asOf reaches (or passes) its boundary.
+	return !asOf.Before(newest)
 }
 
 // allPeriods returns every period string referenced by the extraction's

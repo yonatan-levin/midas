@@ -206,6 +206,136 @@ func TestCalculateDCF_NearTermMarginOverride_ChangesTargetYearOnly(t *testing.T)
 	}
 }
 
+// TestApplyNearTermAnchors_RevenueAnchor_ExtendsShortSlice is the MEDIUM-4 pin:
+// a revenue-growth anchor must actually MOVE year-1 even when RevenueGrowthRates
+// is empty or shorter than year 1 — previously the resolver recorded a guidance
+// source + warning but the DCF input was silently UNCHANGED (the write was
+// skipped because yearIndex >= len(slice)). The fix extends the slice to
+// yearIndex+1, seeding any missing years from GrowthRates[i] (else GrowthRate),
+// then writes the anchor.
+func TestApplyNearTermAnchors_RevenueAnchor_ExtendsShortSlice(t *testing.T) {
+	t.Run("empty RevenueGrowthRates ⇒ extended + year-1 set", func(t *testing.T) {
+		in := salesToCapInputs()
+		in.RevenueGrowthRates = nil // empty: the silent no-op case
+		in.GrowthRates = []float64{0.20, 0.18, 0.15, 0.12, 0.10}
+		in.GrowthRate = 0.05
+
+		g := 0.35
+		applyNearTermAnchors(&in, authority.NearTermAnchors{RevenueGrowthYear1: &g})
+
+		if len(in.RevenueGrowthRates) < 1 {
+			t.Fatalf("revenue anchor must extend RevenueGrowthRates to at least length 1; got len %d", len(in.RevenueGrowthRates))
+		}
+		if in.RevenueGrowthRates[0] != g {
+			t.Fatalf("year-1 revenue anchor not applied to extended slice: got %v want %v", in.RevenueGrowthRates[0], g)
+		}
+	})
+
+	t.Run("year-2 anchor seeds missing year-1 from GrowthRates", func(t *testing.T) {
+		in := salesToCapInputs()
+		in.RevenueGrowthRates = nil
+		in.GrowthRates = []float64{0.20, 0.18, 0.15, 0.12, 0.10}
+		in.GrowthRate = 0.05
+
+		g2 := 0.30
+		applyNearTermAnchors(&in, authority.NearTermAnchors{RevenueGrowthYear2: &g2})
+
+		if len(in.RevenueGrowthRates) < 2 {
+			t.Fatalf("year-2 anchor must extend RevenueGrowthRates to length >= 2; got %d", len(in.RevenueGrowthRates))
+		}
+		// Year-2 anchor lands at index 1; the seeded year-1 (index 0) comes from
+		// GrowthRates[0], NOT a zero.
+		if in.RevenueGrowthRates[1] != g2 {
+			t.Fatalf("year-2 anchor not applied: got %v want %v", in.RevenueGrowthRates[1], g2)
+		}
+		if in.RevenueGrowthRates[0] != 0.20 {
+			t.Fatalf("seeded year-1 must come from GrowthRates[0]=0.20, not zero; got %v", in.RevenueGrowthRates[0])
+		}
+	})
+
+	t.Run("empty slice + no GrowthRates ⇒ seeds from scalar GrowthRate", func(t *testing.T) {
+		in := salesToCapInputs()
+		in.RevenueGrowthRates = nil
+		in.GrowthRates = nil
+		in.GrowthRate = 0.07
+
+		g2 := 0.33
+		applyNearTermAnchors(&in, authority.NearTermAnchors{RevenueGrowthYear2: &g2})
+
+		if len(in.RevenueGrowthRates) < 2 {
+			t.Fatalf("expected slice extended to >= 2; got %d", len(in.RevenueGrowthRates))
+		}
+		if in.RevenueGrowthRates[0] != 0.07 {
+			t.Fatalf("seeded year-1 must fall back to scalar GrowthRate=0.07; got %v", in.RevenueGrowthRates[0])
+		}
+		if in.RevenueGrowthRates[1] != g2 {
+			t.Fatalf("year-2 anchor not applied: got %v", in.RevenueGrowthRates[1])
+		}
+	})
+}
+
+// TestApplyNearTermAnchors_OperatingMarginYear1_NearTermOnly is the HIGH-1
+// regression pin: a year-1 operating-margin anchor must touch ONLY year 1 via
+// the per-year margin override seam — it must NOT shift the base→target
+// convergence curve (which would move years 3+) nor raise TargetOperatingMargin
+// (which would leak guidance into the TERMINAL NOPAT, violating §9.3 "year 1–2
+// only, never dominates intrinsic value").
+//
+// It runs the engine with and without a year-1 margin anchor and asserts:
+//   - year 1 OperatingIncome/FCF MOVED (the anchor took effect), and equals the
+//     anchored margin × year-1 revenue;
+//   - years 3..N FCF are bit-for-bit identical to the no-anchor run;
+//   - the terminal value (and thus EnterpriseValue − ExplicitPeriodValue) is
+//     bit-for-bit identical — proving the anchor did not perturb Target/terminal.
+func TestApplyNearTermAnchors_OperatingMarginYear1_NearTermOnly(t *testing.T) {
+	base, err := dcf.CalculateDCF(salesToCapInputs())
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+
+	in := salesToCapInputs()
+	// A year-1 margin distinct from the converged year-1 value so the anchor is
+	// observable. The base margin is 0.10 and target 0.20 over 5 convergence
+	// years, so the un-anchored year-1 margin is 0.12; pick 0.18.
+	margin1 := 0.18
+	applyNearTermAnchors(&in, authority.NearTermAnchors{OperatingMarginYear1: &margin1})
+
+	// The anchor must consume the per-year margin seam (year 1), NOT BaseOperatingMargin.
+	if got, ok := in.NearTermMarginOverride[1]; !ok || got != margin1 {
+		t.Fatalf("year-1 margin anchor must write NearTermMarginOverride[1]=%v; got (%v,%v)", margin1, got, ok)
+	}
+	// BaseOperatingMargin / TargetOperatingMargin must be left at the model values
+	// (the HIGH-1 bug raised Target; this asserts it is untouched).
+	if in.BaseOperatingMargin != 0.10 {
+		t.Fatalf("year-1 anchor must NOT shift BaseOperatingMargin; got %v", in.BaseOperatingMargin)
+	}
+	if in.TargetOperatingMargin != 0.20 {
+		t.Fatalf("year-1 anchor must NOT raise TargetOperatingMargin (terminal leak); got %v", in.TargetOperatingMargin)
+	}
+
+	got, err := dcf.CalculateDCF(in)
+	if err != nil {
+		t.Fatalf("anchored: %v", err)
+	}
+
+	// Year 1 moved.
+	if got.Projections[0].OperatingIncome == base.Projections[0].OperatingIncome {
+		t.Fatal("year-1 margin anchor did not change year-1 operating income")
+	}
+	// Years 3..N FCF unchanged (the convergence curve was NOT shifted).
+	for i := 2; i < len(base.Projections); i++ {
+		if math.Float64bits(got.Projections[i].FreeCashFlow) != math.Float64bits(base.Projections[i].FreeCashFlow) {
+			t.Fatalf("year %d FCF changed by a year-1 margin anchor — convergence curve was shifted (HIGH-1): %v vs %v",
+				i+1, got.Projections[i].FreeCashFlow, base.Projections[i].FreeCashFlow)
+		}
+	}
+	// Terminal value bit-for-bit identical (Target/terminal NOPAT untouched).
+	if math.Float64bits(got.TerminalValue) != math.Float64bits(base.TerminalValue) {
+		t.Fatalf("year-1 margin anchor leaked into the terminal value (HIGH-1): %v vs %v",
+			got.TerminalValue, base.TerminalValue)
+	}
+}
+
 // TestApplyNearTermAnchors_OperatingMarginYear2_Consumed is the LOW-1 wiring pin:
 // a NearTermAnchors.OperatingMarginYear2 must flow into the engine's per-year
 // margin override (it was previously silently ignored). It also re-asserts the

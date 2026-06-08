@@ -42,6 +42,40 @@ func salesToCapBaseInputs() Inputs {
 	}
 }
 
+// TestValidateInputs_NearTermOverride_RejectsOutOfPrefixYear is the MEDIUM-5
+// pin: dcf.Inputs is EXPORTED, so a direct caller could pass a
+// NearTermReinvestmentOverride / NearTermMarginOverride keyed at year 3+ (or
+// year 0), bypassing the service-seam §9.3 near-term-prefix refusal. The engine
+// must enforce its OWN contract: validateInputs rejects any override year < 1 or
+// > 2 (only years 1 and 2 are valid near-term anchors).
+func TestValidateInputs_NearTermOverride_RejectsOutOfPrefixYear(t *testing.T) {
+	cases := []struct {
+		name      string
+		mutate    func(in *Inputs)
+		wantError bool
+	}{
+		{"reinvestment year 1 ok", func(in *Inputs) { in.NearTermReinvestmentOverride = map[int]float64{1: 100} }, false},
+		{"reinvestment year 2 ok", func(in *Inputs) { in.NearTermReinvestmentOverride = map[int]float64{2: 100} }, false},
+		{"reinvestment year 3 rejected", func(in *Inputs) { in.NearTermReinvestmentOverride = map[int]float64{3: 100} }, true},
+		{"reinvestment year 0 rejected", func(in *Inputs) { in.NearTermReinvestmentOverride = map[int]float64{0: 100} }, true},
+		{"margin year 2 ok", func(in *Inputs) { in.NearTermMarginOverride = map[int]float64{2: 0.3} }, false},
+		{"margin year 3 rejected", func(in *Inputs) { in.NearTermMarginOverride = map[int]float64{3: 0.3} }, true},
+		{"margin year 0 rejected", func(in *Inputs) { in.NearTermMarginOverride = map[int]float64{0: 0.3} }, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			in := salesToCapBaseInputs()
+			tc.mutate(&in)
+			_, err := CalculateDCF(in)
+			if tc.wantError {
+				require.Error(t, err, "an out-of-prefix near-term override must be rejected by the engine")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestCalculateDCF_SalesToCapital_CrossesPositiveInWindow(t *testing.T) {
 	// Per-year hand arithmetic (revenue grows at GrowthRates; margin converges
 	// 0.10→0.20 linearly over 5y; sales-to-capital rises 1.0→3.0 over 5y):

@@ -111,7 +111,7 @@ func TestLoader_ConflictResolution_NewestFilingWins(t *testing.T) {
 	newer.Filing.Accession = "0000002488-26-000050"
 	newer.Filing.FormType = "10-Q"
 	newer.Filing.FilingDate = "2026-05-01"
-	newer.Extraction.CapExGuidance.ValueHigh = 1.7e9 // distinguishable
+	newer.Extraction.CapExGuidance.ValueHigh = Float(1.7e9) // distinguishable
 
 	writeArtifact(t, root, older)
 	writeArtifact(t, root, newer)
@@ -231,6 +231,46 @@ func TestLoader_Staleness_PeriodLapsed(t *testing.T) {
 	assert.False(t, res.Trace.Stale)
 }
 
+// TestIsStale_NewestPeriodGoverns is the MEDIUM-1 pin: staleness is decided by
+// the NEWEST referenced guidance period, not the oldest. An artifact that
+// references BOTH a lapsed period (FY2024) and a still-current period (FY2026)
+// must NOT be stale when as-of falls within FY2026 — the current period is the
+// one that matters. The prior implementation returned stale as soon as ANY
+// included period lapsed, which would wrongly discard live guidance.
+func TestIsStale_NewestPeriodGoverns(t *testing.T) {
+	multi := &Artifact{
+		SchemaVersion: SchemaVersion,
+		Status:        StatusValidated,
+		Issuer:        Issuer{Ticker: "AMD", CIK: testCIK},
+		Filing:        Filing{Accession: "0000002488-26-000111", FormType: "10-K", FilingDate: "2026-02-04", PeriodEnd: "2025-12-28"},
+		Extraction: &Extraction{
+			// A lapsed FY2024 capex envelope AND a still-current FY2026 revenue
+			// envelope. The newest period (FY2026) governs staleness.
+			CapExGuidance: &Envelope{
+				ValueLow: Float(0.9e9), ValueHigh: Float(1.1e9), Unit: UnitAbsoluteUSD, Period: "FY2024",
+				Basis:      &Basis{GrossOrNet: "gross", CashOrAccrual: "cash", GAAPOrNonGAAP: "gaap"},
+				Confidence: 0.80,
+				Evidence:   []Evidence{{Quote: "fiscal 2024 capex ~$1.0B", Location: "Item 7"}},
+			},
+			RevenueGuidance: []Envelope{{
+				ValueLow: Float(0.20), ValueHigh: Float(0.24), Unit: UnitPct, Period: "FY2026",
+				Confidence: 0.80,
+				Evidence:   []Evidence{{Quote: "fiscal 2026 revenue growth ~22%", Location: "Item 7"}},
+			}},
+		},
+		Validation: Validation{Status: string(StatusValidated), Confidence: 0.80},
+	}
+
+	// as-of within FY2026: the newest period has NOT lapsed ⇒ not stale (even
+	// though the FY2024 envelope lapsed long ago).
+	assert.False(t, isStale(multi, mustDate(t, "2026-06-01")),
+		"newest period FY2026 is current ⇒ artifact is NOT stale despite a lapsed FY2024 envelope (MEDIUM-1)")
+
+	// as-of after FY2026 has lapsed: the newest period is now stale.
+	assert.True(t, isStale(multi, mustDate(t, "2027-06-01")),
+		"once the newest period FY2026 lapses, the artifact is stale")
+}
+
 func TestLoader_NoGuidanceFound_IsFirstClass(t *testing.T) {
 	root := t.TempDir()
 	writeArtifact(t, root, absentArtifact())
@@ -262,6 +302,66 @@ func TestLoader_HashMismatch_HardError(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrContentHashMismatch), "tampered artifact hard-errors")
 }
 
+// TestLoader_TamperedAndStructurallyInvalid_HardErrors is the HIGH-4 pin:
+// content-hash verification must run BEFORE structural validation. A tampered
+// artifact that is ALSO structurally invalid must HARD-ERROR as a content-hash
+// mismatch — not be silently SKIPPED as a structural failure (which would let a
+// tampered immutable artifact slip through the immutability guarantee).
+//
+// We author a structurally-INVALID artifact (value_low > value_high) and stamp a
+// DELIBERATELY WRONG artifact_sha256 (not recomputed), so it is both tampered
+// AND invalid. With hash-first ordering the load hard-errors; with the prior
+// structural-first ordering it would have degraded to skip ⇒ Absent.
+func TestLoader_TamperedAndStructurallyInvalid_HardErrors(t *testing.T) {
+	root := t.TempDir()
+
+	a := validCapExArtifact()
+	a.Extraction.CapExGuidance.ValueLow = Float(9e9) // structurally invalid (> value_high)
+	a.ArtifactSHA256 = "deadbeef"                    // tampered: NOT the recomputed hash
+
+	dir := filepath.Join(root, a.Issuer.CIK)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	body, err := json.MarshalIndent(a, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, a.Filing.Accession+".json"), body, 0o644))
+
+	l := NewLoader(root)
+	_, err = l.Load(testCIK, mustDate(t, "2026-03-01"))
+	require.Error(t, err, "a tampered-AND-invalid artifact must hard-error on the hash, not silently skip")
+	assert.True(t, errors.Is(err, ErrContentHashMismatch),
+		"content-hash verification must run before structural validation (HIGH-4)")
+}
+
+// TestLoader_UnknownSchemaMajor_SkipsWithoutHashError is the HIGH-4 companion:
+// an artifact with an UNSUPPORTED schema major is a forward-compat SKIP, not a
+// tamper — so the schema-major gate must run BEFORE the hash check, and an
+// unknown-major artifact must degrade to skip even if its hash would not verify
+// against THIS loader's struct shape.
+func TestLoader_UnknownSchemaMajor_SkipsWithoutHashError(t *testing.T) {
+	root := t.TempDir()
+	// A valid artifact so the load still resolves SOMETHING (proves the unknown-
+	// major sibling was skipped, not hard-errored).
+	writeArtifact(t, root, validCapExArtifact())
+
+	future := validCapExArtifact()
+	future.Filing.Accession = "0000002488-26-000088"
+	future.SchemaVersion = "2.0.0" // unsupported major
+	// Deliberately leave a non-matching hash (do NOT recompute) — the major gate
+	// must short-circuit before the hash check, so this must NOT hard-error.
+	future.ArtifactSHA256 = "deadbeef"
+	dir := filepath.Join(root, future.Issuer.CIK)
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	body, err := json.MarshalIndent(future, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, future.Filing.Accession+".json"), body, 0o644))
+
+	l := NewLoader(root)
+	res, err := l.Load(testCIK, mustDate(t, "2026-03-01"))
+	require.NoError(t, err, "an unknown-major sibling must degrade to skip, never hard-error on the hash")
+	require.NotNil(t, res.Artifact)
+	assert.Equal(t, "0000002488-26-000012", res.Trace.SelectedAccession)
+}
+
 func TestLoader_MalformedFile_DegradesToSkip(t *testing.T) {
 	root := t.TempDir()
 	// A valid artifact + a junk file in the same dir: junk is skipped, the
@@ -285,7 +385,7 @@ func TestLoader_StructurallyInvalidFile_Skipped(t *testing.T) {
 	// VALID self-hash (so it is not a hash mismatch — it is a structural skip).
 	bad := validCapExArtifact()
 	bad.Filing.Accession = "0000002488-26-000077"
-	bad.Extraction.CapExGuidance.ValueLow = 9e9 // > value_high
+	bad.Extraction.CapExGuidance.ValueLow = Float(9e9) // > value_high
 	writeArtifact(t, root, bad)
 
 	l := NewLoader(root)
@@ -293,6 +393,45 @@ func TestLoader_StructurallyInvalidFile_Skipped(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, res.Artifact)
 	assert.Equal(t, "0000002488-26-000012", res.Trace.SelectedAccession, "structurally-invalid sibling skipped")
+}
+
+// TestLoader_IssuerCIKMustMatchDir is the MEDIUM-2 pin: a hash-valid artifact
+// that is physically placed under the WRONG CIK directory (its issuer.cik does
+// not match the directory it sits in) must be SKIPPED — never applied to the
+// wrong issuer. A misplaced (but otherwise self-consistent) artifact under
+// 0000002488/ that claims issuer.cik 0000000320 would silently corrupt AMD's
+// valuation if consumed.
+func TestLoader_IssuerCIKMustMatchDir(t *testing.T) {
+	root := t.TempDir()
+
+	// A valid AMD artifact under the AMD dir (the legitimate hit).
+	writeArtifact(t, root, validCapExArtifact())
+
+	// A self-consistent artifact whose issuer.cik is a DIFFERENT company, written
+	// (by filename) into the AMD directory. writeArtifact uses a.Issuer.CIK for
+	// the dir, so we write it manually into the AMD dir to model the misplacement.
+	misplaced := validCapExArtifact()
+	misplaced.Filing.Accession = "0000000320-26-000001"
+	misplaced.Issuer.Ticker = "AAPL"
+	misplaced.Issuer.CIK = "0000000320" // NOT the AMD dir it will live in
+	h, err := ComputeArtifactSHA256(misplaced)
+	require.NoError(t, err)
+	misplaced.ArtifactSHA256 = h // hash is VALID — only the location is wrong
+
+	amdDir := filepath.Join(root, testCIK)
+	require.NoError(t, os.MkdirAll(amdDir, 0o755))
+	body, err := json.MarshalIndent(misplaced, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(amdDir, misplaced.Filing.Accession+".json"), body, 0o644))
+
+	l := NewLoader(root)
+	res, err := l.Load(testCIK, mustDate(t, "2026-03-01"))
+	require.NoError(t, err, "a misplaced hash-valid artifact must skip, not hard-error")
+	require.NotNil(t, res.Artifact)
+	assert.Equal(t, "0000002488-26-000012", res.Trace.SelectedAccession,
+		"the misplaced foreign-CIK artifact must be skipped; only the legitimate AMD artifact resolves (MEDIUM-2)")
+	assert.NotContains(t, res.Trace.RejectedAccessions, "0000000320-26-000001",
+		"a skipped (wrong-CIK) artifact never enters the candidate set")
 }
 
 // TestLoader_MaliciousCIK_CannotEscapeRoot is the MEDIUM-1 path-traversal guard.
@@ -420,7 +559,7 @@ func TestLoadFromBundle_CapturedAbsence(t *testing.T) {
 
 func TestLoadFromBundle_TamperedArtifact_HardError(t *testing.T) {
 	a := mustHash(t, validCapExArtifact())
-	a.Extraction.CapExGuidance.ValueHigh = 9.9e9 // mutate AFTER hashing → mismatch
+	a.Extraction.CapExGuidance.ValueHigh = Float(9.9e9) // mutate AFTER hashing → mismatch
 	res := Resolution{Artifact: a}
 	stage := NewBundleStage(res, "validated", nil)
 	raw, err := json.Marshal(stage)

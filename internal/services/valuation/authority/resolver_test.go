@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,7 +14,7 @@ import (
 
 func capexEnvelope(conf float64) *guidance.Envelope {
 	return &guidance.Envelope{
-		ValueLow: 1.4e9, ValueHigh: 1.6e9, Unit: guidance.UnitAbsoluteUSD, Period: "FY2026",
+		ValueLow: guidance.Float(1.4e9), ValueHigh: guidance.Float(1.6e9), Unit: guidance.UnitAbsoluteUSD, Period: "FY2026",
 		Confidence: conf,
 		Evidence:   []guidance.Evidence{{Quote: "we expect capex of ~$1.5B", Location: "Item 7"}},
 	}
@@ -21,7 +22,7 @@ func capexEnvelope(conf float64) *guidance.Envelope {
 
 func marginEnvelope(conf float64) guidance.Envelope {
 	return guidance.Envelope{
-		ValueLow: 0.30, ValueHigh: 0.34, Unit: guidance.UnitPct, Period: "FY2026",
+		ValueLow: guidance.Float(0.30), ValueHigh: guidance.Float(0.34), Unit: guidance.UnitPct, Period: "FY2026",
 		Basis:      &guidance.Basis{GAAPOrNonGAAP: "non_gaap"},
 		Confidence: conf,
 		Evidence:   []guidance.Evidence{{Quote: "gross margin in the low-30s", Location: "Item 7"}},
@@ -30,7 +31,7 @@ func marginEnvelope(conf float64) guidance.Envelope {
 
 func revenueEnvelope(conf float64) guidance.Envelope {
 	return guidance.Envelope{
-		ValueLow: 0.20, ValueHigh: 0.24, Unit: guidance.UnitPct, Period: "FY2026",
+		ValueLow: guidance.Float(0.20), ValueHigh: guidance.Float(0.24), Unit: guidance.UnitPct, Period: "FY2026",
 		Confidence: conf,
 		Evidence:   []guidance.Evidence{{Quote: "revenue growth ~22%", Location: "Item 7"}},
 	}
@@ -74,6 +75,42 @@ func TestResolve_Guidance_AnchorsCapEx(t *testing.T) {
 	assert.Equal(t, []string{KeyCapExYear1}, res.AnchorsApplied)
 	require.Len(t, res.Warnings, 1)
 	assert.Contains(t, res.Warnings[0], "guidance: capex_year1 anchored")
+}
+
+// TestResolve_CapExAnchor_DisclosesGrossAsNetApprox is the MEDIUM-6 pin: a CapEx
+// anchor's provenance MUST disclose that the engine substitutes GROSS capex for
+// NET reinvestment in Phase 2 (the gross-as-net approximation). A consumer
+// reading `capex_year1 source=guidance` would otherwise assume true CapEx
+// semantics. The marker must appear on the CapEx anchor's Sources.Detail and its
+// warning tag — and must NOT leak onto the margin/revenue anchors (the
+// approximation is capex-specific).
+func TestResolve_CapExAnchor_DisclosesGrossAsNetApprox(t *testing.T) {
+	const marker = "gross_capex_as_net_reinvestment_approx=true"
+
+	art := validatedArtifact()
+	art.Extraction = &guidance.Extraction{
+		CapExGuidance:   capexEnvelope(0.80),
+		MarginGuidance:  []guidance.Envelope{marginEnvelope(0.80)},
+		RevenueGuidance: []guidance.Envelope{revenueEnvelope(0.80)},
+	}
+	res := Resolve(Input{Loaded: hit(art, false)})
+
+	// CapEx anchor discloses the approximation on its Detail.
+	capexSrc := res.Sources[KeyCapExYear1]
+	assert.Contains(t, capexSrc.Detail, marker, "capex anchor Detail must disclose the gross-as-net approximation (MEDIUM-6)")
+
+	// And on at least one warning tag (the operator-visible signal).
+	var capexWarnHasMarker bool
+	for _, w := range res.Warnings {
+		if strings.Contains(w, "capex_year1") && strings.Contains(w, marker) {
+			capexWarnHasMarker = true
+		}
+	}
+	assert.True(t, capexWarnHasMarker, "a capex_year1 warning must carry the gross-as-net marker")
+
+	// The marker must NOT appear on the margin/revenue anchors (capex-specific).
+	assert.NotContains(t, res.Sources[KeyOperatingMarginYear1].Detail, marker)
+	assert.NotContains(t, res.Sources[KeyRevenueGrowthYear1].Detail, marker)
 }
 
 func TestResolve_UserOverride_WinsOverGuidance(t *testing.T) {
@@ -234,6 +271,53 @@ func TestResolve_AllThreeKnobs_MidpointsCorrect(t *testing.T) {
 	assert.Equal(t, []string{KeyCapExYear1, KeyOperatingMarginYear1, KeyRevenueGrowthYear1}, res.AnchorsApplied)
 }
 
+// TestResolve_FirstEligibleEnvelope_Anchors is the MEDIUM-3 pin: when the FIRST
+// margin (or revenue) envelope fails the §9.3 guardrails (e.g. low confidence)
+// but a LATER one clears them, the resolver must anchor the first ELIGIBLE
+// envelope — not refuse the whole kind because envelope[0] failed. The prior
+// code only ever consulted envelope[0], so a leading low-confidence envelope
+// silently suppressed an otherwise-anchorable later one.
+func TestResolve_FirstEligibleEnvelope_Anchors(t *testing.T) {
+	t.Run("margin: [0] low-confidence, [1] validated ⇒ [1] anchors", func(t *testing.T) {
+		art := validatedArtifact()
+		low := marginEnvelope(0.40) // below default 0.70 ⇒ not eligible
+		// A DISTINCT eligible envelope so the anchored value is unambiguous.
+		high := marginEnvelope(0.85)
+		high.ValueLow, high.ValueHigh = guidance.Float(0.25), guidance.Float(0.29) // midpoint 0.27
+		art.Extraction = &guidance.Extraction{MarginGuidance: []guidance.Envelope{low, high}}
+
+		res := Resolve(Input{Loaded: hit(art, false)})
+
+		require.NotNil(t, res.Anchors.OperatingMarginYear1, "the first ELIGIBLE margin envelope must anchor (MEDIUM-3)")
+		assert.InDelta(t, 0.27, *res.Anchors.OperatingMarginYear1, 1e-12, "anchored to envelope[1]'s midpoint, not envelope[0]")
+		assert.Equal(t, SourceGuidance, res.Sources[KeyOperatingMarginYear1].Level)
+	})
+
+	t.Run("revenue: [0] low-confidence, [1] validated ⇒ [1] anchors", func(t *testing.T) {
+		art := validatedArtifact()
+		low := revenueEnvelope(0.40)
+		high := revenueEnvelope(0.85)
+		high.ValueLow, high.ValueHigh = guidance.Float(0.18), guidance.Float(0.22) // midpoint 0.20
+		art.Extraction = &guidance.Extraction{RevenueGuidance: []guidance.Envelope{low, high}}
+
+		res := Resolve(Input{Loaded: hit(art, false)})
+
+		require.NotNil(t, res.Anchors.RevenueGrowthYear1, "the first ELIGIBLE revenue envelope must anchor (MEDIUM-3)")
+		assert.InDelta(t, 0.20, *res.Anchors.RevenueGrowthYear1, 1e-12, "anchored to envelope[1]'s midpoint, not envelope[0]")
+	})
+
+	t.Run("margin: NONE eligible ⇒ no anchor, one warning", func(t *testing.T) {
+		art := validatedArtifact()
+		art.Extraction = &guidance.Extraction{MarginGuidance: []guidance.Envelope{marginEnvelope(0.30), marginEnvelope(0.40)}}
+
+		res := Resolve(Input{Loaded: hit(art, false)})
+
+		assert.Nil(t, res.Anchors.OperatingMarginYear1, "no eligible margin envelope ⇒ no anchor")
+		require.Len(t, res.Warnings, 1, "exactly one fall-through warning when no envelope is eligible")
+		assert.Contains(t, res.Warnings[0], "NOT anchored")
+	})
+}
+
 func TestResolve_UserOverride_MarginAndRevenue(t *testing.T) {
 	art := validatedArtifact()
 	art.Extraction = &guidance.Extraction{
@@ -261,7 +345,7 @@ func TestResolve_UserOverride_MarginAndRevenue(t *testing.T) {
 
 func TestNumericEligible_EmptyQuoteRejected(t *testing.T) {
 	env := guidance.Envelope{
-		ValueLow: 1, ValueHigh: 2, Unit: guidance.UnitAbsoluteUSD, Period: "FY2026",
+		ValueLow: guidance.Float(1), ValueHigh: guidance.Float(2), Unit: guidance.UnitAbsoluteUSD, Period: "FY2026",
 		Confidence: 0.95,
 		Evidence:   []guidance.Evidence{{Quote: "", Location: "x"}}, // present but empty
 	}

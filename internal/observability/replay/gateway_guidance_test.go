@@ -103,3 +103,25 @@ func TestBundleGuidanceGateway_MalformedStage_Absent(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, got.Absent)
 }
+
+// TestBundleGuidanceGateway_UnreadablePayload_ReturnsError is the MEDIUM-7 pin:
+// ONLY a MISSING 09-guidance.json (an old bundle that never captured guidance)
+// degrades to Absent. A PRESENT-but-unreadable payload — here a directory in the
+// file's place, which os.ReadFile fails on with a NON-fs.ErrNotExist error — must
+// PROPAGATE the read error, not silently resolve to Absent. Degrading a genuine
+// read failure to absence would mask a broken/tampered bundle and violate the
+// replay hermeticity contract (the engine would replay a different — absent —
+// path than the original capture).
+func TestBundleGuidanceGateway_UnreadablePayload_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	// Create 09-guidance.json AS A DIRECTORY so os.ReadFile fails with an error
+	// that is present-but-unreadable (NOT fs.ErrNotExist) — portable across
+	// platforms, unlike a chmod-based permission test.
+	require.NoError(t, os.Mkdir(filepath.Join(dir, guidanceBundleFile), 0o755))
+
+	gw := NewBundleGuidanceGateway(dir)
+	res, err := gw.Load("0000002488", time.Now())
+	require.Error(t, err, "a present-but-unreadable guidance payload must return the read error, not degrade to absent (MEDIUM-7)")
+	assert.False(t, errors.Is(err, ErrBundleMissingPayload), "a present-but-unreadable payload is NOT a missing-payload case")
+	assert.False(t, res.Absent, "a read error must not be reported as a clean absence")
+}

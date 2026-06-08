@@ -90,7 +90,8 @@ type Inputs struct {
 	// trajectory or the terminal. nil/empty ⇒ NO override ⇒ byte-identical to
 	// the Layer-A reinvestment projection (NF1). The caller
 	// (valuation.applyReinvestmentModel) refuses to populate any year > 2 (§9.3
-	// near-term-prefix guardrail), so the engine never sees a year-3+ key.
+	// near-term-prefix guardrail), AND validateInputs independently rejects any
+	// out-of-prefix key (MEDIUM-5) so a direct caller cannot bypass the seam.
 	NearTermReinvestmentOverride map[int]float64
 
 	// NearTermMarginOverride is the symmetric Layer-B Phase-2 guidance anchor
@@ -102,7 +103,8 @@ type Inputs struct {
 	// knobs" (revenue-growth replaces RevenueGrowthRates[1]; capex replaces
 	// reinvestment[2]). nil/empty ⇒ NO override ⇒ byte-identical to the Layer-A
 	// reinvestment projection (NF1). The caller refuses any year > 2 (§9.3
-	// near-term-prefix guardrail), so the engine never sees a year-3+ key.
+	// near-term-prefix guardrail), AND validateInputs independently rejects any
+	// out-of-prefix key (MEDIUM-5).
 	NearTermMarginOverride map[int]float64
 }
 
@@ -461,6 +463,14 @@ func SensitivityAnalysis(baseInputs Inputs, waccRange []float64, growthRange []f
 // here now indicates a real internal bug, not a caller-supplied input.
 const MinWACCTerminalSpread = 0.01
 
+// maxNearTermOverrideYear is the §9.3 near-term-prefix ceiling the ENGINE itself
+// enforces on NearTermReinvestmentOverride / NearTermMarginOverride keys
+// (MEDIUM-5). The valuation service seam (applyReinvestmentModel) already refuses
+// to PRODUCE a year > 2 anchor, but dcf.Inputs is exported, so a direct caller
+// could otherwise inject a year-3+ override and steer the mid/long-term curve —
+// bypassing the guardrail. validateInputs rejects any override year < 1 or > 2.
+const maxNearTermOverrideYear = 2
+
 // Helper functions
 
 // --- Layer A: reinvestment / operating-leverage helpers ---
@@ -611,6 +621,30 @@ func validateInputs(inputs Inputs) error {
 		return errors.New("projection years must be between 1 and 50")
 	}
 
+	// MEDIUM-5: near-term guidance overrides may target ONLY years 1–2 (the §9.3
+	// near-term prefix). Reject any out-of-prefix key on either override map so a
+	// direct caller cannot launder a mid/long-term steer through the exported
+	// dcf.Inputs, bypassing the service-seam refusal.
+	if err := validateNearTermOverrideYears(inputs.NearTermReinvestmentOverride, "reinvestment"); err != nil {
+		return err
+	}
+	if err := validateNearTermOverrideYears(inputs.NearTermMarginOverride, "margin"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateNearTermOverrideYears rejects any near-term override keyed outside the
+// §9.3 near-term prefix (year < 1 or > maxNearTermOverrideYear). kind names the
+// override map for the error message (MEDIUM-5).
+func validateNearTermOverrideYears(overrides map[int]float64, kind string) error {
+	for year := range overrides {
+		if year < 1 || year > maxNearTermOverrideYear {
+			return fmt.Errorf("near-term %s override year %d out of range [1,%d] (§9.3 near-term-prefix guardrail)",
+				kind, year, maxNearTermOverrideYear)
+		}
+	}
 	return nil
 }
 

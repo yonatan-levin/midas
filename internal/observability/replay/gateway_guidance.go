@@ -56,10 +56,13 @@ func (g *BundleGuidanceGateway) Load(_ string, _ time.Time) (guidance.Resolution
 		if errors.Is(err, ErrBundleMissingPayload) || errors.Is(err, fs.ErrNotExist) {
 			return guidance.Resolution{Absent: true}, nil
 		}
-		// Any other read error (permission, etc.) also degrades to absent so a
-		// transient FS issue never aborts a replay — matching the macro
-		// gateway's tolerant per-payload discipline.
-		return guidance.Resolution{Absent: true}, nil
+		// MEDIUM-7: any OTHER read error (a present-but-unreadable / corrupt
+		// payload — permission denied, a directory in the file's place, an I/O
+		// fault) MUST propagate, NOT degrade to absent. Silently replaying on the
+		// absent path would mask a tampered/broken bundle and break hermeticity:
+		// a present guidance stage that cannot be read is a real failure, distinct
+		// from "this old bundle never captured guidance".
+		return guidance.Resolution{}, err
 	}
 
 	// guidance.LoadFromBundle handles the captured-absence envelope (Absent),
