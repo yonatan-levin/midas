@@ -322,6 +322,81 @@ func TestRiskAnalyzer_AssessGoodwillRisk(t *testing.T) {
 	}
 }
 
+func TestRiskAnalyzer_AssessInventoryRisk(t *testing.T) {
+	// Baseline: inventory at 50% of assets vs a 25% threshold = 2.0x excess,
+	// which maps to High severity on the concentration-only path. The turnover
+	// arg then escalates/de-escalates around that baseline.
+	const (
+		inventory   = 500.0 // 50% of assets
+		totalAssets = 1000.0
+		threshold   = 0.25 // 25% industry threshold -> excessRatio 2.0 -> High
+		industry    = "25" // Consumer Discretionary (retail)
+	)
+
+	tests := []struct {
+		name                 string
+		inventoryTurnover    float64
+		expectedSeverity     entities.FlagSeverity
+		expectTurnoverInDesc bool
+	}{
+		{
+			// Turnover not reported (0): preserve pre-TDB-8 concentration-only behavior.
+			name:                 "unknown turnover - concentration-only baseline (High)",
+			inventoryTurnover:    0.0,
+			expectedSeverity:     entities.FlagSeverityHigh,
+			expectTurnoverInDesc: false,
+		},
+		{
+			// Slow-moving inventory (< 2.0 turns/yr) escalates obsolescence risk.
+			name:                 "low turnover - escalated to Critical",
+			inventoryTurnover:    1.2,
+			expectedSeverity:     entities.FlagSeverityCritical,
+			expectTurnoverInDesc: true,
+		},
+		{
+			// Healthy/fast-moving inventory (>= 4.0 turns/yr) de-escalates: fast
+			// turnover rarely goes obsolete despite concentration.
+			name:                 "high turnover - de-escalated to Medium",
+			inventoryTurnover:    6.0,
+			expectedSeverity:     entities.FlagSeverityMedium,
+			expectTurnoverInDesc: false,
+		},
+		{
+			// In-between turnover neither escalates nor de-escalates.
+			name:                 "moderate turnover - unchanged baseline (High)",
+			inventoryTurnover:    3.0,
+			expectedSeverity:     entities.FlagSeverityHigh,
+			expectTurnoverInDesc: false,
+		},
+	}
+
+	analyzer := NewRiskAnalyzer()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flag := analyzer.AssessInventoryRisk(inventory, totalAssets, threshold, tt.inventoryTurnover, industry)
+
+			require.NotNil(t, flag, "Should generate an inventory flag above threshold")
+			assert.Equal(t, "inventory_obsolescence", flag.Type, "Flag type should be inventory_obsolescence")
+			assert.Equal(t, tt.expectedSeverity, flag.Severity, "Severity should reflect turnover signal")
+
+			if tt.expectTurnoverInDesc {
+				assert.Contains(t, strings.ToLower(flag.Description), "turnover", "Low-turnover flag should name the turnover-driven risk")
+			} else {
+				assert.NotContains(t, strings.ToLower(flag.Description), "turnover", "Non-low-turnover flag should keep the concentration-only description")
+			}
+		})
+	}
+}
+
+func TestRiskAnalyzer_AssessInventoryRisk_NoFlagBelowThreshold(t *testing.T) {
+	analyzer := NewRiskAnalyzer()
+
+	// Below threshold: no flag regardless of turnover.
+	flag := analyzer.AssessInventoryRisk(100.0, 1000.0, 0.25, 0.5, "25")
+	assert.Nil(t, flag, "Should not flag when inventory is below the concentration threshold")
+}
+
 // Helper functions for creating test data
 
 func createHighQualityFinancialData() *entities.FinancialData {
@@ -391,8 +466,7 @@ func createInventoryRiskData() *entities.FinancialData {
 		Inventory:         350.0, // 35% of assets - retail risk
 		TotalAssets:       1000.0,
 		Revenue:           1000.0, // Include revenue
-		InventoryTurnover: 2.0,    // Low turnover indicating obsolescence risk
-		// TODO: Add inventory turnover data for better analysis
+		InventoryTurnover: 2.0,    // Reported turnover; >= low threshold, so no escalation here
 		// Other fields...
 	}
 }
