@@ -1,0 +1,27 @@
+{
+  "version": "1.0.0",
+  "description": "Externalized datacleaner asset-adjuster materiality / review gate thresholds (TDB-5). Values here are byte-equal to the pre-TDB-5 in-code constants, so loading this file changes nothing. An ABSENT file OR an ABSENT key falls back to the in-code default (DefaultAssetThresholds), so production behaviour stays byte-identical until an operator deliberately edits a value. Every ratio must be in (0, 1]. Industry-keyed B-rule tables (A5/B1/B2/B3) and treatment rates (A4 50% / A5 40% / A2 tiers / C1 1.5%) are intentionally NOT externalized in this cut — see docs/refactoring/spec/tdb-5-adjustment-thresholds-config-spec.md sections 3.2 and 3.3.",
+  "updated_at": "2026-06-08T00:00:00Z",
+
+  "asset": {
+    "a1_goodwill": {
+      "materiality_ratio": 0.05,
+      "significance_flag_ratio": 0.10
+    },
+    "a2_intangible": {
+      "materiality_ratio": 0.02
+    },
+    "a4_dta": {
+      "materiality_ratio": 0.05,
+      "significance_flag_ratio": 0.10
+    },
+    "a6_right_of_use": {
+      "materiality_ratio": 0.05,
+      "significance_flag_ratio": 0.10
+    },
+    "reviews": {
+      "rd_capitalization_ratio": 0.10,
+      "capitalized_software_ratio": 0.015
+    }
+  }
+}

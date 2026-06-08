@@ -78,6 +78,16 @@ func NewDataCleanerService(cfg *config.Config, aiSvc ai.AIService, calcEmitter *
 		return nil, fmt.Errorf("failed to initialize flag evaluator: %w", err)
 	}
 
+	// TDB-5: load the externalized asset-adjuster gate thresholds. Same
+	// warn-and-fallback stance as the flag-conditions load above — a missing or
+	// invalid adjustment_thresholds.json (or any absent key) falls back to the
+	// in-code defaults, which equal the pre-TDB-5 constants, so production
+	// behaviour is byte-identical until an operator supplies an override.
+	assetThresholds := adjustments.DefaultAssetThresholds()
+	if thrCfg, thrErr := config.LoadAdjustmentThresholdsConfig(cfg.DataCleaner.ThresholdsPath); thrErr == nil {
+		assetThresholds = ResolveAssetThresholds(assetThresholds, thrCfg)
+	}
+
 	// Create industry classifier for probability calculations
 	industryClassifier := industry.NewIndustryClassifier()
 
@@ -90,7 +100,7 @@ func NewDataCleanerService(cfg *config.Config, aiSvc ai.AIService, calcEmitter *
 	svc := &service{
 		config:             &cfg.DataCleaner,
 		rulesEngine:        rulesEngine,
-		assetAdjuster:      adjustments.NewAssetAdjuster(),
+		assetAdjuster:      adjustments.NewAssetAdjusterWithThresholds(assetThresholds),
 		liabilityAdjuster:  liabilityAdjuster,
 		earningsAdjuster:   adjustments.NewEarningsAdjuster(),
 		industryClassifier: industry.NewIndustryClassifier(),

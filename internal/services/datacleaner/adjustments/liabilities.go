@@ -14,7 +14,12 @@ import (
 // LiabilityAdjuster handles Category B adjustments from SEC cleaning guide
 // Implements under-stated liabilities and off-balance-sheet exposures
 type LiabilityAdjuster struct {
-	// TODO: Add configuration for adjustment thresholds
+	// TDB-5 externalized the FLAT asset-adjuster gates (see
+	// adjustments.AssetThresholds). The liability-side B1/B2/B3 gates are the
+	// industry-keyed tables (getLeaseThresholdForIndustry /
+	// getPensionThresholdForIndustry / getContingentLiabilityThreshold), which
+	// are a richer per-GICS schema deferred to a follow-up — see
+	// docs/refactoring/spec/tdb-5-adjustment-thresholds-config-spec.md §3.2.
 	leaseCalculator    *leases.PerformanceOptimizedCalculator
 	industryClassifier *industry.IndustryClassifier
 	// AI service for footnote analysis (config-gated)
