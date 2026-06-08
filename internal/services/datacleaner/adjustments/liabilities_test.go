@@ -368,7 +368,6 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments(t *testing.T) {
 
 	context := &entities.CleaningContext{
 		IndustryCode:     "44", // Retail
-		CompanySize:      entities.LargeCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    false,
@@ -472,7 +471,6 @@ func createTestFinancialData(ticker string) *entities.FinancialData {
 func createTestCleaningContext(industryCode string) *entities.CleaningContext {
 	return &entities.CleaningContext{
 		IndustryCode:     industryCode,
-		CompanySize:      entities.LargeCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    false,

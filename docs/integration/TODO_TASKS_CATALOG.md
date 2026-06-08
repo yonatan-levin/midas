@@ -74,7 +74,7 @@ Acted on the 2026-06-05 OPEN/PARTIAL items (this section **supersedes** the matc
 ### Re-filed — the real, narrowly-scoped residue (NOT the obsolete TODOs above)
 - **R1 — Parser gap (HIGH):** the SEC parser never populates `RestructuringCharges` / `LitigationSettlements` / `CapitalizedInterest`, so adjusters C1/C3/C6 don't fire on real data (C1 falls back to a 1.5%-of-revenue estimate). Real work lives in `internal/infra/gateways/sec/parser.go`, not the cleaner.
 - **R2 — Missing adjusters (MEDIUM):** config rules `right_of_use_assets` (A6) and `excess_cash` (A7) are `enabled:true` but have no adjuster; the asset dispatcher silently skips them (`adjustments/assets.go` `default: continue`). Implement A6/A7 or remove the dangling rules.
-- **R3 — Dead-code cleanup (LOW):** delete the unreferenced `applyRule` chain (`service.go:712-1047`, ~335 lines), the orphaned `getCompanySize` + `CleaningContext.CompanySize` + dead `company_size` flag rule + unpopulated `profile.Facts.MarketCap`, and `alerting.IntegrationService` (now orphaned after the performance-handler deletion).
+- **R3 — Dead-code cleanup (LOW): ✅ DONE 2026-06-06 (TDB-7 / issue #7, branch `worktree-tdb-7-dead-code-cleanup`).** Deleted the unreferenced `applyRule` chain (~354 lines incl. the 5 `apply*Rule` helpers), the orphaned `getCompanySize` + `CleaningContext.CompanySize` field + `entities.CompanySize` type/enum + dead `company_size_classification` flag rule (and its now-orphaned `high/mid_revenue_threshold` vars) + unpopulated `profile.Facts.MarketCap`, and `alerting.IntegrationService` (+ its test). Zero behavior change; full suite green (47/47); invariants byte-identical.
 
 ---
 
@@ -145,10 +145,12 @@ Acted on the 2026-06-05 OPEN/PARTIAL items (this section **supersedes** the matc
 
 ### **Financial Data Extraction Improvements** — ❌ **CLOSED — DEAD CODE (2026-06-06)** _(applyRule chain has zero callers; 7/9 superseded by DC-1 adjusters; genuine residue re-filed as R1/R2/R3 in the 2026-06-06 pass)_
 **Location**: `internal/services/datacleaner/service.go`
-> ⚠️ All 9 TODOs remain in the live legacy rule path. The DC-1 Adjuster framework
-> (`internal/services/datacleaner/adjustments/`) now extracts several of these for real (B1
-> operating-lease PV, A5 inventory, C6 capitalized interest, …) — confirm whether each
-> `service.go` site below is now dead code before implementing vs. deleting it.
+> ✅ The legacy `applyRule` rule path carrying all 9 TODOs below was DELETED under
+> **TDB-7 / issue #7** (2026-06-06, branch `worktree-tdb-7-dead-code-cleanup`) — it had zero
+> callers. The line numbers below are historical (the code no longer exists). The genuine
+> residue (real restructuring / litigation / capitalized-interest extraction) is re-filed as
+> **R1 / TDB-1 / issue #1** in the parser (`internal/infra/gateways/sec/parser.go`), NOT the
+> cleaner.
 - [ ] **Extract actual restructuring charges from financial data** (Line 744)
 - [ ] **Extract actual asset sale gains from financial data** (Line 756)
 - [ ] **Extract actual litigation costs from financial data** (Line 764)
@@ -170,7 +172,7 @@ Acted on the 2026-06-05 OPEN/PARTIAL items (this section **supersedes** the matc
 
 ### **Company Size Classification** — ❌ **CLOSED — OBSOLETE/ORPHANED (2026-06-06)**
 **Location**: `internal/services/datacleaner/service.go:1160` _(`getCompanySize`)_
-- [x] ~~**Implement proper company size classification based on market cap**~~ — producer-only (`service.go:164`), read by zero production consumers; market cap unavailable to the datacleaner. Optional removal tracked as R3 in the 2026-06-06 pass.
+- [x] ~~**Implement proper company size classification based on market cap**~~ — producer-only (`service.go:164`), read by zero production consumers; market cap unavailable to the datacleaner. **Dead code removed under TDB-7 / issue #7 (2026-06-06).**
 - **Impact**: Better risk assessment
 - **Effort**: 30 minutes
 

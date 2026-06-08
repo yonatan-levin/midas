@@ -32,7 +32,6 @@ func TestPipelineOrchestrator_ExecutePipeline(t *testing.T) {
 			},
 			context: &entities.CleaningContext{
 				IndustryCode:     "technology",
-				CompanySize:      entities.LargeCap,
 				EnableIndustry:   true,
 				QualityThreshold: 75.0,
 			},
@@ -227,7 +226,6 @@ func TestPipelineOrchestrator_Performance(t *testing.T) {
 
 	cleaningCtx := &entities.CleaningContext{
 		IndustryCode:     "technology",
-		CompanySize:      entities.LargeCap,
 		EnableIndustry:   true,
 		QualityThreshold: 80.0,
 	}

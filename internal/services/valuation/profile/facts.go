@@ -44,7 +44,6 @@ type Facts struct {
 	// not computed.
 	ConsecutivePositiveOIYears int
 
-	MarketCap *float64
 	// DividendsPerShare drives archetype refinement on dividend-paying
 	// tickers (e.g. mature_dividend_tech vs. maturing_tech_first_dividend).
 	DividendsPerShare *float64

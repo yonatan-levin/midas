@@ -71,7 +71,6 @@ func TestCompleteDataCleaningPipeline(t *testing.T) {
 			data: createManufacturingCompanyData(),
 			context: &entities.CleaningContext{
 				IndustryCode:     "31", // Manufacturing
-				CompanySize:      entities.LargeCap,
 				DataVintage:      time.Now(),
 				EnableIndustry:   true,
 				EnableCaching:    false,
@@ -89,7 +88,6 @@ func TestCompleteDataCleaningPipeline(t *testing.T) {
 			data: createTechnologyCompanyData(),
 			context: &entities.CleaningContext{
 				IndustryCode:     "45", // Technology
-				CompanySize:      entities.LargeCap,
 				DataVintage:      time.Now(),
 				EnableIndustry:   true,
 				EnableCaching:    false,
@@ -107,7 +105,6 @@ func TestCompleteDataCleaningPipeline(t *testing.T) {
 			data: createRetailCompanyData(),
 			context: &entities.CleaningContext{
 				IndustryCode:     "44", // Retail Trade
-				CompanySize:      entities.LargeCap,
 				DataVintage:      time.Now(),
 				EnableIndustry:   true,
 				EnableCaching:    false,
@@ -172,7 +169,6 @@ func TestRealWorldScenarios(t *testing.T) {
 			data:     createUPSStyleData(),
 			context: &entities.CleaningContext{
 				IndustryCode:     "43", // Transportation/Warehousing
-				CompanySize:      entities.LargeCap,
 				DataVintage:      time.Now(),
 				EnableIndustry:   true,
 				EnableCaching:    false,
@@ -192,7 +188,6 @@ func TestRealWorldScenarios(t *testing.T) {
 			data:     createWalmartStyleData(),
 			context: &entities.CleaningContext{
 				IndustryCode:     "44", // Retail Trade
-				CompanySize:      entities.MegaCap,
 				DataVintage:      time.Now(),
 				EnableIndustry:   true,
 				EnableCaching:    false,
@@ -212,7 +207,6 @@ func TestRealWorldScenarios(t *testing.T) {
 			data:     createPharmaCompanyData(),
 			context: &entities.CleaningContext{
 				IndustryCode:     "62", // Healthcare
-				CompanySize:      entities.LargeCap,
 				DataVintage:      time.Now(),
 				EnableIndustry:   true,
 				EnableCaching:    false,
@@ -335,7 +329,6 @@ func TestIndustrySpecificAdjustments(t *testing.T) {
 
 			context := &entities.CleaningContext{
 				IndustryCode:     tt.industryCode,
-				CompanySize:      entities.LargeCap,
 				DataVintage:      time.Now(),
 				EnableIndustry:   true,
 				EnableCaching:    false,
@@ -423,7 +416,6 @@ func TestPerformanceBenchmarks(t *testing.T) {
 		t.Run(bt.name, func(t *testing.T) {
 			context := &entities.CleaningContext{
 				IndustryCode:     "25", // Consumer Discretionary
-				CompanySize:      entities.LargeCap,
 				DataVintage:      time.Now(),
 				EnableIndustry:   true,
 				EnableCaching:    false, // Test raw performance
@@ -561,7 +553,6 @@ func TestAuditTrailCompleteness(t *testing.T) {
 	data := createComprehensiveTestData()
 	context := &entities.CleaningContext{
 		IndustryCode:     "31", // Manufacturing
-		CompanySize:      entities.LargeCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    false,
@@ -649,7 +640,6 @@ func TestRealSECDataIntegration(t *testing.T) {
 
 	context := &entities.CleaningContext{
 		IndustryCode:     "334220", // Technology - Computer and Electronic Product Manufacturing
-		CompanySize:      entities.MegaCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    false,
@@ -727,9 +717,6 @@ func TestRealSECDataIntegration(t *testing.T) {
 	})
 
 	t.Run("Mega Cap Performance Validation", func(t *testing.T) {
-		// Validate mega-cap specific processing
-		assert.Equal(t, entities.MegaCap, context.CompanySize)
-
 		// Mega-cap companies require more sophisticated analysis
 		start := time.Now()
 
@@ -1158,7 +1145,6 @@ func createIncompleteFinancialData() *entities.FinancialData {
 func createValidContext() *entities.CleaningContext {
 	return &entities.CleaningContext{
 		IndustryCode:     "25", // Consumer Discretionary
-		CompanySize:      entities.LargeCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    false,
@@ -1169,7 +1155,6 @@ func createValidContext() *entities.CleaningContext {
 func createInvalidIndustryContext() *entities.CleaningContext {
 	return &entities.CleaningContext{
 		IndustryCode:     "99", // Invalid GICS code
-		CompanySize:      entities.LargeCap,
 		DataVintage:      time.Now(),
 		EnableIndustry:   true,
 		EnableCaching:    false,

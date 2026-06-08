@@ -1,6 +1,6 @@
 # TDB-7 — Delete dead code: applyRule chain, getCompanySize, orphaned IntegrationService
 
-**Status:** OPEN — filed 2026-06-06 (TODO-catalog burn-down pass).
+**Status:** RESOLVED 2026-06-06 — implemented on branch `worktree-tdb-7-dead-code-cleanup`. All targets deleted; `go build`/`go vet`/`go test ./... -count=1` green (47/47 packages, 0 fail); load-bearing invariants byte-identical (DDM bit-for-bit, shadow snapshots, ledger basket). Independent REVIEWER verdict: APPROVE. Diff: 3 insertions / 1,452 deletions across 15 files.
 **Priority:** P3 — Tier 3 (cleanup; **zero behavior change, lowest risk — the cleanest quick win**).
 **Type:** Enhancement / tech-debt.
 **Mirrored as GitHub issue:** `[TDB-7]` (yonatan-levin/midas).
@@ -32,6 +32,12 @@ Pure maintainability: ~400+ lines of misleading dead code (estimate logic that l
 | TDB-7.4 | Delete orphaned `alerting.IntegrationService` (verify no remaining refs first) | S |
 
 ## Acceptance
-- [ ] All listed dead code removed
-- [ ] `go build ./...` + `go vet ./...` + `go test ./... -count=1` green
-- [ ] No load-bearing invariant regressions (DDM bit-for-bit, shadow snapshots, ledger basket)
+- [x] All listed dead code removed
+- [x] `go build ./...` + `go vet ./...` + `go test ./... -count=1` green
+- [x] No load-bearing invariant regressions (DDM bit-for-bit, shadow snapshots, ledger basket)
+
+> **Note:** the `CompanySize` *type* + its 4 enum constants (`SmallCap/MidCap/LargeCap/MegaCap`)
+> were removed alongside the `CleaningContext.CompanySize` field — they became orphaned once
+> the field and `getCompanySize` producer were deleted (zero remaining readers, confirmed by
+> grep). The two `flag_conditions.json` `global_variables` (`high_revenue_threshold` /
+> `mid_revenue_threshold`) that only parameterized the deleted rule were removed too.

@@ -17,7 +17,6 @@ func BenchmarkPipelineExecution_Sequential(b *testing.B) {
 	// Create cleaning context
 	cleaningCtx := &entities.CleaningContext{
 		IndustryCode:     "334413", // Technology
-		CompanySize:      "large",
 		DataVintage:      time.Now().Add(-30 * 24 * time.Hour),
 		EnableIndustry:   true,
 		EnableCaching:    false, // Disable caching for consistent benchmarks
@@ -58,7 +57,6 @@ func BenchmarkPipelineExecution_Parallel(b *testing.B) {
 	// Create cleaning context
 	cleaningCtx := &entities.CleaningContext{
 		IndustryCode:     "334413", // Technology
-		CompanySize:      "large",
 		DataVintage:      time.Now().Add(-30 * 24 * time.Hour),
 		EnableIndustry:   true,
 		EnableCaching:    false, // Disable caching for consistent benchmarks
@@ -96,7 +94,6 @@ func BenchmarkStageProcessing_Individual(b *testing.B) {
 	financialData := createTestFinancialDataForCleaning()
 	cleaningCtx := &entities.CleaningContext{
 		IndustryCode:     "334413",
-		CompanySize:      "large",
 		DataVintage:      time.Now().Add(-30 * 24 * time.Hour),
 		EnableIndustry:   true,
 		EnableCaching:    false,
