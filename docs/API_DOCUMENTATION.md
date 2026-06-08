@@ -372,6 +372,7 @@ When `total_liabilities` cannot be sourced from the underlying filings, the four
 | `current_price` | float | Live per-share market price at calculation time, in the same per-share basis as `dcf_value_per_share` (per-ADR for ADRs). Compute upside as `(dcf_value_per_share - current_price) / current_price`. Omitted when unavailable. |
 | `warnings` | string[] | Diagnostic strings — sector-multiple notes, revenue-base path used by the revenue-multiple model, graham-floor data-quality signals, sanity-check divergences. Always present (may be empty). |
 | `applied_overrides` | map | Per-knob echo of valuation overrides that were explicitly set by the request. Each entry: `"knob_name": {"value": <scalar>, "source": "request"}`. **Omitted** (not `{}`) when no overrides were supplied. See [§3.2.9](#329-applied_overrides--per-knob-echo). |
+| `cleaning_adjustments` | object[] | Datacleaner audit trail — one entry per normalization adjuster that fired on the inputs (lease capitalization, inventory restatement, excess-cash exclusion, contingent-liability overlays, etc.). Fired-only. **Omitted** when no adjuster fired. See [§3.2.11](#3211-cleaning_adjustments--datacleaner-audit-trail). |
 
 ---
 
@@ -571,6 +572,45 @@ Same `FairValueResponse` shape as GET, with one additional field when overrides 
 | 422 | `FOREIGN_PRIVATE_ISSUER_UNSUPPORTED` | 20-F filer outside coverage |
 | 429 | `RATE_LIMIT_EXCEEDED` | Rate limit exceeded |
 | 500 | `CALCULATION_ERROR` | Internal failure |
+
+#### 3.2.11 `cleaning_adjustments` — Datacleaner Audit Trail
+
+`cleaning_adjustments` is an array of the normalization adjusters that **fired** while the datacleaner prepared this company's financials for valuation. Each element projects the audit-relevant fields of one adjuster:
+
+| Sub-field | Type | Description |
+|-----------|------|-------------|
+| `rule` | string | Config rule identifier that fired (e.g. `"goodwill_exclusion"`, `"contingent_liabilities"`, `"right_of_use_assets"`). |
+| `category` | string | Rule family — `"asset_quality"`, `"liability_completeness"`, or `"earnings_normalization"`. |
+| `type` | string | Adjustment kind — one of `"exclude"`, `"writedown"`, `"valuation_allowance"`, `"reclassify"`, `"treat_as_debt"`, `"probability_weighted"`, `"flag"`. |
+| `from_account` | string | Source balance-sheet / income-statement line item. |
+| `to_account` | string | Destination line item for reclassifications; omitted for overlays and pure exclusions. |
+| `amount` | float | Signed monetary delta the adjuster applied, in USD. |
+| `percentage` | float | Proportional change relative to the pre-adjustment value, when the adjuster reports one (Restater family). Omitted otherwise. |
+| `reasoning` | string | Human-readable explanation of why the adjuster fired. |
+
+The array is **fired-only** — adjusters that did not apply are never listed. It is **omitted** entirely (not `null`, not `[]`) when no adjuster fired, so default responses stay byte-identical to the prior wire shape. `POST {}`, `GET`, and per-ticker bulk results all carry the same projection for the same ticker.
+
+```json
+"cleaning_adjustments": [
+  {
+    "rule": "goodwill_exclusion",
+    "category": "asset_quality",
+    "type": "exclude",
+    "from_account": "Goodwill",
+    "amount": 1234.5,
+    "reasoning": "Excluded goodwill of $1234.5M from invested capital"
+  },
+  {
+    "rule": "contingent_liabilities",
+    "category": "liability_completeness",
+    "type": "probability_weighted",
+    "from_account": "ContingentLiabilities",
+    "to_account": "EstimatedLiabilities",
+    "amount": 9876.0,
+    "reasoning": "Probability-weighted contingent liability estimate"
+  }
+]
+```
 
 ---
 

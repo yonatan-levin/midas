@@ -453,6 +453,11 @@ var goFieldToJSON = map[string]string{
 	// the same commit as the struct field to keep this map and the field count
 	// in sync (the init() drift guard enforces it).
 	"AssumptionSources": "assumption_sources",
+	// TDB-11: cleaning_adjustments surfaces the datacleaner audit trail.
+	// Omitempty — absent when no adjuster fired. Added in the same commit as the
+	// struct field to keep this map and the field count in sync (the init() drift
+	// guard enforces it).
+	"CleaningAdjustments": "cleaning_adjustments",
 	// SanityCheck
 	"ImpliedPE":            "implied_pe",
 	"SectorMedianPE":       "sector_median_pe",
@@ -524,8 +529,8 @@ func nilOrType(p any) string {
 // guard above asserts the constant and reflection agree at package
 // load time.
 //
-// T10: 31 (FairValueResponse — 30 pre-T10 + 1 AppliedOverrides) +
-// 5 (Industry) + 8 (SanityCheck) = 44.
+// Current: 33 (FairValueResponse — 30 pre-T10 + AppliedOverrides +
+// AssumptionSources + CleaningAdjustments) + 5 (Industry) + 8 (SanityCheck) = 46.
 //
 // When a future commit extends FairValueResponse, Industry, or
 // SanityCheck:
@@ -535,9 +540,9 @@ func nilOrType(p any) string {
 //  3. Add an entry to goFieldToJSON for the new field's snake_case
 //     name (otherwise camelToSnake's best-effort conversion runs).
 func countFairValueFields() int {
-	// FairValueResponse: 32 top-level public fields (30 pre-T10 + AppliedOverrides
-	// + AssumptionSources [Layer-B Phase-2]).
+	// FairValueResponse: 33 top-level public fields (30 pre-T10 + AppliedOverrides
+	// + AssumptionSources [Layer-B Phase-2] + CleaningAdjustments [TDB-11]).
 	// Industry: 5 fields.
 	// SanityCheck: 8 fields.
-	return 32 + 5 + 8
+	return 33 + 5 + 8
 }

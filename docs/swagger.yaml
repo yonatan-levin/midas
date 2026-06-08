@@ -1,5 +1,17 @@
 basePath: /api/v1
 definitions:
+  github_com_midas_dcf-valuation-api_internal_core_entities.AssumptionSourceValue:
+    properties:
+      detail:
+        description: |-
+          Detail is an optional provenance string, e.g.
+          "accession=0000002488-26-000012 period=FY2026 conf=0.82 midpoint=$1.50B".
+        type: string
+      source:
+        description: Source is the precedence layer that supplied this assumption's
+          value.
+        type: string
+    type: object
   github_com_midas_dcf-valuation-api_internal_core_entities.SanityCheck:
     properties:
       flags:
@@ -175,6 +187,55 @@ definitions:
       unique_tickers_served:
         type: integer
     type: object
+  internal_api_v1_handlers.CleaningAdjustment:
+    description: One datacleaner normalization adjustment that fired on the inputs
+    properties:
+      amount:
+        description: Amount is the signed monetary delta the adjuster applied, in
+          USD.
+        example: 1234.5
+        type: number
+      category:
+        description: |-
+          Category is the rule family: "asset_quality" | "liability_completeness" |
+          "earnings_normalization".
+        example: asset_quality
+        type: string
+      from_account:
+        description: FromAccount is the source balance-sheet / income-statement line
+          item.
+        example: Goodwill
+        type: string
+      percentage:
+        description: |-
+          Percentage is the proportional change relative to the pre-adjustment
+          value, when the adjuster reports one (Restater family). Omitted otherwise.
+        example: 12.5
+        type: number
+      reasoning:
+        description: Reasoning is the human-readable explanation of why the adjuster
+          fired.
+        example: Excluded goodwill of $1234.5M from invested capital
+        type: string
+      rule:
+        description: |-
+          Rule is the config rule identifier that fired (entities.Adjustment.RuleID),
+          e.g. "goodwill_exclusion", "contingent_liabilities", "right_of_use_assets".
+        example: goodwill_exclusion
+        type: string
+      to_account:
+        description: |-
+          ToAccount is the destination line item for reclassifications; empty for
+          overlays and pure exclusions.
+        example: EstimatedLiabilities
+        type: string
+      type:
+        description: |-
+          Type is the adjustment kind: "exclude" | "writedown" | "valuation_allowance" |
+          "reclassify" | "treat_as_debt" | "probability_weighted" | "flag".
+        example: exclude
+        type: string
+    type: object
   internal_api_v1_handlers.DetailedHealthCheckResponse:
     properties:
       checks:
@@ -286,6 +347,21 @@ definitions:
           commit forward.
         example: mature_large_bank:mature
         type: string
+      assumption_sources:
+        additionalProperties:
+          $ref: '#/definitions/github_com_midas_dcf-valuation-api_internal_core_entities.AssumptionSourceValue'
+        description: |-
+          AssumptionSources records, per near-term assumption (e.g. "capex_year1"),
+          which authority level supplied the final value — one of user_override |
+          guidance | profile | historical | default — with a provenance detail
+          (Layer-B Phase-2 §9.2). Populated ONLY when a non-default source fires (e.g.
+          a high-confidence guidance fixture anchors year-1); absent (omitempty) on the
+          default path, so guidance-free responses stay byte-identical to the 4.7
+          engine. Example:
+            "assumption_sources": {
+              "capex_year1": { "source": "guidance", "detail": "accession=… conf=0.82 midpoint=$1.50B" }
+            }
+        type: object
       calculation_method:
         description: 'Model used: multi_stage_dcf, ddm, ffo, revenue_multiple'
         example: multi_stage_dcf
@@ -294,6 +370,21 @@ definitions:
         description: Engine version that produced this result
         example: "4.6"
         type: string
+      cleaning_adjustments:
+        description: |-
+          CleaningAdjustments is the datacleaner audit trail: one entry per
+          normalization adjuster that FIRED on this company's financials (A1–C7,
+          the B1/B2/B3 overlays, and the TDB-2 A6/A7 + TDB-12 contingent
+          overlays), projected from result.CleaningAdjustments via
+          adjustmentsFromLedger. Lets consumers see which restatements/overlays
+          shaped the valuation inputs (e.g. lease capitalization, inventory
+          restatement, excess-cash exclusion). Omitted (omitempty) when no
+          adjuster fired, so the default no-adjustment response stays
+          byte-identical to the pre-TDB-11 wire shape. Fired-only — the
+          projection emits only Applied==true entries.
+        items:
+          $ref: '#/definitions/internal_api_v1_handlers.CleaningAdjustment'
+        type: array
       currency:
         description: |-
           Currency is the ISO-4217 code that dcf_value_per_share and
