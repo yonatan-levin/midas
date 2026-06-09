@@ -12,7 +12,7 @@ The actionable work is comment/doc-only: resolve the bare TODO into a tracked, c
    (`// TODO: Add more industry mappings as needed`) → a tracked note referencing TDB-9 / #9 that
    documents the GICS-sector→override-file mapping, the graceful fall-through, the 4-step add
    procedure, and the driver gate (incl. the DDM-bit-for-bit caution for Financials/40). Comment-only.
-3. **DONE — Tracker update** → `docs/reviewer/TDB-9-industry-mapping-expansion.md` (disposition +
+3. **DONE — Tracker update** → `docs/reviewer/archive/TDB-9-industry-mapping-expansion.md` (disposition +
    acceptance + link to spec).
 
 ## Validation (GOWORK=off)

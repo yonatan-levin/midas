@@ -3,7 +3,7 @@
 
 **Project**: DCF Valuation API (Go)  
 **Catalog Date**: January 19, 2025  
-**Last Verified**: June 5, 2026 (live-code reconciliation pass — see §2026-06-05 Verification Pass)  
+**Last Verified**: June 9, 2026 — **TODO burn-down COMPLETE** (TDB-1…TDB-12 / GitHub #1–#12 all shipped + closed; see §2026-06-08/09 — TDB BURN-DOWN COMPLETE near the top)  
 **Purpose**: Complete inventory of all TODO comments and pending tasks  
 
 ---
@@ -75,6 +75,44 @@ Acted on the 2026-06-05 OPEN/PARTIAL items (this section **supersedes** the matc
 - **R1 — Parser gap (HIGH): ✅ DONE 2026-06-06 (TDB-1 / issue #1, branch `worktree-tdb-1-parser-extraction`).** `parsePeriodData` now populates `RestructuringCharges` / `LitigationSettlements` / `CapitalizedInterest` via `findValue` us-gaap + ifrs-full candidate lists, in reporting currency, normalized to positive add-backs (`math.Abs` — e.g. JNJ tags `LitigationSettlementExpense` as −379M). `GainLossRelatedToLitigationSettlement` and the cash-flow `InterestPaidCapitalized` deliberately excluded (inverted-gain / wrong-measure). C1 now uses the real value (not the 1.5% guess); C3/C6 fire. Full suite green; shadow byte-identical. Operator live-replay verification deferred (non-blocking).
 - **R2 — Missing adjusters (MEDIUM):** config rules `right_of_use_assets` (A6) and `excess_cash` (A7) are `enabled:true` but have no adjuster; the asset dispatcher silently skips them (`adjustments/assets.go` `default: continue`). Implement A6/A7 or remove the dangling rules.
 - **R3 — Dead-code cleanup (LOW): ✅ DONE 2026-06-06 (TDB-7 / issue #7, branch `worktree-tdb-7-dead-code-cleanup`).** Deleted the unreferenced `applyRule` chain (~354 lines incl. the 5 `apply*Rule` helpers), the orphaned `getCompanySize` + `CleaningContext.CompanySize` field + `entities.CompanySize` type/enum + dead `company_size_classification` flag rule (and its now-orphaned `high/mid_revenue_threshold` vars) + unpopulated `profile.Facts.MarketCap`, and `alerting.IntegrationService` (+ its test). Zero behavior change; full suite green (47/47); invariants byte-identical.
+
+---
+
+## 🏁 **2026-06-08/09 — TDB BURN-DOWN COMPLETE** (supersedes ALL remaining OPEN/PARTIAL rows above)
+
+All twelve prioritized backlog issues (**TDB-1 … TDB-12 / GitHub #1–#12**) are SHIPPED to local
+master (`3d6cadf`, not pushed) and CLOSED on GitHub. Engine is now `CalculationVersion 4.7` (Layer A).
+Per-item trackers archived under `docs/reviewer/archive/TDB-*.md`. Full roll-up:
+`docs/reviewer/todo-burndown-final-closeout.md`.
+
+| Issue | Catalog row it closes | Disposition | Merge |
+|---|---|---|---|
+| **TDB-1** | R1 — parser nonrecurring extraction (HIGH) | DONE | `21fb60f` |
+| **TDB-2** | R2 — A6 ROU + A7 excess-cash adjusters (MED) + the A6/A7 test-coverage rows | DONE | `b82035c` |
+| **TDB-3** | "Replace with AI-powered footnote analysis" (PARTIAL) | RESOLVED — AI-failed fallback uses the industry heuristic (not flat 0.40) | `0ff62a6` |
+| **TDB-4** | Monitoring & Observability (×2) — `liabilities.go:641-642` | DONE — `logctx` audit log + Prometheus counter | `034f9bc` |
+| **TDB-5** | Configuration System (thresholds) — `liabilities.go:17,27` + `assets.go:14` | DONE — 9 asset gates externalized; defaults==constants | `b328463` |
+| **TDB-6** | Cloud deployment config variables | DONE — Docker Compose prod env template + `docs/operations/` runbook | `3d6cadf` |
+| **TDB-7** | R3 — dead-code cleanup; also CLOSES "Financial Data Extraction (9 sites)" + "Company Size" + "Generic Rule Implementation (×2)" (all inside the deleted `applyRule` chain) | DONE | `18f4ec6` |
+| **TDB-8** | Inventory turnover analysis — `flagging/risk_analyzer.go:128` | DONE | `39fb1ef` |
+| **TDB-9** | Industry Mapping Expansion — `service.go` `loadIndustryRules` | RESOLVED — **documented defer** (classifier emits only `{45,20,25}`; bare TODO → tracked reference) | `4eb27d7` |
+| **TDB-10** | Residual XBRL-matcher / flag-evaluator sub-TODOs | DONE — 4 IMPLEMENT + 3 DE-SCOPE; zero bare TODOs | `5b432ac` |
+| **TDB-11** | Expose `cleaning_adjustments` on the fair-value API | DONE | `220bf6e` |
+| **TDB-12** | SEC parser populates contingent-liability fields → B3 fires | DONE | `d9cf8b1` |
+
+**Catalog reconciliation:** every 2026-06-05 **OPEN** row is now closed — Industry Mapping → TDB-9,
+Inventory turnover → TDB-8, Monitoring & Observability → TDB-4, Configuration System → TDB-5, Cloud
+deployment → TDB-6; "Generic Rule Implementation (×2)" (`service.go:794,867`) + "Financial Data
+Extraction (9 sites)" were inside the `applyRule` chain DELETED by TDB-7. The 2026-06-05 **PARTIAL**
+rows are resolved — AI footnote → TDB-3, A6/A7 adjuster + tests → TDB-2.
+
+**Validation (cumulative):** `go build`/`go vet` exit 0; `go test ./... -count=1` = **50/50 ok, 0 FAIL**;
+load-bearing invariants byte-identical (DDM bit-for-bit, recompute-shadow exit 0, ledger basket);
+live API verified (AAPL/JPM/KO 200, `calc_version 4.7`, TDB-4/11 + counter three-way consistent).
+
+**Discovered follow-up (NOT a TDB item):** GitHub **#13** — `DATABASE_DRIVER=postgres` doesn't boot
+(no PG driver imported; CLIs SQLite-only). Surfaced by REVIEWER in TDB-6; a real code defect for a
+future session. The TDB-6 template defaults `sqlite3`.
 
 ---
 

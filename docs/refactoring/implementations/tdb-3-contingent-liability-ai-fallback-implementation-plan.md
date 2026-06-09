@@ -2,7 +2,7 @@
 
 **Role:** ARCH → handoff to BACKEND (`/execute`)
 **Spec:** `docs/refactoring/spec/tdb-3-contingent-liability-ai-fallback-spec.md`
-**Tracker:** `docs/reviewer/TDB-3-contingent-liability-ai-footnote-analysis.md`
+**Tracker:** `docs/reviewer/archive/TDB-3-contingent-liability-ai-footnote-analysis.md`
 **GitHub issue:** `#3`
 **Worktree:** `.claude/worktrees/tdb-3-contingent-ai` — **all `go` commands MUST set `GOWORK=off`**.
 **Branch:** `worktree-tdb-3-contingent-ai`

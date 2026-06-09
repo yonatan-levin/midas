@@ -17,9 +17,9 @@ Three prioritized backlog items shipped end-to-end (design → implement → VER
 **Versions:** `CalculationVersion` stays **4.6** (no per-share change). `SchemaVersion["FinancialData"]` **9 → 10** (TDB-2's new `OperatingLeaseRightOfUseAsset` field).
 
 ## Design + tracker docs (on master)
-- TDB-1: `docs/refactoring/spec/tdb-1-parser-nonrecurring-extraction-spec.md` + `…/implementations/…-implementation-plan.md`; tracker `docs/reviewer/TDB-1-parser-restructuring-litigation-capex-not-populated.md`.
-- TDB-2: `docs/refactoring/spec/tdb-2-a6-a7-asset-adjusters-spec.md` + `…/implementations/…-implementation-plan.md`; tracker `docs/reviewer/TDB-2-missing-a6-rou-a7-excess-cash-adjusters.md`.
-- TDB-7: tracker `docs/reviewer/TDB-7-dead-code-cleanup-applyrule-getcompanysize.md`.
+- TDB-1: `docs/refactoring/spec/tdb-1-parser-nonrecurring-extraction-spec.md` + `…/implementations/…-implementation-plan.md`; tracker `docs/reviewer/archive/TDB-1-parser-restructuring-litigation-capex-not-populated.md`.
+- TDB-2: `docs/refactoring/spec/tdb-2-a6-a7-asset-adjusters-spec.md` + `…/implementations/…-implementation-plan.md`; tracker `docs/reviewer/archive/TDB-2-missing-a6-rou-a7-excess-cash-adjusters.md`.
+- TDB-7: tracker `docs/reviewer/archive/TDB-7-dead-code-cleanup-applyrule-getcompanysize.md`.
 - Catalog rows R1 (TDB-1) + R3 (TDB-7) stamped DONE in `docs/integration/TODO_TASKS_CATALOG.md`.
 
 ## Open follow-ups (logged)

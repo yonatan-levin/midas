@@ -1,7 +1,7 @@
 # TDB-12 — Implementer Plan: SEC parser extraction of contingent-liability accruals
 
 **Spec:** `docs/refactoring/spec/tdb-12-contingent-liability-parser-extraction-spec.md` (read it first).
-**Issue:** GitHub `#12`. **Tracker:** `docs/reviewer/TDB-12-contingent-liability-parser-not-populated.md`.
+**Issue:** GitHub `#12`. **Tracker:** `docs/reviewer/archive/TDB-12-contingent-liability-parser-not-populated.md`.
 **Worktree:** `worktree-tdb-12-contingent-parser` — own `go.mod`; **validate with `GOWORK=off`**.
 **Method:** strict TDD (RED → GREEN), single production file (`parser.go`) + one new test file + doc/`GetSupportedConcepts` entries. **Do NOT touch `currency.go`, `liabilities.go`, `recompute.go`, `plugs.go`, or any DDM golden.**
 
@@ -320,7 +320,7 @@ git status   # only: parser.go, parser_contingent_test.go, (maybe) parser_test.g
 - `internal/infra/gateways/sec/parser_contingent_test.go` (new)
 - `internal/infra/gateways/sec/parser_test.go` (only if `GetSupportedConcepts` test pins entries/count)
 - `docs/refactoring/spec/tdb-12-...md`, `docs/refactoring/implementations/tdb-12-...md`
-- `docs/reviewer/TDB-12-...md` (tracker)
+- `docs/reviewer/archive/TDB-12-...md` (tracker)
 - (possibly) `internal/services/datacleaner/testdata/adjustments_projection_basket_golden.json` — only if
   §4e confirmed it is the expected B3-overlay change.
 - **`internal/services/valuation/currency.go` MUST NOT appear.**
@@ -366,7 +366,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
 - [ ] adjustments-projection basket golden — unchanged, OR reviewed-and-regenerated as expected B3 overlays
 - [ ] `internal/services/valuation/currency.go` — UNCHANGED
 - [ ] `CalculationVersion` — UNCHANGED (no behavior-version bump; this is a population fix)
-- [ ] tracker `docs/reviewer/TDB-12-...md` — links spec + plan, Status OPEN
+- [ ] tracker `docs/reviewer/archive/TDB-12-...md` — links spec + plan, Status OPEN
 
 ## 8. Out of scope (do NOT do)
 

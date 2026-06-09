@@ -2,7 +2,7 @@
 
 **MODE:** PLAN_AND_CREATE · **ROLE:** ARCH
 **Ticket:** TDB-10 / GitHub issue #10 · **Status:** OPEN
-**Tracker:** `docs/reviewer/TDB-10-residual-subtodos-xbrl-flag-evaluator.md`
+**Tracker:** `docs/reviewer/archive/TDB-10-residual-subtodos-xbrl-flag-evaluator.md`
 **Implementer plan:** `docs/refactoring/implementations/tdb-10-subtodo-triage-implementation-plan.md`
 **Worktree:** `.claude/worktrees/tdb-10-subtodo-triage` · branch `worktree-tdb-10-subtodo-triage` · **always `GOWORK=off`**
 **Engine version impact:** NONE. No `CalculationVersion` / `SchemaVersion` bump. DCF/DDM/FFO/revenue_multiple outputs unchanged.

@@ -1,7 +1,7 @@
 # TDB-1 — SEC parser extraction of non-recurring earnings items (restructuring / litigation / capitalized interest)
 
 **Status:** DESIGN COMPLETE — ready for `/execute`. Implementation is a separate pass.
-**Issue:** GitHub `#1` (`[TDB-1]`). Tracker: `docs/reviewer/TDB-1-parser-restructuring-litigation-capex-not-populated.md`.
+**Issue:** GitHub `#1` (`[TDB-1]`). Tracker: `docs/reviewer/archive/TDB-1-parser-restructuring-litigation-capex-not-populated.md`.
 **Type:** Correctness gap (silent — no warning, no error today).
 **Priority:** P1 — Tier 1 valuation correctness. Single highest-value gap from the 2026-06-06 TODO burn-down.
 **Worktree:** `worktree-tdb-1-parser-extraction` (own `go.mod`; validate with `GOWORK=off`).

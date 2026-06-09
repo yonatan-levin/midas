@@ -1,7 +1,7 @@
 # TDB-12 — SEC parser extraction of contingent-liability accruals (contingent / environmental / litigation)
 
 **Status:** DESIGN COMPLETE — ready for `/execute`. Implementation is a separate pass.
-**Issue:** GitHub `#12` (`[TDB-12]`). Tracker: `docs/reviewer/TDB-12-contingent-liability-parser-not-populated.md`.
+**Issue:** GitHub `#12` (`[TDB-12]`). Tracker: `docs/reviewer/archive/TDB-12-contingent-liability-parser-not-populated.md`.
 **Type:** Correctness gap (silent — B3 short-circuits with no warning, no error today).
 **Priority:** P1 — Tier 1 valuation correctness. The exact TDB-1 pattern, one rule over (B3 instead of C1/C3/C6).
 **Worktree:** `worktree-tdb-12-contingent-parser` (own `go.mod`; validate with `GOWORK=off`).
