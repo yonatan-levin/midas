@@ -2,7 +2,7 @@
 
 **Status:** DESIGN (ARCH) — 2026-06-08
 **Issue:** #4 (TDB-4)
-**Tracker:** `docs/reviewer/TDB-4-adjustment-monitoring-and-audit-logging.md`
+**Tracker:** `docs/reviewer/archive/TDB-4-adjustment-monitoring-and-audit-logging.md`
 **Type:** Enhancement (observability) — side-effect-only, no behavior change.
 **Engine impact:** NONE. No `CalculationVersion` bump, no `SchemaVersion` bump, no
 response-shape change. Logging + metrics are pure observers.

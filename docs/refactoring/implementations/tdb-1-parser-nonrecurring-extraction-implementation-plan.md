@@ -1,7 +1,7 @@
 # TDB-1 — Implementation plan: SEC parser extraction of non-recurring earnings items
 
 **Spec:** `docs/refactoring/spec/tdb-1-parser-nonrecurring-extraction-spec.md` (read it first).
-**Issue:** GitHub `#1` (`[TDB-1]`). Tracker: `docs/reviewer/TDB-1-parser-restructuring-litigation-capex-not-populated.md`.
+**Issue:** GitHub `#1` (`[TDB-1]`). Tracker: `docs/reviewer/archive/TDB-1-parser-restructuring-litigation-capex-not-populated.md`.
 **Worktree:** `worktree-tdb-1-parser-extraction`. **Validate everything with `GOWORK=off`.**
 **Mode:** TDD (RED → GREEN). Single-package change (`internal/infra/gateways/sec`) + tests.
 
@@ -191,7 +191,7 @@ Also confirm `internal/services/valuation/currency.go` is UNCHANGED (`git diff -
 
 ## Task 5 — Docs + tracker + commit
 
-1. **Tracker** (`docs/reviewer/TDB-1-parser-restructuring-litigation-capex-not-populated.md`): tick the
+1. **Tracker** (`docs/reviewer/archive/TDB-1-parser-restructuring-litigation-capex-not-populated.md`): tick the
    Acceptance boxes that now hold; flip Status to RESOLVED/CLOSED only after Task 4 is fully green and
    the change is committed. (ARCH already added the "Design" link line — see below.) Note the operator
    replay-verification follow-up (spec §5.2) as the one remaining non-blocking item.

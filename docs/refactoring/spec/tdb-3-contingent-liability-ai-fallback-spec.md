@@ -2,7 +2,7 @@
 
 **Role:** ARCH
 **Status:** SPEC — ready for `/execute`
-**Tracker:** `docs/reviewer/TDB-3-contingent-liability-ai-footnote-analysis.md`
+**Tracker:** `docs/reviewer/archive/TDB-3-contingent-liability-ai-footnote-analysis.md`
 **GitHub issue:** `#3` (`[TDB-3]`, OPEN)
 **Worktree:** `.claude/worktrees/tdb-3-contingent-ai` (own `go.mod`; build/test with `GOWORK=off`)
 **Branch:** `worktree-tdb-3-contingent-ai` (off `origin/master` `10b2378`)
@@ -229,6 +229,6 @@ single-policy goal).
 
 ## 10. References
 
-- Tracker: `docs/reviewer/TDB-3-contingent-liability-ai-footnote-analysis.md`
+- Tracker: `docs/reviewer/archive/TDB-3-contingent-liability-ai-footnote-analysis.md`
 - Implementer plan: `docs/refactoring/implementations/tdb-3-contingent-liability-ai-fallback-implementation-plan.md`
 - B3 AI infra & provenance: DC-1 Phase 3 spec `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-3-spec.md` §5.2; `internal/services/datacleaner/adjustments/hash.go`

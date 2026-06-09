@@ -4,7 +4,7 @@
 **Type:** Deployment-config + docs (NO code change).
 **Status:** SPEC — ready for implementation.
 **Author role:** ARCH.
-**Tracker:** `docs/reviewer/TDB-6-cloud-deployment-config-variables.md`.
+**Tracker:** `docs/reviewer/archive/TDB-6-cloud-deployment-config-variables.md`.
 **Implementer plan:** `docs/refactoring/implementations/tdb-6-cloud-deploy-config-implementation-plan.md`.
 
 ---
@@ -335,5 +335,5 @@ Full content outline in the implementer plan (§3.2).
 - [ ] `docs/operations/deployment-runbook.md` exists with all 12 §6 sections, operator-runnable
       commands, and cross-references (not duplicates) of README / API docs.
 - [ ] `go build ./...` exit 0 (sanity — no code changed).
-- [ ] Tracker `docs/reviewer/TDB-6-...md` updated: decision recorded, spec+plan linked,
+- [ ] Tracker `docs/reviewer/archive/TDB-6-...md` updated: decision recorded, spec+plan linked,
       "target chosen" acceptance box checked, Status advanced.

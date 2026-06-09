@@ -1,6 +1,6 @@
 # TDB-5 — Externalize datacleaner adjustment thresholds to config (DESIGN SPEC)
 
-**Issue:** #5 (`[TDB-5]`, yonatan-levin/midas) — mirrors `docs/reviewer/TDB-5-externalize-adjustment-thresholds-config.md`.
+**Issue:** #5 (`[TDB-5]`, yonatan-levin/midas) — mirrors `docs/reviewer/archive/TDB-5-externalize-adjustment-thresholds-config.md`.
 **Status:** OPEN — design only (PLAN_AND_CREATE / ROLE: ARCH).
 **Type:** Enhancement / tech-debt (maintainability).
 **Author:** ARCH, 2026-06-08.

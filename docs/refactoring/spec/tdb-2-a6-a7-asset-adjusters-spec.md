@@ -1,7 +1,7 @@
 # TDB-2 — A6 (ROU assets) + A7 (excess cash) asset-quality adjusters — DESIGN SPEC
 
 **Status:** APPROVED for implementation (design only — no production code in this doc).
-**Issue:** GitHub `#2` / tracker `docs/reviewer/TDB-2-missing-a6-rou-a7-excess-cash-adjusters.md`.
+**Issue:** GitHub `#2` / tracker `docs/reviewer/archive/TDB-2-missing-a6-rou-a7-excess-cash-adjusters.md`.
 **Decision (human, 2026-06-06):** IMPLEMENT both adjusters. Do NOT remove the dangling rules.
 **Author role:** ARCH. **Implementer role:** BACKEND (separate `/execute` pass).
 **Worktree:** `.claude/worktrees/tdb-2-a6-a7-adjusters` (own `go.mod`; validate with `GOWORK=off`).

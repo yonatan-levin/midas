@@ -1,7 +1,7 @@
 # TDB-6 — Cloud Deployment Config: Implementer Plan
 
 **Spec:** `docs/refactoring/spec/tdb-6-cloud-deploy-config-spec.md`.
-**Tracker:** `docs/reviewer/TDB-6-cloud-deployment-config-variables.md`.
+**Tracker:** `docs/reviewer/archive/TDB-6-cloud-deployment-config-variables.md`.
 **Issue:** TDB-6 / GitHub #6.
 **Nature:** Docs + env-template ONLY. No Go code, no compose change, no Dockerfile change.
 **Decision:** Docker Compose production (recorded in spec §1).
@@ -14,7 +14,7 @@
 |---|---|---|
 | CREATE | `config.env.prod.example` | Production host-`.env` template. Placeholders only. ⊇ all compose `${VAR}`. |
 | CREATE | `docs/operations/deployment-runbook.md` | New dir `docs/operations/`. Operator runbook. |
-| EDIT | `docs/reviewer/TDB-6-cloud-deployment-config-variables.md` | Record decision; link spec+plan; check "target chosen"; advance Status. |
+| EDIT | `docs/reviewer/archive/TDB-6-cloud-deployment-config-variables.md` | Record decision; link spec+plan; check "target chosen"; advance Status. |
 | (already created) | `docs/refactoring/spec/tdb-6-cloud-deploy-config-spec.md` | The spec. |
 | (this file) | `docs/refactoring/implementations/tdb-6-cloud-deploy-config-implementation-plan.md` | This plan. |
 

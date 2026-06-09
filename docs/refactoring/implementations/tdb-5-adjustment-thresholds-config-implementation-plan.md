@@ -128,7 +128,7 @@ behaviour).
 **Files (new/edit):**
 - `config/datacleaner/adjustment_thresholds.json` — spec §4 shape, values **byte-equal to defaults**,
   `version: "1.0.0"`, populated `description` (states "absent/absent-key → default → byte-identical").
-- Update `docs/reviewer/TDB-5-externalize-adjustment-thresholds-config.md` — link spec + plan,
+- Update `docs/reviewer/archive/TDB-5-externalize-adjustment-thresholds-config.md` — link spec + plan,
   Status OPEN (done in this handoff).
 
 > Optional (Open Question 4): if the team prefers no shipped file, skip the JSON and rely on the
