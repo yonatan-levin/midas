@@ -51,16 +51,9 @@ func TestFlagConditionEvaluatorIntegration(t *testing.T) {
 
 		require.NotNil(t, highLeverageResult)
 		assert.True(t, highLeverageResult.Triggered)
+		// Actions ride on the result as inert data (the ExecuteActions
+		// dispatcher was deleted in SR-1 A4 — no production caller).
 		assert.Len(t, highLeverageResult.Actions, 2)
-
-		// Execute actions
-		err = evaluator.ExecuteActions(ctx, results, data)
-		require.NoError(t, err)
-
-		// Check that action was executed
-		riskFlags, ok := data["risk_flags"].(map[string]interface{})
-		require.True(t, ok)
-		assert.True(t, riskFlags["high_leverage"].(bool))
 	})
 
 	t.Run("EvaluateRevenueVolatilityFlag", func(t *testing.T) {
@@ -151,16 +144,9 @@ func TestFlagConditionEvaluatorIntegration(t *testing.T) {
 
 		require.NoError(t, err)
 		assert.True(t, result.Triggered)
-
-		// Execute actions
-		err = evaluator.ExecuteActions(ctx, []ports.FlagResult{*result}, data)
-		require.NoError(t, err)
-
-		// Check that R&D capitalization was set
-		valAdjustments, ok := data["valuation_adjustments"].(map[string]interface{})
-		require.True(t, ok)
-		assert.True(t, valAdjustments["capitalize_rd"].(bool))
-		assert.Equal(t, 5.0, valAdjustments["rd_amortization_years"])
+		// The set_field actions ride on the result as inert data (the
+		// ExecuteActions dispatcher was deleted in SR-1 A4).
+		assert.Len(t, result.Actions, 2)
 	})
 
 	t.Run("EvaluateComplexConditionGroups", func(t *testing.T) {

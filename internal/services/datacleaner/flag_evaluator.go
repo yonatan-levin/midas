@@ -497,120 +497,12 @@ func (s *FlagConditionEvaluatorService) evaluateRegexCondition(condition config.
 	return false, "regex pattern not compiled"
 }
 
-// ExecuteActions executes actions for triggered flags
-func (s *FlagConditionEvaluatorService) ExecuteActions(ctx context.Context, results []ports.FlagResult, data map[string]interface{}) error {
-	for _, result := range results {
-		if !result.Triggered {
-			continue
-		}
-
-		for _, action := range result.Actions {
-			// Convert back to FlagAction
-			if flagAction, ok := action.(config.FlagAction); ok {
-				if err := s.executeAction(ctx, flagAction, data, result); err != nil {
-					s.logger.Printf("Error executing action for flag %s: %v", result.FlagName, err)
-					// Continue with other actions
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// executeAction executes a single action
-func (s *FlagConditionEvaluatorService) executeAction(ctx context.Context, action config.FlagAction, data map[string]interface{}, result ports.FlagResult) error {
-	switch action.Type {
-	case "set_field":
-		return s.executeSetFieldAction(action.Parameters, data)
-	case "log":
-		return s.executeLogAction(action.Parameters, result)
-	case "alert":
-		return s.executeAlertAction(action.Parameters, result)
-	case "transform":
-		return s.executeTransformAction(action.Parameters, data)
-	default:
-		return fmt.Errorf("unknown action type: %s", action.Type)
-	}
-}
-
-// executeSetFieldAction sets a field in the data
-func (s *FlagConditionEvaluatorService) executeSetFieldAction(params map[string]interface{}, data map[string]interface{}) error {
-	field, ok := params["field"].(string)
-	if !ok {
-		return fmt.Errorf("field parameter is required for set_field action")
-	}
-
-	value, ok := params["value"]
-	if !ok {
-		return fmt.Errorf("value parameter is required for set_field action")
-	}
-
-	// Handle dot notation for nested fields
-	parts := strings.Split(field, ".")
-	current := data
-
-	for i, part := range parts {
-		if i == len(parts)-1 {
-			// Last part, set the value
-			current[part] = value
-			s.logger.Printf("Set field %s to %v", field, value)
-			return nil
-		}
-
-		// Create nested map if it doesn't exist
-		if _, exists := current[part]; !exists {
-			current[part] = make(map[string]interface{})
-		}
-
-		if next, ok := current[part].(map[string]interface{}); ok {
-			current = next
-		} else {
-			return fmt.Errorf("cannot set nested field %s: parent is not a map", field)
-		}
-	}
-
-	return nil
-}
-
-// executeLogAction logs a message
-func (s *FlagConditionEvaluatorService) executeLogAction(params map[string]interface{}, result ports.FlagResult) error {
-	level, _ := params["level"].(string)
-	message, _ := params["message"].(string)
-
-	if message == "" {
-		message = fmt.Sprintf("Flag %s triggered", result.FlagName)
-	}
-
-	// DE-SCOPED (TDB-10 / #10): per-level log routing is not implemented because
-	// ExecuteActions has no production caller — the cleaner path uses EvaluateFlags
-	// only (service.go: createRiskWarningFlags) and reads Triggered/Details. This
-	// action dispatcher is exercised solely by integration tests. Revisit if flag
-	// actions are ever wired into the request path (would also require a logctx seam).
-	s.logger.Printf("[%s] %s", level, message)
-
-	return nil
-}
-
-// executeAlertAction sends an alert
-func (s *FlagConditionEvaluatorService) executeAlertAction(params map[string]interface{}, result ports.FlagResult) error {
-	// DE-SCOPED (TDB-10 / #10): redundant with the real alerting subsystem at
-	// internal/services/alerting/ (configuration.go + regression_detection.go).
-	// ExecuteActions has no production caller, so building email/webhook here would
-	// add untested dead code that duplicates an existing service. If flag-driven
-	// alerts become a real requirement, route them through internal/services/alerting.
-	s.logger.Printf("ALERT: Flag %s triggered - %s", result.FlagName, result.Details)
-	return nil
-}
-
-// executeTransformAction applies a transformation to data
-func (s *FlagConditionEvaluatorService) executeTransformAction(params map[string]interface{}, data map[string]interface{}) error {
-	// DE-SCOPED (TDB-10 / #10): aspirational config-action stub with no live config
-	// consumer and no caller (ExecuteActions is test-only). No transformation grammar
-	// is defined and none is needed by the shipped flag_conditions.json. Left as a
-	// no-op intentionally; revisit only if/when ExecuteActions is wired into production.
-	return nil
-}
+// SR-1 A4: the ExecuteActions chain (executeAction / executeSetFieldAction /
+// executeLogAction / executeAlertAction / executeTransformAction) was deleted.
+// It had no production caller — the cleaner path uses EvaluateFlags only and
+// reads Triggered/Details (TDB-10 had already de-scoped the log/alert/
+// transform stubs). FlagResult.Actions still carries the configured actions
+// as inert data for any future consumer.
 
 // mergeWithGlobalVariables merges global variables with data
 func (s *FlagConditionEvaluatorService) mergeWithGlobalVariables(data map[string]interface{}) map[string]interface{} {
