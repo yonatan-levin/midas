@@ -1,6 +1,7 @@
 # SR-1 — Codebase-wide /simplify and /code-review candidates
 
-- **Status:** OPEN (analysis only — no code changed)
+- **Status:** IN PROGRESS — B1–B4 FIXED 2026-06-11 (commits `fca7d2e` B1, `6242c21` B2, `a7626de` B3, `2f465ac` B4 + B1 follow-up test); VERIFIER: all four VERIFIED; REVIEWER: B2/B3/B4 APPROVE, B1 APPROVE_WITH_NITS (closed by the follow-up below). Simplify batches pending.
+- **B1 DISCLOSURE (REVIEWER MEDIUM, closed):** reviving the configured flag system is a *wire-visible* behavior change — flags with no hardcoded equivalent (`high_leverage_flag`, `negative_equity_flag`, `cash_flow_quality_flag`) can now fire, each warning-severity trigger deducts 10 points from `data_quality_score` (and shifts `data_quality_grade`) on the FairValueResponse for genuinely risky shapes. Pinned by `TestShippedConfig_HighLeverageFlag_FiresAndDeductsQualityScore`. `industry_specific_tech_flag` stays intentionally dormant (`industry_code` sourced from the unpopulated entity field — documented on `buildFlagEvaluationData`). Replay-baseline drift triage (B1 quality-score + B3 tech-classification effects vs `artifacts/tier2-baseline/2026-06-06/`) is folded into the live-testing phase.
 - **Date:** 2026-06-10
 - **Author:** full-codebase read (learn-codebase pass over all ~210 production Go files, ~62.6K lines, plus shipped configs)
 - **Scope:** what is worth running `/simplify` on (behavior-preserving cleanups) and what is worth running `/code-review` on (suspected correctness defects). Each item carries evidence (file:line), a risk note, and a verification step.

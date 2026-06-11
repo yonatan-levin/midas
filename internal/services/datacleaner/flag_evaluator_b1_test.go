@@ -273,3 +273,56 @@ func newTestServiceWithShippedFlags(t *testing.T) *service {
 		cache:         map[string]*entities.CleaningResult{},
 	}
 }
+
+// TestShippedConfig_HighLeverageFlag_FiresAndDeductsQualityScore pins the
+// REVIEWER-flagged behavior change with the widest blast radius: reviving the
+// configured flag system makes flags with NO hardcoded equivalent live —
+// high_leverage_flag (D/E > 2.0 AND interest coverage < 2.5) being the main
+// one — and each triggered warning-severity flag deducts 10 quality-score
+// points, which is WIRE-VISIBLE via data_quality_score/data_quality_grade on
+// the FairValueResponse. This is intended (the flags were always meant to
+// fire on genuinely risky shapes) and disclosed here + in the SR-1 tracker.
+func TestShippedConfig_HighLeverageFlag_FiresAndDeductsQualityScore(t *testing.T) {
+	svc := newTestServiceWithShippedFlags(t)
+
+	// Leveraged-but-thin-coverage shape: D/E = 2.5, coverage = 2.0. Every
+	// other live flag stays quiet (low goodwill/intangibles, positive equity,
+	// positive OCF, all completeness fields present).
+	fd := &entities.FinancialData{
+		Ticker:                   "LEVRD",
+		Revenue:                  1_000_000_000,
+		TotalAssets:              4_000_000_000,
+		Goodwill:                 100_000_000, // 2.5% — quiet
+		OtherIntangibles:         100_000_000, // 2.5% — quiet
+		NetIncome:                40_000_000,
+		StockholdersEquity:       1_000_000_000,
+		OperatingCashFlow:        90_000_000,
+		TotalDebt:                2_500_000_000, // D/E 2.5 > 2.0
+		OperatingIncome:          20_000_000,
+		InterestExpense:          10_000_000, // coverage 2.0 < 2.5
+		SharesOutstanding:        100_000_000,
+		DilutedSharesOutstanding: 100_000_000,
+		FilingDate:               time.Now().AddDate(0, -3, 0),
+	}
+
+	flags := svc.createRiskWarningFlags(context.Background(), fd, time.Now())
+	require.NotEmpty(t, flags)
+
+	var leverage *entities.Flag
+	for i := range flags {
+		if flags[i].RuleID == "high_leverage_flag" {
+			leverage = &flags[i]
+		}
+	}
+	require.NotNil(t, leverage,
+		"D/E 2.5 with coverage 2.0 must fire the shipped high_leverage_flag; got %#v", flags)
+	assert.Equal(t, entities.FlagSeverity("warning"), leverage.Severity)
+
+	// Quality-score consequence: one warning-severity flag deducts exactly 10
+	// points from the 100 base — the delta that reaches the API response as
+	// data_quality_score for newly-flagged tickers.
+	score, _, err := svc.calculateQualityScore(fd, flags)
+	require.NoError(t, err)
+	assert.Equal(t, 90.0, score,
+		"one warning flag must deduct 10 quality points (wire-visible via data_quality_score)")
+}
