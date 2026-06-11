@@ -288,7 +288,7 @@ func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]
 		// Iterate through concepts within this taxonomy (e.g., "Assets", "Revenues")
 		for conceptName, factGroup := range concepts {
 			// Process every currency-denominated unit key (USD, TWD, EUR, CNY, …).
-			// Non-currency keys other than "shares" are skipped — `pure`,
+			// Non-currency keys other than "shares" and "pure" are skipped —
 			// `decimal`, `USD/shares`, etc. are either non-financial or
 			// per-share metrics we intentionally don't ingest here.
 			for unit, factList := range factGroup.Units {
@@ -297,6 +297,17 @@ func (p *Parser) extractFiscalPeriods(facts *ports.SECCompanyFacts) (map[string]
 					p.processFacts(periods, conceptName, factList, unit)
 				case unit == "shares":
 					// Dimensionless — no currency stamp.
+					p.processFacts(periods, conceptName, factList, "")
+				case unit == "pure":
+					// Dimensionless ratio facts (SR-1 B3). Needed for
+					// EffectiveIncomeTaxRateContinuingOperations, which XBRL
+					// publishes under the `pure` unit — the previous
+					// currency/shares-only ingestion silently dropped every
+					// ratio concept, leaving EffectiveTaxRate permanently 0
+					// (and the A2/A5 TaxShieldDTA computation production-dead).
+					// Like shares, pure facts carry no currency stamp and are
+					// never FX-converted (they are not in applyFXRate's
+					// monetary field list).
 					p.processFacts(periods, conceptName, factList, "")
 				}
 			}
@@ -572,6 +583,89 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		"BorrowingCostsCapitalised",
 	}); exists {
 		financialData.CapitalizedInterest = absAddBack(val)
+	}
+
+	// SR-1 B3 — the six previously-unextracted fields. Before this fix the
+	// C2/C4/C5 earnings adjusters could never fire (their source fields were
+	// permanently 0), A2/A5's TaxShieldDTA was production-dead (EffectiveTaxRate
+	// never populated), and the balance-sheet classifier's R&D/SBC tech
+	// heuristics ran on zero inputs. Extraction policy per field is documented
+	// inline; the candidate lists follow the established us-gaap-first /
+	// IFRS-appended ordering (Phase B6 convention).
+
+	// C4 source + classifier signal: R&D expense. Debit-balance income-statement
+	// charge → absAddBack (TDB-1 idiom: a credit-presented charge is the same
+	// dollars with a flipped presentation sign). The IFRS-full concept shares
+	// the us-gaap name, so a single entry covers both taxonomies.
+	if val, exists := p.findValue(data, []string{
+		"ResearchAndDevelopmentExpense",
+		"ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+	}); exists {
+		financialData.ResearchAndDevelopment = absAddBack(val)
+	}
+
+	// C4 source + classifier signal: stock-based compensation. The cash-flow
+	// add-back concept (ShareBasedCompensation) is the most ubiquitous; the
+	// allocated-expense variant and the IFRS-full equivalent are fallbacks.
+	// Debit-balance charge → absAddBack.
+	if val, exists := p.findValue(data, []string{
+		"ShareBasedCompensation",
+		"AllocatedShareBasedCompensationExpense",
+		// IFRS-full (IFRS 2) equivalent.
+		"ExpenseFromSharebasedPaymentTransactions",
+	}); exists {
+		financialData.StockBasedCompensation = absAddBack(val)
+	}
+
+	// C2 source: asset-sale gains. SIGNED as-is — the sign is semantic: C2
+	// subtracts only POSITIVE net gains from normalized operating income and
+	// its <=0 guard correctly skips net disposal losses; math.Abs here would
+	// fabricate a gain-subtraction out of a loss. NOTE:
+	// GainLossOnSaleOfPropertyPlantEquipment also feeds GainOnPropertySales
+	// (the REIT FFO input, mapped above) — the two consumers are independent
+	// by design (C2 normalizes operating income; FFO adjusts net income).
+	if val, exists := p.findValue(data, []string{
+		"GainLossOnDispositionOfAssets",
+		"GainLossOnSaleOfPropertyPlantEquipment",
+		"GainLossOnSaleOfBusiness",
+	}); exists {
+		financialData.AssetSaleGains = val
+	}
+
+	// C5 source: derivative fair-value marks. SIGNED as-is — C5 handles both
+	// the gain branch (subtract) and the loss branch (add back) and skips only
+	// an exact zero; collapsing the sign would corrupt the branch selection.
+	if val, exists := p.findValue(data, []string{
+		"GainLossOnDerivativeInstrumentsNetPretax",
+		"UnrealizedGainLossOnDerivatives",
+	}); exists {
+		financialData.DerivativeGainsLosses = val
+	}
+
+	// Inventory-turnover / margin analysis input: cost of goods sold. Neutral
+	// data field assigned as-is; consumers guard. CostOfGoodsAndServicesSold
+	// has been advertised in GetSupportedConcepts since Phase 1 but was never
+	// actually parsed until this fix.
+	if val, exists := p.findValue(data, []string{
+		"CostOfGoodsAndServicesSold",
+		"CostOfRevenue",
+		"CostOfGoodsSold",
+		// IFRS-full equivalent.
+		"CostOfSales",
+	}); exists {
+		financialData.CostOfGoodsSold = val
+	}
+
+	// A2/A5 TaxShieldDTA input: effective tax rate. Published under the `pure`
+	// XBRL unit (ingested by extractFiscalPeriods' pure-unit arm, SR-1 B3).
+	// Accepted only in (0, 1]: ratios outside that band occur in tiny-pretax-
+	// income years and would corrupt the writedown tax-shield computation, so
+	// they leave the field at 0 (the adjusters' ETR>0 gate then skips the
+	// shield, matching pre-fix behavior for pathological filings).
+	if val, exists := p.findValue(data, []string{
+		"EffectiveIncomeTaxRateContinuingOperations",
+	}); exists && val > 0 && val <= 1 {
+		financialData.EffectiveTaxRate = val
 	}
 
 	// Dividends per share (for DDM model)
@@ -1109,6 +1203,21 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"us-gaap:InterestCostsCapitalized",
 		"us-gaap:InterestCostsIncurredCapitalized",
 
+		// Income Statement - C2/C4/C5 earnings-normalization sources + the
+		// A2/A5 tax-shield ratio (SR-1 B3). R&D/SBC also feed the balance-
+		// sheet classifier's tech heuristics.
+		"us-gaap:ResearchAndDevelopmentExpense",
+		"us-gaap:ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost",
+		"us-gaap:ShareBasedCompensation",
+		"us-gaap:AllocatedShareBasedCompensationExpense",
+		"us-gaap:GainLossOnDispositionOfAssets",
+		"us-gaap:GainLossOnSaleOfBusiness",
+		"us-gaap:GainLossOnDerivativeInstrumentsNetPretax",
+		"us-gaap:UnrealizedGainLossOnDerivatives",
+		"us-gaap:CostOfRevenue",
+		"us-gaap:CostOfGoodsSold",
+		"us-gaap:EffectiveIncomeTaxRateContinuingOperations",
+
 		// Balance Sheet - Assets
 		"us-gaap:Assets",
 		"us-gaap:AssetsCurrent",
@@ -1184,6 +1293,10 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"ifrs-full:ProfitLoss",
 		"ifrs-full:ProfitLossAttributableToOwnersOfParent",
 		"ifrs-full:FinanceCosts",
+		// SR-1 B3 IFRS equivalents (R&D shares the us-gaap concept name).
+		"ifrs-full:ResearchAndDevelopmentExpense",
+		"ifrs-full:ExpenseFromSharebasedPaymentTransactions",
+		"ifrs-full:CostOfSales",
 		// Capitalized interest (IAS 23 — British spelling). Feeds C6 for IFRS
 		// filers. MEDIUM confidence — unverified against a live filer (TDB-1 Q4).
 		"ifrs-full:BorrowingCostsCapitalised",

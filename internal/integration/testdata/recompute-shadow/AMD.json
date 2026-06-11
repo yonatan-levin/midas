@@ -7,6 +7,15 @@
   "divergences": [
     {
       "period": "2023FY",
+      "umbrella": "CurrentAssets",
+      "reported": 16768000000,
+      "recomputed": 15027600000,
+      "delta": -1740400000,
+      "plug": 8484000000,
+      "clamp_suspected": false
+    },
+    {
+      "period": "2023FY",
       "umbrella": "TotalAssets",
       "reported": 67885000000,
       "recomputed": 53643000000,
@@ -76,6 +85,15 @@
       "delta": 9342000000,
       "plug": 0,
       "clamp_suspected": true
+    },
+    {
+      "period": "2024FY",
+      "umbrella": "CurrentAssets",
+      "reported": 19049000000,
+      "recomputed": 16755400000,
+      "delta": -2293600000,
+      "plug": 9528000000,
+      "clamp_suspected": false
     },
     {
       "period": "2024FY",
@@ -175,6 +193,15 @@
       "delta": 9220000000,
       "plug": 0,
       "clamp_suspected": true
+    },
+    {
+      "period": "2025FY",
+      "umbrella": "CurrentAssets",
+      "reported": 26947000000,
+      "recomputed": 23779000000,
+      "delta": -3168000000,
+      "plug": 13488000000,
+      "clamp_suspected": false
     },
     {
       "period": "2025FY",
