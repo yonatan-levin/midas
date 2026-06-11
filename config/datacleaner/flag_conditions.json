@@ -1,5 +1,5 @@
 {
-    "version": "1.1.0",
+    "version": "1.2.0",
     "global_variables": {
       "min_materiality_threshold": 0.05,
       "high_risk_threshold": 0.10,
@@ -407,15 +407,17 @@
           "conditions": [
             {
               "type": "numeric",
-              "field": "Goodwill",
+              "field": "goodwill",
               "operator": "gt",
-              "value": 0
+              "value": 0,
+              "null_behavior": "false"
             },
             {
               "type": "numeric",
-              "field": "Goodwill",
+              "field": "goodwill_to_assets_ratio",
               "operator": "gt",
-              "value": "${TotalAssets * goodwill_threshold}"
+              "value": "$goodwill_threshold",
+              "null_behavior": "false"
             }
           ]
         },
@@ -451,15 +453,17 @@
           "conditions": [
             {
               "type": "numeric",
-              "field": "OtherIntangibles",
+              "field": "other_intangibles",
               "operator": "gt",
-              "value": 0
+              "value": 0,
+              "null_behavior": "false"
             },
             {
               "type": "numeric",
-              "field": "OtherIntangibles",
+              "field": "intangibles_to_assets_ratio",
               "operator": "gt",
-              "value": "${TotalAssets * intangibles_threshold}"
+              "value": "$intangibles_threshold",
+              "null_behavior": "false"
             }
           ]
         },

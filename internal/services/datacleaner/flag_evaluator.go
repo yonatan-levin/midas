@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -22,8 +23,19 @@ type FlagConditionEvaluatorService struct {
 	compiledRegexs map[string]*regexp.Regexp
 }
 
-// NewFlagConditionEvaluatorService creates a new flag condition evaluator service
+// NewFlagConditionEvaluatorService creates a new flag condition evaluator service.
+//
+// logger may be nil — the production wiring (datacleaner service construction)
+// historically passed nil, and every triggered flag dereferenced the nil
+// *log.Logger via Printf, panicking the request (SR-1 B1). A nil logger now
+// falls back to a stderr-backed logger so diagnostics survive without a
+// panic. (This file predates the zap convention; a full logctx migration is
+// tracked separately and deliberately out of scope for the B1 fix.)
 func NewFlagConditionEvaluatorService(cfg *config.FlagConditionsConfig, logger *log.Logger) (ports.FlagConditionEvaluator, error) {
+	if logger == nil {
+		logger = log.New(os.Stderr, "[flag-evaluator] ", log.LstdFlags)
+	}
+
 	// Pre-compile regex patterns
 	compiledRegexs := make(map[string]*regexp.Regexp)
 
@@ -187,6 +199,16 @@ func (s *FlagConditionEvaluatorService) evaluateCondition(condition config.Condi
 	// Get field value
 	fieldValue, exists := s.getFieldValue(condition.Field, data)
 
+	// exists-type conditions are about PRESENCE itself, so they MUST be
+	// evaluated before the null short-circuit below. Pre-SR-1-B1 the
+	// short-circuit returned first, which made an "expect absent" check
+	// (e.g. data_completeness_flag's {type:exists, value:false}) structurally
+	// unreachable for absent fields — and the old lower-switch branch ignored
+	// the configured operator/value entirely for present fields.
+	if condition.Type == "exists" {
+		return s.evaluateExistsCondition(condition, exists)
+	}
+
 	// Handle null/missing values
 	if !exists {
 		switch condition.NullBehavior {
@@ -209,13 +231,41 @@ func (s *FlagConditionEvaluatorService) evaluateCondition(condition config.Condi
 		return s.evaluateBooleanCondition(condition, fieldValue)
 	case "date":
 		return s.evaluateDateCondition(condition, fieldValue)
-	case "exists":
-		return exists, fmt.Sprintf("%s exists: %v", condition.Field, exists)
 	case "regex":
 		return s.evaluateRegexCondition(condition, fieldValue)
 	default:
 		return false, fmt.Sprintf("unknown condition type: %s", condition.Type)
 	}
+}
+
+// evaluateExistsCondition compares the field's actual presence against the
+// configured expected value. Semantics (SR-1 B1 fix):
+//
+//   - Value (bool, or "true"/"false" string) is the EXPECTED presence;
+//     omitted/unrecognized values default to "expected present" (true).
+//   - Operator "ne" inverts the match; every other operator (the configs use
+//     "eq") is treated as equality.
+//
+// The absent-field detail string deliberately keeps the "is null" phrasing
+// so log consumers and existing assertions that grep for it keep working.
+func (s *FlagConditionEvaluatorService) evaluateExistsCondition(condition config.Condition, exists bool) (bool, string) {
+	expected := true
+	switch v := condition.Value.(type) {
+	case bool:
+		expected = v
+	case string:
+		expected = strings.EqualFold(v, "true")
+	}
+
+	matched := exists == expected
+	if condition.Operator == "ne" {
+		matched = !matched
+	}
+
+	if !exists {
+		return matched, fmt.Sprintf("%s is null (exists=false, expected exists=%v)", condition.Field, expected)
+	}
+	return matched, fmt.Sprintf("%s exists: %v (expected exists=%v)", condition.Field, exists, expected)
 }
 
 // getFieldValue retrieves a field value from data using dot notation
