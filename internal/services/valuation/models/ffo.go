@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"strings"
 
 	"go.uber.org/zap"
 
@@ -189,41 +188,11 @@ func (m *FFOModel) getCapRate(industry string) float64 {
 }
 
 // lookupSubsectorValue performs the shared subsector lookup used by both
-// getMultiple and getCapRate. Returns (value, true) on a hit and (0, false)
-// on miss / nil-or-empty table / empty industry, so callers can apply their
-// own default. Mirrors the longest-prefix-match algorithm used by
-// RevenueMultipleModel.getMultiple and crosscheck.LookupMultiple — keeps
-// behaviour consistent across the three tables.
+// getMultiple and getCapRate. Delegates to the single W-4-deterministic core
+// (LookupByLongestPrefix, SR-1 A10) so behaviour stays consistent across the
+// FFO, revenue-multiple, and cross-check tables.
 func lookupSubsectorValue(table map[string]float64, industry string) (float64, bool) {
-	if len(table) == 0 || industry == "" {
-		return 0, false
-	}
-	upper := strings.ToUpper(industry)
-
-	if v, ok := table[upper]; ok {
-		return v, true
-	}
-
-	bestKey := ""
-	bestVal := 0.0
-	for code, v := range table {
-		if code == "default" {
-			continue
-		}
-		// Match must end at the string end or an underscore so "TECHNOLOGY"
-		// can never silently match "TECH"; longest match wins deterministically
-		// regardless of Go's map iteration order (W-4 invariant).
-		if upper == code || strings.HasPrefix(upper, code+"_") {
-			if len(code) > len(bestKey) {
-				bestKey = code
-				bestVal = v
-			}
-		}
-	}
-	if bestKey != "" {
-		return bestVal, true
-	}
-	return 0, false
+	return LookupByLongestPrefix(table, industry)
 }
 
 // Calculate performs an FFO-based valuation for a REIT.

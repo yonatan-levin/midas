@@ -3,10 +3,10 @@ package valuation
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	configfs "github.com/midas/dcf-valuation-api/config"
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/models"
 	"github.com/midas/dcf-valuation-api/internal/services/valuation/thresholds"
 )
 
@@ -117,40 +117,16 @@ func LoadIndustryMultiples(_ string) (*industryMultiplesConfig, error) {
 	return &cfg, nil
 }
 
-// LookupMultiple finds the appropriate multiple for an industry code.
-// Tries exact match first, then longest prefix match at an underscore
-// boundary, then default. Requiring a `code+"_"` boundary prevents
-// "TECHNOLOGY" from silently matching key "TECH" when new codes are added
-// to the config. Longest-prefix-match avoids nondeterminism from Go's
-// random map iteration order.
+// LookupMultiple finds the appropriate multiple for an industry code: exact
+// match, then longest prefix match at an underscore boundary (the W-4
+// deterministic core, shared via models.LookupByLongestPrefix — SR-1 A10),
+// then the "default" key, then 0.
 func LookupMultiple(multiples map[string]float64, industry string) float64 {
-	upper := strings.ToUpper(industry)
-
-	if val, ok := multiples[upper]; ok {
+	if val, ok := models.LookupByLongestPrefix(multiples, industry); ok {
 		return val
 	}
-
-	bestKey := ""
-	bestVal := 0.0
-	for code, val := range multiples {
-		if code == "default" {
-			continue
-		}
-		// Match must end at the string end or an underscore.
-		if upper == code || strings.HasPrefix(upper, code+"_") {
-			if len(code) > len(bestKey) {
-				bestKey = code
-				bestVal = val
-			}
-		}
-	}
-	if bestKey != "" {
-		return bestVal
-	}
-
 	if val, ok := multiples["default"]; ok {
 		return val
 	}
-
 	return 0
 }
