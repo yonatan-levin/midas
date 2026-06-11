@@ -343,49 +343,10 @@ const (
 	GICSTelecom               = "50"
 )
 
-// Pipeline Stage Entities
-
-// PipelineStage represents different stages in the data cleaning pipeline
-type PipelineStage string
-
-const (
-	StageAssetQuality          PipelineStage = "asset_quality"
-	StageLiabilityCompleteness PipelineStage = "liability_completeness"
-	StageEarningsNormalization PipelineStage = "earnings_normalization"
-	StageQualityAssessment     PipelineStage = "quality_assessment"
-	StageFlagging              PipelineStage = "flagging"
-)
-
-// StageResult represents the result of a single pipeline stage
-type StageResult struct {
-	Stage        PipelineStage `json:"stage"`
-	Success      bool          `json:"success"`
-	Adjustments  []Adjustment  `json:"adjustments"`
-	Flags        []Flag        `json:"flags"`
-	Duration     time.Duration `json:"duration"`
-	RulesApplied int           `json:"rules_applied"`
-	Errors       []string      `json:"errors,omitempty"`
-	Warnings     []string      `json:"warnings,omitempty"`
-}
-
-// PipelineResult represents the complete result of the data cleaning pipeline
-type PipelineResult struct {
-	Success       bool            `json:"success"`
-	StageResults  []StageResult   `json:"stage_results"`
-	TotalDuration time.Duration   `json:"total_duration"`
-	CleanedData   *FinancialData  `json:"cleaned_data"`
-	Summary       PipelineSummary `json:"summary"`
-}
-
-// PipelineSummary provides aggregate statistics for the pipeline execution
-type PipelineSummary struct {
-	TotalAdjustments  int `json:"total_adjustments"`
-	TotalFlags        int `json:"total_flags"`
-	TotalRulesApplied int `json:"total_rules_applied"`
-	StagesProcessed   int `json:"stages_processed"`
-	ErrorCount        int `json:"error_count"`
-	WarningCount      int `json:"warning_count"`
-}
+// SR-1 A1 sweep: the Pipeline Stage entity types (PipelineStage + Stage*
+// constants, StageResult, PipelineResult, PipelineSummary) were deleted with
+// their only consumer, the orphaned PipelineOrchestrator. The Reporting
+// entities below STAY: CleaningReport is on ValuationResult's wire schema.
 
 // Reporting Entities
 
