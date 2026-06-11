@@ -101,11 +101,3 @@ type CoordinationResult struct {
 	Warnings       []string                  `json:"warnings"`
 }
 
-// CoordinationMetrics represents metrics for data coordination
-type CoordinationMetrics struct {
-	TotalCoordinations int64                  `json:"total_coordinations"`
-	ConcurrentRequests int                    `json:"concurrent_requests"`
-	AverageLatency     time.Duration          `json:"average_latency"`
-	RetryRate          float64                `json:"retry_rate"`
-	SourceErrorRates   map[DataSource]float64 `json:"source_error_rates"`
-}
