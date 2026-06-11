@@ -738,13 +738,26 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		financialData.OperatingCashFlow = val
 	}
 
-	// Extract balance sheet items
+	// Extract balance sheet items.
+	//
+	// SR-1 B4: the umbrella tag is authoritative when present; otherwise the
+	// disjoint current+noncurrent COMPONENTS are SUMMED (mirroring the TSM
+	// debt-components pattern below). The pre-fix candidate list mixed the
+	// umbrella with the components under first-hit semantics, so a filer
+	// missing us-gaap:Assets silently got TotalAssets = AssetsCurrent —
+	// current assets only — corrupting every downstream ratio gate (A1/A2/A4
+	// materiality, the DC-1 plugs, the Graham floor). When only ONE component
+	// is reported the sum equals that component (same as pre-fix; still
+	// understated but strictly no worse).
 	if val, exists := p.findValue(data, []string{
 		"Assets",
-		"AssetsCurrent",
-		"AssetsNoncurrent",
 	}); exists {
 		financialData.TotalAssets = val
+	} else if sum, ok := p.sumValues(data, []string{
+		"AssetsCurrent",
+		"AssetsNoncurrent",
+	}); ok {
+		financialData.TotalAssets = sum
 	} else {
 		missingFields = append(missingFields, "total_assets")
 	}
