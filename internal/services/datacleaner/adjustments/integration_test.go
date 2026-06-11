@@ -121,15 +121,11 @@ func TestCompleteDataCleaningPipeline(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Test both asset and liability adjusters working together
-			assetAdjuster := NewAssetAdjuster()
+			// SR-1 A4: the deprecated CalculateNetTangibleAssets asset-side block
+			// (and its assetResult.Adjustments count assertion against
+			// tt.expectAssetAdj) was removed; the AssetAdjuster construction it
+			// needed went with it. Live liability coverage is retained.
 			liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
-
-			// Apply asset adjustments first (Category A)
-			assetResult := assetAdjuster.CalculateNetTangibleAssets(tt.data, tt.context)
-
-			require.NotNil(t, assetResult, "Asset adjustment result should not be nil")
-			assert.Len(t, assetResult.Adjustments, tt.expectAssetAdj, "Asset adjustment count mismatch")
 
 			// Apply liability adjustments (Category B)
 			liabilityRules := filterRulesByCategory(tt.rules, entities.LiabilityCompleteness)
@@ -226,15 +222,15 @@ func TestRealWorldScenarios(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			startTime := time.Now()
 
-			// Create adjusters
-			assetAdjuster := NewAssetAdjuster()
+			// Create adjusters. SR-1 A4: the deprecated CalculateNetTangibleAssets
+			// asset-side call (and the AssetAdjuster it required) was removed; only
+			// liability coverage remains. The expected asset-type entries in
+			// tt.expectedAdj are all shouldExist=false, so dropping the asset
+			// reasoning corpus does not alter any live assertion.
 			liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 
 			// Create comprehensive rule set
 			rules := createComprehensiveRuleSet()
-
-			// Apply adjustments and measure performance
-			assetResult := assetAdjuster.CalculateNetTangibleAssets(tt.data, tt.context)
 
 			liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), tt.data, liabilityRules, tt.context)
@@ -247,10 +243,11 @@ func TestRealWorldScenarios(t *testing.T) {
 
 			// Validate expected adjustments. DC-1 Phase 5 P5-C4: the
 			// liabilityResult.Adjustments audit slice was deleted; the B-rule
-			// audit reasoning now lives on the native OverlaySpecs. We build
-			// the reasoning corpus from the asset-side TangibleAssetsResult
-			// adjustments (still present) plus the liability native overlays.
-			reasonings := collectReasonings(assetResult.Adjustments, liabilityResult.NativeOverlays, liabilityResult.NativeLedgerEntries)
+			// audit reasoning now lives on the native OverlaySpecs. SR-1 A4: the
+			// asset-side TangibleAssetsResult corpus was removed (deprecated
+			// method deletion), so the reasoning corpus is the liability native
+			// overlays + fired ledger entries only.
+			reasonings := collectReasonings(nil, liabilityResult.NativeOverlays, liabilityResult.NativeLedgerEntries)
 			for expectedAdjType, shouldExist := range tt.expectedAdj {
 				found := false
 				for _, r := range reasonings {
@@ -422,7 +419,9 @@ func TestPerformanceBenchmarks(t *testing.T) {
 				QualityThreshold: 0.8,
 			}
 
-			assetAdjuster := NewAssetAdjuster()
+			// SR-1 A4: the deprecated CalculateNetTangibleAssets call (and the
+			// AssetAdjuster it required) was removed from the benchmark loop; the
+			// liability ProcessLiabilityAdjustments path remains the measured work.
 			liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 			rules := createComprehensiveRuleSet()
 
@@ -439,7 +438,6 @@ func TestPerformanceBenchmarks(t *testing.T) {
 				// Apply complete adjustment pipeline
 				liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
-				assetResult := assetAdjuster.CalculateNetTangibleAssets(&testData, context)
 				liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), &testData, liabilityRules, context)
 
 				iterationTime := time.Since(startTime)
@@ -453,8 +451,8 @@ func TestPerformanceBenchmarks(t *testing.T) {
 				// Ensure adjustments were applied (not just measuring empty
 				// processing). DC-1 Phase 5 P5-C4: liabilityResult.Adjustments
 				// was deleted; the B-rule effect lives on the native overlays.
-				assert.True(t, len(assetResult.Adjustments) > 0 || len(liabilityResult.NativeOverlays) > 0,
-					"Should have adjustments in iteration %d", i)
+				assert.True(t, len(liabilityResult.NativeOverlays) > 0,
+					"Should have liability adjustments in iteration %d", i)
 			}
 
 			// Validate performance metrics
@@ -516,7 +514,9 @@ func TestErrorHandlingScenarios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assetAdjuster := NewAssetAdjuster()
+			// SR-1 A4: the deprecated CalculateNetTangibleAssets call (and the
+			// AssetAdjuster + its NotNil assertion) was removed; the
+			// ProcessLiabilityAdjustments graceful-degradation coverage remains.
 			liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 			rules := createComprehensiveRuleSet()
 
@@ -530,12 +530,10 @@ func TestErrorHandlingScenarios(t *testing.T) {
 			// Apply adjustments despite errors
 			liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
-			assetResult := assetAdjuster.CalculateNetTangibleAssets(tt.data, tt.context)
 			liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), tt.data, liabilityRules, tt.context)
 
 			// Validate graceful error handling
 			if tt.expectPartial {
-				assert.NotNil(t, assetResult, "Asset result should not be nil even with errors")
 				assert.NotNil(t, liabilityResult, "Liability result should not be nil even with errors")
 			}
 
@@ -559,38 +557,23 @@ func TestAuditTrailCompleteness(t *testing.T) {
 		QualityThreshold: 0.8,
 	}
 
-	assetAdjuster := NewAssetAdjuster()
+	// SR-1 A4: the deprecated CalculateNetTangibleAssets call (and the
+	// AssetAdjuster it required) was removed, along with the "Adjustment
+	// Documentation" subtest that existed only to validate its
+	// TangibleAssetsResult.Adjustments corpus. The liability-side audit
+	// content is produced by the datacleaner-package adjustmentsFromLedger
+	// projection and validated end-to-end by the basket-parity golden; the
+	// subtests below validate the liability native emissions carry the audit
+	// primitives (RuleID + Reasoning + magnitude) the projection consumes.
 	liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 	rules := createComprehensiveRuleSet()
 
 	// Apply complete adjustment pipeline
 	liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
-	assetResult := assetAdjuster.CalculateNetTangibleAssets(data, context)
 	liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), data, liabilityRules, context)
 
-	// Validate audit trail completeness. DC-1 Phase 5 P5-C4: the dispatcher
-	// *Result.Adjustments / .AuditTrail fields were deleted. The asset-side
-	// CalculateNetTangibleAssets still returns a TangibleAssetsResult with
-	// Adjustments, which we validate here; the liability-side audit content
-	// is now produced by the datacleaner-package adjustmentsFromLedger
-	// projection and validated end-to-end by the basket-parity golden. We
-	// additionally validate the liability native emissions carry the audit
-	// primitives (RuleID + Reasoning + magnitude) the projection consumes.
-	allAdjustments := assetResult.Adjustments
 	allFlags := liabilityResult.Flags
-
-	t.Run("Adjustment Documentation", func(t *testing.T) {
-		for _, adj := range allAdjustments {
-			assert.NotEmpty(t, adj.ID, "Every adjustment must have unique ID")
-			assert.NotEmpty(t, adj.RuleID, "Every adjustment must reference rule")
-			assert.NotEmpty(t, adj.Reasoning, "Every adjustment must have reasoning")
-			assert.NotEmpty(t, adj.FromAccount, "Every adjustment must specify source account")
-			assert.Greater(t, adj.Amount, float64(0), "Adjustment amount must be positive")
-			assert.False(t, adj.Timestamp.IsZero(), "Every adjustment must have timestamp")
-			assert.True(t, adj.Applied, "All adjustments in result should be applied")
-		}
-	})
 
 	t.Run("Flag Documentation", func(t *testing.T) {
 		for _, flag := range allFlags {
@@ -621,9 +604,10 @@ func TestAuditTrailCompleteness(t *testing.T) {
 
 	t.Run("Regulatory Compliance", func(t *testing.T) {
 		// Ensure the audit corpus references SEC guide sources. DC-1 Phase 5
-		// P5-C4: draw from asset adjustments + liability native emissions.
+		// P5-C4: draw from liability native emissions. SR-1 A4: the asset-side
+		// corpus was removed with the deprecated CalculateNetTangibleAssets.
 		secGuideReferences := 0
-		for _, r := range collectReasonings(assetResult.Adjustments, liabilityResult.NativeOverlays, liabilityResult.NativeLedgerEntries) {
+		for _, r := range collectReasonings(nil, liabilityResult.NativeOverlays, liabilityResult.NativeLedgerEntries) {
 			if contains(r, "rule") || contains(r, "A1") ||
 				contains(r, "B1") || contains(r, "guide") {
 				secGuideReferences++
@@ -646,7 +630,9 @@ func TestRealSECDataIntegration(t *testing.T) {
 		QualityThreshold: 0.9,
 	}
 
-	assetAdjuster := NewAssetAdjuster()
+	// SR-1 A4: the deprecated CalculateNetTangibleAssets call (and the
+	// AssetAdjuster it required) was removed across this test's subtests; only
+	// the ProcessLiabilityAdjustments coverage on real Apple data remains.
 	liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceIntegration{}, nil)
 	rules := createComprehensiveRuleSet()
 
@@ -656,7 +642,6 @@ func TestRealSECDataIntegration(t *testing.T) {
 		// Apply complete adjustment pipeline to real Apple data
 		liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
-		assetResult := assetAdjuster.CalculateNetTangibleAssets(appleData, context)
 		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), appleData, liabilityRules, context)
 
 		duration := time.Since(start)
@@ -665,15 +650,7 @@ func TestRealSECDataIntegration(t *testing.T) {
 		assert.Less(t, duration.Milliseconds(), int64(500), "Real data processing should complete within 500ms")
 
 		// Validate reasonable Apple-specific results
-		assert.NotNil(t, assetResult, "Asset result should not be nil for Apple data")
 		assert.NotNil(t, liabilityResult, "Liability result should not be nil for Apple data")
-
-		// Apple has minimal goodwill relative to its size - validate reasonable adjustments
-		originalGoodwill := appleData.Goodwill
-		if originalGoodwill > 0 {
-			assert.GreaterOrEqual(t, len(assetResult.Adjustments), 1,
-				"Should have adjustments if goodwill was present")
-		}
 
 		// Apple has significant cash and debt - validate debt calculations
 		assert.GreaterOrEqual(t, appleData.TotalAssets, float64(300000000000), // $300B+ assets
@@ -690,7 +667,7 @@ func TestRealSECDataIntegration(t *testing.T) {
 		}
 
 		t.Logf("Real Apple data processed in %dms with %d adjustments and %d flags",
-			duration.Milliseconds(), len(assetResult.Adjustments)+len(liabilityResult.NativeOverlays),
+			duration.Milliseconds(), len(liabilityResult.NativeOverlays),
 			len(liabilityResult.Flags))
 	})
 
@@ -743,18 +720,16 @@ func TestRealSECDataIntegration(t *testing.T) {
 	t.Run("Real Data Audit Trail Validation", func(t *testing.T) {
 		liabilityRules := filterRulesByCategory(rules, entities.LiabilityCompleteness)
 
-		assetResult := assetAdjuster.CalculateNetTangibleAssets(appleData, context)
 		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), appleData, liabilityRules, context)
 
 		// Validate comprehensive audit trail for real data. DC-1 Phase 5
 		// P5-C4: the liabilityResult.AuditTrail string was deleted; the
 		// liability audit content is now the native overlay/ledger reasonings.
-		assert.NotEmpty(t, assetResult.AuditTrail, "Asset audit trail should be populated")
-
-		// Audit trail should mention Apple-specific characteristics. Build the
-		// combined corpus from the asset audit string + liability native
-		// emission reasonings.
-		combinedAuditTrail := assetResult.AuditTrail
+		// SR-1 A4: the asset-side TangibleAssetsResult.AuditTrail assertion and
+		// corpus were removed with the deprecated CalculateNetTangibleAssets.
+		// Audit trail should mention Apple-specific characteristics; build the
+		// corpus from the liability native emission reasonings.
+		combinedAuditTrail := ""
 		for _, r := range collectReasonings(nil, liabilityResult.NativeOverlays, liabilityResult.NativeLedgerEntries) {
 			combinedAuditTrail += " " + r
 		}
@@ -816,9 +791,11 @@ func collectAuditEntries(
 	return out
 }
 
-// collectReasonings gathers the audit-reasoning corpus: the asset-side
-// TangibleAssetsResult adjustments (still emitted by CalculateNetTangibleAssets)
-// plus the liability native overlay + fired-ledger reasonings.
+// collectReasonings gathers the audit-reasoning corpus from the liability
+// native overlay + fired-ledger reasonings. SR-1 A4: the asset-side source
+// (TangibleAssetsResult, deprecated CalculateNetTangibleAssets) was removed;
+// callers now pass nil for assetAdjustments. The leading slice param is kept
+// for signature stability — a nil slice contributes nothing.
 func collectReasonings(
 	assetAdjustments []entities.Adjustment,
 	liabOverlays []entities.OverlaySpec,

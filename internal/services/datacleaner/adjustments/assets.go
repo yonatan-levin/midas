@@ -307,12 +307,7 @@ type AdjustmentResult struct {
 	Reasoning   string                `json:"reasoning"`
 }
 
-// TangibleAssetsResult represents the result of calculating net tangible assets
-type TangibleAssetsResult struct {
-	AdjustedTangibleAssets float64               `json:"adjusted_tangible_assets"`
-	Adjustments            []entities.Adjustment `json:"adjustments"`
-	AuditTrail             string                `json:"audit_trail"`
-}
+// SR-1 A4: the deprecated CalculateNetTangibleAssets review-tracker and its TangibleAssetsResult carrier were deleted (test-only callers; production uses ProcessAssetAdjustments).
 
 // ApplyA1Goodwill is the Adjuster-shaped (DC-1 Phase 2) implementation of
 // the A1 goodwill-exclusion rule. It produces an AdjusterOutput describing
@@ -1656,102 +1651,6 @@ func (aa *AssetAdjuster) recalculateTangibleAssets(data *entities.FinancialData)
 		tangibleAssets = 0
 	}
 	data.TangibleAssets = tangibleAssets
-}
-
-// CalculateNetTangibleAssets calculates net tangible assets after all adjustments
-// DEPRECATED: Use ProcessAssetAdjustments instead for active cleaning
-func (aa *AssetAdjuster) CalculateNetTangibleAssets(data *entities.FinancialData, context *entities.CleaningContext) *TangibleAssetsResult {
-	// Use existing baseline (already processed by parser and previous cleaning stages)
-	// Don't modify this value - just document what Category A items were reviewed
-	finalTangibleAssets := data.TangibleAssets
-	var adjustments []entities.Adjustment
-
-	// Category A: Asset Quality Review & Documentation
-	// Track significant items that warrant attention (threshold-based)
-
-	// A1: Review Goodwill (track if significant)
-	if data.Goodwill > 0 {
-		goodwillRatio := data.Goodwill / data.TotalAssets
-		if goodwillRatio > 0.05 { // >5% threshold from SEC guide
-			adjustments = append(adjustments, entities.Adjustment{
-				ID:          fmt.Sprintf("A1_goodwill_%d", time.Now().UnixNano()),
-				RuleID:      "goodwill_exclusion",
-				Category:    entities.AssetQuality,
-				Type:        entities.AdjustmentTypeExclusion,
-				Amount:      data.Goodwill,
-				FromAccount: "Goodwill",
-				Reasoning:   fmt.Sprintf("Reviewed goodwill exclusion: %.0f (%.1f%% of assets)", data.Goodwill, goodwillRatio*100),
-				Applied:     true,
-				Timestamp:   time.Now(),
-			})
-		}
-	}
-
-	// A2: Review Intangible Assets (track if significant)
-	if data.OtherIntangibles > 0 {
-		intangibleRatio := data.OtherIntangibles / data.TotalAssets
-		if intangibleRatio > 0.05 { // >5% threshold for tracking
-			adjustments = append(adjustments, entities.Adjustment{
-				ID:          fmt.Sprintf("A2_intangibles_%d", time.Now().UnixNano()),
-				RuleID:      "intangible_adjustment",
-				Category:    entities.AssetQuality,
-				Type:        entities.AdjustmentTypeWritedown,
-				Amount:      data.OtherIntangibles,
-				FromAccount: "OtherIntangibles",
-				Reasoning:   fmt.Sprintf("Reviewed intangible assets: %.0f (%.1f%% of assets)", data.OtherIntangibles, intangibleRatio*100),
-				Applied:     true,
-				Timestamp:   time.Now(),
-			})
-		}
-	}
-
-	// A4: Review Deferred Tax Assets (track if significant)
-	if data.DeferredTaxAssets > 0 {
-		dtaRatio := data.DeferredTaxAssets / data.TotalAssets
-		if dtaRatio > 0.05 { // >5% threshold from SEC guide A4
-			adjustments = append(adjustments, entities.Adjustment{
-				ID:          fmt.Sprintf("A4_dta_%d", time.Now().UnixNano()),
-				RuleID:      "deferred_tax_assets",
-				Category:    entities.AssetQuality,
-				Type:        entities.AdjustmentTypeWritedown,
-				Amount:      data.DeferredTaxAssets * 0.5, // Document 50% valuation allowance
-				FromAccount: "DeferredTaxAssets",
-				Reasoning:   fmt.Sprintf("Reviewed DTA valuation allowance: %.0f (%.1f%% of assets)", data.DeferredTaxAssets, dtaRatio*100),
-				Applied:     true,
-				Timestamp:   time.Now(),
-			})
-		}
-	}
-
-	// A5: Review Inventory Quality (track if significant)
-	if data.Inventory > 0 {
-		inventoryRatio := data.Inventory / data.TotalAssets
-		if inventoryRatio > 0.10 { // >10% threshold for tracking
-			adjustments = append(adjustments, entities.Adjustment{
-				ID:          fmt.Sprintf("A5_inventory_%d", time.Now().UnixNano()),
-				RuleID:      "obsolete_inventory",
-				Category:    entities.AssetQuality,
-				Type:        entities.AdjustmentTypeWritedown,
-				Amount:      data.Inventory * 0.1, // Document potential 10% adjustment
-				FromAccount: "Inventory",
-				Reasoning:   fmt.Sprintf("Reviewed inventory quality: %.0f (%.1f%% of assets)", data.Inventory, inventoryRatio*100),
-				Applied:     true,
-				Timestamp:   time.Now(),
-			})
-		}
-	}
-
-	// Build audit trail summary
-	auditTrail := fmt.Sprintf("Asset quality assessment completed. Reviewed %d significant Category A items.", len(adjustments))
-	if len(adjustments) == 0 {
-		auditTrail = "Asset quality assessment completed. No significant Category A adjustments required."
-	}
-
-	return &TangibleAssetsResult{
-		AdjustedTangibleAssets: finalTangibleAssets,
-		Adjustments:            adjustments,
-		AuditTrail:             auditTrail,
-	}
 }
 
 // Helper methods

@@ -446,13 +446,6 @@ type AdjustmentResult struct {
 	Reasoning   string       `json:"reasoning"`
 }
 
-// TangibleAssetsResult represents the result of calculating net tangible assets
-type TangibleAssetsResult struct {
-	AdjustedTangibleAssets float64      `json:"adjusted_tangible_assets"`
-	Adjustments            []Adjustment `json:"adjustments"`
-	AuditTrail             string       `json:"audit_trail"`
-}
-
 // DC-1 Phase 5 P5-C4: the dead entities.AssetAdjustmentResult /
 // entities.LiabilityAdjustmentResult duplicate structs were deleted here.
 // They had zero code callers (grep-confirmed — only doc references); the

@@ -10,61 +10,8 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/core/entities"
 )
 
-func TestAssetAdjuster_CalculateNetTangibleAssets(t *testing.T) {
-	tests := []struct {
-		name                    string
-		financialData           *entities.FinancialData
-		expectedTangibleAssets  float64
-		expectedAdjustmentsMade int
-	}{
-		{
-			name: "comprehensive asset cleaning",
-			financialData: &entities.FinancialData{
-				TotalAssets:                500000.0,
-				Goodwill:                   100000.0, // Will be excluded
-				OtherIntangibles:           50000.0,  // Will be reduced
-				IndefiniteLivedIntangibles: 30000.0,  // Will be excluded
-				DeferredTaxAssets:          40000.0,  // Will be haircut
-				Inventory:                  80000.0,  // Will be written down if obsolete
-				TangibleAssets:             200000.0, // Should remain
-			},
-			expectedTangibleAssets:  200000.0, // Only tangible assets remain after cleaning
-			expectedAdjustmentsMade: 4,        // Goodwill, intangibles, DTA, inventory
-		},
-		{
-			name: "clean company - minimal adjustments",
-			financialData: &entities.FinancialData{
-				TotalAssets:                1000000.0,
-				Goodwill:                   50000.0,  // Minimal - 5%
-				OtherIntangibles:           30000.0,  // Minimal
-				IndefiniteLivedIntangibles: 0.0,      // None
-				DeferredTaxAssets:          20000.0,  // Minimal
-				Inventory:                  100000.0, // Reasonable
-				TangibleAssets:             800000.0, // Strong tangible base
-			},
-			expectedTangibleAssets:  800000.0, // Mostly preserved
-			expectedAdjustmentsMade: 0,        // No major adjustments needed
-		},
-	}
-
-	adjuster := NewAssetAdjuster()
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			originalData := copyFinancialData(tt.financialData)
-			context := createDefaultContext()
-
-			result := adjuster.CalculateNetTangibleAssets(originalData, context)
-
-			assert.InDelta(t, tt.expectedTangibleAssets, result.AdjustedTangibleAssets, 50000.0, "Tangible assets should be within expected range")
-			assert.GreaterOrEqual(t, len(result.Adjustments), tt.expectedAdjustmentsMade, "Should make expected adjustments")
-
-			// Verify audit trail
-			assert.NotEmpty(t, result.AuditTrail, "Should provide audit trail")
-			assert.Contains(t, result.AuditTrail, "Asset quality", "Should reference asset quality in audit trail")
-		})
-	}
-}
+// SR-1 A4: TestAssetAdjuster_CalculateNetTangibleAssets was removed along with the
+// deprecated CalculateNetTangibleAssets method it exercised.
 
 func TestAssetAdjuster_ProcessAssetAdjustments_ActiveWorkflow(t *testing.T) {
 	tests := []struct {
