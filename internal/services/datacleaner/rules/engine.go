@@ -51,7 +51,19 @@ func (e *engine) LoadRules(configPath string) error {
 	return nil
 }
 
-// LoadIndustryRules loads industry-specific rule overrides
+// LoadIndustryRules loads industry-specific rule overrides.
+//
+// SR-1 B2 fix: overrides and special rules are applied to a per-industry
+// SNAPSHOT built from value copies of the base rules — the base rule set
+// (e.rules) is NEVER mutated. Pre-fix, the overrides wrote through the shared
+// *CleaningRule pointers and special rules were injected into the base index,
+// so the first industry load (this method runs per-clean for 45/25 tickers)
+// permanently installed that industry's thresholds / severities / enabled
+// flags into every subsequent ticker's rule set, making cleaning results
+// order-dependent across the process lifetime.
+//
+// Re-loading the same industry replaces its snapshot wholesale, so repeated
+// loads are idempotent against the pristine base.
 func (e *engine) LoadIndustryRules(industryPath string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -62,36 +74,34 @@ func (e *engine) LoadIndustryRules(industryPath string) error {
 		return fmt.Errorf("failed to load industry rules from %s: %w", industryPath, err)
 	}
 
-	// Apply overrides to existing rules
+	// Index overrides by rule ID for the copy loop below.
+	overrides := make(map[string]entities.IndustryRuleOverride, len(industryConfig.Overrides))
 	for _, override := range industryConfig.Overrides {
-		if rule, exists := e.rules[override.RuleID]; exists {
-			// Apply overrides
+		overrides[override.RuleID] = override
+	}
+
+	// Build the industry snapshot from VALUE COPIES of the base rules,
+	// applying overrides to the copies only.
+	industryRules := make([]entities.CleaningRule, 0, len(e.rules)+len(industryConfig.SpecialRules))
+	for _, rule := range e.rules {
+		ruleCopy := *rule // base stays pristine; the copy carries the overrides
+		if override, exists := overrides[ruleCopy.ID]; exists {
 			if override.Enabled != nil {
-				rule.Enabled = *override.Enabled
+				ruleCopy.Enabled = *override.Enabled
 			}
 			if override.Threshold != nil {
-				rule.Threshold = override.Threshold
+				ruleCopy.Threshold = override.Threshold
 			}
 			if override.Severity != nil {
-				rule.Severity = *override.Severity
+				ruleCopy.Severity = *override.Severity
 			}
 		}
+		industryRules = append(industryRules, ruleCopy)
 	}
 
-	// Add special industry-specific rules
-	industryRules := make([]entities.CleaningRule, 0, len(e.rules)+len(industryConfig.SpecialRules))
-
-	// Add all existing rules
-	for _, rule := range e.rules {
-		industryRules = append(industryRules, *rule)
-	}
-
-	// Add special rules and index them
-	for _, specialRule := range industryConfig.SpecialRules {
-		industryRules = append(industryRules, specialRule)
-		// Also add to main rules index
-		e.rules[specialRule.ID] = &specialRule
-	}
+	// Special industry rules live ONLY in the snapshot — they are not added
+	// to the base index (GetRuleByID resolves them via its snapshot fallback).
+	industryRules = append(industryRules, industryConfig.SpecialRules...)
 
 	// Store industry-specific rules
 	e.industryRules[industryConfig.GICSCode] = industryRules
@@ -221,19 +231,37 @@ func (e *engine) ValidateRules() error {
 	return nil
 }
 
-// GetRuleByID returns a specific rule by ID
+// GetRuleByID returns a specific rule by ID.
+//
+// Base rules take precedence and are returned in their PRISTINE (un-overridden)
+// form — industry overrides live only in the per-industry snapshots (SR-1 B2).
+// Industry-only special rules are resolved via a read-only fallback scan over
+// the snapshots so callers that look special rules up by ID keep working.
+// Special-rule IDs are unique across the shipped industry files; if two
+// industries ever declare the same special ID, the first snapshot scanned wins
+// (map order) — callers needing industry-specific resolution should read
+// GetIndustryRules(gicsCode) instead.
 func (e *engine) GetRuleByID(id string) (*entities.CleaningRule, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	rule, exists := e.rules[id]
-	if !exists {
-		return nil, fmt.Errorf("rule with ID %s not found", id)
+	if rule, exists := e.rules[id]; exists {
+		// Return a copy to prevent modification
+		ruleCopy := *rule
+		return &ruleCopy, nil
 	}
 
-	// Return a copy to prevent modification
-	ruleCopy := *rule
-	return &ruleCopy, nil
+	// Fallback: industry-only special rules live in the snapshots.
+	for _, industryRules := range e.industryRules {
+		for i := range industryRules {
+			if industryRules[i].ID == id {
+				ruleCopy := industryRules[i]
+				return &ruleCopy, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("rule with ID %s not found", id)
 }
 
 // GetRuleVersion returns the version of loaded rules
