@@ -26,7 +26,6 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/infra/gateways/sec"
 	"github.com/midas/dcf-valuation-api/internal/infra/repositories/cache"
 	"github.com/midas/dcf-valuation-api/internal/infra/repositories/sqlite"
-	"github.com/midas/dcf-valuation-api/internal/infra/resilience"
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	"github.com/midas/dcf-valuation-api/internal/services/auth"
@@ -111,10 +110,6 @@ var CoreModule = fx.Options(
 
 	// Cache/Redis
 	fx.Provide(NewRedisClient),
-
-	// Resilience Factories
-	fx.Provide(NewCircuitBreakerFactory),
-	fx.Provide(NewRetryPolicyFactory),
 
 	// Repositories
 	fx.Provide(fx.Annotate(NewFinancialDataRepository, fx.As(new(ports.FinancialDataRepository)))),
@@ -480,69 +475,11 @@ func NewRedisClient(cfg *config.Config, logger *zap.Logger) (*redis.Client, erro
 	return client, nil
 }
 
-// CircuitBreakerFactory creates circuit breakers for different services
-type CircuitBreakerFactory struct {
-	logger *zap.Logger
-}
-
-func NewCircuitBreakerFactory(logger *zap.Logger) *CircuitBreakerFactory {
-	return &CircuitBreakerFactory{logger: logger}
-}
-
-func (f *CircuitBreakerFactory) CreateSECCircuitBreaker() ports.CircuitBreaker {
-	config := resilience.CircuitBreakerConfig{
-		Name:             "sec_api",
-		MaxFailures:      3,
-		FailureTimeout:   30 * time.Second,
-		SuccessThreshold: 2,
-		RequestTimeout:   15 * time.Second,
-		ResetTimeout:     60 * time.Second,
-	}
-	return resilience.NewCircuitBreaker(config, f.logger)
-}
-
-func (f *CircuitBreakerFactory) CreateMarketDataCircuitBreaker() ports.CircuitBreaker {
-	config := resilience.CircuitBreakerConfig{
-		Name:             "market_data_api",
-		MaxFailures:      5,
-		FailureTimeout:   15 * time.Second,
-		SuccessThreshold: 3,
-		RequestTimeout:   10 * time.Second,
-		ResetTimeout:     30 * time.Second,
-	}
-	return resilience.NewCircuitBreaker(config, f.logger)
-}
-
-// RetryPolicyFactory creates retry policies for different services
-type RetryPolicyFactory struct {
-	logger *zap.Logger
-}
-
-func NewRetryPolicyFactory(logger *zap.Logger) *RetryPolicyFactory {
-	return &RetryPolicyFactory{logger: logger}
-}
-
-func (f *RetryPolicyFactory) CreateSECRetryPolicy() ports.RetryPolicy {
-	config := resilience.RetryConfig{
-		MaxAttempts: 3,
-		BaseDelay:   500 * time.Millisecond,
-		MaxDelay:    5 * time.Second,
-		Strategy:    resilience.BackoffExponential,
-		Jitter:      true,
-	}
-	return resilience.NewRetryPolicy(config, f.logger)
-}
-
-func (f *RetryPolicyFactory) CreateMarketDataRetryPolicy() ports.RetryPolicy {
-	config := resilience.RetryConfig{
-		MaxAttempts: 2,
-		BaseDelay:   200 * time.Millisecond,
-		MaxDelay:    2 * time.Second,
-		Strategy:    resilience.BackoffLinear,
-		Jitter:      true,
-	}
-	return resilience.NewRetryPolicy(config, f.logger)
-}
+// SR-1 A5: the CircuitBreakerFactory / RetryPolicyFactory types were deleted
+// together with internal/infra/resilience. They were constructed and injected
+// into NewSECGateway / NewMarketDataGateway, which ignored them — the gateways
+// run their own inline retry loops. Wiring real circuit breaking INTO the
+// gateways is a feature change (SR-1 A5 option (a)) that needs its own spec.
 
 // Repository Providers
 
@@ -580,8 +517,6 @@ func NewAuthRepository(db *sqlx.DB) auth.Repository {
 
 func NewSECGateway(
 	cfg *config.Config,
-	cbFactory *CircuitBreakerFactory,
-	retryFactory *RetryPolicyFactory,
 	logger *zap.Logger,
 ) ports.SECGateway {
 	return sec.NewGateway(&cfg.SEC, logger)
@@ -589,8 +524,6 @@ func NewSECGateway(
 
 func NewMarketDataGateway(
 	cfg *config.Config,
-	cbFactory *CircuitBreakerFactory,
-	retryFactory *RetryPolicyFactory,
 	logger *zap.Logger,
 ) ports.MarketDataGateway {
 	return market.NewGateway(&cfg.Market, logger)
