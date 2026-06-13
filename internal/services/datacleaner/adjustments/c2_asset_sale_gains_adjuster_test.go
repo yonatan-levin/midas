@@ -29,12 +29,10 @@ func productionAssetSaleGainsRule() *entities.CleaningRule {
 // the Adjuster interface AND its AdjusterOutput matches the spec / plan §3.5 /
 // §4 row C2 Restater contract (NEGATIVE DeltaAmount — subtraction).
 func TestC2AssetSaleGainsAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	ea := NewEarningsAdjuster()
-	adj := NewC2AssetSaleGainsAdjuster(ea)
+	// SR-1 A3: the adapter struct was deleted; call ApplyC2AssetSaleGains directly
+	// on the EarningsAdjuster (the production dispatch path).
+	adj := NewEarningsAdjuster()
 	require.NotNil(t, adj)
-
-	assert.Equal(t, adjusterIDC2AssetSaleGains, adj.Name(),
-		"c2AssetSaleGainsAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := productionAssetSaleGainsRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -48,7 +46,7 @@ func TestC2AssetSaleGainsAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			NormalizedOperatingIncome: 300_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC2AssetSaleGains(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "fired path emits exactly one LedgerEntry")
@@ -89,7 +87,7 @@ func TestC2AssetSaleGainsAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			NormalizedOperatingIncome: 300_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC2AssetSaleGains(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -118,7 +116,7 @@ func TestC2AssetSaleGainsAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			EffectiveTaxRate:          0.21,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC2AssetSaleGains(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 		require.Len(t, out.LedgerEntries, 1)
 		entry := out.LedgerEntries[0]

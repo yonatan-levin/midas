@@ -38,12 +38,10 @@ func productionStockCompensationRule() *entities.CleaningRule {
 // adds a `data.NormalizedOperatingIncome += sbcAmount` mutation will fail
 // loudly here.
 func TestC4StockCompensationAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	ea := NewEarningsAdjuster()
-	adj := NewC4StockCompensationAdjuster(ea)
+	// SR-1 A3: the adapter struct was deleted; call ApplyC4StockCompensation
+	// directly on the EarningsAdjuster (the production dispatch path).
+	adj := NewEarningsAdjuster()
 	require.NotNil(t, adj)
-
-	assert.Equal(t, adjusterIDC4StockCompensation, adj.Name(),
-		"c4StockCompensationAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := productionStockCompensationRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -62,7 +60,7 @@ func TestC4StockCompensationAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 		preSBC := data.StockBasedCompensation
 		preRevenue := data.Revenue
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC4StockCompensation(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "fired path emits exactly one LedgerEntry")
@@ -120,7 +118,7 @@ func TestC4StockCompensationAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			StockBasedCompensation: 0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC4StockCompensation(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "skip path emits exactly one LedgerEntry")
@@ -144,7 +142,7 @@ func TestC4StockCompensationAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			StockBasedCompensation: -5_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC4StockCompensation(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -165,7 +163,7 @@ func TestC4StockCompensationAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			StockBasedCompensation: 1_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC4StockCompensation(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)

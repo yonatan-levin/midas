@@ -59,8 +59,9 @@ func TestQ2_A2TaxShieldDTA_Populated(t *testing.T) {
 		},
 	}
 
-	aa := NewAssetAdjuster()
-	adj := NewA2IntangibleAdjuster(aa)
+	// SR-1 A3: the adapter struct was deleted; call ApplyA2Intangible directly
+	// on the AssetAdjuster (the production dispatch path).
+	adj := NewAssetAdjuster()
 	rule := createIntangibleRule()
 	cleaningCtx := &entities.CleaningContext{}
 
@@ -72,7 +73,7 @@ func TestQ2_A2TaxShieldDTA_Populated(t *testing.T) {
 				EffectiveTaxRate: tt.effectiveTaxRate,
 			}
 
-			out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+			out, err := adj.ApplyA2Intangible(context.Background(), data, rule, cleaningCtx)
 			require.NoError(t, err)
 			require.Len(t, out.LedgerEntries, 1)
 			entry := out.LedgerEntries[0]

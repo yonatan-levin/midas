@@ -48,7 +48,7 @@ func TestB3ContingentLiability_FallbackPolicy(t *testing.T) {
 	t.Run("AI success → AI probability and non-nil provenance", func(t *testing.T) {
 		// mockAIService returns ProbabilityPercent=30.0 → 0.30 weight.
 		la := NewLiabilityAdjuster(&mockAIService{}, nil).WithAI(true)
-		adj := NewB3ContingentLiabilityAdjuster(la)
+		adj := la // SR-1 A3: adapter deleted; call ApplyB3Contingent directly
 		rule := productionContingentLiabilitiesRule()
 		// IndustryCode "45" (Tech) on purpose: if the AI path were somehow
 		// bypassed, the heuristic (0.40) would differ from the AI weight
@@ -58,7 +58,7 @@ func TestB3ContingentLiability_FallbackPolicy(t *testing.T) {
 			FootnoteText: "Material patent and product-liability disputes ongoing.",
 		}
 
-		out, err := adj.Apply(context.Background(), newData("AI_SUCCESS"), rule, cleaningCtx)
+		out, err := adj.ApplyB3Contingent(context.Background(), newData("AI_SUCCESS"), rule, cleaningCtx)
 		require.NoError(t, err)
 		require.Len(t, out.Overlays, 1)
 
@@ -77,11 +77,11 @@ func TestB3ContingentLiability_FallbackPolicy(t *testing.T) {
 		// AI service supplied but WithAI NOT called → arm 4 (default).
 		// Industrials "20" heuristic = 0.70 → 180k * 0.70 = 126k.
 		la := NewLiabilityAdjuster(&mockAIService{}, nil)
-		adj := NewB3ContingentLiabilityAdjuster(la)
+		adj := la // SR-1 A3: adapter deleted; call ApplyB3Contingent directly
 		rule := productionContingentLiabilitiesRule()
 		cleaningCtx := &entities.CleaningContext{IndustryCode: "20"} // Industrials
 
-		out, err := adj.Apply(context.Background(), newData("AI_DISABLED"), rule, cleaningCtx)
+		out, err := adj.ApplyB3Contingent(context.Background(), newData("AI_DISABLED"), rule, cleaningCtx)
 		require.NoError(t, err)
 		require.Len(t, out.Overlays, 1)
 
@@ -101,14 +101,14 @@ func TestB3ContingentLiability_FallbackPolicy(t *testing.T) {
 		// Industrials "20" heuristic = 0.70 → 180k * 0.70 = 126k.
 		// Old flat-0.40 code produced 180k * 0.40 = 72k → this FAILS RED.
 		la := NewLiabilityAdjuster(&failingAIService{}, nil).WithAI(true)
-		adj := NewB3ContingentLiabilityAdjuster(la)
+		adj := la // SR-1 A3: adapter deleted; call ApplyB3Contingent directly
 		rule := productionContingentLiabilitiesRule()
 		cleaningCtx := &entities.CleaningContext{
 			IndustryCode: "20", // Industrials → heuristic 0.70 (NOT 0.40)
 			FootnoteText: "Material disputes ongoing.",
 		}
 
-		out, err := adj.Apply(context.Background(), newData("AI_FAILED"), rule, cleaningCtx)
+		out, err := adj.ApplyB3Contingent(context.Background(), newData("AI_FAILED"), rule, cleaningCtx)
 		require.NoError(t, err, "Apply must absorb AI errors, never surface them")
 		require.Len(t, out.Overlays, 1)
 

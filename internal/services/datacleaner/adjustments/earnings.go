@@ -53,39 +53,9 @@ type EarningsAdjustmentResult struct {
 	NativelyEmittedRuleIDs map[string]bool        `json:"-"`
 }
 
-// c1RestructuringAdjuster is the per-rule adapter that wraps EarningsAdjuster's
-// C1 rule into the single-Apply Adjuster interface. Each migrated C-rule gets
-// its own adapter struct in Phase 2 PR-3; once every C-rule has migrated
-// (Task 3.8), service.go::applyActiveAdjustments will dispatch through the
-// adapters and the shim's earnings branch will be deleted.
-//
-// Mirrors the assets.go a1/a2/a4/a5 adapters shipped in PR-2.
-type c1RestructuringAdjuster struct {
-	ea *EarningsAdjuster
-}
-
-// NewC1RestructuringAdjuster returns an Adjuster-shaped wrapper around
-// EarningsAdjuster's C1 rule. Exported so the cleaner orchestrator can hold
-// the instance alongside the legacy EarningsAdjuster.
-func NewC1RestructuringAdjuster(ea *EarningsAdjuster) Adjuster {
-	return &c1RestructuringAdjuster{ea: ea}
-}
-
-// Compile-time pin so any future signature drift fails to build.
-var _ Adjuster = (*c1RestructuringAdjuster)(nil)
-
-// Name returns the stable AdjusterID for the C1 rule.
-func (c *c1RestructuringAdjuster) Name() string {
-	return adjusterIDC1RestructuringCharges
-}
-
-// Apply implements Adjuster by delegating to EarningsAdjuster.ApplyC1Restructuring.
-// The dual-write contract (in-place mutation of data.NormalizedOperatingIncome)
-// is preserved by the dispatcher in ProcessEarningsAdjustments — NOT by Apply
-// itself. See ApplyC1Restructuring godoc for the role split.
-func (c *c1RestructuringAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
-	return c.ea.ApplyC1Restructuring(ctx, working, rule, cleaningCtx)
-}
+// SR-1 A3: the per-rule Adjuster adapter structs were deleted — production
+// dispatches via the Apply* methods directly; the Adjuster interface had no
+// production consumer.
 
 // ApplyC1Restructuring is the Adjuster-shaped (DC-1 Phase 2 PR-3 Task 3.1)
 // implementation of the C1 restructuring-charges add-back rule. Like the
@@ -189,31 +159,6 @@ func (ea *EarningsAdjuster) ApplyC1Restructuring(ctx context.Context, working *e
 	}, nil
 }
 
-// c2AssetSaleGainsAdjuster is the per-rule adapter that wraps EarningsAdjuster's
-// C2 rule into the single-Apply Adjuster interface. Mirrors c1RestructuringAdjuster.
-type c2AssetSaleGainsAdjuster struct {
-	ea *EarningsAdjuster
-}
-
-// NewC2AssetSaleGainsAdjuster returns an Adjuster-shaped wrapper around
-// EarningsAdjuster's C2 rule.
-func NewC2AssetSaleGainsAdjuster(ea *EarningsAdjuster) Adjuster {
-	return &c2AssetSaleGainsAdjuster{ea: ea}
-}
-
-var _ Adjuster = (*c2AssetSaleGainsAdjuster)(nil)
-
-func (c *c2AssetSaleGainsAdjuster) Name() string {
-	return adjusterIDC2AssetSaleGains
-}
-
-// Apply delegates to EarningsAdjuster.ApplyC2AssetSaleGains. The dual-write
-// contract (in-place subtraction from data.NormalizedOperatingIncome) is
-// preserved by the dispatcher — NOT by Apply itself.
-func (c *c2AssetSaleGainsAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
-	return c.ea.ApplyC2AssetSaleGains(ctx, working, rule, cleaningCtx)
-}
-
 // ApplyC2AssetSaleGains is the Adjuster-shaped (DC-1 Phase 2 PR-3 Task 3.2)
 // implementation of the C2 asset-sale-gains subtraction rule. Like
 // ApplyC1Restructuring, it is MUTATION-FREE — it reads `working` and returns
@@ -289,27 +234,6 @@ func (ea *EarningsAdjuster) ApplyC2AssetSaleGains(ctx context.Context, working *
 			SkipMetrics: map[string]float64{"original_Revenue": working.Revenue},
 		}},
 	}, nil
-}
-
-// c3LitigationSettlementsAdjuster is the per-rule adapter that wraps
-// EarningsAdjuster's C3 rule into the single-Apply Adjuster interface.
-type c3LitigationSettlementsAdjuster struct {
-	ea *EarningsAdjuster
-}
-
-// NewC3LitigationSettlementsAdjuster returns an Adjuster-shaped wrapper.
-func NewC3LitigationSettlementsAdjuster(ea *EarningsAdjuster) Adjuster {
-	return &c3LitigationSettlementsAdjuster{ea: ea}
-}
-
-var _ Adjuster = (*c3LitigationSettlementsAdjuster)(nil)
-
-func (c *c3LitigationSettlementsAdjuster) Name() string {
-	return adjusterIDC3LitigationSettlements
-}
-
-func (c *c3LitigationSettlementsAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
-	return c.ea.ApplyC3Litigation(ctx, working, rule, cleaningCtx)
 }
 
 // ApplyC3Litigation is the Adjuster-shaped (DC-1 Phase 2 PR-3 Task 3.3)
@@ -396,27 +320,6 @@ func (ea *EarningsAdjuster) ApplyC3Litigation(ctx context.Context, working *enti
 	}, nil
 }
 
-// c5DerivativeGainsLossesAdjuster is the per-rule adapter that wraps
-// EarningsAdjuster's C5 rule into the single-Apply Adjuster interface.
-type c5DerivativeGainsLossesAdjuster struct {
-	ea *EarningsAdjuster
-}
-
-// NewC5DerivativeGainsLossesAdjuster returns an Adjuster-shaped wrapper.
-func NewC5DerivativeGainsLossesAdjuster(ea *EarningsAdjuster) Adjuster {
-	return &c5DerivativeGainsLossesAdjuster{ea: ea}
-}
-
-var _ Adjuster = (*c5DerivativeGainsLossesAdjuster)(nil)
-
-func (c *c5DerivativeGainsLossesAdjuster) Name() string {
-	return adjusterIDC5DerivativeGainsLosses
-}
-
-func (c *c5DerivativeGainsLossesAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
-	return c.ea.ApplyC5DerivativeGainsLosses(ctx, working, rule, cleaningCtx)
-}
-
 // ApplyC5DerivativeGainsLosses is the Adjuster-shaped (DC-1 Phase 2 PR-3
 // Task 3.5) implementation of the C5 derivative-mark normalization rule. Like
 // the other C-rules, it is MUTATION-FREE; the dispatcher in
@@ -498,27 +401,6 @@ func (ea *EarningsAdjuster) ApplyC5DerivativeGainsLosses(ctx context.Context, wo
 	}, nil
 }
 
-// c6CapitalizedInterestAdjuster is the per-rule adapter that wraps
-// EarningsAdjuster's C6 rule into the single-Apply Adjuster interface.
-type c6CapitalizedInterestAdjuster struct {
-	ea *EarningsAdjuster
-}
-
-// NewC6CapitalizedInterestAdjuster returns an Adjuster-shaped wrapper.
-func NewC6CapitalizedInterestAdjuster(ea *EarningsAdjuster) Adjuster {
-	return &c6CapitalizedInterestAdjuster{ea: ea}
-}
-
-var _ Adjuster = (*c6CapitalizedInterestAdjuster)(nil)
-
-func (c *c6CapitalizedInterestAdjuster) Name() string {
-	return adjusterIDC6CapitalizedInterest
-}
-
-func (c *c6CapitalizedInterestAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
-	return c.ea.ApplyC6CapitalizedInterest(ctx, working, rule, cleaningCtx)
-}
-
 // ApplyC6CapitalizedInterest is the Adjuster-shaped (DC-1 Phase 2 PR-3
 // Task 3.6) implementation of the C6 capitalized-interest reclassification
 // rule. Like the other C-rules, it is MUTATION-FREE; the dispatcher in
@@ -592,29 +474,6 @@ func (ea *EarningsAdjuster) ApplyC6CapitalizedInterest(ctx context.Context, work
 			SkipMetrics: map[string]float64{"original_Revenue": working.Revenue},
 		}},
 	}, nil
-}
-
-// c4StockCompensationAdjuster is the per-rule adapter that wraps EarningsAdjuster's
-// C4 rule into the single-Apply Adjuster interface. C4 follows the FlagEmitter
-// convention (NOT Restater) — see ApplyC4StockCompensation godoc for the
-// PLAN-VS-CODE DISAGREEMENT explanation.
-type c4StockCompensationAdjuster struct {
-	ea *EarningsAdjuster
-}
-
-// NewC4StockCompensationAdjuster returns an Adjuster-shaped wrapper.
-func NewC4StockCompensationAdjuster(ea *EarningsAdjuster) Adjuster {
-	return &c4StockCompensationAdjuster{ea: ea}
-}
-
-var _ Adjuster = (*c4StockCompensationAdjuster)(nil)
-
-func (c *c4StockCompensationAdjuster) Name() string {
-	return adjusterIDC4StockCompensation
-}
-
-func (c *c4StockCompensationAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
-	return c.ea.ApplyC4StockCompensation(ctx, working, rule, cleaningCtx)
 }
 
 // ApplyC4StockCompensation is the Adjuster-shaped (DC-1 Phase 2 PR-3 Task 3.4)
@@ -719,28 +578,6 @@ func (ea *EarningsAdjuster) ApplyC4StockCompensation(ctx context.Context, workin
 	})
 
 	return out, nil
-}
-
-// c7WorkingCapitalAdjuster is the per-rule adapter that wraps EarningsAdjuster's
-// C7 rule into the single-Apply Adjuster interface. Like C4, C7 is a
-// FlagEmitter — see ApplyC7WorkingCapital godoc.
-type c7WorkingCapitalAdjuster struct {
-	ea *EarningsAdjuster
-}
-
-// NewC7WorkingCapitalAdjuster returns an Adjuster-shaped wrapper.
-func NewC7WorkingCapitalAdjuster(ea *EarningsAdjuster) Adjuster {
-	return &c7WorkingCapitalAdjuster{ea: ea}
-}
-
-var _ Adjuster = (*c7WorkingCapitalAdjuster)(nil)
-
-func (c *c7WorkingCapitalAdjuster) Name() string {
-	return adjusterIDC7WorkingCapital
-}
-
-func (c *c7WorkingCapitalAdjuster) Apply(ctx context.Context, working *entities.FinancialData, rule *entities.CleaningRule, cleaningCtx *entities.CleaningContext) (AdjusterOutput, error) {
-	return c.ea.ApplyC7WorkingCapital(ctx, working, rule, cleaningCtx)
 }
 
 // ApplyC7WorkingCapital is the Adjuster-shaped (DC-1 Phase 2 PR-3 Task 3.7)

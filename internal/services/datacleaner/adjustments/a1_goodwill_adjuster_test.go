@@ -41,18 +41,10 @@ func productionGoodwillRule() *entities.CleaningRule {
 // AdjusterOutput whose LedgerEntries, Overlays, and Flags match the shape
 // the orchestrator + Phase 3 view reconstruction will rely on.
 func TestA1GoodwillAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	// Construct through the exported factory so the test exercises the
-	// public API surface the orchestrator will use. The factory returns the
-	// Adjuster interface, so any signature drift breaks the test compile.
-	aa := NewAssetAdjuster()
-	adj := NewA1GoodwillAdjuster(aa)
+	// SR-1 A3: the adapter struct was deleted; call ApplyA1Goodwill directly
+	// on the AssetAdjuster (the production dispatch path).
+	adj := NewAssetAdjuster()
 	require.NotNil(t, adj)
-
-	// Name() contract: stable identifier consumers can join on. Locked to
-	// the AdjusterID constant so a rename forces both the test and the
-	// constant to move together.
-	assert.Equal(t, adjusterIDA1GoodwillExclusion, adj.Name(),
-		"a1GoodwillAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := createGoodwillRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -66,7 +58,7 @@ func TestA1GoodwillAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets: 1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA1Goodwill(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err, "Apply must not error on a well-formed fired-path input")
 
 		// AdjusterOutput contract: exactly one fired LedgerEntry, exactly
@@ -121,7 +113,7 @@ func TestA1GoodwillAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets: 1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA1Goodwill(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		// AdjusterOutput contract for the no-goodwill skip path:
@@ -151,7 +143,7 @@ func TestA1GoodwillAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets: 1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA1Goodwill(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -179,7 +171,7 @@ func TestA1GoodwillAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets: 1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA1Goodwill(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)

@@ -23,8 +23,9 @@ import (
 // TestDDM_LegacyPath_BitForBit, this makes the §6 "DDM byte-identical"
 // guarantee testable at the adjuster boundary.
 func TestA6A7_DDMBanks_DoNotFire(t *testing.T) {
-	aa := NewAssetAdjuster()
-	a6 := NewA6RightOfUseAdjuster(aa)
+	// SR-1 A3: the adapter struct was deleted; call ApplyA6RightOfUseAssets
+	// directly on the AssetAdjuster (the production dispatch path).
+	a6 := NewAssetAdjuster()
 	cleaningCtx := &entities.CleaningContext{}
 
 	// Synthetic JPM-shaped balance sheet: huge total assets, NO ROU asset
@@ -37,7 +38,7 @@ func TestA6A7_DDMBanks_DoNotFire(t *testing.T) {
 		Revenue:                       170_000_000_000.0,
 	}
 
-	a6Out, err := a6.Apply(context.Background(), bank, productionRightOfUseRule(), cleaningCtx)
+	a6Out, err := a6.ApplyA6RightOfUseAssets(context.Background(), bank, productionRightOfUseRule(), cleaningCtx)
 	require.NoError(t, err)
 	require.Len(t, a6Out.LedgerEntries, 1)
 	assert.False(t, a6Out.LedgerEntries[0].Fired,

@@ -34,17 +34,10 @@ func productionPensionRule() *entities.CleaningRule {
 // `var _ Adjuster = (*b2PensionUnderfundingAdjuster)(nil)` in liabilities.go
 // is the primary signature pin; this test exercises the runtime contract.
 func TestB2PensionUnderfundingAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	// Construct through the exported factory so the test exercises the
-	// public API surface the orchestrator will use.
-	la := NewLiabilityAdjuster(&mockAIService{}, nil)
-	adj := NewB2PensionUnderfundingAdjuster(la)
+	// SR-1 A3: the adapter struct was deleted; call ApplyB2PensionUnderfunding
+	// directly on the LiabilityAdjuster (the production dispatch path).
+	adj := NewLiabilityAdjuster(&mockAIService{}, nil)
 	require.NotNil(t, adj)
-
-	// Name() contract: stable identifier consumers can join on. Locked to
-	// the AdjusterID constant so a rename forces both the test and the
-	// constant to move together.
-	assert.Equal(t, adjusterIDB2PensionUnderfunding, adj.Name(),
-		"b2PensionUnderfundingAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := productionPensionRule()
 
@@ -68,7 +61,7 @@ func TestB2PensionUnderfundingAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		origTotalDebt := data.TotalDebt
 		origInterestBearingDebt := data.InterestBearingDebt
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB2PensionUnderfunding(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err, "Apply must not error on a well-formed fired-path input")
 
 		// AdjusterOutput contract: exactly one fired LedgerEntry, exactly
@@ -135,7 +128,7 @@ func TestB2PensionUnderfundingAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		}
 		cleaningCtx := &entities.CleaningContext{IndustryCode: "31"} // Manufacturing
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB2PensionUnderfunding(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.Overlays, 1)
@@ -157,7 +150,7 @@ func TestB2PensionUnderfundingAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		}
 		cleaningCtx := &entities.CleaningContext{IndustryCode: "45"} // Technology
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB2PensionUnderfunding(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		// AdjusterOutput contract for the no-pension skip path:
@@ -190,7 +183,7 @@ func TestB2PensionUnderfundingAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		}
 		cleaningCtx := &entities.CleaningContext{IndustryCode: "45"}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB2PensionUnderfunding(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
