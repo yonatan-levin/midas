@@ -781,116 +781,7 @@ func (s *Service) performValuation(
 	tangibleValuePerShare := s.calculateTangibleValuePerShare(asReportedViewOr(cleaned, latestFinancialData), marketData)
 
 	// --- Phase 3: Industry-aware model selection ---
-	// Classify industry using IndustryClassifier (SIC/NAICS/keyword matching).
-	// The IndustryCode on the financial data may already be populated from
-	// upstream; only invoke the classifier when it hasn't been, to avoid the
-	// per-request CPU cost on the hot path (B-2: restores pre-feature gate).
-	industryCode := latestFinancialData.IndustryCode
-	var sicLabel string
-
-	// classification carries the full classifier output (sector, industry,
-	// sub-industry, model_hint, plus echoes of the input SIC/NAICS) so the
-	// "industry_classification" calc trace below can surface every field
-	// in the Phase M spec table — see docs/refactoring/observability-
-	// upgrade-spec.md §374 (M-1b).
-	var classification industry.ClassificationResult
-	classification.SIC = historicalData.SICCode
-
-	if industryCode == "" && s.industryClassifier != nil {
-		// Use SIC code and company name from SEC data for classification.
-		// Falls back to ticker if company name unavailable.
-		companyName := historicalData.CompanyName
-		if companyName == "" {
-			companyName = historicalData.Ticker
-		}
-		// ctx is passed through for future context-aware tracing inside Classify.
-		classified, classifyErr := s.industryClassifier.Classify(ctx, historicalData.SICCode, "", companyName)
-		if classifyErr == nil && classified.Industry != "" && classified.Industry != "NA" {
-			industryCode = classified.Industry
-		}
-		// Always retain the classification (even on error / NA) so the trace
-		// below can echo the SIC/NAICS the caller asked about.
-		classification = classified
-	} else if industryCode != "" {
-		// Pre-populated upstream — Classify was bypassed, so the trace would
-		// otherwise emit empty sector/industry/model_hint while industry_code
-		// holds the real value. Synthesize the struct fields from the cached
-		// code so the calc trace stays self-consistent (M-1b validation
-		// follow-up). Sector / SubIndustry / NAICS remain unknown on this
-		// path — leave them blank rather than guess; the upstream caller
-		// authoritatively chose `industryCode` and that's all we know.
-		classification.Industry = industryCode
-		classification.ModelHint = industryCode
-	}
-
-	// sicLabel reflects whatever value the router actually uses, so the API
-	// response surface and the model-router are consistent. If upstream
-	// pre-populated industryCode, we report that; if we classified just now,
-	// we report the classifier output. Empty string (and "NA") flow through
-	// and simply produce an omitempty-dropped field in the response.
-	// See docs/superpowers/specs/2026-04-23-industry-in-response-design.md.
-	sicLabel = industryCode
-
-	// Request-correlated Debug log (uses logctx.Or so request_id flows through when
-	// the call path is HTTP; falls back to singleton on scheduler/startup paths).
-	s.log(ctx).Debug("Industry classification result",
-		zap.String("ticker", historicalData.Ticker),
-		zap.String("industry_code", industryCode),
-		zap.String("sic_label", sicLabel))
-
-	// W-1: heuristic (balance-sheet) classification is resolved by calling
-	// ClassifyIndustry directly, not by reading cleaningResult.IndustryCode.
-	// This guarantees IndustryHeuristicCode/Name are always GICS (matching the
-	// field documentation) rather than "whatever the upstream pipeline coughed
-	// up". On error or nil result the fields stay empty and the response's
-	// omitempty-tagged Industry sub-fields drop.
-	var heuristicCode, heuristicName string
-	if s.industryClassifier != nil {
-		if sectorConfig, classifyErr := s.industryClassifier.ClassifyIndustry(historicalData.Ticker, latestFinancialData); classifyErr == nil && sectorConfig != nil {
-			heuristicCode = sectorConfig.SectorCode
-			heuristicName = sectorConfig.SectorName
-		}
-	}
-
-	// Stage 3 — "industry_classification" calc trace: always emitted from here (not
-	// inside Classify) so only the valuation pipeline fires it once per valuation —
-	// avoids double-emission if Classify is also called from the datacleaner path.
-	// Surfaces the full Phase M spec field set (sic, naics, sector, industry,
-	// sub_industry, model_hint) per docs/refactoring/archive/observability-upgrade-spec.md
-	// §374. industry_code is preserved as a back-compat alias for downstream
-	// log consumers that key on the original field name.
-	if s.calcEmitter != nil {
-		s.calcEmitter.Emit(ctx, "industry_classification",
-			zap.String("ticker", historicalData.Ticker),
-			zap.String("sic", classification.SIC),
-			zap.String("naics", classification.NAICS),
-			zap.String("sector", classification.Sector),
-			zap.String("industry", classification.Industry),
-			zap.String("sub_industry", classification.SubIndustry),
-			zap.String("industry_code", industryCode),
-			zap.String("model_hint", classification.ModelHint),
-		)
-	}
-
-	// Tier-1 narrate: classify.industry. Spec §5 row 11. Carries both
-	// classifier outputs (SIC-based and the heuristic) plus a match flag so
-	// a reader can spot drift between the two without opening the bundle.
-	matchFlag := classification.Industry != "" && heuristicCode != ""
-	narrate.From(ctx).Emit(ctx, narrate.PhaseClassifyIndustry, narrate.OutcomeOK, "",
-		zap.String("sic_label", classification.Industry),
-		zap.String("heuristic_label", heuristicCode),
-		zap.Bool("match", matchFlag),
-		zap.String("chosen", industryCode),
-	)
-	if b := artifact.From(ctx); b != nil {
-		b.Snapshot(ctx, "classify.industry", "11-classify.json", map[string]any{
-			"sic_classifier":       classification,
-			"heuristic_code":       heuristicCode,
-			"heuristic_name":       heuristicName,
-			"chosen_industry_code": industryCode,
-			"match":                matchFlag,
-		})
-	}
+	industryCode, sicLabel, heuristicCode, heuristicName := s.classifyTickerIndustry(ctx, historicalData, latestFinancialData)
 
 	// Resolve shares outstanding (needed by both DCF and alternative models)
 	// Priority: diluted (most conservative) > market basic (most current) > financial basic
@@ -1830,6 +1721,138 @@ func (s *Service) performValuation(
 	}
 
 	return result, nil
+}
+
+// classifyTickerIndustry resolves the SIC-based industry code + the balance-sheet
+// heuristic GICS classification for a ticker, emitting the stage-3
+// "industry_classification" calc trace, the classify.industry Tier-1 narrate
+// line, and the 11-classify.json artifact snapshot. Extracted verbatim from
+// performValuation's Phase-3 block (SR-1 A7) so the ~110-line classification
+// concern reads as one named step; the body is unchanged, so behavior — and the
+// trace/narrate/artifact emissions — are byte-identical.
+//
+// Returns:
+//   - industryCode: the chosen SIC label fed to the model router (may be ""/"NA",
+//     which flows through to an omitempty-dropped response field)
+//   - sicLabel: equals industryCode — the value the router actually uses, kept as
+//     a distinct return so the caller's two locals stay named as before
+//   - heuristicCode/heuristicName: the GICS sector from ClassifyIndustry (W-1),
+//     empty when the classifier is unwired or errors
+func (s *Service) classifyTickerIndustry(
+	ctx context.Context,
+	historicalData *entities.HistoricalFinancialData,
+	latestFinancialData *entities.FinancialData,
+) (industryCode, sicLabel, heuristicCode, heuristicName string) {
+	// Classify industry using IndustryClassifier (SIC/NAICS/keyword matching).
+	// The IndustryCode on the financial data may already be populated from
+	// upstream; only invoke the classifier when it hasn't been, to avoid the
+	// per-request CPU cost on the hot path (B-2: restores pre-feature gate).
+	industryCode = latestFinancialData.IndustryCode
+
+	// classification carries the full classifier output (sector, industry,
+	// sub-industry, model_hint, plus echoes of the input SIC/NAICS) so the
+	// "industry_classification" calc trace below can surface every field
+	// in the Phase M spec table — see docs/refactoring/observability-
+	// upgrade-spec.md §374 (M-1b).
+	var classification industry.ClassificationResult
+	classification.SIC = historicalData.SICCode
+
+	if industryCode == "" && s.industryClassifier != nil {
+		// Use SIC code and company name from SEC data for classification.
+		// Falls back to ticker if company name unavailable.
+		companyName := historicalData.CompanyName
+		if companyName == "" {
+			companyName = historicalData.Ticker
+		}
+		// ctx is passed through for future context-aware tracing inside Classify.
+		classified, classifyErr := s.industryClassifier.Classify(ctx, historicalData.SICCode, "", companyName)
+		if classifyErr == nil && classified.Industry != "" && classified.Industry != "NA" {
+			industryCode = classified.Industry
+		}
+		// Always retain the classification (even on error / NA) so the trace
+		// below can echo the SIC/NAICS the caller asked about.
+		classification = classified
+	} else if industryCode != "" {
+		// Pre-populated upstream — Classify was bypassed, so the trace would
+		// otherwise emit empty sector/industry/model_hint while industry_code
+		// holds the real value. Synthesize the struct fields from the cached
+		// code so the calc trace stays self-consistent (M-1b validation
+		// follow-up). Sector / SubIndustry / NAICS remain unknown on this
+		// path — leave them blank rather than guess; the upstream caller
+		// authoritatively chose `industryCode` and that's all we know.
+		classification.Industry = industryCode
+		classification.ModelHint = industryCode
+	}
+
+	// sicLabel reflects whatever value the router actually uses, so the API
+	// response surface and the model-router are consistent. If upstream
+	// pre-populated industryCode, we report that; if we classified just now,
+	// we report the classifier output. Empty string (and "NA") flow through
+	// and simply produce an omitempty-dropped field in the response.
+	// See docs/superpowers/specs/2026-04-23-industry-in-response-design.md.
+	sicLabel = industryCode
+
+	// Request-correlated Debug log (uses logctx.Or so request_id flows through when
+	// the call path is HTTP; falls back to singleton on scheduler/startup paths).
+	s.log(ctx).Debug("Industry classification result",
+		zap.String("ticker", historicalData.Ticker),
+		zap.String("industry_code", industryCode),
+		zap.String("sic_label", sicLabel))
+
+	// W-1: heuristic (balance-sheet) classification is resolved by calling
+	// ClassifyIndustry directly, not by reading cleaningResult.IndustryCode.
+	// This guarantees IndustryHeuristicCode/Name are always GICS (matching the
+	// field documentation) rather than "whatever the upstream pipeline coughed
+	// up". On error or nil result the fields stay empty and the response's
+	// omitempty-tagged Industry sub-fields drop.
+	if s.industryClassifier != nil {
+		if sectorConfig, classifyErr := s.industryClassifier.ClassifyIndustry(historicalData.Ticker, latestFinancialData); classifyErr == nil && sectorConfig != nil {
+			heuristicCode = sectorConfig.SectorCode
+			heuristicName = sectorConfig.SectorName
+		}
+	}
+
+	// Stage 3 — "industry_classification" calc trace: always emitted from here (not
+	// inside Classify) so only the valuation pipeline fires it once per valuation —
+	// avoids double-emission if Classify is also called from the datacleaner path.
+	// Surfaces the full Phase M spec field set (sic, naics, sector, industry,
+	// sub_industry, model_hint) per docs/refactoring/archive/observability-upgrade-spec.md
+	// §374. industry_code is preserved as a back-compat alias for downstream
+	// log consumers that key on the original field name.
+	if s.calcEmitter != nil {
+		s.calcEmitter.Emit(ctx, "industry_classification",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("sic", classification.SIC),
+			zap.String("naics", classification.NAICS),
+			zap.String("sector", classification.Sector),
+			zap.String("industry", classification.Industry),
+			zap.String("sub_industry", classification.SubIndustry),
+			zap.String("industry_code", industryCode),
+			zap.String("model_hint", classification.ModelHint),
+		)
+	}
+
+	// Tier-1 narrate: classify.industry. Spec §5 row 11. Carries both
+	// classifier outputs (SIC-based and the heuristic) plus a match flag so
+	// a reader can spot drift between the two without opening the bundle.
+	matchFlag := classification.Industry != "" && heuristicCode != ""
+	narrate.From(ctx).Emit(ctx, narrate.PhaseClassifyIndustry, narrate.OutcomeOK, "",
+		zap.String("sic_label", classification.Industry),
+		zap.String("heuristic_label", heuristicCode),
+		zap.Bool("match", matchFlag),
+		zap.String("chosen", industryCode),
+	)
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "classify.industry", "11-classify.json", map[string]any{
+			"sic_classifier":       classification,
+			"heuristic_code":       heuristicCode,
+			"heuristic_name":       heuristicName,
+			"chosen_industry_code": industryCode,
+			"match":                matchFlag,
+		})
+	}
+
+	return industryCode, sicLabel, heuristicCode, heuristicName
 }
 
 // performAlternativeValuation executes a non-DCF valuation model (DDM, FFO, Revenue Multiple)
