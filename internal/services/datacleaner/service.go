@@ -268,7 +268,7 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	}
 
 	// Add additional warning flags for risky patterns
-	additionalFlags := s.createRiskWarningFlags(result.CleanedData, startTime)
+	additionalFlags := s.createRiskWarningFlags(ctx, result.CleanedData, startTime)
 	result.Flags = append(result.Flags, additionalFlags...)
 
 	// DC-1 Phase 1 shadow-mode observability: recompute each balance-sheet
@@ -918,19 +918,74 @@ func (s *service) getIndustryCode(data *entities.FinancialData) (string, error) 
 	return sectorConfig.SectorCode, nil
 }
 
-// createRiskWarningFlags creates additional warning flags for risky patterns using the FlagConditionEvaluator
-func (s *service) createRiskWarningFlags(data *entities.FinancialData, timestamp time.Time) []entities.Flag {
-	ctx := context.Background()
-
-	// Convert FinancialData to map for flag evaluator
-	dataMap := map[string]interface{}{
+// buildFlagEvaluationData projects a FinancialData into the flat field map the
+// FlagConditionEvaluator consumes.
+//
+// SR-1 B1 fix: the pre-fix map carried ONLY PascalCase keys while the shipped
+// config/datacleaner/flag_conditions.json speaks snake_case — so no configured
+// flag could ever match and production silently fell back to the hardcoded
+// flags. The map now carries the canonical snake_case vocabulary the shipped
+// config uses (the PascalCase keys are kept for back-compat with any external
+// config an operator may have authored against the old names), plus the
+// derived ratio fields the goodwill/intangibles/leverage flags compare against
+// "$global_variable" references.
+//
+// Fields the shipped config references but that are NOT derivable from a
+// single FinancialData snapshot (revenue_yoy_change, receivables_growth_rate,
+// number_of_segments, audit_opinion, …) are deliberately absent — their
+// conditions carry null_behavior:"false" and stay dormant until a richer
+// data source exists.
+func buildFlagEvaluationData(data *entities.FinancialData) map[string]interface{} {
+	m := map[string]interface{}{
+		// Legacy PascalCase keys (back-compat).
 		"Ticker":           data.Ticker,
 		"TotalAssets":      data.TotalAssets,
 		"Goodwill":         data.Goodwill,
 		"OtherIntangibles": data.OtherIntangibles,
 		"Revenue":          data.Revenue,
 		"FilingDate":       data.FilingDate,
+
+		// Canonical snake_case vocabulary matching flag_conditions.json.
+		"ticker":              data.Ticker,
+		"industry_code":       data.IndustryCode,
+		"total_assets":        data.TotalAssets,
+		"goodwill":            data.Goodwill,
+		"other_intangibles":   data.OtherIntangibles,
+		"revenue":             data.Revenue,
+		"total_revenue":       data.Revenue,
+		"net_income":          data.NetIncome,
+		"stockholders_equity": data.StockholdersEquity,
+		"operating_cash_flow": data.OperatingCashFlow,
+		"total_debt":          data.TotalDebt,
+		"filing_date":         data.FilingDate,
 	}
+
+	// Derived ratios — only when the denominator is meaningful, so a missing
+	// denominator leaves the field absent and null_behavior governs the flag.
+	if data.TotalAssets > 0 {
+		m["goodwill_to_assets_ratio"] = data.Goodwill / data.TotalAssets
+		m["intangibles_to_assets_ratio"] = data.OtherIntangibles / data.TotalAssets
+	}
+	if data.StockholdersEquity > 0 {
+		m["debt_to_equity_ratio"] = data.TotalDebt / data.StockholdersEquity
+	}
+	if data.InterestExpense > 0 {
+		m["interest_coverage_ratio"] = data.OperatingIncome / data.InterestExpense
+	}
+	if data.Revenue > 0 {
+		m["rd_expense_ratio"] = data.ResearchAndDevelopment / data.Revenue
+	}
+
+	return m
+}
+
+// createRiskWarningFlags creates additional warning flags for risky patterns using the FlagConditionEvaluator.
+//
+// ctx is the caller's request-scoped context (SR-1 B1: previously a fresh
+// context.Background(), which severed cancellation and any future logctx
+// correlation from the evaluator path).
+func (s *service) createRiskWarningFlags(ctx context.Context, data *entities.FinancialData, timestamp time.Time) []entities.Flag {
+	dataMap := buildFlagEvaluationData(data)
 
 	// Use the flag evaluator to evaluate configured conditions
 	flagResults, err := s.flagEvaluator.EvaluateFlags(ctx, dataMap)

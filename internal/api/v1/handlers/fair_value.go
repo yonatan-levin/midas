@@ -189,7 +189,7 @@ type FairValueResponse struct {
 	DataQualityScore   float64               `json:"data_quality_score,omitempty" example:"85.5"`            // Data quality score (0-100)
 	DataQualityGrade   string                `json:"data_quality_grade,omitempty" example:"B"`               // Data quality grade (A-F)
 	CalculationMethod  string                `json:"calculation_method,omitempty" example:"multi_stage_dcf"` // Model used: multi_stage_dcf, ddm, ffo, revenue_multiple
-	CalculationVersion string                `json:"calculation_version,omitempty" example:"4.6"`            // Engine version that produced this result
+	CalculationVersion string                `json:"calculation_version,omitempty" example:"4.8"`            // Engine version that produced this result
 	Warnings           []string              `json:"warnings,omitempty"`                                     // Data quality or assumption warnings
 	SanityCheck        *entities.SanityCheck `json:"sanity_check,omitempty"`                                 // Multiples cross-check against sector medians
 	Industry           *Industry             `json:"industry,omitempty"`                                     // Dual industry classification (SIC + heuristic) for drift detection
@@ -608,74 +608,88 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 	// Calculate valuation
 	result, err := h.valuationService.CalculateValuation(c.Request.Context(), ticker, opts)
 	if err != nil {
-		// Tier-1 narrate: valuation.computed with outcome=error so the per-
-		// request story shows the failure even when the engine returns
-		// before any of the lower-level emissions could fire.
-		em.Emit(c.Request.Context(), narrate.PhaseValuationComputed, narrate.OutcomeError, err.Error())
-
-		logctx.From(c.Request.Context()).Error("Valuation calculation failed",
-			zap.String("ticker", ticker),
-			zap.Error(err))
-
-		// Classify error using sentinel types for reliable matching.
-		//
-		// Layer-2 cross-knob invariants (T8): params.ParamError surfaces when the
-		// resolver finds terminal_growth >= WACC, min > max, stage-sum < 1, horizon
-		// out of range, or exit-multiple unresolvable AFTER Layer-1 static ranges
-		// passed (T7). These are caller errors — map to 422 INVALID_OVERRIDE.
-		// Checked first so a specific invariant message is never masked by the
-		// generic TICKER_NOT_FOUND / CALCULATION_ERROR fallthrough.
-		//
-		// NOTE: GET /fair-value/{ticker} only accepts the legacy scalar overrides
-		// (beta/rf via query params) which have no Layer-2 cross-knob invariants
-		// today. This branch is defensive and enables T9 (POST endpoint) to call
-		// the same sendError path by sharing paramErrorResponse.
-		if errResp, ok := paramErrorResponse(err); ok {
-			errResp.Instance = c.Request.URL.Path
-			errResp.Timestamp = time.Now().UTC().Format(time.RFC3339)
-			errResp.Method = c.Request.Method
-			c.Header("Content-Type", "application/problem+json")
-			c.JSON(http.StatusUnprocessableEntity, errResp)
-			c.Abort()
-			return
-		}
-
-		// FPI MUST be checked before ErrInsufficientData — both produce 422
-		// but FPI carries a more specific code/message that helps users
-		// understand we have data, just in a taxonomy we don't yet parse.
-		if errors.Is(err, valuation.ErrTickerNotFound) {
-			h.sendError(c, http.StatusNotFound, "TICKER_NOT_FOUND",
-				"Ticker not found",
-				"The specified ticker could not be found in our database",
-				map[string]interface{}{"ticker": ticker})
-		} else if errors.Is(err, valuation.ErrForeignPrivateIssuer) {
-			h.sendError(c, http.StatusUnprocessableEntity, "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
-				"Foreign private issuer not covered",
-				"This ticker files using a taxonomy or currency pair Midas does not yet cover. Supported: ifrs-full taxonomy with FRED-tracked currencies (TWD, EUR, JPY, GBP, HKD, CNY, KRW, CHF, CAD, AUD, INR, BRL, DKK). Out-of-coverage taxonomies (JGAAP, K-IFRS, ifrs-smes) and currencies are tracked in docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md.",
-				map[string]interface{}{
-					"ticker":      ticker,
-					"filing_type": "20-F",
-					"taxonomy":    "ifrs-full",
-				})
-		} else if errors.Is(err, valuation.ErrInsufficientData) {
-			h.sendError(c, http.StatusUnprocessableEntity, "INSUFFICIENT_DATA",
-				"Insufficient data for valuation",
-				"Not enough financial data available to perform reliable valuation",
-				map[string]interface{}{"ticker": ticker})
-		} else if errors.Is(err, valuation.ErrModelNotApplicable) {
-			h.sendError(c, http.StatusUnprocessableEntity, "MODEL_NOT_APPLICABLE",
-				"Standard DCF model not applicable",
-				"Standard DCF requires positive operating income and alternative models (DDM, FFO, revenue multiples) could not produce a result for this company.",
-				map[string]interface{}{"ticker": ticker})
-		} else {
-			h.sendError(c, http.StatusInternalServerError, "CALCULATION_ERROR",
-				"Valuation calculation failed",
-				"An internal error occurred during valuation calculation",
-				map[string]interface{}{"ticker": ticker})
-		}
+		h.respondValuationError(c, em, ticker, err)
 		return
 	}
 
+	h.respondFairValueSuccess(c, em, ticker, result, "Fair value calculation completed")
+}
+
+// respondValuationError classifies a CalculateValuation failure and writes the
+// matching error response. Shared verbatim by GetFairValue and PostFairValue
+// (SR-1 A8) so the sentinel ladder, its ordering, and the wire messages cannot
+// drift between the two endpoints.
+//
+// Layer-2 cross-knob invariants (T8): params.ParamError surfaces when the
+// resolver finds terminal_growth >= WACC, min > max, stage-sum < 1, horizon
+// out of range, or exit-multiple unresolvable AFTER Layer-1 static ranges
+// passed (T7). These are caller errors — map to 422 INVALID_OVERRIDE. Checked
+// first so a specific invariant message is never masked by the generic
+// TICKER_NOT_FOUND / CALCULATION_ERROR fallthrough. (On GET the branch is
+// defensive — the legacy beta/rf query overrides have no Layer-2 cross-knob
+// invariants today.)
+func (h *FairValueHandler) respondValuationError(c *gin.Context, em *narrate.Emitter, ticker string, err error) {
+	// Tier-1 narrate: valuation.computed with outcome=error so the per-
+	// request story shows the failure even when the engine returns
+	// before any of the lower-level emissions could fire.
+	em.Emit(c.Request.Context(), narrate.PhaseValuationComputed, narrate.OutcomeError, err.Error())
+
+	logctx.From(c.Request.Context()).Error("Valuation calculation failed",
+		zap.String("ticker", ticker),
+		zap.Error(err))
+
+	if errResp, ok := paramErrorResponse(err); ok {
+		errResp.Instance = c.Request.URL.Path
+		errResp.Timestamp = time.Now().UTC().Format(time.RFC3339)
+		errResp.Method = c.Request.Method
+		c.Header("Content-Type", "application/problem+json")
+		c.JSON(http.StatusUnprocessableEntity, errResp)
+		c.Abort()
+		return
+	}
+
+	// FPI MUST be checked before ErrInsufficientData — both produce 422
+	// but FPI carries a more specific code/message that helps users
+	// understand we have data, just in a taxonomy we don't yet parse.
+	if errors.Is(err, valuation.ErrTickerNotFound) {
+		h.sendError(c, http.StatusNotFound, "TICKER_NOT_FOUND",
+			"Ticker not found",
+			"The specified ticker could not be found in our database",
+			map[string]interface{}{"ticker": ticker})
+	} else if errors.Is(err, valuation.ErrForeignPrivateIssuer) {
+		h.sendError(c, http.StatusUnprocessableEntity, "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
+			"Foreign private issuer not covered",
+			"This ticker files using a taxonomy or currency pair Midas does not yet cover. Supported: ifrs-full taxonomy with FRED-tracked currencies (TWD, EUR, JPY, GBP, HKD, CNY, KRW, CHF, CAD, AUD, INR, BRL, DKK). Out-of-coverage taxonomies (JGAAP, K-IFRS, ifrs-smes) and currencies are tracked in docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md.",
+			map[string]interface{}{
+				"ticker":      ticker,
+				"filing_type": "20-F",
+				"taxonomy":    "ifrs-full",
+			})
+	} else if errors.Is(err, valuation.ErrInsufficientData) {
+		h.sendError(c, http.StatusUnprocessableEntity, "INSUFFICIENT_DATA",
+			"Insufficient data for valuation",
+			"Not enough financial data available to perform reliable valuation",
+			map[string]interface{}{"ticker": ticker})
+	} else if errors.Is(err, valuation.ErrModelNotApplicable) {
+		h.sendError(c, http.StatusUnprocessableEntity, "MODEL_NOT_APPLICABLE",
+			"Standard DCF model not applicable",
+			"Standard DCF requires positive operating income and alternative models (DDM, FFO, revenue multiples) could not produce a result for this company.",
+			map[string]interface{}{"ticker": ticker})
+	} else {
+		h.sendError(c, http.StatusInternalServerError, "CALCULATION_ERROR",
+			"Valuation calculation failed",
+			"An internal error occurred during valuation calculation",
+			map[string]interface{}{"ticker": ticker})
+	}
+}
+
+// respondFairValueSuccess builds the response via buildFairValueResponse and
+// writes the success-path tail (narrate line, artifact snapshot, completion
+// log, 200 body) shared by GetFairValue and PostFairValue (SR-1 A8). logMsg
+// preserves each endpoint's distinct completion message ("Fair value
+// calculation completed" vs "POST fair value calculation completed") that
+// operators grep for.
+func (h *FairValueHandler) respondFairValueSuccess(c *gin.Context, em *narrate.Emitter, ticker string, result *entities.ValuationResult, logMsg string) {
 	response := h.buildFairValueResponse(ticker, result)
 
 	// Tier-1 narrate: valuation.computed success line. Carries the headline
@@ -694,7 +708,7 @@ func (h *FairValueHandler) GetFairValue(c *gin.Context) {
 		b.AddSchemaVersion("FairValueResponse", 1)
 	}
 
-	logctx.From(c.Request.Context()).Info("Fair value calculation completed",
+	logctx.From(c.Request.Context()).Info(logMsg,
 		zap.String("ticker", ticker),
 		zap.Float64("dcf_value", result.DCFValuePerShare),
 		zap.Float64("tangible_value", result.TangibleValuePerShare))
@@ -918,82 +932,16 @@ func (h *FairValueHandler) PostFairValue(c *gin.Context) {
 		zap.String("ticker", ticker),
 		zap.Bool("has_overrides", opts != nil))
 
-	// Calculate valuation.
+	// Calculate valuation. Error classification + the success tail are shared
+	// verbatim with GET via respondValuationError / respondFairValueSuccess
+	// (SR-1 A8) — POST{} == GET byte-identity rides on that sharing.
 	result, err := h.valuationService.CalculateValuation(c.Request.Context(), ticker, opts)
 	if err != nil {
-		em.Emit(c.Request.Context(), narrate.PhaseValuationComputed, narrate.OutcomeError, err.Error())
-
-		logctx.From(c.Request.Context()).Error("Valuation calculation failed",
-			zap.String("ticker", ticker),
-			zap.Error(err))
-
-		// Layer-2 cross-knob invariants (T8) — checked first so a specific
-		// invariant message is never masked by the generic error fallthrough.
-		if errResp, ok := paramErrorResponse(err); ok {
-			errResp.Instance = c.Request.URL.Path
-			errResp.Timestamp = time.Now().UTC().Format(time.RFC3339)
-			errResp.Method = c.Request.Method
-			c.Header("Content-Type", "application/problem+json")
-			c.JSON(http.StatusUnprocessableEntity, errResp)
-			c.Abort()
-			return
-		}
-
-		// FPI must be checked before ErrInsufficientData — same ordering as GET.
-		if errors.Is(err, valuation.ErrTickerNotFound) {
-			h.sendError(c, http.StatusNotFound, "TICKER_NOT_FOUND",
-				"Ticker not found",
-				"The specified ticker could not be found in our database",
-				map[string]interface{}{"ticker": ticker})
-		} else if errors.Is(err, valuation.ErrForeignPrivateIssuer) {
-			h.sendError(c, http.StatusUnprocessableEntity, "FOREIGN_PRIVATE_ISSUER_UNSUPPORTED",
-				"Foreign private issuer not covered",
-				"This ticker files using a taxonomy or currency pair Midas does not yet cover. Supported: ifrs-full taxonomy with FRED-tracked currencies (TWD, EUR, JPY, GBP, HKD, CNY, KRW, CHF, CAD, AUD, INR, BRL, DKK). Out-of-coverage taxonomies (JGAAP, K-IFRS, ifrs-smes) and currencies are tracked in docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md.",
-				map[string]interface{}{
-					"ticker":      ticker,
-					"filing_type": "20-F",
-					"taxonomy":    "ifrs-full",
-				})
-		} else if errors.Is(err, valuation.ErrInsufficientData) {
-			h.sendError(c, http.StatusUnprocessableEntity, "INSUFFICIENT_DATA",
-				"Insufficient data for valuation",
-				"Not enough financial data available to perform reliable valuation",
-				map[string]interface{}{"ticker": ticker})
-		} else if errors.Is(err, valuation.ErrModelNotApplicable) {
-			h.sendError(c, http.StatusUnprocessableEntity, "MODEL_NOT_APPLICABLE",
-				"Standard DCF model not applicable",
-				"Standard DCF requires positive operating income and alternative models (DDM, FFO, revenue multiples) could not produce a result for this company.",
-				map[string]interface{}{"ticker": ticker})
-		} else {
-			h.sendError(c, http.StatusInternalServerError, "CALCULATION_ERROR",
-				"Valuation calculation failed",
-				"An internal error occurred during valuation calculation",
-				map[string]interface{}{"ticker": ticker})
-		}
+		h.respondValuationError(c, em, ticker, err)
 		return
 	}
 
-	response := h.buildFairValueResponse(ticker, result)
-
-	// Tier-1 narrate: valuation.computed success.
-	em.Emit(c.Request.Context(), narrate.PhaseValuationComputed, narrate.OutcomeOK, "",
-		zap.String("model", result.CalculationMethod),
-		zap.Float64("fair_value_per_share", result.DCFValuePerShare),
-		zap.Float64("tangible_value_per_share", result.TangibleValuePerShare),
-	)
-
-	// Tier-3 artifact bundle: snapshot the final response body.
-	if b := artifact.From(c.Request.Context()); b != nil {
-		b.Snapshot(c.Request.Context(), "response.sent", "17-response.json", &response)
-		b.AddSchemaVersion("FairValueResponse", 1)
-	}
-
-	logctx.From(c.Request.Context()).Info("POST fair value calculation completed",
-		zap.String("ticker", ticker),
-		zap.Float64("dcf_value", result.DCFValuePerShare),
-		zap.Float64("tangible_value", result.TangibleValuePerShare))
-
-	c.JSON(http.StatusOK, response)
+	h.respondFairValueSuccess(c, em, ticker, result, "POST fair value calculation completed")
 }
 
 // GetBulkFairValue handles POST /api/v1/fair-value/bulk requests

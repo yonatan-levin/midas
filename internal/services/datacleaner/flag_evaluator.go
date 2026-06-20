@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -22,8 +23,19 @@ type FlagConditionEvaluatorService struct {
 	compiledRegexs map[string]*regexp.Regexp
 }
 
-// NewFlagConditionEvaluatorService creates a new flag condition evaluator service
+// NewFlagConditionEvaluatorService creates a new flag condition evaluator service.
+//
+// logger may be nil — the production wiring (datacleaner service construction)
+// historically passed nil, and every triggered flag dereferenced the nil
+// *log.Logger via Printf, panicking the request (SR-1 B1). A nil logger now
+// falls back to a stderr-backed logger so diagnostics survive without a
+// panic. (This file predates the zap convention; a full logctx migration is
+// tracked separately and deliberately out of scope for the B1 fix.)
 func NewFlagConditionEvaluatorService(cfg *config.FlagConditionsConfig, logger *log.Logger) (ports.FlagConditionEvaluator, error) {
+	if logger == nil {
+		logger = log.New(os.Stderr, "[flag-evaluator] ", log.LstdFlags)
+	}
+
 	// Pre-compile regex patterns
 	compiledRegexs := make(map[string]*regexp.Regexp)
 
@@ -187,6 +199,16 @@ func (s *FlagConditionEvaluatorService) evaluateCondition(condition config.Condi
 	// Get field value
 	fieldValue, exists := s.getFieldValue(condition.Field, data)
 
+	// exists-type conditions are about PRESENCE itself, so they MUST be
+	// evaluated before the null short-circuit below. Pre-SR-1-B1 the
+	// short-circuit returned first, which made an "expect absent" check
+	// (e.g. data_completeness_flag's {type:exists, value:false}) structurally
+	// unreachable for absent fields — and the old lower-switch branch ignored
+	// the configured operator/value entirely for present fields.
+	if condition.Type == "exists" {
+		return s.evaluateExistsCondition(condition, exists)
+	}
+
 	// Handle null/missing values
 	if !exists {
 		switch condition.NullBehavior {
@@ -209,13 +231,41 @@ func (s *FlagConditionEvaluatorService) evaluateCondition(condition config.Condi
 		return s.evaluateBooleanCondition(condition, fieldValue)
 	case "date":
 		return s.evaluateDateCondition(condition, fieldValue)
-	case "exists":
-		return exists, fmt.Sprintf("%s exists: %v", condition.Field, exists)
 	case "regex":
 		return s.evaluateRegexCondition(condition, fieldValue)
 	default:
 		return false, fmt.Sprintf("unknown condition type: %s", condition.Type)
 	}
+}
+
+// evaluateExistsCondition compares the field's actual presence against the
+// configured expected value. Semantics (SR-1 B1 fix):
+//
+//   - Value (bool, or "true"/"false" string) is the EXPECTED presence;
+//     omitted/unrecognized values default to "expected present" (true).
+//   - Operator "ne" inverts the match; every other operator (the configs use
+//     "eq") is treated as equality.
+//
+// The absent-field detail string deliberately keeps the "is null" phrasing
+// so log consumers and existing assertions that grep for it keep working.
+func (s *FlagConditionEvaluatorService) evaluateExistsCondition(condition config.Condition, exists bool) (bool, string) {
+	expected := true
+	switch v := condition.Value.(type) {
+	case bool:
+		expected = v
+	case string:
+		expected = strings.EqualFold(v, "true")
+	}
+
+	matched := exists == expected
+	if condition.Operator == "ne" {
+		matched = !matched
+	}
+
+	if !exists {
+		return matched, fmt.Sprintf("%s is null (exists=false, expected exists=%v)", condition.Field, expected)
+	}
+	return matched, fmt.Sprintf("%s exists: %v (expected exists=%v)", condition.Field, exists, expected)
 }
 
 // getFieldValue retrieves a field value from data using dot notation
@@ -447,120 +497,12 @@ func (s *FlagConditionEvaluatorService) evaluateRegexCondition(condition config.
 	return false, "regex pattern not compiled"
 }
 
-// ExecuteActions executes actions for triggered flags
-func (s *FlagConditionEvaluatorService) ExecuteActions(ctx context.Context, results []ports.FlagResult, data map[string]interface{}) error {
-	for _, result := range results {
-		if !result.Triggered {
-			continue
-		}
-
-		for _, action := range result.Actions {
-			// Convert back to FlagAction
-			if flagAction, ok := action.(config.FlagAction); ok {
-				if err := s.executeAction(ctx, flagAction, data, result); err != nil {
-					s.logger.Printf("Error executing action for flag %s: %v", result.FlagName, err)
-					// Continue with other actions
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// executeAction executes a single action
-func (s *FlagConditionEvaluatorService) executeAction(ctx context.Context, action config.FlagAction, data map[string]interface{}, result ports.FlagResult) error {
-	switch action.Type {
-	case "set_field":
-		return s.executeSetFieldAction(action.Parameters, data)
-	case "log":
-		return s.executeLogAction(action.Parameters, result)
-	case "alert":
-		return s.executeAlertAction(action.Parameters, result)
-	case "transform":
-		return s.executeTransformAction(action.Parameters, data)
-	default:
-		return fmt.Errorf("unknown action type: %s", action.Type)
-	}
-}
-
-// executeSetFieldAction sets a field in the data
-func (s *FlagConditionEvaluatorService) executeSetFieldAction(params map[string]interface{}, data map[string]interface{}) error {
-	field, ok := params["field"].(string)
-	if !ok {
-		return fmt.Errorf("field parameter is required for set_field action")
-	}
-
-	value, ok := params["value"]
-	if !ok {
-		return fmt.Errorf("value parameter is required for set_field action")
-	}
-
-	// Handle dot notation for nested fields
-	parts := strings.Split(field, ".")
-	current := data
-
-	for i, part := range parts {
-		if i == len(parts)-1 {
-			// Last part, set the value
-			current[part] = value
-			s.logger.Printf("Set field %s to %v", field, value)
-			return nil
-		}
-
-		// Create nested map if it doesn't exist
-		if _, exists := current[part]; !exists {
-			current[part] = make(map[string]interface{})
-		}
-
-		if next, ok := current[part].(map[string]interface{}); ok {
-			current = next
-		} else {
-			return fmt.Errorf("cannot set nested field %s: parent is not a map", field)
-		}
-	}
-
-	return nil
-}
-
-// executeLogAction logs a message
-func (s *FlagConditionEvaluatorService) executeLogAction(params map[string]interface{}, result ports.FlagResult) error {
-	level, _ := params["level"].(string)
-	message, _ := params["message"].(string)
-
-	if message == "" {
-		message = fmt.Sprintf("Flag %s triggered", result.FlagName)
-	}
-
-	// DE-SCOPED (TDB-10 / #10): per-level log routing is not implemented because
-	// ExecuteActions has no production caller — the cleaner path uses EvaluateFlags
-	// only (service.go: createRiskWarningFlags) and reads Triggered/Details. This
-	// action dispatcher is exercised solely by integration tests. Revisit if flag
-	// actions are ever wired into the request path (would also require a logctx seam).
-	s.logger.Printf("[%s] %s", level, message)
-
-	return nil
-}
-
-// executeAlertAction sends an alert
-func (s *FlagConditionEvaluatorService) executeAlertAction(params map[string]interface{}, result ports.FlagResult) error {
-	// DE-SCOPED (TDB-10 / #10): redundant with the real alerting subsystem at
-	// internal/services/alerting/ (configuration.go + regression_detection.go).
-	// ExecuteActions has no production caller, so building email/webhook here would
-	// add untested dead code that duplicates an existing service. If flag-driven
-	// alerts become a real requirement, route them through internal/services/alerting.
-	s.logger.Printf("ALERT: Flag %s triggered - %s", result.FlagName, result.Details)
-	return nil
-}
-
-// executeTransformAction applies a transformation to data
-func (s *FlagConditionEvaluatorService) executeTransformAction(params map[string]interface{}, data map[string]interface{}) error {
-	// DE-SCOPED (TDB-10 / #10): aspirational config-action stub with no live config
-	// consumer and no caller (ExecuteActions is test-only). No transformation grammar
-	// is defined and none is needed by the shipped flag_conditions.json. Left as a
-	// no-op intentionally; revisit only if/when ExecuteActions is wired into production.
-	return nil
-}
+// SR-1 A4: the ExecuteActions chain (executeAction / executeSetFieldAction /
+// executeLogAction / executeAlertAction / executeTransformAction) was deleted.
+// It had no production caller — the cleaner path uses EvaluateFlags only and
+// reads Triggered/Details (TDB-10 had already de-scoped the log/alert/
+// transform stubs). FlagResult.Actions still carries the configured actions
+// as inert data for any future consumer.
 
 // mergeWithGlobalVariables merges global variables with data
 func (s *FlagConditionEvaluatorService) mergeWithGlobalVariables(data map[string]interface{}) map[string]interface{} {

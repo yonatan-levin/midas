@@ -41,17 +41,10 @@ func productionRestructuringRule() *entities.CleaningRule {
 // C1 is an add-back) match the shape the orchestrator + Phase 3 view
 // reconstruction will rely on.
 func TestC1RestructuringAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	// Construct through the exported factory so the test exercises the public
-	// API surface the orchestrator will use.
-	ea := NewEarningsAdjuster()
-	adj := NewC1RestructuringAdjuster(ea)
+	// SR-1 A3: the adapter struct was deleted; call ApplyC1Restructuring directly
+	// on the EarningsAdjuster (the production dispatch path).
+	adj := NewEarningsAdjuster()
 	require.NotNil(t, adj)
-
-	// Name() contract: stable identifier consumers can join on. Locked to the
-	// AdjusterID constant so a rename forces both the test and the constant to
-	// move together.
-	assert.Equal(t, adjusterIDC1RestructuringCharges, adj.Name(),
-		"c1RestructuringAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := productionRestructuringRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -65,7 +58,7 @@ func TestC1RestructuringAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			NormalizedOperatingIncome: 150_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC1Restructuring(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err, "Apply must not error on a well-formed fired-path input")
 
 		// AdjusterOutput contract: exactly one fired LedgerEntry, NO Overlays
@@ -115,7 +108,7 @@ func TestC1RestructuringAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			NormalizedOperatingIncome: 150_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC1Restructuring(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "skip path emits exactly one LedgerEntry")
@@ -148,7 +141,7 @@ func TestC1RestructuringAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			NormalizedOperatingIncome: 150_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC1Restructuring(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -186,7 +179,7 @@ func TestC1RestructuringAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			EffectiveTaxRate:          0.21,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC1Restructuring(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 		require.Len(t, out.LedgerEntries, 1)
 		entry := out.LedgerEntries[0]

@@ -61,13 +61,10 @@ func productionCapitalizedSoftwareReviewRule() *entities.CleaningRule {
 // sheet adjustment happens) while the Flags slice carries the actual firing
 // signal when the review's 10% R&D/Revenue threshold trips.
 func TestARDCapitalizationReviewAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	aa := NewAssetAdjuster()
-	adj := NewARDCapitalizationReviewAdjuster(aa)
+	// SR-1 A3: the adapter struct was deleted; call ApplyARDCapitalizationReview
+	// directly on the AssetAdjuster (the production dispatch path).
+	adj := NewAssetAdjuster()
 	require.NotNil(t, adj)
-
-	// Name() contract: stable identifier consumers can join on.
-	assert.Equal(t, adjusterIDARDCapitalizationReview, adj.Name(),
-		"aRDCapitalizationReviewAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := productionRDCapitalizationReviewRule()
 	cleaningCtx := createTechContext()
@@ -82,7 +79,7 @@ func TestARDCapitalizationReviewAdjuster_Adjuster_Interface_Contract(t *testing.
 		preRD := data.ResearchAndDevelopment
 		preRevenue := data.Revenue
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyARDCapitalizationReview(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err, "Apply must not error on a well-formed fired-path input")
 
 		require.Len(t, out.LedgerEntries, 1, "fired path emits exactly one LedgerEntry")
@@ -143,7 +140,7 @@ func TestARDCapitalizationReviewAdjuster_Adjuster_Interface_Contract(t *testing.
 			Revenue:                1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyARDCapitalizationReview(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "skip path emits exactly one LedgerEntry")
@@ -172,7 +169,7 @@ func TestARDCapitalizationReviewAdjuster_Adjuster_Interface_Contract(t *testing.
 		preRD := data.ResearchAndDevelopment
 		preRevenue := data.Revenue
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyARDCapitalizationReview(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -202,12 +199,10 @@ func TestARDCapitalizationReviewAdjuster_Adjuster_Interface_Contract(t *testing.
 // firing signal); different threshold (1.5% intangibles/revenue) and different
 // flag severity (Warning vs. Critical).
 func TestACapitalizedSoftwareReviewAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	aa := NewAssetAdjuster()
-	adj := NewACapitalizedSoftwareReviewAdjuster(aa)
+	// SR-1 A3: the adapter struct was deleted; call ApplyACapitalizedSoftwareReview
+	// directly on the AssetAdjuster (the production dispatch path).
+	adj := NewAssetAdjuster()
 	require.NotNil(t, adj)
-
-	assert.Equal(t, adjusterIDACapitalizedSoftwareReview, adj.Name(),
-		"aCapitalizedSoftwareReviewAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := productionCapitalizedSoftwareReviewRule()
 	cleaningCtx := createTechContext()
@@ -221,7 +216,7 @@ func TestACapitalizedSoftwareReviewAdjuster_Adjuster_Interface_Contract(t *testi
 		preIntangibles := data.OtherIntangibles
 		preRevenue := data.Revenue
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyACapitalizedSoftwareReview(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "fired path emits exactly one LedgerEntry")
@@ -266,7 +261,7 @@ func TestACapitalizedSoftwareReviewAdjuster_Adjuster_Interface_Contract(t *testi
 			Revenue:          1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyACapitalizedSoftwareReview(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -289,7 +284,7 @@ func TestACapitalizedSoftwareReviewAdjuster_Adjuster_Interface_Contract(t *testi
 		preIntangibles := data.OtherIntangibles
 		preRevenue := data.Revenue
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyACapitalizedSoftwareReview(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)

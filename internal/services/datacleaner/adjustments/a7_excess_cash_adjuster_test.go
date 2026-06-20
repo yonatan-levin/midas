@@ -32,12 +32,10 @@ func productionExcessCashRule() *entities.CleaningRule {
 // acceptance gate: a7ExcessCashAdjuster satisfies the Adjuster interface AND
 // its AdjusterOutput matches the spec §4 OverlayEmitter contract.
 func TestA7ExcessCashAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	aa := NewAssetAdjuster()
-	adj := NewA7ExcessCashAdjuster(aa)
+	// SR-1 A3: the adapter struct was deleted; call ApplyA7ExcessCash directly
+	// on the AssetAdjuster (the production dispatch path).
+	adj := NewAssetAdjuster()
 	require.NotNil(t, adj)
-
-	assert.Equal(t, adjusterIDA7ExcessCash, adj.Name(),
-		"a7ExcessCashAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := productionExcessCashRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -49,7 +47,7 @@ func TestA7ExcessCashAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			Revenue:                100_000_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA7ExcessCash(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -89,7 +87,7 @@ func TestA7ExcessCashAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			Revenue:                0.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA7ExcessCash(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.Overlays, 1)
@@ -106,7 +104,7 @@ func TestA7ExcessCashAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			Revenue:                100_000_000.0, // revenue positive, but no pct
 		}
 
-		out, err := adj.Apply(context.Background(), data, ruleNoThreshold, cleaningCtx)
+		out, err := adj.ApplyA7ExcessCash(context.Background(), data, ruleNoThreshold, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.Overlays, 1)
@@ -120,7 +118,7 @@ func TestA7ExcessCashAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			Revenue:                100_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA7ExcessCash(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -137,7 +135,7 @@ func TestA7ExcessCashAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			Revenue:                100_000_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA7ExcessCash(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -155,7 +153,7 @@ func TestA7ExcessCashAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			Revenue:                100_000_000_000.0,
 		}
 		before := *data
-		_, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		_, err := adj.ApplyA7ExcessCash(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 		assert.True(t, reflect.DeepEqual(before, *data),
 			"ApplyA7ExcessCash must not mutate working")

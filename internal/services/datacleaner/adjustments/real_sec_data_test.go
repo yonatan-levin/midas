@@ -134,44 +134,10 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 			financialData.Goodwill/1000000000, financialData.OperatingLeaseLiability/1000000000)
 	})
 
-	t.Run("Real Apple Data Category A Adjustments", func(t *testing.T) {
-		// Load and parse real data
-		realAppleData, err := loadRealAppleSECData(t)
-		require.NoError(t, err)
-
-		// Get parsed financial data
-		financialData := extractLatestAnnualData(t, realAppleData)
-		require.NotNil(t, financialData)
-
-		// Initialize asset adjuster
-		assetAdjuster := NewAssetAdjuster()
-		context := &entities.CleaningContext{
-			IndustryCode:     "45", // Technology
-			DataVintage:      time.Now(),
-			EnableIndustry:   true,
-			EnableCaching:    false,
-			QualityThreshold: 0.8, // High quality threshold for Apple
-		}
-
-		// Test Category A adjustments on real Apple data
-		assetResult := assetAdjuster.CalculateNetTangibleAssets(financialData, context)
-		require.NotNil(t, assetResult, "Asset result should not be nil")
-
-		// Validate that processing completed without errors
-		assert.NotNil(t, assetResult.Adjustments, "Should have adjustment records")
-		assert.GreaterOrEqual(t, assetResult.AdjustedTangibleAssets, float64(0), "Tangible assets should be non-negative")
-
-		// Apple typically has minimal goodwill relative to its size
-		if len(assetResult.Adjustments) > 0 {
-			t.Logf("Real Apple Category A adjustments: %d adjustments made", len(assetResult.Adjustments))
-			for _, adj := range assetResult.Adjustments {
-				t.Logf("  - %s: %.2fB (%s)", adj.Type, adj.Amount/1000000000, adj.Reasoning)
-			}
-		}
-
-		t.Logf("Real Apple Category A results: TangibleAssets=%.2fB, %d adjustments",
-			assetResult.AdjustedTangibleAssets/1000000000, len(assetResult.Adjustments))
-	})
+	// SR-1 A4: the "Real Apple Data Category A Adjustments" subtest was removed.
+	// It existed only to exercise the deprecated CalculateNetTangibleAssets
+	// method (every assertion consumed its TangibleAssetsResult); active
+	// Category A cleaning is covered via ProcessAssetAdjustments elsewhere.
 
 	t.Run("Real Apple Data Category B Adjustments", func(t *testing.T) {
 		// Load and parse real data
@@ -236,16 +202,16 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 		financialData := extractLatestAnnualData(t, realAppleData)
 		require.NotNil(t, financialData)
 
-		// Initialize adjusters
-		assetAdjuster := NewAssetAdjuster()
+		// Initialize adjusters. SR-1 A4: the deprecated CalculateNetTangibleAssets
+		// call (and the AssetAdjuster it required) was removed; the
+		// ProcessLiabilityAdjustments path remains the measured pipeline work.
 		liabilityAdjuster := NewLiabilityAdjuster(&mockAIServiceRealData{}, nil)
 		context := createTestCleaningContext("real_apple_performance_test")
 
 		// Measure complete pipeline performance
 		startTime := time.Now()
 
-		// Run Category A + B adjustments
-		assetResult := assetAdjuster.CalculateNetTangibleAssets(financialData, context)
+		// Run Category B adjustments
 		allRules := createComprehensiveRuleSet()
 		liabilityRules := filterRulesByCategory(allRules, entities.LiabilityCompleteness)
 		liabilityResult := liabilityAdjuster.ProcessLiabilityAdjustments(gocontext.Background(), financialData, liabilityRules, context)
@@ -257,10 +223,9 @@ func TestRealAppleSECDataIntegration(t *testing.T) {
 			"Real Apple data processing should complete within 1000ms (actual: %s)", processingTime)
 
 		// Validate results quality
-		require.NotNil(t, assetResult)
 		require.NotNil(t, liabilityResult)
 
-		totalAdjustments := len(assetResult.Adjustments) + len(liabilityResult.NativeOverlays)
+		totalAdjustments := len(liabilityResult.NativeOverlays)
 
 		// Apple should produce meaningful results
 		assert.GreaterOrEqual(t, financialData.TotalAssets, float64(300000000000),

@@ -37,12 +37,10 @@ func productionWorkingCapitalRule() *entities.CleaningRule {
 // FlagEmitter convention directly so any future refactor that adds a
 // balance-sheet mutation will fail loudly here.
 func TestC7WorkingCapitalAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	ea := NewEarningsAdjuster()
-	adj := NewC7WorkingCapitalAdjuster(ea)
+	// SR-1 A3: the adapter struct was deleted; call ApplyC7WorkingCapital directly
+	// on the EarningsAdjuster (the production dispatch path).
+	adj := NewEarningsAdjuster()
 	require.NotNil(t, adj)
-
-	assert.Equal(t, adjusterIDC7WorkingCapital, adj.Name(),
-		"c7WorkingCapitalAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := productionWorkingCapitalRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -57,7 +55,7 @@ func TestC7WorkingCapitalAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 		preWCAdj := data.WorkingCapitalAdjustment
 		preRevenue := data.Revenue
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC7WorkingCapital(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "fired path emits exactly one LedgerEntry")
@@ -112,7 +110,7 @@ func TestC7WorkingCapitalAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			WorkingCapitalAdjustment: 0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC7WorkingCapital(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "skip path emits exactly one LedgerEntry")
@@ -137,7 +135,7 @@ func TestC7WorkingCapitalAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 		preWCAdj := data.WorkingCapitalAdjustment
 		preRevenue := data.Revenue
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC7WorkingCapital(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -173,7 +171,7 @@ func TestC7WorkingCapitalAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			WorkingCapitalAdjustment: 50_000_000, // 5% > 3%
 		}
 
-		out, err := adj.Apply(context.Background(), data, ruleWithThreshold, cleaningCtx)
+		out, err := adj.ApplyC7WorkingCapital(context.Background(), data, ruleWithThreshold, cleaningCtx)
 		require.NoError(t, err)
 		require.Len(t, out.Flags, 1, "rule-configured 3% threshold should fire at 5% ratio")
 		assert.InDelta(t, 0.03, out.LedgerEntries[0].SkipMetrics["threshold"], 1e-9,
@@ -190,7 +188,7 @@ func TestC7WorkingCapitalAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			WorkingCapitalAdjustment: -50_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC7WorkingCapital(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)

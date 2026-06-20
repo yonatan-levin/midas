@@ -120,19 +120,13 @@ type MacroDataGateway interface {
 	HealthCheck(ctx context.Context) error
 }
 
-// CircuitBreaker defines the interface for circuit breaker functionality
-type CircuitBreaker interface {
-	Execute(ctx context.Context, fn func() error) error
-	State() string
-	Reset()
-}
-
-// RetryPolicy defines the interface for retry functionality
-type RetryPolicy interface {
-	Execute(ctx context.Context, fn func() error) error
-	WithMaxAttempts(attempts int) RetryPolicy
-	WithBackoff(strategy string) RetryPolicy
-}
+// SR-1 A5: the CircuitBreaker / RetryPolicy port interfaces were deleted
+// along with internal/infra/resilience and the DI factories. The factories
+// were constructed and injected into the SEC/market gateway providers, which
+// IGNORED them — the gateways implement their own inline retry loops, so the
+// resilience layer was live code with dead wiring ("looks resilient, isn't").
+// If real circuit breaking is wanted, it should be wired INTO the gateways
+// via a fresh spec (SR-1 A5 option (a)), not resurrected as-is.
 
 // SECCompanyFacts represents the structure of SEC Company Facts API response.
 // The SEC EDGAR CompanyFacts API returns a nested structure:

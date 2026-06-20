@@ -29,10 +29,10 @@ func productionLitigationRule() *entities.CleaningRule {
 // TestC3LitigationSettlementsAdjuster_Adjuster_Interface_Contract pins the
 // DC-1 Phase 2 PR-3 Task 3.3 acceptance gate.
 func TestC3LitigationSettlementsAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	ea := NewEarningsAdjuster()
-	adj := NewC3LitigationSettlementsAdjuster(ea)
+	// SR-1 A3: the adapter struct was deleted; call ApplyC3Litigation directly
+	// on the EarningsAdjuster (the production dispatch path).
+	adj := NewEarningsAdjuster()
 	require.NotNil(t, adj)
-	assert.Equal(t, adjusterIDC3LitigationSettlements, adj.Name())
 
 	rule := productionLitigationRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -46,7 +46,7 @@ func TestC3LitigationSettlementsAdjuster_Adjuster_Interface_Contract(t *testing.
 			NormalizedOperatingIncome: 150_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC3Litigation(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -78,7 +78,7 @@ func TestC3LitigationSettlementsAdjuster_Adjuster_Interface_Contract(t *testing.
 			NormalizedOperatingIncome: 150_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC3Litigation(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -98,7 +98,7 @@ func TestC3LitigationSettlementsAdjuster_Adjuster_Interface_Contract(t *testing.
 			NormalizedOperatingIncome: 150_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC3Litigation(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -120,7 +120,7 @@ func TestC3LitigationSettlementsAdjuster_Adjuster_Interface_Contract(t *testing.
 			EffectiveTaxRate:          0.21,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC3Litigation(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 		require.Len(t, out.LedgerEntries, 1)
 		entry := out.LedgerEntries[0]

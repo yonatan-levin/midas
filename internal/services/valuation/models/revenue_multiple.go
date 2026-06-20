@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -330,42 +329,17 @@ func newestFirstAnnualRevenues(hist *entities.HistoricalFinancialData, n int) []
 	return out
 }
 
-// getMultiple returns the EV/Revenue multiple for the given industry code.
-// Falls back to the default multiple if no industry-specific multiple is
-// configured. Uses longest-prefix-match at an underscore boundary to avoid
-// "TECHNOLOGY" silently matching "TECH" (same fix as crosscheck.LookupMultiple).
+// getMultiple returns the EV/Revenue multiple for the given industry code:
+// exact match, then longest prefix match at an underscore boundary (the
+// shared W-4-deterministic core, LookupByLongestPrefix — SR-1 A10), then the
+// "default" key, then the package constant.
 func (m *RevenueMultipleModel) getMultiple(industry string) float64 {
-	upper := strings.ToUpper(industry)
-
-	// Try exact match first
-	if multiple, ok := m.multiples[upper]; ok {
+	if multiple, ok := LookupByLongestPrefix(m.multiples, industry); ok {
 		return multiple
 	}
-
-	// Longest prefix match at an underscore boundary
-	// (e.g., "TECH_SAAS_CLOUD" matches "TECH_SAAS" over "TECH").
-	bestKey := ""
-	bestVal := 0.0
-	for code, multiple := range m.multiples {
-		if code == "default" {
-			continue
-		}
-		if upper == code || strings.HasPrefix(upper, code+"_") {
-			if len(code) > len(bestKey) {
-				bestKey = code
-				bestVal = multiple
-			}
-		}
-	}
-	if bestKey != "" {
-		return bestVal
-	}
-
-	// Default fallback
 	if defaultMultiple, ok := m.multiples["default"]; ok {
 		return defaultMultiple
 	}
-
 	return DefaultEVRevenueMultiple
 }
 

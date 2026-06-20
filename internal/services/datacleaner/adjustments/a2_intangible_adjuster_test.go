@@ -41,17 +41,10 @@ func productionIntangibleRule() *entities.CleaningRule {
 // AdjusterOutput whose LedgerEntries (Restater-shaped) and Flags match the
 // shape the orchestrator + Phase 3 view reconstruction will rely on.
 func TestA2IntangibleAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	// Construct through the exported factory so the test exercises the
-	// public API surface the orchestrator will use.
-	aa := NewAssetAdjuster()
-	adj := NewA2IntangibleAdjuster(aa)
+	// SR-1 A3: the adapter struct was deleted; call ApplyA2Intangible directly
+	// on the AssetAdjuster (the production dispatch path).
+	adj := NewAssetAdjuster()
 	require.NotNil(t, adj)
-
-	// Name() contract: stable identifier consumers can join on. Locked to
-	// the AdjusterID constant so a rename forces both the test and the
-	// constant to move together.
-	assert.Equal(t, adjusterIDA2IntangibleWritedown, adj.Name(),
-		"a2IntangibleAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := createIntangibleRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -65,7 +58,7 @@ func TestA2IntangibleAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets:      1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA2Intangible(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err, "Apply must not error on a well-formed fired-path input")
 
 		// AdjusterOutput contract: exactly one fired LedgerEntry, NO Overlays
@@ -114,7 +107,7 @@ func TestA2IntangibleAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets:      1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA2Intangible(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "skip path emits exactly one LedgerEntry")
@@ -143,7 +136,7 @@ func TestA2IntangibleAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets:      1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA2Intangible(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -176,7 +169,7 @@ func TestA2IntangibleAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			EffectiveTaxRate: 0.21,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA2Intangible(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 		require.Len(t, out.LedgerEntries, 1)
 		entry := out.LedgerEntries[0]
@@ -194,7 +187,7 @@ func TestA2IntangibleAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			EffectiveTaxRate: 0.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA2Intangible(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 		require.Len(t, out.LedgerEntries, 1)
 		entry := out.LedgerEntries[0]

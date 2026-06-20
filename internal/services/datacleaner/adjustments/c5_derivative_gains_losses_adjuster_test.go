@@ -35,10 +35,10 @@ func productionDerivativeGainsLossesRule() *entities.CleaningRule {
 //     are branches, not duplicates).
 //   - Mutation-free Apply on all paths.
 func TestC5DerivativeGainsLossesAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	ea := NewEarningsAdjuster()
-	adj := NewC5DerivativeGainsLossesAdjuster(ea)
+	// SR-1 A3: the adapter struct was deleted; call ApplyC5DerivativeGainsLosses
+	// directly on the EarningsAdjuster (the production dispatch path).
+	adj := NewEarningsAdjuster()
 	require.NotNil(t, adj)
-	assert.Equal(t, adjusterIDC5DerivativeGainsLosses, adj.Name())
 
 	rule := productionDerivativeGainsLossesRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -52,7 +52,7 @@ func TestC5DerivativeGainsLossesAdjuster_Adjuster_Interface_Contract(t *testing.
 			NormalizedOperatingIncome: 150_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC5DerivativeGainsLosses(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		// LOAD-BEARING: ONE LedgerEntry per fire — legacy has two mutation
@@ -88,7 +88,7 @@ func TestC5DerivativeGainsLossesAdjuster_Adjuster_Interface_Contract(t *testing.
 			NormalizedOperatingIncome: 150_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC5DerivativeGainsLosses(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		// LOAD-BEARING: ONE LedgerEntry per fire.
@@ -116,7 +116,7 @@ func TestC5DerivativeGainsLossesAdjuster_Adjuster_Interface_Contract(t *testing.
 			NormalizedOperatingIncome: 150_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC5DerivativeGainsLosses(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -137,7 +137,7 @@ func TestC5DerivativeGainsLossesAdjuster_Adjuster_Interface_Contract(t *testing.
 			EffectiveTaxRate:          0.21,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC5DerivativeGainsLosses(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 		require.Len(t, out.LedgerEntries, 1)
 		entry := out.LedgerEntries[0]

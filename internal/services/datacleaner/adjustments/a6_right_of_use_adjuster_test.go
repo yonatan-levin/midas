@@ -31,12 +31,10 @@ func productionRightOfUseRule() *entities.CleaningRule {
 // its AdjusterOutput matches the spec §3 OverlayEmitter contract for the
 // fired + both skipped paths. Mirrors TestA1GoodwillAdjuster_*.
 func TestA6RightOfUseAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	aa := NewAssetAdjuster()
-	adj := NewA6RightOfUseAdjuster(aa)
+	// SR-1 A3: the adapter struct was deleted; call ApplyA6RightOfUseAssets
+	// directly on the AssetAdjuster (the production dispatch path).
+	adj := NewAssetAdjuster()
 	require.NotNil(t, adj)
-
-	assert.Equal(t, adjusterIDA6RightOfUseExclusion, adj.Name(),
-		"a6RightOfUseAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := productionRightOfUseRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -50,7 +48,7 @@ func TestA6RightOfUseAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets:                   1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA6RightOfUseAssets(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "fired path emits exactly one LedgerEntry")
@@ -102,7 +100,7 @@ func TestA6RightOfUseAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets:                   1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA6RightOfUseAssets(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -116,7 +114,7 @@ func TestA6RightOfUseAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets:                   1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA6RightOfUseAssets(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -136,7 +134,7 @@ func TestA6RightOfUseAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets:                   1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA6RightOfUseAssets(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -158,7 +156,7 @@ func TestA6RightOfUseAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 			TotalAssets:                   1_000_000.0,
 		}
 		before := *data
-		_, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		_, err := adj.ApplyA6RightOfUseAssets(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 		assert.True(t, reflect.DeepEqual(before, *data),
 			"ApplyA6RightOfUseAssets must not mutate working")

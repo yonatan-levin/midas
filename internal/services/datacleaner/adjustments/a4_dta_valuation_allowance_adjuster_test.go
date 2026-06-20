@@ -43,17 +43,10 @@ func productionDeferredTaxRule() *entities.CleaningRule {
 // whose LedgerEntries (Restater-shaped) and Flags match the shape the
 // orchestrator + Phase 3 view reconstruction will rely on.
 func TestA4DTAValuationAllowanceAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	// Construct through the exported factory so the test exercises the
-	// public API surface the orchestrator will use.
-	aa := NewAssetAdjuster()
-	adj := NewA4DTAValuationAllowanceAdjuster(aa)
+	// SR-1 A3: the adapter struct was deleted; call ApplyA4DTAValuationAllowance
+	// directly on the AssetAdjuster (the production dispatch path).
+	adj := NewAssetAdjuster()
 	require.NotNil(t, adj)
-
-	// Name() contract: stable identifier consumers can join on. Locked to
-	// the AdjusterID constant so a rename forces both the test and the
-	// constant to move together.
-	assert.Equal(t, adjusterIDA4DTAValuationAllowance, adj.Name(),
-		"a4DTAValuationAllowanceAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := createDeferredTaxRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -67,7 +60,7 @@ func TestA4DTAValuationAllowanceAdjuster_Adjuster_Interface_Contract(t *testing.
 			TotalAssets:       1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA4DTAValuationAllowance(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err, "Apply must not error on a well-formed fired-path input")
 
 		// AdjusterOutput contract: exactly one fired LedgerEntry, NO Overlays
@@ -120,7 +113,7 @@ func TestA4DTAValuationAllowanceAdjuster_Adjuster_Interface_Contract(t *testing.
 			TotalAssets:       1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA4DTAValuationAllowance(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "fired path emits exactly one LedgerEntry")
@@ -148,7 +141,7 @@ func TestA4DTAValuationAllowanceAdjuster_Adjuster_Interface_Contract(t *testing.
 			TotalAssets:       1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA4DTAValuationAllowance(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "skip path emits exactly one LedgerEntry")
@@ -177,7 +170,7 @@ func TestA4DTAValuationAllowanceAdjuster_Adjuster_Interface_Contract(t *testing.
 			TotalAssets:       1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyA4DTAValuationAllowance(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)

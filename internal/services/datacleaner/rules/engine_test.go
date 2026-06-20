@@ -81,14 +81,22 @@ func testLoadIndustryRules(t *testing.T) {
 	techRules := engine.GetIndustryRules("45") // GICS code for tech
 	assert.Len(t, techRules, 3)                // 2 enabled base rules + 1 industry-specific (capitalized_software disabled by override)
 
-	// Verify industry override is applied
+	// Verify the industry override is applied to the SNAPSHOT only (SR-1 B2):
+	// capitalized_software is disabled by the tech override, so it must be
+	// absent from the enabled tech snapshot…
+	for _, rule := range techRules {
+		assert.NotEqual(t, entities.RuleCapitalizedSoftware, rule.ID,
+			"capitalized_software is disabled by the tech override and must not appear in the enabled tech snapshot")
+	}
+
+	// …while the BASE rule stays pristine (enabled, original 5% threshold).
 	softwareRule, err := engine.GetRuleByID(entities.RuleCapitalizedSoftware)
 	require.NoError(t, err)
-	// Industry rule should have modified this rule to be more strict
-	assert.NotNil(t, softwareRule.Threshold)
-	if softwareRule.Threshold != nil && softwareRule.Threshold.PercentageOfRevenue != nil {
-		assert.Equal(t, 0.02, *softwareRule.Threshold.PercentageOfRevenue) // 2% threshold from industry override
-	}
+	assert.True(t, softwareRule.Enabled, "industry override must not disable the base rule")
+	require.NotNil(t, softwareRule.Threshold)
+	require.NotNil(t, softwareRule.Threshold.PercentageOfRevenue)
+	assert.Equal(t, 0.05, *softwareRule.Threshold.PercentageOfRevenue,
+		"industry threshold override must not leak into the base rule")
 }
 
 func testValidateRules(t *testing.T) {
@@ -237,14 +245,22 @@ func testIndustryOverrides(t *testing.T) {
 	err = engine.LoadIndustryRules(industryFile)
 	require.NoError(t, err)
 
-	// Verify override was applied
-	modifiedRule, err := engine.GetRuleByID(entities.RuleCapitalizedSoftware)
+	// SR-1 B2: the override must NOT leak into the base rule — GetRuleByID
+	// keeps returning the pristine base definition…
+	baseRule, err := engine.GetRuleByID(entities.RuleCapitalizedSoftware)
 	require.NoError(t, err)
+	assert.True(t, originalEnabled)  // Original should be true
+	assert.True(t, baseRule.Enabled) // …and STAYS true after the industry load
+	assert.NotNil(t, baseRule.Threshold)
+	require.NotNil(t, baseRule.Threshold.PercentageOfRevenue)
+	assert.Equal(t, 0.05, *baseRule.Threshold.PercentageOfRevenue)
 
-	// Rule should now be disabled by industry override (was true, now false)
-	assert.True(t, originalEnabled)       // Original should be true
-	assert.False(t, modifiedRule.Enabled) // Should be disabled after override
-	assert.NotNil(t, modifiedRule.Threshold)
+	// …while the override is visible only through the industry snapshot:
+	// the disabled rule disappears from the enabled tech rule set.
+	for _, rule := range engine.GetIndustryRules("45") {
+		assert.NotEqual(t, entities.RuleCapitalizedSoftware, rule.ID,
+			"capitalized_software must be disabled in the tech snapshot")
+	}
 }
 
 // Helper functions to create test data

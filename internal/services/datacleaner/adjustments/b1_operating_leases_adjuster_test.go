@@ -37,19 +37,10 @@ func productionOperatingLeasesRule() *entities.CleaningRule {
 // AdjusterOutput whose LedgerEntries, Overlays, and Flags match the shape
 // the orchestrator + Phase 3 view reconstruction will rely on.
 func TestB1OperatingLeasesAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	// Construct through the exported factory so the test exercises the
-	// public API surface the orchestrator will use. The factory returns
-	// the Adjuster interface, so any signature drift breaks the test
-	// compile.
-	la := NewLiabilityAdjuster(&mockAIService{}, nil)
-	adj := NewB1OperatingLeaseCapitalizationAdjuster(la)
+	// SR-1 A3: the adapter struct was deleted; call ApplyB1OperatingLeases
+	// directly on the LiabilityAdjuster (the production dispatch path).
+	adj := NewLiabilityAdjuster(&mockAIService{}, nil)
 	require.NotNil(t, adj)
-
-	// Name() contract: stable identifier consumers can join on. Locked to
-	// the AdjusterID constant so a rename forces both the test and the
-	// constant to move together.
-	assert.Equal(t, adjusterIDB1OperatingLeaseCapitalization, adj.Name(),
-		"b1OperatingLeaseCapitalizationAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := productionOperatingLeasesRule()
 
@@ -73,7 +64,7 @@ func TestB1OperatingLeasesAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 		origTotalDebt := data.TotalDebt
 		origInterestBearingDebt := data.InterestBearingDebt
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB1OperatingLeases(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err, "Apply must not error on a well-formed fired-path input")
 
 		// AdjusterOutput contract: exactly one fired LedgerEntry and
@@ -127,7 +118,7 @@ func TestB1OperatingLeasesAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 		}
 		cleaningCtx := &entities.CleaningContext{IndustryCode: "45"} // Technology
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB1OperatingLeases(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		// AdjusterOutput contract for the no-lease skip path:
@@ -265,8 +256,7 @@ func TestLiabilityAdjuster_ProcessLiabilityAdjustments_NativeB1SkipPath(t *testi
 // on TotalDebt with AmountIncremental semantics; that is the load-bearing
 // invariant for Phase 3's InvestedCapital() consumer.
 func TestB1OperatingLeasesAdjuster_FallbackInline_NoExtraction(t *testing.T) {
-	la := NewLiabilityAdjuster(&mockAIService{}, nil)
-	adj := NewB1OperatingLeaseCapitalizationAdjuster(la)
+	adj := NewLiabilityAdjuster(&mockAIService{}, nil)
 	rule := productionOperatingLeasesRule()
 
 	// Fixture with OperatingLeaseLiability populated — exercises the
@@ -279,7 +269,7 @@ func TestB1OperatingLeasesAdjuster_FallbackInline_NoExtraction(t *testing.T) {
 	}
 	cleaningCtx := &entities.CleaningContext{IndustryCode: "44"}
 
-	out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+	out, err := adj.ApplyB1OperatingLeases(context.Background(), data, rule, cleaningCtx)
 	require.NoError(t, err)
 
 	// Calculator-success path still respects the OverlayEmitter contract:

@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
-	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 
 	"github.com/midas/dcf-valuation-api/internal/config"
@@ -110,51 +109,8 @@ func TestDatabaseDriverMapping(t *testing.T) {
 	}
 }
 
-func TestCircuitBreakerFactory_CreateSECCircuitBreaker(t *testing.T) {
-	logger := zap.NewNop()
-	factory := &CircuitBreakerFactory{logger: logger}
-
-	t.Run("creates SEC circuit breaker with correct config", func(t *testing.T) {
-		cb := factory.CreateSECCircuitBreaker()
-
-		assert.NotNil(t, cb)
-		assert.Equal(t, "CLOSED", cb.State())
-	})
-}
-
-func TestCircuitBreakerFactory_CreateMarketDataCircuitBreaker(t *testing.T) {
-	logger := zap.NewNop()
-	factory := &CircuitBreakerFactory{logger: logger}
-
-	t.Run("creates market data circuit breaker with correct config", func(t *testing.T) {
-		cb := factory.CreateMarketDataCircuitBreaker()
-
-		assert.NotNil(t, cb)
-		assert.Equal(t, "CLOSED", cb.State())
-	})
-}
-
-func TestRetryPolicyFactory_CreateSECRetryPolicy(t *testing.T) {
-	logger := zap.NewNop()
-	factory := &RetryPolicyFactory{logger: logger}
-
-	t.Run("creates SEC retry policy", func(t *testing.T) {
-		policy := factory.CreateSECRetryPolicy()
-
-		assert.NotNil(t, policy)
-	})
-}
-
-func TestRetryPolicyFactory_CreateMarketDataRetryPolicy(t *testing.T) {
-	logger := zap.NewNop()
-	factory := &RetryPolicyFactory{logger: logger}
-
-	t.Run("creates market data retry policy", func(t *testing.T) {
-		policy := factory.CreateMarketDataRetryPolicy()
-
-		assert.NotNil(t, policy)
-	})
-}
+// SR-1 A5: the CircuitBreakerFactory / RetryPolicyFactory tests were deleted
+// with the factories (live code, dead wiring — gateways ignored them).
 
 func TestContainer_Creation(t *testing.T) {
 	t.Run("creates container successfully", func(t *testing.T) {
@@ -162,20 +118,6 @@ func TestContainer_Creation(t *testing.T) {
 
 		assert.NotNil(t, container)
 		assert.NotNil(t, container.app)
-	})
-}
-
-// Integration test would require full DI setup
-func TestFactories_Integration(t *testing.T) {
-	t.Run("factory types exist", func(t *testing.T) {
-		logger := zap.NewNop()
-
-		// Test that all factory types exist and can be created
-		cbFactory := &CircuitBreakerFactory{logger: logger}
-		retryFactory := &RetryPolicyFactory{logger: logger}
-
-		require.NotNil(t, cbFactory)
-		require.NotNil(t, retryFactory)
 	})
 }
 

@@ -36,10 +36,10 @@ func productionCapitalizedInterestRule() *entities.CleaningRule {
 //   - Skip path: no capitalized interest emits one Fired:false LedgerEntry.
 //   - Mutation-free Apply on all paths.
 func TestC6CapitalizedInterestAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	ea := NewEarningsAdjuster()
-	adj := NewC6CapitalizedInterestAdjuster(ea)
+	// SR-1 A3: the adapter struct was deleted; call ApplyC6CapitalizedInterest
+	// directly on the EarningsAdjuster (the production dispatch path).
+	adj := NewEarningsAdjuster()
 	require.NotNil(t, adj)
-	assert.Equal(t, adjusterIDC6CapitalizedInterest, adj.Name())
 
 	rule := productionCapitalizedInterestRule()
 	cleaningCtx := &entities.CleaningContext{}
@@ -52,7 +52,7 @@ func TestC6CapitalizedInterestAdjuster_Adjuster_Interface_Contract(t *testing.T)
 			InterestExpense:     50_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC6CapitalizedInterest(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -92,7 +92,7 @@ func TestC6CapitalizedInterestAdjuster_Adjuster_Interface_Contract(t *testing.T)
 			InterestExpense:     50_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC6CapitalizedInterest(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -114,7 +114,7 @@ func TestC6CapitalizedInterestAdjuster_Adjuster_Interface_Contract(t *testing.T)
 			InterestExpense:     50_000_000,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyC6CapitalizedInterest(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)

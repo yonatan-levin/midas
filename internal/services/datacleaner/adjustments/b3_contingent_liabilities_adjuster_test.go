@@ -160,17 +160,10 @@ func (m *mapFormAIService) HealthCheck(ctx context.Context) error {
 // `var _ Adjuster = (*b3ContingentLiabilityAdjuster)(nil)` in liabilities.go
 // is the primary signature pin; this test exercises the runtime contract.
 func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	t.Run("Name returns AdjusterID constant", func(t *testing.T) {
-		la := NewLiabilityAdjuster(&mockAIService{}, nil)
-		adj := NewB3ContingentLiabilityAdjuster(la)
-		require.NotNil(t, adj)
-		// Name() contract: stable identifier consumers can join on. Locked
-		// to the AdjusterID constant so a rename forces both the test and
-		// the constant to move together.
-		assert.Equal(t, adjusterIDB3ContingentLiability, adj.Name(),
-			"b3ContingentLiabilityAdjuster.Name() must equal the AdjusterID constant")
-	})
-
+	// SR-1 A3: the adapter struct was deleted; each subtest calls
+	// ApplyB3Contingent directly on the LiabilityAdjuster (the production
+	// dispatch path). The prior "Name returns AdjusterID constant" subtest was
+	// removed — the AdjusterID is still pinned via the ledger-entry assertions.
 	t.Run("fired path emits OverlaySpec with Field:DebtLikeClaims", func(t *testing.T) {
 		// Rule-based path (AI disabled by default — NewLiabilityAdjuster
 		// returns aiEnabled=false). Tech industry probability for
@@ -178,7 +171,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		// getContingentLiabilityProbability. Total disclosed = 100k +
 		// 50k + 30k = 180k. Expected weighted = 180k * 0.40 = 72k.
 		la := NewLiabilityAdjuster(&mockAIService{}, nil)
-		adj := NewB3ContingentLiabilityAdjuster(la)
+		adj := la // SR-1 A3: adapter deleted; call ApplyB3Contingent directly
 		rule := productionContingentLiabilitiesRule()
 
 		data := &entities.FinancialData{
@@ -196,7 +189,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		origTotalDebt := data.TotalDebt
 		origInterestBearingDebt := data.InterestBearingDebt
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB3Contingent(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err, "Apply must not error on a well-formed fired-path input")
 
 		require.Len(t, out.LedgerEntries, 1, "fired path emits exactly one LedgerEntry")
@@ -252,7 +245,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		// are SHA-256 hex strings per Q4 resolution (DC-1 Phase 3
 		// Task 3.8). Determinism test lives in q4_b3_aiprovenance_test.go.
 		la := NewLiabilityAdjuster(&mockAIService{}, nil).WithAI(true)
-		adj := NewB3ContingentLiabilityAdjuster(la)
+		adj := la // SR-1 A3: adapter deleted; call ApplyB3Contingent directly
 		rule := productionContingentLiabilitiesRule()
 
 		data := &entities.FinancialData{
@@ -268,7 +261,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 			FootnoteText: "Material patent and product-liability disputes ongoing.",
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB3Contingent(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.Overlays, 1)
@@ -308,7 +301,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		// AIProvenance MUST be nil because the recorded amount is not
 		// AI-derived.
 		la := NewLiabilityAdjuster(&mockAIService{}, nil) // WithAI(true) NOT called
-		adj := NewB3ContingentLiabilityAdjuster(la)
+		adj := la                                         // SR-1 A3: adapter deleted; call ApplyB3Contingent directly
 		rule := productionContingentLiabilitiesRule()
 
 		data := &entities.FinancialData{
@@ -321,7 +314,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		}
 		cleaningCtx := &entities.CleaningContext{IndustryCode: "99"} // unmapped → default 30%
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB3Contingent(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.Overlays, 1)
@@ -336,7 +329,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		// guard in ApplyB3Contingent prevents the AI call. Recorded
 		// amount is rule-based; AIProvenance must be nil.
 		la := NewLiabilityAdjuster(nil, nil).WithAI(true)
-		adj := NewB3ContingentLiabilityAdjuster(la)
+		adj := la // SR-1 A3: adapter deleted; call ApplyB3Contingent directly
 		rule := productionContingentLiabilitiesRule()
 
 		data := &entities.FinancialData{
@@ -349,7 +342,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		}
 		cleaningCtx := &entities.CleaningContext{IndustryCode: "99"}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB3Contingent(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.Overlays, 1)
@@ -364,7 +357,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		// 0.40, so the weighted amount is unchanged at 72k. AIProvenance MUST
 		// be nil — only AI-derived amounts carry provenance.
 		la := NewLiabilityAdjuster(&failingAIService{}, nil).WithAI(true)
-		adj := NewB3ContingentLiabilityAdjuster(la)
+		adj := la // SR-1 A3: adapter deleted; call ApplyB3Contingent directly
 		rule := productionContingentLiabilitiesRule()
 
 		data := &entities.FinancialData{
@@ -377,7 +370,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		}
 		cleaningCtx := &entities.CleaningContext{IndustryCode: "45"}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB3Contingent(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err, "Apply must NOT surface AI errors — legacy path absorbs them")
 
 		require.Len(t, out.Overlays, 1)
@@ -419,7 +412,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 			},
 		}
 		la := NewLiabilityAdjuster(mapAI, nil).WithAI(true)
-		adj := NewB3ContingentLiabilityAdjuster(la)
+		adj := la // SR-1 A3: adapter deleted; call ApplyB3Contingent directly
 		rule := productionContingentLiabilitiesRule()
 
 		data := &entities.FinancialData{
@@ -435,7 +428,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 			FootnoteText: "Material patent and product-liability disputes ongoing.",
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB3Contingent(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.Overlays, 1)
@@ -460,7 +453,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 
 	t.Run("skip path (no contingent-liability data) emits Fired:false LedgerEntry", func(t *testing.T) {
 		la := NewLiabilityAdjuster(&mockAIService{}, nil)
-		adj := NewB3ContingentLiabilityAdjuster(la)
+		adj := la // SR-1 A3: adapter deleted; call ApplyB3Contingent directly
 		rule := productionContingentLiabilitiesRule()
 
 		data := &entities.FinancialData{
@@ -478,7 +471,7 @@ func TestB3ContingentLiabilityAdjuster_Adjuster_Interface_Contract(t *testing.T)
 		origTotalDebt := data.TotalDebt
 		origInterestBearingDebt := data.InterestBearingDebt
 
-		out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+		out, err := adj.ApplyB3Contingent(context.Background(), data, rule, cleaningCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "skip path emits exactly one LedgerEntry")

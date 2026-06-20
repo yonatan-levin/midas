@@ -143,9 +143,11 @@ func TestOrchestrator_LedgerOrdering(t *testing.T) {
 // maintained map ensures the test self-updates when new rules are added.
 //
 // Industry-specific "special" rules (e.g. rd_capitalization_review in
-// technology.json) are NOT in rules.json — they are loaded lazily by the
-// service when an industry context fires. The test eager-loads every
-// known industry overrides file so GetRules(nil) returns the union.
+// technology.json) are NOT in rules.json — and since the SR-1 B2 fix they
+// are NO LONGER injected into the base rule index by LoadIndustryRules
+// (that injection was the cross-ticker leak). They live only in the
+// per-industry snapshots, so the union is built from GetRules(nil) (base)
+// PLUS GetIndustryRules(gicsCode) for every known industry file.
 func buildRuleCategoryMap(t *testing.T) map[string]entities.RuleCategory {
 	t.Helper()
 	cfg := createTestConfig()
@@ -155,31 +157,42 @@ func buildRuleCategoryMap(t *testing.T) map[string]entities.RuleCategory {
 	require.True(t, ok, "DataCleanerService implementation must be *service for white-box rule introspection")
 
 	// Mirror the on-demand industry loading the service does in
-	// loadIndustryRules(). Keep the list of industry override files in sync
-	// with config/datacleaner/industry/ — extra entries are harmless (best-
+	// loadIndustryRules(). Keep the (file, gics_code) pairs in sync with
+	// config/datacleaner/industry/ — extra entries are harmless (best-
 	// effort), missing ones produce undefined rule IDs in the ledger.
-	for _, industryFile := range []string{
-		"technology.json",
-		"retail.json",
-	} {
-		path := concrete.config.IndustryRulesPath + "/" + industryFile
+	industryFiles := []struct {
+		file string
+		gics string
+	}{
+		{"technology.json", "45"},
+		{"retail.json", "25"},
+	}
+	for _, industry := range industryFiles {
+		path := concrete.config.IndustryRulesPath + "/" + industry.file
 		// Best-effort: a missing file is an explicit failure (test needs to
 		// learn about the new file or the renamed one), not a silent skip.
 		require.NoError(t, concrete.rulesEngine.LoadIndustryRules(path),
 			"failed to load industry overrides %s; if a new industry file shipped, add it to this list", path)
 	}
 
-	// GetRules(nil) returns every loaded rule across every industry the
-	// engine knows about (not just enabled ones for a specific industry).
-	// Build a flat ID → category map; duplicates must all agree on category.
+	// Build a flat ID → category map across the base rules AND every
+	// industry snapshot; duplicates must all agree on category.
 	result := make(map[string]entities.RuleCategory)
-	for _, rule := range concrete.rulesEngine.GetRules(nil) {
+	add := func(rule entities.CleaningRule) {
 		if existing, dup := result[rule.ID]; dup {
 			require.Equal(t, existing, rule.Category,
 				"rule %q registered with conflicting categories: %q and %q",
 				rule.ID, existing, rule.Category)
 		}
 		result[rule.ID] = rule.Category
+	}
+	for _, rule := range concrete.rulesEngine.GetRules(nil) {
+		add(rule)
+	}
+	for _, industry := range industryFiles {
+		for _, rule := range concrete.rulesEngine.GetIndustryRules(industry.gics) {
+			add(rule)
+		}
 	}
 	return result
 }

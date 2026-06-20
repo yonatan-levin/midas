@@ -51,17 +51,10 @@ func productionObsoleteInventoryRule() *entities.CleaningRule {
 // "fired path TaxShieldDTA with EffectiveTaxRate=21%" subtest below for the
 // CANONICAL PIN of the formula `writedownAmount * EffectiveTaxRate`.
 func TestA5InventoryWritedownAdjuster_Adjuster_Interface_Contract(t *testing.T) {
-	// Construct through the exported factory so the test exercises the
-	// public API surface the orchestrator will use.
-	aa := NewAssetAdjuster()
-	adj := NewA5InventoryWritedownAdjuster(aa)
+	// SR-1 A3: the adapter struct was deleted; call ApplyA5InventoryWritedown
+	// directly on the AssetAdjuster (the production dispatch path).
+	adj := NewAssetAdjuster()
 	require.NotNil(t, adj)
-
-	// Name() contract: stable identifier consumers can join on. Locked to the
-	// AdjusterID constant so a rename forces both the test and the constant
-	// to move together.
-	assert.Equal(t, adjusterIDA5InventoryWritedown, adj.Name(),
-		"a5InventoryWritedownAdjuster.Name() must equal the AdjusterID constant")
 
 	rule := createInventoryRule()
 
@@ -89,7 +82,7 @@ func TestA5InventoryWritedownAdjuster_Adjuster_Interface_Contract(t *testing.T) 
 			EffectiveTaxRate:  0.21,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, retailCtx)
+		out, err := adj.ApplyA5InventoryWritedown(context.Background(), data, rule, retailCtx)
 		require.NoError(t, err, "Apply must not error on a well-formed fired-path input")
 
 		require.Len(t, out.LedgerEntries, 1, "fired path emits exactly one LedgerEntry")
@@ -128,7 +121,7 @@ func TestA5InventoryWritedownAdjuster_Adjuster_Interface_Contract(t *testing.T) 
 			EffectiveTaxRate:  0.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, retailCtx)
+		out, err := adj.ApplyA5InventoryWritedown(context.Background(), data, rule, retailCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -152,7 +145,7 @@ func TestA5InventoryWritedownAdjuster_Adjuster_Interface_Contract(t *testing.T) 
 			EffectiveTaxRate:  0.21,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, defaultCtx)
+		out, err := adj.ApplyA5InventoryWritedown(context.Background(), data, rule, defaultCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -172,7 +165,7 @@ func TestA5InventoryWritedownAdjuster_Adjuster_Interface_Contract(t *testing.T) 
 			EffectiveTaxRate:  0.21,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, techCtx)
+		out, err := adj.ApplyA5InventoryWritedown(context.Background(), data, rule, techCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -189,7 +182,7 @@ func TestA5InventoryWritedownAdjuster_Adjuster_Interface_Contract(t *testing.T) 
 			TotalAssets: 1_000_000.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, retailCtx)
+		out, err := adj.ApplyA5InventoryWritedown(context.Background(), data, rule, retailCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1, "skip path emits exactly one LedgerEntry")
@@ -219,7 +212,7 @@ func TestA5InventoryWritedownAdjuster_Adjuster_Interface_Contract(t *testing.T) 
 			InventoryTurnover: 6.0,
 		}
 
-		out, err := adj.Apply(context.Background(), data, rule, defaultCtx)
+		out, err := adj.ApplyA5InventoryWritedown(context.Background(), data, rule, defaultCtx)
 		require.NoError(t, err)
 
 		require.Len(t, out.LedgerEntries, 1)
@@ -249,8 +242,7 @@ func TestA5InventoryWritedownAdjuster_Adjuster_Interface_Contract(t *testing.T) 
 // pins the first-population invariant for A5 — A1/A2/A4 leave TaxShieldDTA at
 // zero, so the test surface for "is the formula wired correctly?" lives here.
 func TestProcessInventoryAdjustment_TaxShieldDTA_PopulatedWhenEffectiveTaxRateNonZero(t *testing.T) {
-	aa := NewAssetAdjuster()
-	adj := NewA5InventoryWritedownAdjuster(aa)
+	adj := NewAssetAdjuster()
 
 	data := &entities.FinancialData{
 		Inventory:         400_000.0,
@@ -261,7 +253,7 @@ func TestProcessInventoryAdjustment_TaxShieldDTA_PopulatedWhenEffectiveTaxRateNo
 	rule := createInventoryRule()
 	cleaningCtx := createRetailContext()
 
-	out, err := adj.Apply(context.Background(), data, rule, cleaningCtx)
+	out, err := adj.ApplyA5InventoryWritedown(context.Background(), data, rule, cleaningCtx)
 	require.NoError(t, err)
 	require.Len(t, out.LedgerEntries, 1)
 

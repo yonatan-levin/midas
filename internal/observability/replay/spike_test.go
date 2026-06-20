@@ -92,14 +92,15 @@ func TestSpike_FxDecorate_OverridesGatewayProvider(t *testing.T) {
 		fx.Provide(zap.NewNop),
 
 		// The provider being tested is fx.Provide(NewSECGateway, fx.As(...))
-		// at di/container.go:127. We do NOT need every CoreModule provider
-		// — only the SEC gateway provider chain (NewSECGateway + factories).
-		// CoreModule pulls in DB/Redis providers that would force config
-		// of those subsystems even if we never resolve them. The spike's
-		// goal is to assert fx.Decorate semantics against a provider that
-		// matches CoreModule's exact registration shape.
-		fx.Provide(di.NewCircuitBreakerFactory),
-		fx.Provide(di.NewRetryPolicyFactory),
+		// in di.CoreModule. We do NOT need every CoreModule provider — only
+		// the SEC gateway provider. CoreModule pulls in DB/Redis providers
+		// that would force config of those subsystems even if we never
+		// resolve them. The spike's goal is to assert fx.Decorate semantics
+		// against a provider that matches CoreModule's exact registration
+		// shape. di.NewSECGateway now depends only on *config.Config and
+		// *zap.Logger (both supplied above); the resilience CircuitBreaker/
+		// RetryPolicy factories it once consumed were removed in SR-1 (the
+		// resilience-layer deletion), so no extra providers are needed here.
 		fx.Provide(fx.Annotate(di.NewSECGateway, fx.As(new(ports.SECGateway)))),
 
 		// The decoration under test. If fx.Decorate composes correctly at
