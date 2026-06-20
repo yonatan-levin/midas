@@ -1491,7 +1491,7 @@ func (s *Service) performValuation(
 		CurrentPrice:        marketData.SharePrice,
 		DataFreshnessScore:  dataFreshnessScore,
 		CalculationMethod:   "multi_stage_dcf",
-		CalculationVersion:  "4.7", // Tier 2 Layer A: DCF reinvestment / operating-leverage model — profiles that opt into sales_to_capital project FCF = NOPAT − Reinvestment(ΔRevenue/SalesToCapital) with a converging margin, so FCF can cross positive in-window (changes dcf_value_per_share for opted-in growth archetypes by design). Legacy-proportional profiles + DDM/FFO/revenue_multiple are bit-for-bit. Prior: 4.6 (BUG-015 TTM OI base for 10-Q-latest). The request-valuation-overrides feature is additive + version-neutral.
+		CalculationVersion:  "4.8", // Tier 2 Layer A: DCF reinvestment / operating-leverage model — profiles that opt into sales_to_capital project FCF = NOPAT − Reinvestment(ΔRevenue/SalesToCapital) with a converging margin, so FCF can cross positive in-window (changes dcf_value_per_share for opted-in growth archetypes by design). Legacy-proportional profiles + DDM/FFO/revenue_multiple are bit-for-bit. 4.8 reflects SR-1/B3 cleaner SEC R&D extraction now changing tech-classified ticker outputs (AMD/MXL) via A5's inventory writedown. Prior: 4.7 (Layer A reinvestment model). The request-valuation-overrides feature is additive + version-neutral.
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -2041,7 +2041,7 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:        marketData.SharePrice,
 		DataFreshnessScore:  dataFreshnessScore,
 		CalculationMethod:   modelResult.ModelType,
-		CalculationVersion:  "4.7", // Tier 2 Layer A: DCF reinvestment / operating-leverage model. Alt-model numerics (DDM/FFO/revenue_multiple) are UNAFFECTED — Layer A is DCF-path only — so only calculation_version drifts here (bit-for-bit primary values). The bump is engine-wide for a single version stamp. Prior: 4.6 (BUG-015). The request-valuation-overrides feature is additive + version-neutral.
+		CalculationVersion:  "4.8", // Tier 2 Layer A: DCF reinvestment / operating-leverage model. Alt-model numerics (DDM/FFO/revenue_multiple) are UNAFFECTED — Layer A is DCF-path only — so only calculation_version drifts here (bit-for-bit primary values). The bump is engine-wide for a single version stamp. 4.8 reflects SR-1/B3 cleaner SEC R&D extraction now changing tech-classified ticker outputs (AMD/MXL) via A5's inventory writedown. Prior: 4.7 (Layer A reinvestment model). The request-valuation-overrides feature is additive + version-neutral.
 		Warnings:            modelResult.Warnings,
 	}
 

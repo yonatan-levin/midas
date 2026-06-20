@@ -781,7 +781,7 @@
                 "calculation_version": {
                     "description": "Engine version that produced this result",
                     "type": "string",
-                    "example": "4.6"
+                    "example": "4.8"
                 },
                 "cleaning_adjustments": {
                     "description": "CleaningAdjustments is the datacleaner audit trail: one entry per\nnormalization adjuster that FIRED on this company's financials (A1–C7,\nthe B1/B2/B3 overlays, and the TDB-2 A6/A7 + TDB-12 contingent\noverlays), projected from result.CleaningAdjustments via\nadjustmentsFromLedger. Lets consumers see which restatements/overlays\nshaped the valuation inputs (e.g. lease capitalization, inventory\nrestatement, excess-cash exclusion). Omitted (omitempty) when no\nadjuster fired, so the default no-adjustment response stays\nbyte-identical to the pre-TDB-11 wire shape. Fired-only — the\nprojection emits only Applied==true entries.",
