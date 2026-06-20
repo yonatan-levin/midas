@@ -123,7 +123,23 @@ the firing rules in `internal/services/datacleaner/adjustments/`.
 
 ## 5. Close criteria
 
-This runbook's §3 (fresh 4.4 baseline) is **done**. §4.1–§4.3 close when captured
-and replayed per the Phase-5 spec §5 per-ticker expectation; until then they remain
-operator follow-ups tracked in
-`docs/reviewer/DC-1-phase-5-replay-verification-followup.md`.
+This runbook's §3 (fresh 4.4 baseline) is **done**. The DC-1 Phase-5 verification
+follow-up that drove §4 is **CLOSED (2026-06-20)** — see
+`docs/reviewer/archive/DC-1-phase-5-replay-verification-followup.md`:
+
+- **§4.2 (DebtLikeClaims EV bridge)** — confirmed live, dollar-exact, on
+  `CalculationVersion 4.7` master (WMT, self-contained from the captured bundle).
+  The DDM ADD-sign sub-case is confirmed **permanently unreachable in production**
+  (USB/JPM run `multi_stage_dcf`, zero B-rules, T2-BS-1 `DPS=0`) and stays
+  unit-pinned by `TestDDM_EVBridge_AddsDebtLikeClaims`.
+- **§4.3 (cleaning-rule projection)** — confirmed live with non-empty output
+  (INTC 5 rows, WMT 4 rows; full RuleID/Category/Type/Amount/Percentage/
+  FromAccount/ToAccount shape). A goodwill/restructuring filer such as **INTC** is
+  the reliable way to exercise this (the original 10-ticker basket fires ~zero).
+- **§4.1 (strict 4.3→4.4 replay isolation)** — **superseded, not pursued**: needs a
+  `FRED_API_KEY` + a rebuild at a pre-Phase-5 4.3 SHA (neither available) and is now
+  doubly-confounded (engine at 4.7). The Phase-5 zero-numeric-drift property is
+  established instead by the green load-bearing unit pins (bit-for-bit DDM,
+  RestatedViewParity, NoDoubleCount, recompute-shadow byte-identity, ledger-basket)
+  plus the §4.2/§4.3 live confirmations. Re-open only if a strict, FRED-anchored
+  cross-version replay isolation is later required.
