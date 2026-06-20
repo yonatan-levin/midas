@@ -1,0 +1,113 @@
+{
+  "ticker": "KO",
+  "wacc": 0.06660845998546297,
+  "growth_rate": 0.030397738899797577,
+  "growth_rates": [
+    0.03039773889979762,
+    0.03039773889979762,
+    0.03039773889979762,
+    0.03039773889979762,
+    0.03039773889979762,
+    0.03039773889979762,
+    0.03039773889979762
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 20.585535465924895,
+  "dcf_value_per_share": 15.728349924708134,
+  "current_assets_per_share": 7.044506258692628,
+  "ncav_per_share": -9.31710709318498,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-06-20T13:24:57Z",
+  "data_quality_score": 90,
+  "data_quality_grade": "A",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.8",
+  "warnings": [
+    "terminal_dominance: terminal_pv is 87.3% of enterprise_value (\u003e80% threshold; consider longer horizon or lower terminal growth)",
+    "operating_income_base: source=ANNUAL_FY operating_income=$13762000000",
+    "operating_income_base: TTM unavailable, used latest FY ($13762000000 dated 2026-02-20) [2025FY]",
+    "DCF-implied EV/EBITDA (21.3) is \u003e2x sector median (10.0) for MFG"
+  ],
+  "sanity_check": {
+    "implied_pe": 17.291565131292273,
+    "sector_median_pe": 16,
+    "implied_ev_ebitda": 21.29441954903545,
+    "sector_median_ev_ebitda": 10,
+    "implied_pfcf": 17.300382859559125,
+    "sector_median_pfcf": 18,
+    "is_reasonable": false,
+    "flags": [
+      "DCF-implied EV/EBITDA (21.3) is \u003e2x sector median (10.0) for MFG"
+    ]
+  },
+  "industry": {
+    "sic_code": "2080",
+    "sic": "MFG",
+    "heuristic_code": "20",
+    "heuristic_name": "Industrials",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 79.39,
+  "assumption_profile": "cyclical_mid_cycle:standard_growth",
+  "resolution_trace": {
+    "profile_id": "cyclical_mid_cycle:standard_growth",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.1.0",
+    "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+    "matched_rule_id": "mfg_generic",
+    "human_reason": "default_standard_growth"
+  },
+  "dcf_horizon_years": 5,
+  "dcf_terminal_method": "exit_multiple",
+  "dcf_terminal_pct_of_ev": 0.8729535261118859,
+  "dcf_per_year_pv": [
+    2677100091.746185,
+    2586214140.267843,
+    2498413712.637331,
+    2413594057.1602464,
+    2331653978.3997226
+  ],
+  "dcf_terminal_growth_used": 0.015198869449898789,
+  "cleaning_adjustments": [
+    {
+      "rule": "excess_cash",
+      "category": "asset_quality",
+      "type": "exclude",
+      "from_account": "CashAndCashEquivalents",
+      "amount": 9326800000,
+      "reasoning": "excess_cash: Identified 9326800000 excess cash (cash 10574000000 - operating need 1247200000 at 10% of revenue) as non-operating per A7 rule"
+    },
+    {
+      "rule": "obsolete_inventory",
+      "category": "asset_quality",
+      "type": "writedown",
+      "from_account": "Inventory",
+      "to_account": "InventoryWritedown",
+      "amount": 1892000000,
+      "percentage": 40,
+      "reasoning": "inventory_writedown: Applied 40% writedown to obsolete inventory per A5 rule"
+    },
+    {
+      "rule": "goodwill_exclusion",
+      "category": "asset_quality",
+      "type": "exclude",
+      "from_account": "Goodwill",
+      "amount": 15411000000,
+      "reasoning": "goodwill_exclusion: Excluded 15411000000 goodwill (14.8% of assets) per A1 rule"
+    },
+    {
+      "rule": "stock_compensation",
+      "category": "earnings_normalization",
+      "type": "reclassify",
+      "from_account": "StockBasedCompensation",
+      "to_account": "OperatingExpenses",
+      "amount": 56000000,
+      "percentage": 0.4490057729313663,
+      "reasoning": "Reclassified stock-based compensation of $56.0M for dilution analysis"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "quoteResponse": {
+    "error": null,
+    "result": [
+      {
+        "averageDailyVolume3Month": 37960051,
+        "beta": 2.492,
+        "cryptoTradeable": false,
+        "currency": "USD",
+        "customPriceAlertConfidence": "HIGH",
+        "esgPopulated": false,
+        "exchange": "NMS",
+        "exchangeDataDelayedBy": 0,
+        "exchangeTimezoneName": "America/New_York",
+        "exchangeTimezoneShortName": "EDT",
+        "firstTradeDateMilliseconds": 322151400000,
+        "fullExchangeName": "NasdaqGS",
+        "gmtOffSetMilliseconds": -14400000,
+        "hasPrePostMarketData": true,
+        "impliedSharesOutstanding": 1630600639,
+        "language": "en-US",
+        "market": "us_market",
+        "marketCap": 876235849728,
+        "marketState": "CLOSED",
+        "priceHint": 2,
+        "quoteSourceName": "Delayed Quote",
+        "quoteType": "EQUITY",
+        "region": "US",
+        "regularMarketPrice": 537.37,
+        "regularMarketTime": 1781812801,
+        "regularMarketVolume": 42879327,
+        "sharesOutstanding": 1630600639,
+        "sourceInterval": 15,
+        "symbol": "AMD",
+        "tradeable": false,
+        "triggerable": true,
+        "typeDisp": "Equity"
+      }
+    ]
+  }
+}

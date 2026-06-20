@@ -1,0 +1,97 @@
+{
+  "ticker": "EQIX",
+  "wacc": 0.07960762210197701,
+  "growth_rate": 0.05857998681992993,
+  "growth_rates": [
+    0.058579986819929854,
+    0.058579986819929854,
+    0.058579986819929854,
+    0.058579986819929854,
+    0.058579986819929854,
+    0.058579986819929854,
+    0.058579986819929854
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 354.17869478460807,
+  "dcf_value_per_share": 300.18130805149553,
+  "current_assets_per_share": 54.1493208544775,
+  "ncav_per_share": -215.05768432141156,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-06-20T13:24:49Z",
+  "data_quality_score": 85,
+  "data_quality_grade": "B",
+  "calculation_method": "ffo",
+  "calculation_version": "4.8",
+  "warnings": [
+    "VAL-3 P3 forward FFO: 4y at avg 5.9% growth, terminal 25.0x P/FFO",
+    "P/FFO value ($300.2) diverges from NAV cross-check ($146.1/share, cap rate 4.0%); ratio=2.05x"
+  ],
+  "industry": {
+    "sic_code": "6798",
+    "sic": "REIT_DATACENTER",
+    "heuristic_code": "45",
+    "heuristic_name": "Information Technology",
+    "match": false
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 1092.19,
+  "assumption_profile": "reit_datacenter:standard_growth",
+  "resolution_trace": {
+    "profile_id": "reit_datacenter:standard_growth",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.1.0",
+    "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+    "matched_rule_id": "reit_datacenter",
+    "human_reason": "default_standard_growth"
+  },
+  "cleaning_adjustments": [
+    {
+      "rule": "goodwill_exclusion",
+      "category": "asset_quality",
+      "type": "exclude",
+      "from_account": "Goodwill",
+      "amount": 5931000000,
+      "reasoning": "goodwill_exclusion: Excluded 5931000000 goodwill (14.5% of assets) per A1 rule"
+    },
+    {
+      "rule": "excess_cash",
+      "category": "asset_quality",
+      "type": "exclude",
+      "from_account": "CashAndCashEquivalents",
+      "amount": 1117600000,
+      "reasoning": "excess_cash: Identified 1117600000 excess cash (cash 1362000000 - operating need 244400000 at 10% of revenue) as non-operating per A7 rule"
+    },
+    {
+      "rule": "operating_leases",
+      "category": "liability_completeness",
+      "type": "treat_as_debt",
+      "from_account": "OperatingLeaseCommitments",
+      "to_account": "InterestBearingDebt",
+      "amount": 1417000000,
+      "reasoning": "operating_lease_adj: Present value of operating lease commitments (3.5% of assets) calculated using simplified_liability_based method with 4.5% discount rate over 8 years"
+    },
+    {
+      "rule": "stock_compensation",
+      "category": "earnings_normalization",
+      "type": "reclassify",
+      "from_account": "StockBasedCompensation",
+      "to_account": "OperatingExpenses",
+      "amount": 128000000,
+      "percentage": 5.237315875613748,
+      "reasoning": "Reclassified stock-based compensation of $128.0M for dilution analysis"
+    },
+    {
+      "rule": "capitalized_interest",
+      "category": "earnings_normalization",
+      "type": "reclassify",
+      "from_account": "CapitalizedInterest",
+      "to_account": "InterestExpense",
+      "amount": 32000000,
+      "percentage": 1.309328968903437,
+      "reasoning": "Reclassified capitalized interest of $32.0M to interest expense"
+    }
+  ]
+}

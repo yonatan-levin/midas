@@ -1,0 +1,251 @@
+{
+  "ticker": "MSFT",
+  "industry_code": "",
+  "cik": "789019",
+  "as_of": "2026-04-23T03:00:00+03:00",
+  "reporting_currency": "USD",
+  "operating_income": 38398000000,
+  "normalized_operating_income": 38274000000,
+  "revenue": 82886000000,
+  "research_and_development": 8915000000,
+  "interest_expense": 0,
+  "tax_rate": 0.21,
+  "restructuring_charges": 0,
+  "asset_sale_gains": 0,
+  "litigation_settlements": 0,
+  "stock_based_compensation": 3081000000,
+  "derivative_gains_losses": 124000000,
+  "capitalized_interest": 0,
+  "working_capital_adjustment": 0,
+  "total_assets": 694228000000,
+  "tangible_assets": 574567000000,
+  "goodwill": 119661000000,
+  "other_intangibles": 0,
+  "total_debt": 40262000000,
+  "interest_bearing_debt": 40262000000,
+  "intangible_assets": 0,
+  "indefinite_lived_intangibles": 0,
+  "deferred_tax_assets": 0,
+  "valuation_allowance": 0,
+  "effective_tax_rate": 0.19,
+  "cost_of_goods_sold": 26828000000,
+  "inventory": 1219000000,
+  "inventory_turnover": 67.99507793273175,
+  "dead_inventory_writedown": 0,
+  "operating_lease_liability_current": 0,
+  "operating_lease_liability_noncurrent": 0,
+  "operating_lease_liability": 22238000000,
+  "operating_lease_commitments": null,
+  "operating_lease_right_of_use_asset": 24403000000,
+  "pension_liabilities": 0,
+  "opeb_liability": 0,
+  "pension_plan_assets": 0,
+  "projected_benefit_obligation": 0,
+  "contingent_liabilities": 647000000,
+  "environmental_liabilities": 0,
+  "litigation_liabilities": 0,
+  "incremental_borrowing_rate": 0,
+  "risk_free_rate": 0,
+  "dividends_per_share": 0,
+  "net_income": 31778000000,
+  "gain_on_property_sales": 0,
+  "depreciation_and_amortization": 9000000000,
+  "capital_expenditures": 30876000000,
+  "operating_cash_flow": 0,
+  "current_assets": 175329000000,
+  "current_liabilities": 136661000000,
+  "other_current_assets": 142005000000,
+  "other_non_current_assets": 399238000000,
+  "other_current_liabilities": 136661000000,
+  "other_non_current_liabilities": 102938000000,
+  "adjustment_ledger": [
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "A6_right_of_use_exclusion",
+      "rule_id": "right_of_use_assets",
+      "fired": false,
+      "reasoning": "ROU ratio below 5% threshold",
+      "skip_reason": "ROU ratio 3.5% below threshold 5.0%",
+      "skip_metrics": {
+        "rou_ratio": 0.035151275949688,
+        "threshold": 0.05
+      }
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "A2_intangible_writedown",
+      "rule_id": "intangible_adjustment",
+      "fired": false,
+      "reasoning": "No intangible assets present to adjust",
+      "skip_reason": "No intangible assets present to adjust"
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "A1_goodwill_exclusion",
+      "rule_id": "goodwill_exclusion",
+      "fired": true,
+      "reasoning": "A1 goodwill exclusion overlay emitted"
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "A-capitalized_software_review",
+      "rule_id": "capitalized_software",
+      "fired": false,
+      "reasoning": "No intangible assets present that might include capitalized software",
+      "skip_reason": "No intangible assets present that might include capitalized software"
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "A7_excess_cash",
+      "rule_id": "excess_cash",
+      "fired": true,
+      "reasoning": "A7 excess-cash identification overlay emitted",
+      "skip_metrics": {
+        "cash": 32105000000,
+        "excess_cash": 23816400000,
+        "operating_cash_need": 8288600000
+      }
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "A-RD_capitalization_review",
+      "rule_id": "rd_capitalization_review",
+      "fired": false,
+      "reasoning": "rd_capitalization_review: R\u0026D expenses 8915000000 (10.8% of revenue) flagged for review",
+      "skip_reason": "flag-only review; no balance-sheet adjustment",
+      "skip_metrics": {
+        "rd_amount": 8915000000,
+        "rd_ratio": 0.10755736795116183,
+        "threshold": 0.1
+      }
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "B1_operating_lease_capitalization",
+      "rule_id": "operating_leases",
+      "fired": true,
+      "reasoning": "B1 operating-lease capitalization overlay emitted"
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "B2_pension_underfunding",
+      "rule_id": "pension_obligations",
+      "fired": false,
+      "reasoning": "No under-funded pension or OPEB obligations present",
+      "skip_reason": "No under-funded pension or OPEB obligations present"
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "C5_derivative_gains_losses",
+      "rule_id": "derivative_gains_losses",
+      "fired": true,
+      "reasoning": "Derivative gains/losses adjustment: Excluded $124.0M from normalized operating income",
+      "component": "NormalizedOperatingIncome",
+      "delta_amount": -124000000,
+      "equity_offset": -124000000,
+      "skip_metrics": {
+        "original_Revenue": 82886000000
+      }
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "C7_working_capital",
+      "rule_id": "working_capital_window_dressing",
+      "fired": false,
+      "reasoning": "No working capital adjustments detected",
+      "skip_reason": "No working capital adjustments detected"
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "C1_restructuring_charges",
+      "rule_id": "restructuring_charges",
+      "fired": false,
+      "reasoning": "Restructuring charges below materiality threshold (1.5% \u003c 2.0%)",
+      "skip_reason": "Restructuring charges below materiality threshold (1.5% \u003c 2.0%)",
+      "skip_metrics": {
+        "restructuring_ratio": 0.015,
+        "threshold": 0.02
+      }
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "C2_asset_sale_gains",
+      "rule_id": "asset_sale_gains",
+      "fired": false,
+      "reasoning": "No asset sale gains to adjust",
+      "skip_reason": "No asset sale gains to adjust"
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "C3_litigation_settlements",
+      "rule_id": "litigation_settlements",
+      "fired": false,
+      "reasoning": "No litigation settlements to adjust",
+      "skip_reason": "No litigation settlements to adjust"
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "C4_stock_compensation",
+      "rule_id": "stock_compensation",
+      "fired": false,
+      "reasoning": "Stock-based compensation adjustment: Reclassified $3081.0M (3.7% of revenue) for dilution analysis",
+      "skip_reason": "flag-only review; no balance-sheet adjustment",
+      "skip_metrics": {
+        "original_Revenue": 82886000000,
+        "sbc_amount": 3081000000,
+        "sbc_ratio": 0.0371715368095939
+      }
+    },
+    {
+      "timestamp": "2026-06-20T13:24:59.9352361+03:00",
+      "adjuster_id": "C6_capitalized_interest",
+      "rule_id": "capitalized_interest",
+      "fired": false,
+      "reasoning": "No capitalized interest to adjust",
+      "skip_reason": "No capitalized interest to adjust"
+    }
+  ],
+  "overlays": [
+    {
+      "overlay_id": "A1_goodwill_exclusion",
+      "rule_id": "goodwill_exclusion",
+      "field": "TotalAssets",
+      "operation": "subtract",
+      "amount": 119661000000,
+      "amount_semantics": "incremental",
+      "reasoning": "goodwill_exclusion: Excluded 119661000000 goodwill (17.2% of assets) per A1 rule"
+    },
+    {
+      "overlay_id": "A7_excess_cash",
+      "rule_id": "excess_cash",
+      "field": "ExcessCash",
+      "operation": "identify",
+      "amount": 23816400000,
+      "amount_semantics": "replacement",
+      "reasoning": "excess_cash: Identified 23816400000 excess cash (cash 32105000000 - operating need 8288600000 at 10% of revenue) as non-operating per A7 rule"
+    },
+    {
+      "overlay_id": "B1_operating_lease_capitalization",
+      "rule_id": "operating_leases",
+      "field": "TotalDebt",
+      "operation": "add",
+      "amount": 22238000000,
+      "amount_semantics": "incremental",
+      "reasoning": "operating_lease_adj: Present value of operating lease commitments (3.2% of assets) calculated using simplified_liability_based method with 4.5% discount rate over 8 years"
+    }
+  ],
+  "total_liabilities": 279861000000,
+  "cash_and_cash_equivalents": 32105000000,
+  "stockholders_equity": 414367000000,
+  "minority_interest": 0,
+  "preferred_equity": 0,
+  "shares_outstanding": 7429000000,
+  "diluted_shares_outstanding": 7445000000,
+  "period": "",
+  "filing_period": "2026Q3",
+  "filing_date": "2026-04-29T03:00:00+03:00",
+  "has_normalized_data": true,
+  "missing_fields": [
+    "tax_rate"
+  ]
+}

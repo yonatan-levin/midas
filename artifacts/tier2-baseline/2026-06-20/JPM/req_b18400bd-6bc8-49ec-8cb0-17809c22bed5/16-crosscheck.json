@@ -1,0 +1,14 @@
+{
+  "implied_pe": 53.43681807974878,
+  "sector_median_pe": 12,
+  "implied_ev_ebitda": 38.58455007693282,
+  "sector_median_ev_ebitda": 10,
+  "implied_pfcf": 46.73808873726676,
+  "sector_median_pfcf": 14,
+  "is_reasonable": false,
+  "flags": [
+    "DCF-implied P/E (53.4) is \u003e2x sector median (12.0) for FIN_BANK",
+    "DCF-implied EV/EBITDA (38.6) is \u003e2x sector median (10.0) for FIN_BANK",
+    "DCF-implied P/FCF (46.7) is \u003e2x sector median (14.0) for FIN_BANK"
+  ]
+}

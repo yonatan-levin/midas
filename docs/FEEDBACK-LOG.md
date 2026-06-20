@@ -154,6 +154,18 @@ location nobody browses.
 
 ---
 
+### 2026-06-20 — The accuracy market-gap is a screening signal, never an optimization target
+
+**Rule:** Treat `cmd/accuracy`'s market-price gap as a *screening signal only* — it points at which tickers to inspect; it never defines the right answer. **Never tune the valuation engine to minimize the gap.** Calibrate to *correctness* (accounting/finance defects whose right answer is price-independent), and drive the **price-free** columns — `NEG_INTRINSIC`, `NEG_FCF_YEARS`, `TERMINAL_DOMINANCE` — toward zero. Success is NOT `gap → 0`.
+
+**Why:** The user pushed back (2026-06-20): the market is frequently wrong (whole-sector/market overvaluation), so an intrinsic-value model is *supposed* to disagree with price. Optimizing to the gap would turn the DCF into an expensive market parrot, deleting its reason to exist. A basket-wide gap collapse would itself signal overfitting to price. The gap earned acceptance only on the explicit condition that it does not drive engine decisions.
+
+**How to apply:** All bucket-A accuracy/calibration work. Use the gap (and `EXTREME_GAP`) to *triage*; justify every engine change by an independent correctness rationale (valuation theory or a real defect), then use the gap only as corroboration. Disambiguate "bent ruler" from "real bubble" via the price-free flags: a one-sided below-market skew is the engine's fault only when those flags *also* fire; clean internals + persistent skew → believe the model. See `cmd/accuracy/README.md` §"The gap is a signal, not a target".
+
+**Source:** A/C/D re-focus — A-0 4.8 baseline session, 2026-06-20.
+
+---
+
 ## Archive (Promoted to MEMORY.md or Obsolete)
 
 *(Empty. Move items here when they are promoted to `memory/MEMORY.md` or are no longer relevant.)*
@@ -200,3 +212,4 @@ location nobody browses.
 |------|--------|
 | 2026-04-18 | Initial empty template. No active rules yet. |
 | 2026-06-04 | Added 3 active rules — isolated-worktrees, AGENTS.md-is-not-a-history-log, API-doc-sync + swag-version-pinning. |
+| 2026-06-20 | Added active rule — accuracy market-gap is a screening signal, never an optimization target. |

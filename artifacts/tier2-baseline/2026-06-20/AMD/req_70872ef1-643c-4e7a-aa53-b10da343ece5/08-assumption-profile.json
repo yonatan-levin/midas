@@ -1,0 +1,41 @@
+{
+  "profile_id": "cyclical_mid_cycle:high_growth",
+  "source": "explicit",
+  "resolver_version": "1.0.0",
+  "config_version": "1.1.0",
+  "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+  "resolved_snapshot": {
+    "profile_id": "cyclical_mid_cycle:high_growth",
+    "archetype": "cyclical_mid_cycle",
+    "maturity": "high_growth",
+    "horizon_years": 5,
+    "compound_growth_cap": 3,
+    "revenue_base_method": "raw_ttm",
+    "discount_method": "cost_of_equity",
+    "terminal_method": "exit_multiple",
+    "stabilized": false,
+    "fade_years": 2,
+    "terminal_multiple": 3,
+    "dps_growth_cap": 0,
+    "payout_path": [],
+    "dividend_forecast_horizon": 0,
+    "stable_dividend_growth": 0.03,
+    "reinvestment_method": "sales_to_capital",
+    "sales_to_capital_start": 1.5,
+    "sales_to_capital_target": 2.5,
+    "reinvestment_fade_years": 5,
+    "maintenance_capex_floor": 0.03,
+    "base_margin_method": "ttm",
+    "target_operating_margin": 0.3,
+    "margin_convergence_years": 5
+  },
+  "trace": {
+    "profile_id": "cyclical_mid_cycle:high_growth",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.1.0",
+    "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+    "matched_rule_id": "mfg_semi",
+    "human_reason": "yoy_above_high_growth_threshold"
+  }
+}

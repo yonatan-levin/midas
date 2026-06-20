@@ -1,0 +1,128 @@
+{
+  "ticker": "MSFT",
+  "wacc": 0.09706387718145594,
+  "growth_rate": 0.0999528211807168,
+  "growth_rates": [
+    0.10797880233869514,
+    0.10797880233869514,
+    0.10797880233869514,
+    0.1023830418709561,
+    0.09678728140321709,
+    0.09119152093547805,
+    0.08559576046773903
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 77.17488247145735,
+  "dcf_value_per_share": 345.79812824033866,
+  "current_assets_per_share": 23.54989926124916,
+  "ncav_per_share": -14.0405641370047,
+  "graham_floor_per_share": 0,
+  "as_of": "2026-06-20T13:25:00Z",
+  "data_quality_score": 65,
+  "data_quality_grade": "D",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.8",
+  "warnings": [
+    "terminal_dominance: terminal_pv is 81.4% of enterprise_value (\u003e80% threshold; consider longer horizon or lower terminal growth)",
+    "reinvestment_model: method=sales_to_capital base_margin=45.6% target_margin=45.6% sales_to_capital=3.00→4.50 fade=5y",
+    "maintenance_capex_floor: projected reinvestment clamped up to the maintenance-capex floor; FCF reflects the floor, not the lower modeled reinvestment",
+    "operating_income_base: source=ANNUAL_FY operating_income=$128528000000",
+    "operating_income_base: TTM unavailable, used latest FY ($128528000000 dated 2025-07-30) [2025FY]",
+    "DCF-implied P/E (81.0) is \u003e2x sector median (28.0) for TECH",
+    "DCF-implied EV/EBITDA (55.0) is \u003e2x sector median (18.0) for TECH",
+    "DCF-implied P/FCF (260.0) is \u003e2x sector median (32.0) for TECH"
+  ],
+  "sanity_check": {
+    "implied_pe": 81.01413130937509,
+    "sector_median_pe": 28,
+    "implied_ev_ebitda": 54.95721475060807,
+    "sector_median_ev_ebitda": 18,
+    "implied_pfcf": 259.9946540849648,
+    "sector_median_pfcf": 32,
+    "is_reasonable": false,
+    "flags": [
+      "DCF-implied P/E (81.0) is \u003e2x sector median (28.0) for TECH",
+      "DCF-implied EV/EBITDA (55.0) is \u003e2x sector median (18.0) for TECH",
+      "DCF-implied P/FCF (260.0) is \u003e2x sector median (32.0) for TECH"
+    ]
+  },
+  "industry": {
+    "sic_code": "7372",
+    "sic": "TECH",
+    "heuristic_code": "45",
+    "heuristic_name": "Information Technology",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 379.4,
+  "assumption_profile": "software_like_large_scale:standard_growth",
+  "resolution_trace": {
+    "profile_id": "software_like_large_scale:standard_growth",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.1.0",
+    "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+    "matched_rule_id": "tech_generic",
+    "human_reason": "default_standard_growth"
+  },
+  "dcf_horizon_years": 5,
+  "dcf_terminal_method": "gordon_growth",
+  "dcf_terminal_pct_of_ev": 0.8137393585971977,
+  "dcf_per_year_pv": [
+    94144680396.9786,
+    95788533974.17126,
+    97345897983.63626,
+    98656507955.0504,
+    99247658636.19998
+  ],
+  "dcf_terminal_growth_used": 0.03,
+  "cleaning_adjustments": [
+    {
+      "rule": "goodwill_exclusion",
+      "category": "asset_quality",
+      "type": "exclude",
+      "from_account": "Goodwill",
+      "amount": 119661000000,
+      "reasoning": "goodwill_exclusion: Excluded 119661000000 goodwill (17.2% of assets) per A1 rule"
+    },
+    {
+      "rule": "excess_cash",
+      "category": "asset_quality",
+      "type": "exclude",
+      "from_account": "CashAndCashEquivalents",
+      "amount": 23816400000,
+      "reasoning": "excess_cash: Identified 23816400000 excess cash (cash 32105000000 - operating need 8288600000 at 10% of revenue) as non-operating per A7 rule"
+    },
+    {
+      "rule": "operating_leases",
+      "category": "liability_completeness",
+      "type": "treat_as_debt",
+      "from_account": "OperatingLeaseCommitments",
+      "to_account": "InterestBearingDebt",
+      "amount": 22238000000,
+      "reasoning": "operating_lease_adj: Present value of operating lease commitments (3.2% of assets) calculated using simplified_liability_based method with 4.5% discount rate over 8 years"
+    },
+    {
+      "rule": "derivative_gains_losses",
+      "category": "earnings_normalization",
+      "type": "exclude",
+      "from_account": "DerivativeGainsLosses",
+      "to_account": "NormalizedOperatingIncome",
+      "amount": 124000000,
+      "percentage": 0.14960306927587289,
+      "reasoning": "Excluded derivative gains/losses of $124.0M from operating income"
+    },
+    {
+      "rule": "stock_compensation",
+      "category": "earnings_normalization",
+      "type": "reclassify",
+      "from_account": "StockBasedCompensation",
+      "to_account": "OperatingExpenses",
+      "amount": 3081000000,
+      "percentage": 3.71715368095939,
+      "reasoning": "Reclassified stock-based compensation of $3081.0M for dilution analysis"
+    }
+  ]
+}

@@ -1,0 +1,138 @@
+{
+  "ticker": "AMD",
+  "wacc": 0.14462747836213427,
+  "growth_rate": 0.24204623578275153,
+  "growth_rates": [
+    0.3095845967435891,
+    0.3095845967435891,
+    0.3095845967435891,
+    0.2636676773948713,
+    0.21775075804615346,
+    0.17183383869743565,
+    0.12591691934871782
+  ],
+  "growth_source": "analyst_blend",
+  "growth_confidence": "high",
+  "tangible_value_per_share": 23.117575757575757,
+  "dcf_value_per_share": 112.85167380622819,
+  "current_assets_per_share": 17.35030303030303,
+  "ncav_per_share": 8.15030303030303,
+  "graham_floor_per_share": 5.433535353535353,
+  "graham_discount_pct": 97.8987767697799,
+  "as_of": "2026-06-20T13:24:46Z",
+  "data_quality_score": 55,
+  "data_quality_grade": "F",
+  "calculation_method": "multi_stage_dcf",
+  "calculation_version": "4.8",
+  "warnings": [
+    "terminal_dominance: terminal_pv is 89.1% of enterprise_value (\u003e80% threshold; consider longer horizon or lower terminal growth)",
+    "reinvestment_model: method=sales_to_capital base_margin=10.7% target_margin=30.0% sales_to_capital=1.50→2.50 fade=5y",
+    "operating_income_base: source=ANNUAL_FY operating_income=$3694000000",
+    "operating_income_base: TTM unavailable, used latest FY ($3694000000 dated 2026-02-04) [2025FY]",
+    "DCF-implied P/E (134.6) is \u003e2x sector median (22.0) for MFG_SEMI",
+    "DCF-implied EV/EBITDA (124.4) is \u003e2x sector median (10.0) for MFG_SEMI",
+    "DCF-implied P/FCF (187.3) is \u003e2x sector median (25.0) for MFG_SEMI"
+  ],
+  "sanity_check": {
+    "implied_pe": 134.63865638487096,
+    "sector_median_pe": 22,
+    "implied_ev_ebitda": 124.4019388755261,
+    "sector_median_ev_ebitda": 10,
+    "implied_pfcf": 187.3292372034975,
+    "sector_median_pfcf": 25,
+    "is_reasonable": false,
+    "flags": [
+      "DCF-implied P/E (134.6) is \u003e2x sector median (22.0) for MFG_SEMI",
+      "DCF-implied EV/EBITDA (124.4) is \u003e2x sector median (10.0) for MFG_SEMI",
+      "DCF-implied P/FCF (187.3) is \u003e2x sector median (25.0) for MFG_SEMI"
+    ]
+  },
+  "industry": {
+    "sic_code": "3674",
+    "sic": "MFG_SEMI",
+    "heuristic_code": "45",
+    "heuristic_name": "Information Technology",
+    "match": true
+  },
+  "currency": "USD",
+  "adr_ratio_applied": 1,
+  "current_price": 537.37,
+  "assumption_profile": "cyclical_mid_cycle:high_growth",
+  "resolution_trace": {
+    "profile_id": "cyclical_mid_cycle:high_growth",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.1.0",
+    "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+    "matched_rule_id": "mfg_semi",
+    "human_reason": "yoy_above_high_growth_threshold"
+  },
+  "dcf_horizon_years": 5,
+  "dcf_terminal_method": "exit_multiple",
+  "dcf_terminal_pct_of_ev": 0.8911683512871458,
+  "dcf_per_year_pv": [
+    -961448721.0647581,
+    948930288.9673163,
+    3285263493.324932,
+    6628143733.952842,
+    10082480536.506926
+  ],
+  "dcf_terminal_growth_used": 0.03,
+  "cleaning_adjustments": [
+    {
+      "rule": "excess_cash",
+      "category": "asset_quality",
+      "type": "exclude",
+      "from_account": "CashAndCashEquivalents",
+      "amount": 4559700000,
+      "reasoning": "excess_cash: Identified 4559700000 excess cash (cash 5585000000 - operating need 1025300000 at 10% of revenue) as non-operating per A7 rule"
+    },
+    {
+      "rule": "obsolete_inventory",
+      "category": "asset_quality",
+      "type": "writedown",
+      "from_account": "Inventory",
+      "to_account": "InventoryWritedown",
+      "amount": 3218000000,
+      "percentage": 40,
+      "reasoning": "inventory_writedown: Applied 40% writedown to obsolete inventory per A5 rule"
+    },
+    {
+      "rule": "intangible_adjustment",
+      "category": "asset_quality",
+      "type": "writedown",
+      "from_account": "IntangibleAssets",
+      "to_account": "IntangibleWritedown",
+      "amount": 10769333333.333334,
+      "percentage": 66.66666666666667,
+      "reasoning": "intangible_writedown: Applied 67% writedown to indefinite-lived intangibles (20.3% of assets) per A2 rule"
+    },
+    {
+      "rule": "goodwill_exclusion",
+      "category": "asset_quality",
+      "type": "exclude",
+      "from_account": "Goodwill",
+      "amount": 25344000000,
+      "reasoning": "goodwill_exclusion: Excluded 25344000000 goodwill (31.8% of assets) per A1 rule"
+    },
+    {
+      "rule": "operating_leases",
+      "category": "liability_completeness",
+      "type": "treat_as_debt",
+      "from_account": "OperatingLeaseCommitments",
+      "to_account": "InterestBearingDebt",
+      "amount": 647000000,
+      "reasoning": "operating_lease_adj: Present value of operating lease commitments (0.8% of assets) calculated using simplified_liability_based method with 4.5% discount rate over 8 years"
+    },
+    {
+      "rule": "stock_compensation",
+      "category": "earnings_normalization",
+      "type": "reclassify",
+      "from_account": "StockBasedCompensation",
+      "to_account": "OperatingExpenses",
+      "amount": 487000000,
+      "percentage": 4.7498293182483176,
+      "reasoning": "Reclassified stock-based compensation of $487.0M for dilution analysis"
+    }
+  ]
+}

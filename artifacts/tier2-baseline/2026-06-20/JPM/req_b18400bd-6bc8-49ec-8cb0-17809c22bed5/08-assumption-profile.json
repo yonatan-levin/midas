@@ -1,0 +1,33 @@
+{
+  "profile_id": "mature_large_bank:mature",
+  "source": "explicit",
+  "resolver_version": "1.0.0",
+  "config_version": "1.1.0",
+  "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+  "resolved_snapshot": {
+    "profile_id": "mature_large_bank:mature",
+    "archetype": "mature_large_bank",
+    "maturity": "mature",
+    "horizon_years": 3,
+    "compound_growth_cap": 1.5,
+    "revenue_base_method": "raw_ttm",
+    "discount_method": "cost_of_equity",
+    "terminal_method": "gordon_growth",
+    "stabilized": true,
+    "fade_years": 0,
+    "terminal_multiple": 0.8,
+    "dps_growth_cap": 0.08,
+    "payout_path": [],
+    "dividend_forecast_horizon": 0,
+    "stable_dividend_growth": 0.03
+  },
+  "trace": {
+    "profile_id": "mature_large_bank:mature",
+    "source": "explicit",
+    "resolver_version": "1.0.0",
+    "config_version": "1.1.0",
+    "config_hash": "c86c3a673484394688ec03f98625a9f1e9617c6e1a24bc4b3c2bfde58f993d19",
+    "matched_rule_id": "fin_generic",
+    "human_reason": "default_standard_growth"
+  }
+}

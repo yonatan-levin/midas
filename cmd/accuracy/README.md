@@ -63,6 +63,27 @@ defensive cash-cows like KO. That report is the evidence base for a follow-up
 `/debug` investigation into the FCF projection (tracked separately — **not** in
 scope for this harness, which only *measures*).
 
+## The gap is a signal, not a target
+
+The market gap is a **screening signal — it tells you where to look, never what the
+answer is.** Do **not** tune the engine to minimize it: an intrinsic-value model that
+hugs market price is a worthless market parrot, since its whole purpose is to be able
+to say "the market is wrong here."
+
+Operating rules (locked 2026-06-20; see `docs/FEEDBACK-LOG.md`):
+
+- **Calibrate to correctness, not to the gap.** Only change the engine when there is
+  an independent accounting/finance reason — a defect whose right answer does not
+  depend on price (e.g. BUG-014 cash-in-NWC, BUG-015 quarterly-OI base). A shrinking
+  gap afterward is *corroboration*, never the goal.
+- **The KPI is the price-free columns** — `NEG_INTRINSIC`, `NEG_FCF_YEARS`,
+  `TERMINAL_DOMINANCE` (terminal-PV share). Those are wrong regardless of price.
+- **Success is not gap → 0.** A correct engine still disagrees with the market on
+  genuinely mispriced names; a basket-wide gap collapse signals overfitting to price.
+- **Bent-ruler vs. real bubble:** a one-sided below-market skew is the *engine's*
+  fault only when the price-free flags *also* fire. Clean internals + persistent skew
+  → believe the model; the market may be frothy.
+
 ## Capturing a baseline
 
 The harness consumes bundles; it does not produce them. To refresh the baseline,
