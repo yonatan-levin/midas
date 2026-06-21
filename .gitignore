@@ -96,7 +96,6 @@ logs/
 # (rather than artifacts/) so the negation can reach into the directory —
 # Git skips recursion into a fully-ignored parent.
 artifacts/*
-!artifacts/tier2-baseline/
 *.gz
 
 # Caches (tooling may create these locally)
