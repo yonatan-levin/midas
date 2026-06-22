@@ -2041,8 +2041,13 @@ func (s *Service) performAlternativeValuation(
 		CurrentPrice:        marketData.SharePrice,
 		DataFreshnessScore:  dataFreshnessScore,
 		CalculationMethod:   modelResult.ModelType,
-		CalculationVersion:  "4.8", // Tier 2 Layer A: DCF reinvestment / operating-leverage model. Alt-model numerics (DDM/FFO/revenue_multiple) are UNAFFECTED — Layer A is DCF-path only — so only calculation_version drifts here (bit-for-bit primary values). The bump is engine-wide for a single version stamp. 4.8 reflects SR-1/B3 cleaner SEC R&D extraction now changing tech-classified ticker outputs (AMD/MXL) via A5's inventory writedown. Prior: 4.7 (Layer A reinvestment model). The request-valuation-overrides feature is additive + version-neutral.
-		Warnings:            modelResult.Warnings,
+		// VAL-3 Phase 2: carry the FFO/AFFO per-share numbers through. The model
+		// already chose the headline (IntrinsicValuePerShare → DCFValuePerShare);
+		// no headline re-derivation here. Both omitempty — zero on non-FFO paths.
+		PFFOValuePerShare:  modelResult.PFFOValuePerShare,
+		PAFFOValuePerShare: modelResult.PAFFOValuePerShare,
+		CalculationVersion: "4.8", // Tier 2 Layer A: DCF reinvestment / operating-leverage model. Alt-model numerics (DDM/FFO/revenue_multiple) are UNAFFECTED — Layer A is DCF-path only — so only calculation_version drifts here (bit-for-bit primary values). The bump is engine-wide for a single version stamp. 4.8 reflects SR-1/B3 cleaner SEC R&D extraction now changing tech-classified ticker outputs (AMD/MXL) via A5's inventory writedown. Prior: 4.7 (Layer A reinvestment model). The request-valuation-overrides feature is additive + version-neutral.
+		Warnings:           modelResult.Warnings,
 	}
 
 	if len(gf.Warnings) > 0 {

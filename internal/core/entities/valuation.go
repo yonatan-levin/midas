@@ -168,6 +168,15 @@ type ValuationResult struct {
 	// packages, exactly as it must not import params. The service maps
 	// authority.Resolution.Sources → AssumptionSourceValue.
 	AssumptionSources map[string]AssumptionSourceValue `json:"assumption_sources,omitempty"`
+
+	// VAL-3 Phase 2 (REIT FFO/AFFO). Both omitempty: only the FFO-model path
+	// populates them, so DCF/DDM/revenue_multiple results omit them (byte-
+	// identical wire shape). PFFOValuePerShare is the FFO-based number (present
+	// on every REIT result); PAFFOValuePerShare is the AFFO-based number, present
+	// only when maintenance capex is disclosed OR estimable (0.7× capex). When
+	// PAFFO is present it equals the headline DCFValuePerShare.
+	PFFOValuePerShare  float64 `json:"pffo_value_per_share,omitempty"`
+	PAFFOValuePerShare float64 `json:"paffo_value_per_share,omitempty"`
 }
 
 // AssumptionSourceValue is the per-assumption payload on ValuationResult
