@@ -3774,9 +3774,83 @@ func loadP2TestRegistry(t *testing.T, archetype, maturity string, horizonYears i
 	return reg
 }
 
+// loadP2TestRegistryWithMaxSibling builds a registry exactly like
+// loadP2TestRegistry (the wildcard rule routes EVERY ticker to the given
+// archetype/maturity/horizon profile) but ADDS one extra, never-routed sibling
+// profile whose horizon_years == maxSiblingHorizon. The sibling raises the
+// registry's MaxHorizonYears without changing resolution, so VAL-1 Phase 2's
+// NewService extends the shared estimator slice to maxSiblingHorizon rates while
+// the wildcard-resolved profile still drives the actual horizon. This is how the
+// byte-identity (T3) and 7y-no-drift (T5) tests obtain a long shared slice
+// alongside a short resolved horizon. The sibling archetype is chosen distinct
+// from the routed archetype to avoid a profile-key collision.
+func loadP2TestRegistryWithMaxSibling(t *testing.T, archetype, maturity string, horizonYears int, terminalMethod string, maxSiblingHorizon int) profile.Registry {
+	t.Helper()
+	siblingArchetype := "hypergrowth_profitable"
+	if archetype == siblingArchetype {
+		siblingArchetype = "software_like_large_scale"
+	}
+	jsonConfig := `{
+		"config_version": "1.0.0",
+		"resolver_version": "1.0.0",
+		"profiles": {
+			"` + archetype + `:` + maturity + `": {
+				"profile_id": "` + archetype + `:` + maturity + `",
+				"archetype": "` + archetype + `",
+				"maturity": "` + maturity + `",
+				"horizon_years": ` + strconv.Itoa(horizonYears) + `,
+				"compound_growth_cap": 4.0,
+				"revenue_base_method": "raw_ttm",
+				"discount_method": "wacc",
+				"terminal_method": "` + terminalMethod + `",
+				"stabilized": false,
+				"fade_years": 1,
+				"terminal_multiple": 4.0,
+				"dps_growth_cap": 0,
+				"payout_path": [],
+				"dividend_forecast_horizon": 0,
+				"stable_dividend_growth": 0.03
+			},
+			"` + siblingArchetype + `:high_growth": {
+				"profile_id": "` + siblingArchetype + `:high_growth",
+				"archetype": "` + siblingArchetype + `",
+				"maturity": "high_growth",
+				"horizon_years": ` + strconv.Itoa(maxSiblingHorizon) + `,
+				"compound_growth_cap": 4.0,
+				"revenue_base_method": "raw_ttm",
+				"discount_method": "wacc",
+				"terminal_method": "gordon_growth",
+				"stabilized": false,
+				"fade_years": 1,
+				"terminal_multiple": 4.0,
+				"dps_growth_cap": 0,
+				"payout_path": [],
+				"dividend_forecast_horizon": 0,
+				"stable_dividend_growth": 0.03
+			}
+		},
+		"archetype_rules": [
+			{"id":"p2_test_wildcard","priority":0,"industry_prefix":"*","archetype":"` + archetype + `"}
+		],
+		"maturity_thresholds_fallback": {
+			"large_cap_revenue_min_usd": 50000000000,
+			"mid_cap_revenue_min_usd": 10000000000,
+			"high_growth_revenue_yoy_min": 0.30,
+			"mature_revenue_yoy_max": 0.10,
+			"trough_oi_threshold": 0.0
+		}
+	}`
+	reg, err := profile.LoadFromBytes([]byte(jsonConfig), "p2_test_registry_with_sibling")
+	require.NoError(t, err, "P2 sibling test registry must load")
+	return reg
+}
+
 // buildP2TestService constructs a Service whose profileRegistry routes
-// every ticker to the given profile, using DefaultEstimatorConfig with
-// Stage3Years bumped so 10-year horizons have enough growth rates.
+// every ticker to the given profile. VAL-1 Phase 2: the service relies on
+// PRODUCTION wiring — NewService derives the shared estimator's Stage3Years
+// from reg.MaxHorizonYears() — so a 10-year profile gets enough growth rates
+// without any test-only estimator rebuild. (The pre-Phase-2 helper manually
+// bumped Stage3Years=3 here; that crutch is gone now that production does it.)
 func buildP2TestService(t *testing.T, reg profile.Registry) *Service {
 	t.Helper()
 	financialRepo := &MockFinancialDataRepository{}
@@ -3802,23 +3876,7 @@ func buildP2TestService(t *testing.T, reg profile.Registry) *Service {
 		},
 	}
 	logger := zap.NewNop()
-	svc := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, metricsService, cfg, logger, newTestCalcEmitter(), reg)
-
-	// Ensure the estimator can produce ≥10 growth rates so horizon=10 tests
-	// have enough per-year rates. This mirrors what production wiring will
-	// do once Pre-P2's config-driven Stage3Years lands in cmd/server.
-	estCfg := svc.growthEstimator.Config()
-	estCfg.Stage3Years = 3 // 3 + 4 + 3 = 10 stages
-	// Rebuild the estimator with the extended config; calcEmitter is the same.
-	svc.growthEstimator = rebuildEstimatorForP2Test(estCfg, logger, svc.calcEmitter)
-	return svc
-}
-
-// rebuildEstimatorForP2Test reconstructs the growth estimator with an
-// extended config. Used by P2 tests that need a horizon ≥ 10 (Pre-P2's
-// Stage3Years extension). Mirrors the inline construction in NewService.
-func rebuildEstimatorForP2Test(cfg growthsvc.EstimatorConfig, logger *zap.Logger, calcEmitter *calclog.Emitter) *growthsvc.Estimator {
-	return growthsvc.NewEstimator(cfg, logger, calcEmitter)
+	return NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, metricsService, cfg, logger, newTestCalcEmitter(), reg)
 }
 
 // TestService_DCF_HorizonFromProfile_MatureLargeScale_3y verifies P2's
@@ -3906,13 +3964,12 @@ func TestService_DCF_NoProfile_PreservesLegacy7y(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// Legacy horizon = len(growthEstimate.ProjectedGrowthRates) — under
-	// buildP2TestService's Stage3Years=3 patch this is 10. The contract
-	// here is "no profile → derive from growth-estimator output", not a
-	// hard-coded literal. We assert horizon equals the growth-rate slice
-	// length, which is what the legacy path always did.
-	assert.Greater(t, result.DCFHorizonYears, 0,
-		"legacy path must still stamp a positive horizon")
+	// VAL-1 Phase 2: with a nil registry, NewService leaves Stage3Years at its
+	// DefaultEstimatorConfig value (0), so the shared estimator produces exactly
+	// the legacy 7 growth rates (3 + 4 + 0). The no-profile horizon resolves to the
+	// legacy default (7) — byte-identical to pre-Phase-2.
+	assert.Equal(t, 7, result.DCFHorizonYears,
+		"nil-registry legacy path must stamp the legacy 7y horizon")
 	assert.Len(t, result.DCFPerYearPV, result.DCFHorizonYears,
 		"DCFPerYearPV length must always equal DCFHorizonYears")
 }
@@ -3921,6 +3978,15 @@ func TestService_DCF_NoProfile_PreservesLegacy7y(t *testing.T) {
 // Stage3Years bump, so the shared estimator produces only the legacy 7 growth
 // rates (3 + 4 + 0). Used to force a profile-horizon clamp (profile horizon 10
 // > 7 available rates), exercising T4's resolver clamp + warnings-drain rule.
+//
+// VAL-1 Phase 2 note: production NewService now derives Stage3Years from the
+// registry's max horizon, so passing a 10y registry would auto-extend the slice
+// to 10 and the clamp would never fire. To keep exercising the clamp path (whose
+// warnings-drain byte-identity rule is still load-bearing), this helper forcibly
+// rebuilds the shared estimator back to the legacy 3/4/0 (7-rate) config AFTER
+// construction and resets estimatorInjectedStage3 to 0 so the legacy-horizon
+// neutralizer matches the 7-rate slice. This fabricates the otherwise-now-rare
+// clamp scenario; it is NOT how production behaves.
 func buildP2TestServiceDefaultEstimator(t *testing.T, reg profile.Registry) *Service {
 	t.Helper()
 	financialRepo := &MockFinancialDataRepository{}
@@ -3945,8 +4011,16 @@ func buildP2TestServiceDefaultEstimator(t *testing.T, reg profile.Registry) *Ser
 		},
 	}
 	logger := zap.NewNop()
-	// Default estimator (Stage3Years = 0 → 7 rates), deliberately NOT extended.
-	return NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, metricsService, cfg, logger, newTestCalcEmitter(), reg)
+	svc := NewService(financialRepo, marketRepo, macroRepo, cache, dataCleaner, nil, metricsService, cfg, logger, newTestCalcEmitter(), reg)
+
+	// Force the legacy 3/4/0 (7-rate) estimator regardless of the registry's max
+	// horizon, so a 10y profile clamps to 7. estimatorInjectedStage3 is reset to 0
+	// to keep the legacy-horizon neutralizer consistent with the 7-rate slice.
+	legacyCfg := svc.growthEstimator.Config()
+	legacyCfg.Stage3Years = 0
+	svc.growthEstimator = growthsvc.NewEstimator(legacyCfg, logger, svc.calcEmitter)
+	svc.estimatorInjectedStage3 = 0
+	return svc
 }
 
 // TestService_DCF_ProfileHorizonClamp_NoWarningOnDefaultPath is the T4

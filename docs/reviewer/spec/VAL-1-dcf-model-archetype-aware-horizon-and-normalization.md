@@ -149,9 +149,46 @@ Coverage: ≥90% on new code per CLAUDE.md finance-module standard.
 - [x] Tests assert fields populate for representative fixtures (AAPL, MSFT, MXL) — `TestService_performValuation_DCFDiagnostics_*` in `internal/services/valuation/service_test.go` (lines ~3504-3705) pins field semantics, length invariants (`len(dcf_per_year_pv) == dcf_horizon_years`), and the >0.80 terminal-dominance warning trigger.
 - [x] No existing test regresses — full `go test ./... -count=1 -short` PASS at the Phase 1 close.
 
+### Phase 2 — SHIPPED 2026-06-22 (archetype-aware DCF horizon, production wiring)
+
+The horizon resolution + diagnostics were already wired by Tier-2 P2 / the
+request-valuation-overrides (T4) work; the remaining production gap was the
+shared growth estimator's slice length. `growth.DefaultEstimatorConfig()` ships
+`Stage3Years = 0` → only 7 per-year growth rates, and `params.ResolveInputs`
+silently clamps any profile requesting `horizon_years: 10` down to 7. So Phase 2
+was correct for 3y/5y/7y but broke hyper-growth (10y) in production.
+
+Phase 2 closes that gap (decisions D1–D3):
+- **D1:** `NewService` derives the shared estimator's `Stage3Years` from
+  `Registry.MaxHorizonYears()` (new accessor) so the slice carries enough rates
+  for the largest profile horizon (shipped config = 10 → `Stage3 = max(0, 10−7) = 3`),
+  capped at `params.MaxDCFProjectionYears` (D3). Nil registry → `Stage3 = 0`
+  (legacy 7-rate slice). Seams: `service.go::NewService`,
+  `profile.Registry.MaxHorizonYears`.
+- **D2 (byte-identity):** lengthening the shared slice raises `growthRateLen` for
+  EVERY ticker, which would push the no-profile/default horizon 7 → 10. Neutralized
+  via `params.Defaults.LegacyDefaultHorizonYears` (= legacy 7, computed in
+  `performValuation` as `growthRateLen − estimatorInjectedStage3` when the request
+  did not override `stage3_years`). The resolver uses it on the default-sourced
+  branch only; profile/request horizons win via the precedence chain and are
+  validated against the real (longer) `growthRateLen`. Pinned by
+  `TestService_DCF_DefaultPath_ByteIdentity` (bit-for-bit vs a 7-rate reference).
+- Gordon terminal only; no DDM/FFO/revenue_multiple change; **no new response
+  field** (the 5 diagnostic fields already exist) so the replay field-count guard
+  is not triggered. `CalculationVersion` stays `4.8` (the VAL-1 reconciliation
+  bump is a separate later step; the prior 4.7→4.8 bump already landed).
+
+Tests: `TestService_DCF_ArchetypeHorizonGrid_ProductionWiring` (3/5/7/10 grid via
+production `NewService`), `TestNewService_DeriveStage3FromRegistryMaxHorizon`,
+`TestService_DCF_DefaultPath_ByteIdentity`, `TestService_DCF_HighGrowth7y_NoDriftFromLongerSlice`,
+`TestMaxHorizonYears_*`, `TestResolveInputs_LegacyDefaultHorizon_*`. The stale
+"flat 7y horizon" framing above (§"Context" :37, §"Why it matters" :42) predates
+the T4/Tier-2-P2 mechanics; horizon has resolved from the profile in code since
+then — Phase 2 only made the 10y end work in production.
+
 ### Phase 2-5 (with unified profile work)
-- [ ] `AssumptionProfile` machinery shared with RM-3 / VAL-2 / VAL-3.
-- [ ] Horizon resolved from profile; per-archetype values sane.
+- [x] `AssumptionProfile` machinery shared with RM-3 / VAL-2 / VAL-3.
+- [x] Horizon resolved from profile; per-archetype values sane. (Phase 2 SHIPPED 2026-06-22 — production estimator-length wiring + `LegacyDefaultHorizonYears` byte-identity preservation.)
 - [ ] Cyclical-base normalization fires when profile is `(cyclical, *)`.
 - [ ] Exit-multiple terminal optional and behind the profile.
 - [ ] Diluted-share-forward adjustment optional and behind the profile.

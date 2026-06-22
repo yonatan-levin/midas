@@ -201,11 +201,14 @@ func TestNarrateArtifact_TraceOn_EmitsStreamAndBundle(t *testing.T) {
 		"G-1: AnalystWeight must reflect estimator output (0.0 with no analyst coverage)")
 	assert.Equal(t, 1.0, growthFields["historical_weight"],
 		"G-1: HistoricalWeight must reflect estimator output (1.0 with no analyst coverage)")
-	// stage_count must be the actual length of ProjectedGrowthRates (7 with
-	// the default estimator config). Defensive pin so a future Stage3 default
-	// bump doesn't silently break the narrate contract.
-	assert.EqualValues(t, 7, growthFields["stage_count"],
-		"stage_count must equal len(ProjectedGrowthRates)")
+	// stage_count must be the actual length of ProjectedGrowthRates. VAL-1
+	// Phase 2 wires NewService to derive the shared estimator's Stage3Years from
+	// the registry's max profile horizon; the production assumption_profiles.json
+	// caps at 10 (hypergrowth_profitable), so the shared estimator now emits 10
+	// rates (3 + 4 + 3). This pin tracks that production wiring — if the config's
+	// max horizon changes, the estimator slice (and this value) move with it.
+	assert.EqualValues(t, 10, growthFields["stage_count"],
+		"stage_count must equal len(ProjectedGrowthRates) — 10 under Phase 2 production wiring")
 
 	// --- Assert (2): bundle directory created with the expected per-phase
 	//     files. The directory layout is artifacts/<UTC-date>/AAPL/req_<id>/. ---

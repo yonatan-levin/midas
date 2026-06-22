@@ -236,6 +236,60 @@ func TestResolveInputs_ProfileHorizonExceedsLen_ClampsNot422(t *testing.T) {
 	require.NotEmpty(t, p.Warnings, "a clamp warning must be recorded")
 }
 
+// ---------------------------------------------------------------------------
+// VAL-1 Phase 2 (D2): LegacyDefaultHorizonYears neutralizes the lengthened
+// growth-rate slice on the default-sourced horizon path.
+// ---------------------------------------------------------------------------
+
+// TestResolveInputs_LegacyDefaultHorizon_UsedWhenNoProfileOrOverride pins D2:
+// when the horizon is default-sourced (no profile, no override) and a legacy
+// baseline is supplied, the resolver uses the baseline (7) instead of the raw,
+// longer growthRateLen (10). The profile/request branches still win and are
+// validated against the real growthRateLen.
+func TestResolveInputs_LegacyDefaultHorizon_UsedWhenNoProfileOrOverride(t *testing.T) {
+	d := legacyDefaults()
+	d.Stage3Years = 3               // shared estimator extended → 10 rates
+	d.LegacyDefaultHorizonYears = 7 // legacy pre-extension default
+
+	t.Run("default-sourced uses legacy baseline, not growthRateLen", func(t *testing.T) {
+		p, err := ResolveInputs(d, Overrides{}, 10)
+		require.NoError(t, err)
+		assert.Equal(t, 7, p.HorizonYears,
+			"default-sourced horizon must use LegacyDefaultHorizonYears (7), not the 10-rate slice")
+		assert.Equal(t, SourceDefault, p.Provenance[knobHorizonYears])
+		assert.Empty(t, p.Warnings, "no clamp warning: 7 ≤ stage-sum 10 and ≤ growthRateLen 10")
+	})
+
+	t.Run("profile horizon still wins and is honored up to the longer slice", func(t *testing.T) {
+		dp := d
+		dp.ProfileHorizonYears = 10
+		p, err := ResolveInputs(dp, Overrides{}, 10)
+		require.NoError(t, err)
+		assert.Equal(t, 10, p.HorizonYears, "profile horizon 10 must be honored (no clamp) with a 10-rate slice")
+		assert.Equal(t, SourceProfile, p.Provenance[knobHorizonYears])
+		assert.Empty(t, p.Warnings)
+	})
+
+	t.Run("request override still wins", func(t *testing.T) {
+		p, err := ResolveInputs(d, Overrides{HorizonYears: i(9)}, 10)
+		require.NoError(t, err)
+		assert.Equal(t, 9, p.HorizonYears)
+		assert.Equal(t, SourceRequest, p.Provenance[knobHorizonYears])
+	})
+}
+
+// TestResolveInputs_LegacyDefaultHorizon_ZeroFallsBackToGrowthLen pins the
+// backward-compatible path: when no legacy baseline is supplied (0, e.g. older
+// callers), the default-sourced horizon falls back to growthRateLen exactly as
+// before Phase 2.
+func TestResolveInputs_LegacyDefaultHorizon_ZeroFallsBackToGrowthLen(t *testing.T) {
+	d := legacyDefaults() // LegacyDefaultHorizonYears == 0
+	p, err := ResolveInputs(d, Overrides{}, 7)
+	require.NoError(t, err)
+	assert.Equal(t, 7, p.HorizonYears, "no baseline → default-sourced horizon == growthRateLen")
+	assert.Equal(t, SourceDefault, p.Provenance[knobHorizonYears])
+}
+
 // Exit-multiple resolvability is enforced in ResolveInputs (it is WACC-independent —
 // it depends only on method + multiple + industry/profile default, all known at
 // phase 1). See the note in resolve.go. The plan permitted placing it in either

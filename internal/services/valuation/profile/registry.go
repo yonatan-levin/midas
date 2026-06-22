@@ -31,6 +31,13 @@ type Registry interface {
 	// ConfigHash returns the SHA-256 of the canonicalized config JSON,
 	// stamped onto every ResolutionTrace for replay determinism.
 	ConfigHash() string
+
+	// MaxHorizonYears returns the largest HorizonYears across every loaded
+	// profile (0 when the registry is empty). VAL-1 Phase 2 reads this in
+	// NewService to size the shared growth estimator's Stage3Years so the
+	// resolver never silently clamps a legitimate long-horizon profile
+	// (e.g. hypergrowth_profitable's 10y) down to the legacy 7-rate slice.
+	MaxHorizonYears() int
 }
 
 // ArchetypeRule is one priority-ordered rule in the resolver's Stage-1
@@ -83,6 +90,10 @@ type jsonRegistry struct {
 	archetypeRules     []ArchetypeRule
 	fallbackProfile    *AssumptionProfile
 	maturityThresholds MaturityThresholds
+	// maxHorizonYears is the largest HorizonYears across all loaded profiles,
+	// precomputed at construction for deterministic, allocation-free reads on
+	// the request/startup path. See MaxHorizonYears.
+	maxHorizonYears int
 }
 
 // LoadFromJSON loads the registry from assumption_profiles.json on disk.
@@ -158,6 +169,16 @@ func LoadFromBytes(rawBytes []byte, label string) (Registry, error) {
 	canonical, _ := json.Marshal(&cfg) // rawBytes already parsed successfully
 	sum := sha256.Sum256(canonical)
 
+	// Precompute the max horizon across all profiles (VAL-1 Phase 2). Iterates
+	// the indexed map once at load time; the result is frozen for the registry's
+	// lifetime so MaxHorizonYears() is a pure field read.
+	maxHorizon := 0
+	for _, p := range idx {
+		if p.HorizonYears > maxHorizon {
+			maxHorizon = p.HorizonYears
+		}
+	}
+
 	return &jsonRegistry{
 		configVersion:      cfg.ConfigVersion,
 		configHash:         hex.EncodeToString(sum[:]),
@@ -165,6 +186,7 @@ func LoadFromBytes(rawBytes []byte, label string) (Registry, error) {
 		archetypeRules:     rules,
 		fallbackProfile:    fallback,
 		maturityThresholds: cfg.MaturityThresholdsFallback,
+		maxHorizonYears:    maxHorizon,
 	}, nil
 }
 
@@ -203,6 +225,10 @@ func (r *jsonRegistry) ConfigVersion() string { return r.configVersion }
 // ConfigHash returns the SHA-256 hex-encoded hash of the canonicalized
 // loaded config, stamped onto every ResolutionTrace.
 func (r *jsonRegistry) ConfigHash() string { return r.configHash }
+
+// MaxHorizonYears returns the largest HorizonYears across every loaded
+// profile (precomputed at construction). Returns 0 for an empty registry.
+func (r *jsonRegistry) MaxHorizonYears() int { return r.maxHorizonYears }
 
 // Lookup returns the profile entry for an exact (archetype, maturity)
 // pair. Resolver consumers use Resolve; Lookup is exported for tests and
