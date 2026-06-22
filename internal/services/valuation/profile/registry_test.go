@@ -116,3 +116,24 @@ func mustLoadMinimal(t *testing.T) profile.Registry {
 	require.NoError(t, err)
 	return reg
 }
+
+// TestMaxHorizonYears_MinimalConfig_ReturnsLargestProfileHorizon (VAL-1 Phase 2,
+// plan T2): MaxHorizonYears must report the largest HorizonYears across loaded
+// profiles. The minimal config has a 3y bank and a 5y software profile → 5.
+func TestMaxHorizonYears_MinimalConfig_ReturnsLargestProfileHorizon(t *testing.T) {
+	reg := mustLoadMinimal(t)
+	assert.Equal(t, 5, reg.MaxHorizonYears(),
+		"max horizon must be the largest HorizonYears across all profiles (3y bank, 5y software → 5)")
+}
+
+// TestMaxHorizonYears_ShippedConfig_Is10 pins the production config: the
+// shipped assumption_profiles.json carries three hypergrowth/long-horizon
+// profiles at horizon_years=10. This is the value NewService uses to size the
+// shared estimator's Stage3Years; if a future config raises it, this test
+// flags the change so the estimator wiring is re-validated.
+func TestMaxHorizonYears_ShippedConfig_Is10(t *testing.T) {
+	reg, err := profile.LoadFromJSON("../../../../config/assumption_profiles.json")
+	require.NoError(t, err, "shipped assumption_profiles.json must load")
+	assert.Equal(t, 10, reg.MaxHorizonYears(),
+		"shipped config's max profile horizon must be 10 (hypergrowth_profitable et al.)")
+}

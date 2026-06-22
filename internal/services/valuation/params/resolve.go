@@ -206,9 +206,20 @@ func ResolveInputs(d Defaults, o Overrides, growthRateLen int) (EffectiveValuati
 	}
 
 	// --- Horizon (growth-rate length / profile ← override) -----------------
-	// Default source is the legacy growth-rate slice length; a profile value (>0)
-	// overrides it (legacy gate service.go:1110); an explicit request override wins.
+	// Default source is the legacy default horizon; a profile value (>0) overrides
+	// it (legacy gate service.go:1110); an explicit request override wins.
+	//
+	// VAL-1 Phase 2 (D2): the default source is d.LegacyDefaultHorizonYears when
+	// supplied (>0), NOT the raw growthRateLen. Once NewService lengthens the shared
+	// estimator's slice (so a 10y profile is honored), growthRateLen rises to 10 for
+	// EVERY ticker. Using it directly here would silently push the no-profile/default
+	// horizon from 7 → 10, a behavior change for un-profiled tickers. The legacy
+	// baseline keeps that path byte-identical. When no baseline is supplied (0, e.g.
+	// older callers), fall back to growthRateLen — preserving the pre-Phase-2 contract.
 	p.HorizonYears = growthRateLen
+	if d.LegacyDefaultHorizonYears > 0 {
+		p.HorizonYears = d.LegacyDefaultHorizonYears
+	}
 	p.Provenance[knobHorizonYears] = SourceDefault
 	if d.ProfileHorizonYears > 0 {
 		p.HorizonYears = d.ProfileHorizonYears

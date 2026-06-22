@@ -340,6 +340,18 @@ type Defaults struct {
 	Stage2Years int
 	Stage3Years int
 
+	// LegacyDefaultHorizonYears is the legacy default-sourced DCF horizon used by
+	// ResolveInputs when NO profile and NO request override applies (VAL-1 Phase 2,
+	// decision D2). It preserves default-path byte-identity once the shared growth
+	// estimator's slice is lengthened (via Stage3Years) to honor long-horizon
+	// profiles: the no-profile path keeps reporting the pre-Phase-2 horizon (7 for
+	// the shared 3/4 estimator) rather than drifting up to the new, longer
+	// growthRateLen. Profile- and request-sourced horizons are unaffected — they win
+	// via the precedence chain and are validated/clamped against the real (longer)
+	// growthRateLen. Zero means "no legacy baseline supplied"; the resolver then
+	// falls back to growthRateLen, preserving existing callers' behavior exactly.
+	LegacyDefaultHorizonYears int
+
 	// Data-source baselines for WACC inputs / tax — already resolved by the
 	// service from market / macro / entity data BEFORE calling the resolver.
 	Beta              float64 // from marketData.GetEffectiveBeta()

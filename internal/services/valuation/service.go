@@ -34,24 +34,31 @@ import (
 
 // Service provides valuation operations
 type Service struct {
-	financialRepo      ports.FinancialDataRepository
-	marketRepo         ports.MarketDataRepository
-	macroRepo          ports.MacroDataRepository
-	cache              ports.CacheRepository
-	dataCleaner        datacleaner.DataCleanerService
-	dataFetcher        *datafetcher.DataFetcher
-	growthEstimator    *growthsvc.Estimator
-	yfinanceGateway    ports.YFinanceGateway  // optional, for analyst estimates
-	macroGateway       ports.MacroDataGateway // Phase B9 (IFRS-FPI): FX-rate lookups; nil = no-op FX path
-	metricsService     ports.MetricsService
-	modelRouter        *models.ModelRouter          // Phase 3: industry-aware model selection
-	industryClassifier *industry.IndustryClassifier // Phase 3: SIC/NAICS classification
-	countryRiskMap     map[string]float64           // Phase 4: ISO-2 country code -> CRP
-	industryMultiples  *industryMultiplesConfig     // Phase 4: EV/EBITDA and P/E multiples for cross-checks
-	adrRatios          *ADRRatios                   // Phase B8 (IFRS-FPI): ordinary-shares-per-ADR; consumed in Phase B10
-	config             *config.Config
-	logger             *zap.Logger
-	calcEmitter        *calclog.Emitter // emits the 12 DCF stage traces (Phase M)
+	financialRepo   ports.FinancialDataRepository
+	marketRepo      ports.MarketDataRepository
+	macroRepo       ports.MacroDataRepository
+	cache           ports.CacheRepository
+	dataCleaner     datacleaner.DataCleanerService
+	dataFetcher     *datafetcher.DataFetcher
+	growthEstimator *growthsvc.Estimator
+	// estimatorInjectedStage3 records the Stage3Years that VAL-1 Phase 2 wiring
+	// added to the shared growth estimator beyond the legacy DefaultEstimatorConfig
+	// value (0), to honor long-horizon profiles. It is the byte-identity neutralizer
+	// (D2): performValuation subtracts it from the default-sourced DCF horizon so an
+	// un-profiled ticker keeps its pre-Phase-2 horizon even though the shared slice is
+	// now longer. Zero when no registry / no long-horizon profile was present.
+	estimatorInjectedStage3 int
+	yfinanceGateway         ports.YFinanceGateway  // optional, for analyst estimates
+	macroGateway            ports.MacroDataGateway // Phase B9 (IFRS-FPI): FX-rate lookups; nil = no-op FX path
+	metricsService          ports.MetricsService
+	modelRouter             *models.ModelRouter          // Phase 3: industry-aware model selection
+	industryClassifier      *industry.IndustryClassifier // Phase 3: SIC/NAICS classification
+	countryRiskMap          map[string]float64           // Phase 4: ISO-2 country code -> CRP
+	industryMultiples       *industryMultiplesConfig     // Phase 4: EV/EBITDA and P/E multiples for cross-checks
+	adrRatios               *ADRRatios                   // Phase B8 (IFRS-FPI): ordinary-shares-per-ADR; consumed in Phase B10
+	config                  *config.Config
+	logger                  *zap.Logger
+	calcEmitter             *calclog.Emitter // emits the 12 DCF stage traces (Phase M)
 
 	// profileRegistry resolves the Tier 2 AssumptionProfile from per-request
 	// Facts (spec §2.3, §3.1). Wired by fx in production via
@@ -134,6 +141,38 @@ func NewService(
 		estimatorCfg.MinGrowthRate = cfg.Valuation.DCFMinGrowthRate
 	}
 
+	// VAL-1 Phase 2 (decision D1): size the shared estimator's Stage3Years from the
+	// largest profile horizon the registry can resolve, so the slice carries enough
+	// per-year growth rates for long-horizon archetypes (e.g. hypergrowth_profitable
+	// = 10y) and params.ResolveInputs never silently clamps a legitimate profile
+	// horizon down to the legacy 7-rate slice.
+	//
+	// Stage3Years = max(0, maxHorizon - (Stage1+Stage2)). maxHorizon is clamped to
+	// params.MaxDCFProjectionYears (the engine's ProjectionYears > 50 rail, D3) so a
+	// malformed config cannot drive the slice past the engine ceiling. A nil registry
+	// (tests, replay) reports max 0, leaving Stage3Years at its DefaultEstimatorConfig
+	// value (0) — the legacy 7-year slice, byte-identical to pre-Phase-2.
+	//
+	// Byte-identity note (D2): lengthening the slice raises growthRateLen for EVERY
+	// ticker, but the no-profile/default horizon stays pinned to the legacy value via
+	// params.Defaults.LegacyDefaultHorizonYears (populated in performValuation), and a
+	// 3/5/7-year profile still feeds a 3/5/7-length slice into CalculateDCF (the
+	// resolved horizon truncates the slice). Only long-horizon profiles change.
+	// injectedStage3 records how much Stage3Years Phase 2 added beyond the legacy
+	// DefaultEstimatorConfig value (0). It is the exact amount performValuation must
+	// subtract from the default-sourced horizon to preserve byte-identity (D2).
+	injectedStage3 := 0
+	if profileRegistry != nil {
+		maxHorizon := profileRegistry.MaxHorizonYears()
+		if maxHorizon > params.MaxDCFProjectionYears {
+			maxHorizon = params.MaxDCFProjectionYears
+		}
+		if extra := maxHorizon - (estimatorCfg.Stage1Years + estimatorCfg.Stage2Years); extra > 0 {
+			estimatorCfg.Stage3Years = extra
+			injectedStage3 = extra
+		}
+	}
+
 	// Initialize industry classifier for SIC/NAICS-based model selection.
 	// ctx is added to Classify (M.1) so the valuation service can emit stage-3
 	// "industry_classification" trace after the call returns.
@@ -180,23 +219,24 @@ func NewService(
 	}
 
 	return &Service{
-		financialRepo:      financialRepo,
-		marketRepo:         marketRepo,
-		macroRepo:          macroRepo,
-		cache:              cache,
-		dataCleaner:        dataCleaner,
-		dataFetcher:        dataFetcher,
-		growthEstimator:    growthsvc.NewEstimator(estimatorCfg, logger, calcEmitter),
-		metricsService:     metricsService,
-		modelRouter:        router,
-		industryClassifier: classifier,
-		countryRiskMap:     crpMap,
-		industryMultiples:  indMultiples,
-		adrRatios:          adrRatios,
-		config:             cfg,
-		logger:             logger,
-		calcEmitter:        calcEmitter,
-		profileRegistry:    profileRegistry,
+		financialRepo:           financialRepo,
+		marketRepo:              marketRepo,
+		macroRepo:               macroRepo,
+		cache:                   cache,
+		dataCleaner:             dataCleaner,
+		dataFetcher:             dataFetcher,
+		growthEstimator:         growthsvc.NewEstimator(estimatorCfg, logger, calcEmitter),
+		estimatorInjectedStage3: injectedStage3,
+		metricsService:          metricsService,
+		modelRouter:             router,
+		industryClassifier:      classifier,
+		countryRiskMap:          crpMap,
+		industryMultiples:       indMultiples,
+		adrRatios:               adrRatios,
+		config:                  cfg,
+		logger:                  logger,
+		calcEmitter:             calcEmitter,
+		profileRegistry:         profileRegistry,
 		// Default to the production wall-clock binding. Replay overrides this
 		// via SetClock after construction (D10). Existing test call sites
 		// don't need to thread anything new because the default is identical
@@ -950,6 +990,23 @@ func (s *Service) performValuation(
 	// s.growthEstimator, so this is byte-identical to T4.
 	estCfg := estimator.Config()
 
+	// VAL-1 Phase 2 (D2): the legacy default-sourced horizon = growthRateLen with the
+	// Phase-2-injected shared Stage3 removed, so an un-profiled / no-override ticker
+	// keeps its pre-Phase-2 horizon (7 for the shared 3/4 estimator) even though the
+	// shared slice is now longer. We subtract estimatorInjectedStage3 ONLY when the
+	// request did not explicitly override stage3_years — a request-chosen Stage3 is a
+	// legitimate caller staging choice that was honored pre-Phase-2 too, so it must
+	// flow into growthRateLen unaltered. The resolver uses this value only on the
+	// default-sourced branch; profile/request horizons win via the precedence chain
+	// and are validated against the real (longer) growthRateLen.
+	legacyDefaultHorizon := growthRateLen
+	if overrides.Stage3Years == nil && s.estimatorInjectedStage3 > 0 {
+		legacyDefaultHorizon = growthRateLen - s.estimatorInjectedStage3
+		if legacyDefaultHorizon < 0 {
+			legacyDefaultHorizon = 0
+		}
+	}
+
 	resolverDefaults := params.Defaults{
 		TerminalGrowthCap: s.config.Valuation.DefaultTerminalGrowthCap,
 		MaxGrowthRate:     s.config.Valuation.DCFMaxGrowthRate,
@@ -957,6 +1014,8 @@ func (s *Service) performValuation(
 		Stage1Years:       estCfg.Stage1Years,
 		Stage2Years:       estCfg.Stage2Years,
 		Stage3Years:       estCfg.Stage3Years,
+
+		LegacyDefaultHorizonYears: legacyDefaultHorizon,
 
 		// WACC inputs + tax — the EXACT legacy default sources.
 		Beta:              marketData.GetEffectiveBeta(),
