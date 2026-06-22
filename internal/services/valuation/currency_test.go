@@ -365,6 +365,41 @@ func TestService_ConvertFinancialsToUSD_OperatingLeaseCommitments_Converted(t *t
 	gw.AssertExpectations(t)
 }
 
+// TestCurrency_MaintenanceCapEx_FXConverted asserts the VAL-3 Phase 2
+// MaintenanceCapEx field (a monetary cash-flow line) is FX-converted exactly
+// like CapitalExpenditures. FPI/ADR REITs report in non-USD; if MaintenanceCapEx
+// were left in the source currency, AFFO = FFO − MaintenanceCapEx would mix
+// currencies.
+func TestCurrency_MaintenanceCapEx_FXConverted(t *testing.T) {
+	ctx := context.Background()
+
+	gw := &fxMockMacroGateway{}
+	gw.On("GetFXRate", mock.Anything, "TWD", "USD").Return(0.0312, nil).Once()
+
+	svc := newFXTestService(t, gw)
+
+	hist := &entities.HistoricalFinancialData{
+		Ticker: "TSM",
+		Data: map[string]*entities.FinancialData{
+			"2023FY": {
+				Ticker:              "TSM",
+				ReportingCurrency:   "TWD",
+				CapitalExpenditures: 1_000_000_000,
+				MaintenanceCapEx:    400_000_000,
+			},
+		},
+	}
+
+	err := svc.convertFinancialsToUSD(ctx, hist)
+	require.NoError(t, err)
+
+	got := hist.Data["2023FY"]
+	assert.InDelta(t, 31_200_000.0, got.CapitalExpenditures, 1.0, "CapitalExpenditures must be FX-converted")
+	assert.InDelta(t, 12_480_000.0, got.MaintenanceCapEx, 1.0, "MaintenanceCapEx must be FX-converted like CapitalExpenditures")
+
+	gw.AssertExpectations(t)
+}
+
 // ---------------------------------------------------------------------------
 // Phase B10 — applyADRRatio tests
 // ---------------------------------------------------------------------------

@@ -257,6 +257,7 @@ func applyFXRate(fd *entities.FinancialData, rate float64) {
 	// Cash flow statement
 	fd.DepreciationAndAmortization *= rate
 	fd.CapitalExpenditures *= rate
+	fd.MaintenanceCapEx *= rate // VAL-3 Phase 2 — monetary, FX-convert like CapitalExpenditures (FPI/ADR REITs).
 	fd.OperatingCashFlow *= rate
 
 	// Per-share monetary fields. DividendsPerShare is per-share but the unit
