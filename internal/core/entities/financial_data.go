@@ -103,7 +103,15 @@ type FinancialData struct {
 	// Cash Flow Statement fields (for true FCF calculation)
 	DepreciationAndAmortization float64 `json:"depreciation_and_amortization"` // Non-cash charge to add back
 	CapitalExpenditures         float64 `json:"capital_expenditures"`          // Cash outflow for PP&E (stored as positive)
-	OperatingCashFlow           float64 `json:"operating_cash_flow"`           // Net cash from operations
+	// MaintenanceCapEx is the recurring/maintenance capital expenditure used as
+	// the REIT AFFO deduction (AFFO = FFO − MaintenanceCapEx; VAL-3 Phase 2).
+	// Stored POSITIVE (a cash-outflow magnitude, like CapitalExpenditures). 0 =
+	// not disclosed by the filer; the FFO model then estimates it at 0.7×
+	// CapitalExpenditures. NOT a computePlugs term and NOT a recomputeUmbrellas
+	// term — it is a standalone cash-flow line (like CapitalExpenditures /
+	// DepreciationAndAmortization); never wire it into a residual.
+	MaintenanceCapEx  float64 `json:"maintenance_capex,omitempty"` // Recurring/maintenance capex for REIT AFFO. Stored POSITIVE; 0 = not disclosed.
+	OperatingCashFlow float64 `json:"operating_cash_flow"`         // Net cash from operations
 
 	// Working capital components (for delta WC calculation)
 	CurrentAssets      float64 `json:"current_assets"`
