@@ -197,10 +197,10 @@ Coverage: ≥90% on `ffo.go` per CLAUDE.md finance-module standard.
 - [x] NAV cross-check uses subsector cap rates. *(Phase 4 — see below; merge: this commit.)*
 - [x] Tests pass for DLR, AMT, SPG, PLD, EQR fixtures. *(DLR/SPG/PLD subsector NAV end-to-end tests in `ffo_test.go`; AMT covered by existing `TestFFOModel_Calculate_StandardREIT`; EQR covered by the REIT_RESIDENTIAL classifier basket.)*
 
-### Phase 2
-- [ ] `MaintenanceCapEx` field on `FinancialData`, populated by parser.
-- [ ] AFFO-based valuation alongside FFO-based; AFFO preferred when data is available.
-- [ ] CHANGELOG/CLAUDE.md updated.
+### Phase 2 — SHIPPED 2026-06-22 (#15)
+- [x] `MaintenanceCapEx` field on `FinancialData`, populated by parser. *(`internal/core/entities/financial_data.go`; `sec/parser.go::parsePeriodData` first-hit on `PaymentsForCapitalImprovements`/`…RealEstate`; FX-converted in `currency.go`.)*
+- [x] AFFO-based valuation alongside FFO-based; AFFO preferred when data is available. *(`ffo.go::Calculate` — AFFO = FFO − MaintenanceCapEx (disclosed or 0.7× capex estimate, D1 reuses the P/FFO multiple, D2 floors negative AFFO); headline switches to AFFO when available, bit-for-bit FFO otherwise. Surfaced as `pffo_value_per_share`/`paffo_value_per_share`. CalcVersion 4.8→4.9.)*
+- [x] CHANGELOG/CLAUDE.md updated. *(CLAUDE.md VAL-3 Phase 2 gotcha bullet added.)*
 
 ### Phase 3 (with unified profile work)
 - [ ] Forward FFO/AFFO projection lands; profile-driven horizon.

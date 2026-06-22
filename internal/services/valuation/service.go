@@ -1491,7 +1491,7 @@ func (s *Service) performValuation(
 		CurrentPrice:        marketData.SharePrice,
 		DataFreshnessScore:  dataFreshnessScore,
 		CalculationMethod:   "multi_stage_dcf",
-		CalculationVersion:  "4.8", // Tier 2 Layer A: DCF reinvestment / operating-leverage model — profiles that opt into sales_to_capital project FCF = NOPAT − Reinvestment(ΔRevenue/SalesToCapital) with a converging margin, so FCF can cross positive in-window (changes dcf_value_per_share for opted-in growth archetypes by design). Legacy-proportional profiles + DDM/FFO/revenue_multiple are bit-for-bit. 4.8 reflects SR-1/B3 cleaner SEC R&D extraction now changing tech-classified ticker outputs (AMD/MXL) via A5's inventory writedown. Prior: 4.7 (Layer A reinvestment model). The request-valuation-overrides feature is additive + version-neutral.
+		CalculationVersion:  "4.9", // 4.9 = VAL-3 Phase 2 AFFO: REIT headline now AFFO-based when maintenance capex disclosed/estimable (DCF/DDM/revenue_multiple numerics unchanged — only the engine-wide version stamp drifts). Prior 4.8 = Tier 2 Layer A DCF reinvestment / operating-leverage model — profiles that opt into sales_to_capital project FCF = NOPAT − Reinvestment(ΔRevenue/SalesToCapital) with a converging margin, so FCF can cross positive in-window (changes dcf_value_per_share for opted-in growth archetypes by design). Legacy-proportional profiles + DDM/FFO/revenue_multiple are bit-for-bit. The request-valuation-overrides feature is additive + version-neutral.
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -2046,7 +2046,7 @@ func (s *Service) performAlternativeValuation(
 		// no headline re-derivation here. Both omitempty — zero on non-FFO paths.
 		PFFOValuePerShare:  modelResult.PFFOValuePerShare,
 		PAFFOValuePerShare: modelResult.PAFFOValuePerShare,
-		CalculationVersion: "4.8", // Tier 2 Layer A: DCF reinvestment / operating-leverage model. Alt-model numerics (DDM/FFO/revenue_multiple) are UNAFFECTED — Layer A is DCF-path only — so only calculation_version drifts here (bit-for-bit primary values). The bump is engine-wide for a single version stamp. 4.8 reflects SR-1/B3 cleaner SEC R&D extraction now changing tech-classified ticker outputs (AMD/MXL) via A5's inventory writedown. Prior: 4.7 (Layer A reinvestment model). The request-valuation-overrides feature is additive + version-neutral.
+		CalculationVersion: "4.9", // 4.9 = VAL-3 Phase 2 AFFO: REIT headline now AFFO-based when maintenance capex disclosed/estimable. This is the alt-model (FFO) stamp — the FFO path's headline genuinely changes for REITs with maintenance capex; DDM/revenue_multiple keep bit-for-bit numerics, only the engine-wide version stamp drifts. Prior 4.8 = Tier 2 Layer A DCF reinvestment / operating-leverage model (DCF-path only); the bump is engine-wide for a single version stamp. The request-valuation-overrides feature is additive + version-neutral.
 		Warnings:           modelResult.Warnings,
 	}
 
