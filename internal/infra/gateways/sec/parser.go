@@ -729,6 +729,22 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 		financialData.CapitalExpenditures = val
 	}
 
+	// Maintenance / recurring capital expenditures (VAL-3 Phase 2 — REIT AFFO).
+	// Rarely filed as a discrete tag; when absent the FFO model estimates
+	// 0.7× CapitalExpenditures. findValue first-hit (NOT sumValues — these are
+	// alternative presentations of the same recurring-capex line). Clamp val > 0
+	// (a negative recurring-capex magnitude is a data anomaly — do NOT absAddBack;
+	// these are cash-outflow magnitudes stored positive, mirroring CapitalExpenditures).
+	// DEVELOPMENT / ACQUISITION capex tags are deliberately EXCLUDED (they are
+	// growth capex, not maintenance — including them over-states maintenance and
+	// under-states AFFO). NOT a computePlugs/recomputeUmbrellas term.
+	if val, exists := p.findValue(data, []string{
+		"PaymentsForCapitalImprovements",           // primary — recurring property improvements
+		"PaymentsForCapitalImprovementsRealEstate", // some REIT filers
+	}); exists && val > 0 {
+		financialData.MaintenanceCapEx = val
+	}
+
 	if val, exists := p.findValue(data, []string{
 		"NetCashProvidedByOperatingActivities",
 		"CashProvidedByOperatingActivities",
@@ -1296,6 +1312,10 @@ func (p *Parser) GetSupportedConcepts() []string {
 		"us-gaap:NetCashProvidedByUsedInOperatingActivities",
 		// Phase B post-launch: D&A umbrella for energy/utility filers.
 		"us-gaap:DepreciationAmortizationAndAccretionNet",
+		// Recurring/maintenance capex for REIT AFFO (VAL-3 Phase 2). Development
+		// and acquisition capex are deliberately NOT listed (growth capex).
+		"us-gaap:PaymentsForCapitalImprovements",
+		"us-gaap:PaymentsForCapitalImprovementsRealEstate",
 
 		// ---- IFRS-full (Phase B6) -------------------------------------------
 		// Income Statement

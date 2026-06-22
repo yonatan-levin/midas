@@ -287,6 +287,124 @@ func TestParser_ParseFinancialData_NonRecurringEarningsItems(t *testing.T) {
 	}
 }
 
+// TestParser_MaintenanceCapEx pins VAL-3 Phase 2: the SEC parser populates
+// FinancialData.MaintenanceCapEx (REIT AFFO deduction) from a first-hit
+// recurring-capex tag, stored POSITIVE. The 0.7× estimate is NOT done here —
+// it is a model-layer fallback — so an absent tag leaves the field at 0.
+//
+// Load-bearing sub-cases:
+//   - disclosed: PaymentsForCapitalImprovements populates the field.
+//   - filer-variant fallback: PaymentsForCapitalImprovementsRealEstate populates
+//     when the primary is absent.
+//   - first-hit priority: primary wins; the two tags are NOT summed.
+//   - clamp val > 0: a non-positive recurring-capex magnitude is a data anomaly
+//     and does NOT populate (no absAddBack — these are positive cash outflows).
+//   - exclusion guard: development/acquisition capex tags must NOT populate
+//     MaintenanceCapEx (over-stating maintenance under-states AFFO).
+//   - absent: no recurring-capex tag leaves MaintenanceCapEx at 0.
+func TestParser_MaintenanceCapEx(t *testing.T) {
+	logger := zap.NewNop()
+	parser := NewParser(logger)
+
+	usGAAPFact := func(val float64) ports.SECFactGroup {
+		return ports.SECFactGroup{
+			Units: map[string][]ports.SECFact{
+				"USD": {
+					{End: "2023-09-30", Val: val, Accn: "0000320193-23-000106", Fy: 2023, Fp: "FY", Form: "10-K", Filed: "2023-11-03"},
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name    string
+		usGAAP  map[string]ports.SECFactGroup
+		wantMCX float64
+	}{
+		{
+			name: "disclosed_primary",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":                       usGAAPFact(383285000000),
+				"OperatingIncomeLoss":            usGAAPFact(114301000000),
+				"PaymentsForCapitalImprovements": usGAAPFact(250000000),
+			},
+			wantMCX: 250000000,
+		},
+		{
+			name: "disclosed_realestate_fallback",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":            usGAAPFact(383285000000),
+				"OperatingIncomeLoss": usGAAPFact(114301000000),
+				"PaymentsForCapitalImprovementsRealEstate": usGAAPFact(180000000),
+			},
+			wantMCX: 180000000,
+		},
+		{
+			// First-hit: primary wins; the two are NOT summed (alternative
+			// presentations of the same recurring-capex line).
+			name: "firsthit_priority",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":                                 usGAAPFact(383285000000),
+				"OperatingIncomeLoss":                      usGAAPFact(114301000000),
+				"PaymentsForCapitalImprovements":           usGAAPFact(250000000),
+				"PaymentsForCapitalImprovementsRealEstate": usGAAPFact(999000000),
+			},
+			wantMCX: 250000000,
+		},
+		{
+			// Clamp val > 0 (NOT absAddBack): a negative recurring-capex magnitude
+			// is a data anomaly — leave the field at 0.
+			name: "negative_not_populated",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":                       usGAAPFact(383285000000),
+				"OperatingIncomeLoss":            usGAAPFact(114301000000),
+				"PaymentsForCapitalImprovements": usGAAPFact(-50000000),
+			},
+			wantMCX: 0,
+		},
+		{
+			// Development/acquisition capex must NOT populate MaintenanceCapEx.
+			name: "development_capex_excluded",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":                          usGAAPFact(383285000000),
+				"OperatingIncomeLoss":               usGAAPFact(114301000000),
+				"PaymentsToDevelopRealEstateAssets": usGAAPFact(500000000),
+				"PaymentsToAcquireRealEstate":       usGAAPFact(700000000),
+			},
+			wantMCX: 0,
+		},
+		{
+			name: "absent",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Revenues":            usGAAPFact(383285000000),
+				"OperatingIncomeLoss": usGAAPFact(114301000000),
+			},
+			wantMCX: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			facts := &ports.SECCompanyFacts{
+				CIK:        "0000320193",
+				EntityName: "Test REIT",
+				Facts:      map[string]map[string]ports.SECFactGroup{"us-gaap": tt.usGAAP},
+			}
+
+			historical, err := parser.ParseFinancialData(context.Background(), facts)
+			require.NoError(t, err)
+			require.NotNil(t, historical)
+
+			data, exists := historical.Data["2023FY"]
+			require.True(t, exists, "expected 2023FY period in historical.Data")
+			require.NotNil(t, data)
+
+			assert.Equal(t, tt.wantMCX, data.MaintenanceCapEx,
+				"MaintenanceCapEx must match expected recurring-capex magnitude (positive)")
+		})
+	}
+}
+
 func TestParser_ParseFinancialData_NilFacts(t *testing.T) {
 	logger := zap.NewNop()
 	parser := NewParser(logger)
