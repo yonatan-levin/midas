@@ -422,6 +422,8 @@ var goFieldToJSON = map[string]string{
 	"GrowthConfidence":      "growth_confidence",
 	"TangibleValuePerShare": "tangible_value_per_share",
 	"DCFValuePerShare":      "dcf_value_per_share",
+	"PFFOValuePerShare":     "pffo_value_per_share",  // VAL-3 Phase 2
+	"PAFFOValuePerShare":    "paffo_value_per_share", // VAL-3 Phase 2
 	"AsOf":                  "as_of",
 	"DataQualityScore":      "data_quality_score",
 	"DataQualityGrade":      "data_quality_grade",
@@ -529,8 +531,9 @@ func nilOrType(p any) string {
 // guard above asserts the constant and reflection agree at package
 // load time.
 //
-// Current: 33 (FairValueResponse — 30 pre-T10 + AppliedOverrides +
-// AssumptionSources + CleaningAdjustments) + 5 (Industry) + 8 (SanityCheck) = 46.
+// Current: 35 (FairValueResponse — 30 pre-T10 + AppliedOverrides +
+// AssumptionSources + CleaningAdjustments + PFFOValuePerShare +
+// PAFFOValuePerShare [VAL-3 Phase 2]) + 5 (Industry) + 8 (SanityCheck) = 48.
 //
 // When a future commit extends FairValueResponse, Industry, or
 // SanityCheck:
@@ -540,9 +543,10 @@ func nilOrType(p any) string {
 //  3. Add an entry to goFieldToJSON for the new field's snake_case
 //     name (otherwise camelToSnake's best-effort conversion runs).
 func countFairValueFields() int {
-	// FairValueResponse: 33 top-level public fields (30 pre-T10 + AppliedOverrides
-	// + AssumptionSources [Layer-B Phase-2] + CleaningAdjustments [TDB-11]).
+	// FairValueResponse: 35 top-level public fields (30 pre-T10 + AppliedOverrides
+	// + AssumptionSources [Layer-B Phase-2] + CleaningAdjustments [TDB-11] +
+	// PFFOValuePerShare + PAFFOValuePerShare [VAL-3 Phase 2]).
 	// Industry: 5 fields.
 	// SanityCheck: 8 fields.
-	return 33 + 5 + 8
+	return 35 + 5 + 8
 }

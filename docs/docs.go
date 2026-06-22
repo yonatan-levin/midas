@@ -788,7 +788,7 @@ const docTemplate = `{
                 "calculation_version": {
                     "description": "Engine version that produced this result",
                     "type": "string",
-                    "example": "4.6"
+                    "example": "4.8"
                 },
                 "cleaning_adjustments": {
                     "description": "CleaningAdjustments is the datacleaner audit trail: one entry per\nnormalization adjuster that FIRED on this company's financials (A1–C7,\nthe B1/B2/B3 overlays, and the TDB-2 A6/A7 + TDB-12 contingent\noverlays), projected from result.CleaningAdjustments via\nadjustmentsFromLedger. Lets consumers see which restatements/overlays\nshaped the valuation inputs (e.g. lease capitalization, inventory\nrestatement, excess-cash exclusion). Omitted (omitempty) when no\nadjuster fired, so the default no-adjustment response stays\nbyte-identical to the pre-TDB-11 wire shape. Fired-only — the\nprojection emits only Applied==true entries.",
@@ -888,6 +888,15 @@ const docTemplate = `{
                 "ncav_per_share": {
                     "type": "number",
                     "example": 4.55
+                },
+                "paffo_value_per_share": {
+                    "type": "number",
+                    "example": 31.5
+                },
+                "pffo_value_per_share": {
+                    "description": "VAL-3 Phase 2 — REIT FFO/AFFO. Both omitempty: present only on REIT\n(FFO-model) responses; absent for DCF/DDM/revenue_multiple. PFFO is the\nFFO-based number (always present on REIT responses); PAFFO is the AFFO-based\nnumber, present only when maintenance capex is disclosed OR estimable\n(0.7× capex). When PAFFO is present it equals the headline intrinsic value\n(dcf_value_per_share); when absent the headline is PFFO.",
+                    "type": "number",
+                    "example": 42.1
                 },
                 "resolution_trace": {
                     "$ref": "#/definitions/github_com_midas_dcf-valuation-api_internal_services_valuation_profile.ResolutionTrace"

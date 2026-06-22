@@ -475,6 +475,19 @@ definitions:
       ncav_per_share:
         example: 4.55
         type: number
+      paffo_value_per_share:
+        example: 31.5
+        type: number
+      pffo_value_per_share:
+        description: |-
+          VAL-3 Phase 2 — REIT FFO/AFFO. Both omitempty: present only on REIT
+          (FFO-model) responses; absent for DCF/DDM/revenue_multiple. PFFO is the
+          FFO-based number (always present on REIT responses); PAFFO is the AFFO-based
+          number, present only when maintenance capex is disclosed OR estimable
+          (0.7× capex). When PAFFO is present it equals the headline intrinsic value
+          (dcf_value_per_share); when absent the headline is PFFO.
+        example: 42.1
+        type: number
       resolution_trace:
         $ref: '#/definitions/github_com_midas_dcf-valuation-api_internal_services_valuation_profile.ResolutionTrace'
       sanity_check:

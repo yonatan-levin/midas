@@ -173,6 +173,15 @@ type FairValueResponse struct {
 	TangibleValuePerShare float64   `json:"tangible_value_per_share" example:"24.73"`        // Net tangible book value per share
 	DCFValuePerShare      float64   `json:"dcf_value_per_share" example:"156.42"`            // Discounted cash flow fair value per share
 
+	// VAL-3 Phase 2 — REIT FFO/AFFO. Both omitempty: present only on REIT
+	// (FFO-model) responses; absent for DCF/DDM/revenue_multiple. PFFO is the
+	// FFO-based number (always present on REIT responses); PAFFO is the AFFO-based
+	// number, present only when maintenance capex is disclosed OR estimable
+	// (0.7× capex). When PAFFO is present it equals the headline intrinsic value
+	// (dcf_value_per_share); when absent the headline is PFFO.
+	PFFOValuePerShare  float64 `json:"pffo_value_per_share,omitempty" example:"42.10"`
+	PAFFOValuePerShare float64 `json:"paffo_value_per_share,omitempty" example:"31.50"`
+
 	// Graham-school asset-floor diagnostics — see
 	// docs/refactoring/archive/graham-floor-metrics-spec.md. All four use *float64 +
 	// omitempty: nil = TotalLiabilities unresolved (a warning is appended to
@@ -756,6 +765,8 @@ func (h *FairValueHandler) buildFairValueResponse(ticker string, result *entitie
 		GrowthConfidence:      result.GrowthConfidence,
 		TangibleValuePerShare: result.TangibleValuePerShare,
 		DCFValuePerShare:      result.DCFValuePerShare,
+		PFFOValuePerShare:     result.PFFOValuePerShare,  // VAL-3 Phase 2 (omitempty — REIT only)
+		PAFFOValuePerShare:    result.PAFFOValuePerShare, // VAL-3 Phase 2 (omitempty — REIT only)
 		CurrentAssetsPerShare: result.CurrentAssetsPerShare,
 		NCAVPerShare:          result.NCAVPerShare,
 		GrahamFloorPerShare:   result.GrahamFloorPerShare,
