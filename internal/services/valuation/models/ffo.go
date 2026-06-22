@@ -20,6 +20,13 @@ const DefaultPFFOMultiple = 15.0
 // DefaultREITCapRate is the default capitalization rate for NAV cross-check (6%).
 const DefaultREITCapRate = 0.06
 
+// MaintenanceCapExEstimateRatio is the fraction of total CapitalExpenditures
+// treated as recurring/maintenance capex when a REIT does not break it out in
+// XBRL (VAL-3 Phase 2; spec §line 112). Practitioners use a 60-80% rule of
+// thumb; 0.70 is the spec-mandated point estimate. Documented domain default,
+// not runtime-tunable.
+const MaintenanceCapExEstimateRatio = 0.70
+
 // FFOModel implements the Funds From Operations model for REITs.
 //
 // FFO = Net Income + D&A - Gains on Property Sales
@@ -241,12 +248,61 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 	// the subsector key keeps the model from systematically under/over-valuing
 	// data center / cell tower / mall REITs.
 	pffoMultiple := m.getMultiple(input.Industry)
-	valuePerShare := ffoPerShare * pffoMultiple
 
-	// If FFO is negative, value should be zero (don't assign negative intrinsic value)
-	if valuePerShare < 0 {
-		valuePerShare = 0
+	// PFFO (FFO-based) value — the pre-Phase-2 computation, unchanged. Floored
+	// to 0 on negative FFO, exactly as before.
+	pffoValuePerShare := ffoPerShare * pffoMultiple
+	if pffoValuePerShare < 0 {
+		pffoValuePerShare = 0
 		warnings = append(warnings, "FFO-based value is zero due to negative FFO")
+	}
+
+	// VAL-3 Phase 2 — AFFO (Adjusted FFO = FFO − MaintenanceCapEx). AFFO is the
+	// methodologically-superior REIT cash-flow base (Damodaran) because FFO
+	// ignores the recurring capex needed to maintain the property portfolio.
+	//
+	// Maintenance-capex resolution (REIT-gated estimate): the FFO model only
+	// runs for REITs, so reaching here already implies a REIT. Use the disclosed
+	// MaintenanceCapEx when present; otherwise estimate 0.7× total capex (spec
+	// §line 112). When neither is available the AFFO path is a NO-OP and the
+	// headline stays the FFO-based value, bit-for-bit identical to today.
+	//
+	// Decision D1: reuse the SAME subsector P/FFO multiple on the AFFO base (no
+	// distinct P/AFFO table). Real P/AFFO multiples are structurally higher than
+	// P/FFO (AFFO is a smaller base), so applying P/FFO to AFFO systematically
+	// under-values; this is a spec-sanctioned Phase 2 simplification. Surfacing
+	// both pffo_value_per_share and paffo_value_per_share lets a consumer see the
+	// FFO-based number unmolested.
+	maintCapEx := latest.MaintenanceCapEx
+	affoAvailable := false
+	if maintCapEx <= 0 && latest.CapitalExpenditures > 0 {
+		maintCapEx = MaintenanceCapExEstimateRatio * latest.CapitalExpenditures
+		warnings = append(warnings, fmt.Sprintf(
+			"AFFO maintenance capex ESTIMATED at %.0f%% of total capex (%.0f); SEC breakout not filed. Caveat: P/AFFO multiple reuses the P/FFO multiple (D1) — AFFO value may be conservative",
+			MaintenanceCapExEstimateRatio*100, maintCapEx))
+		affoAvailable = true
+	} else if maintCapEx > 0 {
+		affoAvailable = true
+	}
+
+	// Headline defaults to the FFO-based value (bit-for-bit when AFFO absent).
+	valuePerShare := pffoValuePerShare
+	paffoValuePerShare := 0.0
+	if affoAvailable {
+		affo := ffo - maintCapEx
+		affoPerShare := affo / shares
+		paffoValuePerShare = affoPerShare * pffoMultiple // same multiple (D1)
+		if paffoValuePerShare < 0 {
+			// Decision D2: floor to 0 and keep the headline at PAFFO (0). A REIT
+			// whose maintenance capex exceeds FFO genuinely has ~0 distributable
+			// cash; falling back to PFFO would hide that distress signal.
+			paffoValuePerShare = 0
+			warnings = append(warnings, "AFFO-based value floored at 0 (maintenance capex exceeds FFO — distressed REIT)")
+		} else {
+			warnings = append(warnings, fmt.Sprintf(
+				"AFFO base used: FFO %.0f − maintenance capex %.0f = AFFO %.0f (headline is AFFO-based)", ffo, maintCapEx, affo))
+		}
+		valuePerShare = paffoValuePerShare // headline switches to AFFO
 	}
 
 	// VAL-3 P3 forward path. Gated on profile.HorizonYears > 0; nil profile
@@ -365,7 +421,9 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 		zap.Float64("value_per_share", valuePerShare))
 
 	return &ModelResult{
-		IntrinsicValuePerShare: valuePerShare,
+		IntrinsicValuePerShare: valuePerShare,      // AFFO-based iff available, else FFO-based
+		PFFOValuePerShare:      pffoValuePerShare,  // always the FFO-based number
+		PAFFOValuePerShare:     paffoValuePerShare, // 0 (omitted) when AFFO unavailable
 		TrailingValue:          trailingValue,
 		ForwardValue:           forwardValue,
 		HorizonSelected:        horizonSelected,

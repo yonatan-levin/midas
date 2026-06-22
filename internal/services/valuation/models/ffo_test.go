@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -900,4 +901,217 @@ func findNAVWarning(t *testing.T, warnings []string) string {
 		}
 	}
 	return ""
+}
+
+// ---------------------------------------------------------------------------
+// VAL-3 Phase 2 — AFFO tests
+// ---------------------------------------------------------------------------
+//
+// affoModel pins the P/FFO multiple at 15× and disables subsector + NAV
+// cross-check lookup (nil tables, 0 cap rate) so the AFFO math is deterministic
+// and independent of config/industry_multiples.json.
+func affoModel() *FFOModel {
+	return NewFFOModelWithTables(15.0, 0, nil, nil, testLogger())
+}
+
+func hasWarningContaining(warnings []string, substr string) bool {
+	for _, w := range warnings {
+		if strings.Contains(w, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestFFOModel_Calculate_AFFO_DisclosedMaintenanceCapEx: maintenance capex is
+// disclosed, so AFFO < FFO and the headline switches to the AFFO-based number.
+func TestFFOModel_Calculate_AFFO_DisclosedMaintenanceCapEx(t *testing.T) {
+	model := affoModel()
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "DLR",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   2000000000,
+					DepreciationAndAmortization: 1500000000,
+					GainOnPropertySales:         100000000,
+					MaintenanceCapEx:            600000000, // disclosed
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      500000000,
+		InterestBearingDebt:    30000000000,
+		CashAndCashEquivalents: 2000000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// FFO = 2B + 1.5B - 0.1B = 3.4B; FFO/share = 6.8; PFFO = 6.8*15 = 102.
+	// AFFO = 3.4B - 0.6B = 2.8B; AFFO/share = 5.6; PAFFO = 5.6*15 = 84.
+	assert.InDelta(t, 102.0, result.PFFOValuePerShare, 0.01)
+	assert.InDelta(t, 84.0, result.PAFFOValuePerShare, 0.01)
+	assert.Less(t, result.PAFFOValuePerShare, result.PFFOValuePerShare, "AFFO < FFO when maint capex disclosed")
+	assert.InDelta(t, result.PAFFOValuePerShare, result.IntrinsicValuePerShare, 0.0001, "headline switches to AFFO")
+	assert.True(t, hasWarningContaining(result.Warnings, "AFFO base used"), "AFFO warning present")
+	assert.False(t, hasWarningContaining(result.Warnings, "ESTIMATED"), "no estimate warning when disclosed")
+}
+
+// TestFFOModel_Calculate_AFFO_EstimatedFromCapEx: no maintenance-capex breakout,
+// but CapitalExpenditures > 0 → estimate maintenance capex at 0.7× and warn.
+func TestFFOModel_Calculate_AFFO_EstimatedFromCapEx(t *testing.T) {
+	model := affoModel()
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "PLD",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   2000000000,
+					DepreciationAndAmortization: 1500000000,
+					GainOnPropertySales:         100000000,
+					MaintenanceCapEx:            0,          // not disclosed
+					CapitalExpenditures:         1000000000, // total capex
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      500000000,
+		InterestBearingDebt:    30000000000,
+		CashAndCashEquivalents: 2000000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Estimated maint capex = 0.7 * 1B = 0.7B.
+	// FFO = 3.4B; AFFO = 3.4B - 0.7B = 2.7B; AFFO/share = 5.4; PAFFO = 5.4*15 = 81.
+	assert.InDelta(t, 102.0, result.PFFOValuePerShare, 0.01)
+	assert.InDelta(t, 81.0, result.PAFFOValuePerShare, 0.01)
+	assert.InDelta(t, result.PAFFOValuePerShare, result.IntrinsicValuePerShare, 0.0001, "headline switches to AFFO")
+	assert.True(t, hasWarningContaining(result.Warnings, "ESTIMATED"), "estimate warning present")
+}
+
+// TestFFOModel_Calculate_AFFO_AbsentBitForBit: no maintenance capex AND no
+// capex → AFFO is unavailable; headline stays the FFO-based number, PAFFO is 0,
+// and no AFFO/estimate warnings are appended. Pinned bit-for-bit against the
+// independently-computed legacy FFO value.
+func TestFFOModel_Calculate_AFFO_AbsentBitForBit(t *testing.T) {
+	model := affoModel()
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "AMT",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   2000000000,
+					DepreciationAndAmortization: 1500000000,
+					GainOnPropertySales:         100000000,
+					MaintenanceCapEx:            0,
+					CapitalExpenditures:         0, // no capex → estimate unavailable
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      500000000,
+		InterestBearingDebt:    30000000000,
+		CashAndCashEquivalents: 2000000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// Legacy FFO value computed independently with the SAME float ops/order.
+	ffo := 2000000000.0 + 1500000000.0 - 100000000.0
+	ffoPerShare := ffo / 500000000.0
+	legacyValue := ffoPerShare * 15.0
+
+	assert.Equal(t, 0.0, result.PAFFOValuePerShare, "AFFO unavailable → PAFFO omitted")
+	assert.Equal(t, math.Float64bits(legacyValue), math.Float64bits(result.IntrinsicValuePerShare),
+		"headline must be bit-for-bit identical to legacy FFO value")
+	assert.Equal(t, math.Float64bits(legacyValue), math.Float64bits(result.PFFOValuePerShare))
+	assert.False(t, hasWarningContaining(result.Warnings, "AFFO"), "no AFFO warning on bit-for-bit path")
+	assert.False(t, hasWarningContaining(result.Warnings, "ESTIMATED"), "no estimate warning on bit-for-bit path")
+}
+
+// TestFFOModel_Calculate_AFFO_NegativeAFFOFlooredToZero: maintenance capex
+// exceeds FFO → AFFO < 0. Per decision D2: floor PAFFO to 0, warn, headline = 0.
+func TestFFOModel_Calculate_AFFO_NegativeAFFOFlooredToZero(t *testing.T) {
+	model := affoModel()
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "DISTRESSED_REIT",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   200000000,
+					DepreciationAndAmortization: 300000000,
+					GainOnPropertySales:         0,
+					MaintenanceCapEx:            900000000, // exceeds FFO (=500M)
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      100000000,
+		InterestBearingDebt:    5000000000,
+		CashAndCashEquivalents: 200000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// FFO = 200M + 300M = 500M; AFFO = 500M - 900M = -400M → floored to 0.
+	assert.Greater(t, result.PFFOValuePerShare, 0.0, "PFFO still positive")
+	assert.Equal(t, 0.0, result.PAFFOValuePerShare, "negative AFFO floored to 0")
+	assert.Equal(t, 0.0, result.IntrinsicValuePerShare, "headline = PAFFO (0) per decision D2")
+	assert.True(t, hasWarningContaining(result.Warnings, "AFFO-based value floored at 0"), "floor warning present")
+}
+
+// TestFFOModel_Calculate_AFFO_PFFOAlwaysSurfaced: for any REIT input, PFFO is
+// the FFO-based number and is surfaced regardless of AFFO availability.
+func TestFFOModel_Calculate_AFFO_PFFOAlwaysSurfaced(t *testing.T) {
+	model := affoModel()
+	ctx := context.Background()
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "SPG",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					NetIncome:                   1000000000,
+					DepreciationAndAmortization: 800000000,
+					GainOnPropertySales:         0,
+					MaintenanceCapEx:            0,
+					CapitalExpenditures:         0, // AFFO unavailable
+					FilingDate:                  time.Now(),
+					FilingPeriod:                "2023FY",
+				},
+			},
+		},
+		SharesOutstanding:      200000000,
+		InterestBearingDebt:    10000000000,
+		CashAndCashEquivalents: 500000000,
+	}
+
+	result, err := model.Calculate(ctx, input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// FFO = 1.8B; FFO/share = 9.0; PFFO = 9.0*15 = 135.
+	assert.InDelta(t, 135.0, result.PFFOValuePerShare, 0.01, "PFFO always surfaced on a REIT result")
+	assert.Greater(t, result.PFFOValuePerShare, 0.0)
 }
