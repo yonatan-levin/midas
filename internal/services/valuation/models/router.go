@@ -127,6 +127,15 @@ type ModelResult struct {
 	ForwardValue     float64 `json:"forward_value,omitempty"`
 	HorizonSelected  int     `json:"horizon_selected,omitempty"`
 	TerminalMultiple float64 `json:"terminal_multiple,omitempty"`
+
+	// VAL-3 Phase 2 (REIT FFO/AFFO). Both omitempty: only the FFO model
+	// populates them, so DDM/DCF/revenue_multiple emit 0 → omitted (no JSON
+	// change on those paths). PFFOValuePerShare is the FFO-based number (always
+	// > 0 on a REIT result); PAFFOValuePerShare is the AFFO-based number, set
+	// only when maintenance capex is disclosed OR estimable (0.7× capex). When
+	// PAFFO is set it equals the headline IntrinsicValuePerShare.
+	PFFOValuePerShare  float64 `json:"pffo_value_per_share,omitempty"`
+	PAFFOValuePerShare float64 `json:"paffo_value_per_share,omitempty"`
 }
 
 // ModelRouter selects the appropriate valuation model based on industry classification
