@@ -1,10 +1,11 @@
 # RM-2 — Sector EV/Revenue multiples are coarsely categorised; semis/biotech/SaaS hit a 1.5× MFG default
 
 **Status:** PHASE 1 RESOLVED (2026-05-23) — Phase 2 (Damodaran sprint) remains OPEN. Filed 2026-05-06 during live-API verification of the Graham-floor PR.
+**GitHub issue:** [#14](https://github.com/yonatan-levin/midas/issues/14) (mirrors this tracker; covers Phase 2 + the absorbed TDB-9 override-file work in RM-2.5).
 **Severity:** Major. Compounds with RM-1 to produce silent ~25× understatements of fair value for negative-OI tickers in tech/biotech/finance sectors.
 **Origin:** Live MXL response showed `revenue_multiple` applying `1.5×` (the MFG default) to a fabless semiconductor whose peer-group EV/Revenue is in the 6-12× range. Investigation revealed `config/industry_multiples.json` has only a handful of broad sector entries and no semiconductor-specific bucket.
 **Blocks:** Nothing — long-standing gap, not a regression.
-**Related specs:** `docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md` (revenue base; the multiplier and the base are independent fixes for the same headline number), `docs/refactoring/spec/industry-classification-unification-spec.md` (the underlying classifier-emits-coarse-codes problem).
+**Related specs:** `docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md` (revenue base; the multiplier and the base are independent fixes for the same headline number), `docs/refactoring/spec/industry-classification-unification-spec.md` (the underlying classifier-emits-coarse-codes problem), `docs/reviewer/archive/TDB-9-industry-mapping-expansion.md` (datacleaner override-file coverage — deferred work **absorbed here**; see "Absorbed from TDB-9" below).
 
 ---
 
@@ -178,6 +179,27 @@ For Phase 2:
 - Live multiple scraping (Option C). Track separately as `RM-2.3` if/when needed.
 - Sector multiples for OTHER metrics (P/E, EV/EBITDA, P/B). The crosscheck module (`internal/services/valuation/crosscheck.go`) already uses sector medians for these; bringing the same Damodaran-based source-of-truth into crosscheck is a related-but-separate cleanup.
 - Per-region multiples (Damodaran publishes US, Europe, Japan, China). Phase 2 ships US-only; international tickers (TSM, ASML) get the US-equivalent industry multiple as a stopgap. Track regional split as `RM-2.4` after Phase 2.
+
+## Absorbed from TDB-9 — datacleaner override-file coverage (RM-2.5)
+
+TDB-9 (`docs/reviewer/archive/TDB-9-industry-mapping-expansion.md`, closed 2026-06-09 as a
+**documented defer**) covered an *adjacent but distinct* axis: the datacleaner's industry-specific
+**rule-override files** — `internal/services/datacleaner/service.go::loadIndustryRules` maps a GICS
+sector code to `config/datacleaner/industry/<sector>.json`. Only `45`→`technology.json` and
+`25`→`retail.json` exist. The live `ClassifyIndustry` emits only `45`/`20`/`25`, so **`20`
+(Industrials) is the single reachable-and-uncovered sector** — it degrades gracefully to base
+`rules.json` + a non-fatal warning (a working default, not a bug). The other GICS codes
+(10/15/30/35/40/50/55/60) are an override-file namespace the classifier cannot yet emit.
+
+That deferred work has no other home, so it is tracked here (it shares RM-2's classifier-coverage theme):
+
+| ID | Task | File | Effort |
+|---|---|---|---|
+| RM-2.5.1 | Author a domain-validated `industrials.json` override (or confirm base-rule coverage is sufficient and close the `20` gap) | `config/datacleaner/industry/industrials.json` (new) | M |
+| RM-2.5.2 | To cover a not-yet-emitted GICS sector, extend `ClassifyIndustry` to emit the code FIRST — **overlaps RM-2.1.2** (classifier emission) | `internal/services/datacleaner/industry/classifier.go` | M |
+| RM-2.5.3 | Add each new `<sector>.json` to the `datacleaner/ledger_invariants_test.go` sync list, then regenerate + **REVIEW** the recompute-shadow snapshots for affected tickers | tests + fixtures | S |
+
+**Distinction from RM-2.1.2:** RM-2.1.2 fixes the *multiplier emission* (classifier → code → `industry_multiples.json`); RM-2.5 fixes the *cleaning-rule overrides* (code → `<sector>.json`). They share the classifier-emission dependency but are independent deliverables. **Driver gate (unchanged from TDB-9):** a sector whose base-rule cleaning is demonstrably wrong, or this RM-2 sprint. The verbatim 5-step add procedure + the Financials/DDM bit-for-bit caution live in the in-code note at `loadIndustryRules` — do NOT add a bare mapping line.
 
 ## Acceptance for closing this tracker
 

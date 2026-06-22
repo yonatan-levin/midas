@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 **Date:** 2026-04-23
-**Status:** APPROVED, IN IMPLEMENTATION
+**Status:** COMPLETED — SHIPPED (verified 2026-06-22; archived). The additive `Industry` field (SIC + heuristic + `match` flag) is live and load-bearing: the `Industry` struct + `BuildIndustryFromResult` in `internal/api/v1/handlers/fair_value.go`, the canonical `sicToGICS` match map, the named tests in `fair_value_test.go` (`TestFairValueResponse_Industry_*` / `TestBuildIndustryFromResult_*`), the `Industry` schema in `docs/openapi.yaml`, and the replay field-count guard in `internal/observability/replay/diff.go` (which counts this struct's fields). All 6 acceptance criteria met. Successor work on the same classifier family: classifier coverage/override gaps → RM-2 / #14 (incl. RM-2.5, absorbed from TDB-9); structural unification → `docs/refactoring/spec/industry-classification-unification-spec.md`.
 **Scope:** Additive response-surface change to `FairValueResponse` exposing both the SIC-based and the balance-sheet-heuristic industry labels the engine already computes internally.
 
 ---
