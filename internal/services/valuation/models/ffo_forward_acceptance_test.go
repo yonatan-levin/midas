@@ -215,10 +215,13 @@ func TestFFO_Forward_FallsBackToFFOWhenNoAFFO(t *testing.T) {
 	assertWarningContains(t, result.Warnings, "forward FFO")
 }
 
-// TestFFO_Forward_NegativeAFFO_FallsBackToFFOBase — AFFO available but ≤0
-// (maintenance capex exceeds FFO): both legs floor to 0 and a distress warning
-// is present. The forward leg must NOT project a negative base.
-func TestFFO_Forward_NegativeAFFO_FallsBackToFFOBase(t *testing.T) {
+// TestFFO_Forward_NegativeAFFO_FloorsToZero_NoFFOFallback — AFFO available but ≤0
+// (maintenance capex exceeds FFO): both trailing and forward legs floor to 0 and a
+// distress warning is present. The forward leg must NOT project a negative base, and
+// must NOT fall back to the FFO base — falling back would break the load-bearing
+// trailing↔forward base-consistency invariant (valuePerShare == headlineBasePerShare *
+// pffoMultiple), since the trailing headline is already 0 (D2 floor).
+func TestFFO_Forward_NegativeAFFO_FloorsToZero_NoFFOFallback(t *testing.T) {
 	rates := []float64{0.07, 0.07, 0.07, 0.07, 0.07}
 	const ni, da, shares = 200_000_000.0, 300_000_000.0, 100_000_000.0
 	const maintCapEx = 1_000_000_000.0 // > FFO (500M) ⇒ AFFO < 0
