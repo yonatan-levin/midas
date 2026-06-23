@@ -446,6 +446,11 @@ var goFieldToJSON = map[string]string{
 	"DCFTerminalPctOfEV":    "dcf_terminal_pct_of_ev",
 	"DCFPerYearPV":          "dcf_per_year_pv",
 	"DCFTerminalGrowthUsed": "dcf_terminal_growth_used",
+	// VAL-1 Phase 3: dcf_base_normalization records cyclical-base
+	// normalization ("latest"|"3y_mean"). Omitempty — absent on non-cyclical
+	// paths. Added in the same commit as the FairValueResponse field to keep
+	// this map and the field count in sync (the init() drift guard enforces it).
+	"DCFBaseNormalization": "dcf_base_normalization",
 	// T10: applied_overrides echoes request-sourced knobs. Omitempty — absent
 	// on default GET and POST{} paths. Added in the same commit as the struct
 	// field to keep this map and the field count in sync.
@@ -531,9 +536,10 @@ func nilOrType(p any) string {
 // guard above asserts the constant and reflection agree at package
 // load time.
 //
-// Current: 35 (FairValueResponse — 30 pre-T10 + AppliedOverrides +
+// Current: 36 (FairValueResponse — 30 pre-T10 + AppliedOverrides +
 // AssumptionSources + CleaningAdjustments + PFFOValuePerShare +
-// PAFFOValuePerShare [VAL-3 Phase 2]) + 5 (Industry) + 8 (SanityCheck) = 48.
+// PAFFOValuePerShare [VAL-3 Phase 2] + DCFBaseNormalization [VAL-1
+// Phase 3]) + 5 (Industry) + 8 (SanityCheck) = 49.
 //
 // When a future commit extends FairValueResponse, Industry, or
 // SanityCheck:
@@ -543,10 +549,11 @@ func nilOrType(p any) string {
 //  3. Add an entry to goFieldToJSON for the new field's snake_case
 //     name (otherwise camelToSnake's best-effort conversion runs).
 func countFairValueFields() int {
-	// FairValueResponse: 35 top-level public fields (30 pre-T10 + AppliedOverrides
-	// + AssumptionSources [Layer-B Phase-2] + CleaningAdjustments [TDB-11] +
-	// PFFOValuePerShare + PAFFOValuePerShare [VAL-3 Phase 2]).
+	// FairValueResponse: 36 top-level public fields (30 pre-T10 + AppliedOverrides
+	// + AssumptionSources [Layer-B Phase-2] + CleaningAdjustments [TDB-11]
+	// + PFFOValuePerShare + PAFFOValuePerShare [VAL-3 Phase 2]
+	// + DCFBaseNormalization [VAL-1 Phase 3]).
 	// Industry: 5 fields.
 	// SanityCheck: 8 fields.
-	return 35 + 5 + 8
+	return 36 + 5 + 8
 }

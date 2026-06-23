@@ -1289,6 +1289,35 @@ func (s *Service) performValuation(
 		}
 	}
 
+	// VAL-1 Phase 3: cyclical-base normalization. For a cyclical archetype a
+	// trough-year base makes the projected rebound look aggressive, so the DCF
+	// base OI is floored at the 3-year FY mean (max(latest/TTM, 3y_mean)). This
+	// is applied to the baseOI scalar BEFORE the <=0 guard and BEFORE both
+	// downstream consumers (dcfInputs.BaseOperatingIncome and the Layer-A
+	// reinvestment margin seed in applyReinvestmentModel), so the normalized
+	// base flows into both DCF paths consistently. baseNormalizationMethod stays
+	// "" for non-cyclical profiles, so the diagnostic is omitempty-dropped and
+	// non-cyclical responses are byte-identical to today.
+	var baseNormalizationMethod string
+	if resolvedProfile != nil && resolvedProfile.IsCyclicalArchetype() {
+		normalizedOI, method := normalizeCyclicalBaseOI(baseOI, historicalData)
+		baseNormalizationMethod = method
+		if method == "3y_mean" {
+			s.log(ctx).Info("Cyclical-base normalization: flooring DCF base OI at 3y FY mean",
+				zap.String("ticker", historicalData.Ticker),
+				zap.Float64("latest_base_oi", baseOI),
+				zap.Float64("mean_3y_oi", normalizedOI))
+			if s.calcEmitter != nil {
+				s.calcEmitter.Emit(ctx, "cyclical_base_normalization",
+					zap.String("ticker", historicalData.Ticker),
+					zap.String("method", method),
+					zap.Float64("latest_base_oi", baseOI),
+					zap.Float64("mean_3y_oi", normalizedOI))
+			}
+			baseOI = normalizedOI
+		}
+	}
+
 	if baseOI <= 0 {
 		// Report baseOI (the value that actually failed the guard) — on the
 		// quarter-latest path this is the TTM-annualized base, not the
@@ -1588,6 +1617,9 @@ func (s *Service) performValuation(
 	}
 	result.DCFPerYearPV = perYearPV
 	result.DCFTerminalGrowthUsed = terminalGrowthRate
+	// VAL-1 Phase 3: empty for non-cyclical profiles → omitempty drops it →
+	// byte-identical non-cyclical responses.
+	result.DCFBaseNormalization = baseNormalizationMethod
 
 	// Tier 2 P2: terminal-dominance sanity warning. When the discounted
 	// terminal value exceeds 80% of total EV, the model is implicitly

@@ -555,6 +555,21 @@ components:
             this field reports that override. A request-sourced rate that
             would violate the 1% spread is rejected as 422 `INVALID_OVERRIDE`
             before the engine runs. Omitted on non-DCF model paths.
+        dcf_base_normalization:
+          type: string
+          enum: [latest, 3y_mean]
+          example: "3y_mean"
+          description: |
+            VAL-1 Phase 3 cyclical-base normalization. For cyclical archetypes
+            (`cyclical_mid_cycle`, `cyclical_trough`) the DCF base operating
+            income is floored at the 3-year FY mean: `max(latest/TTM OI,
+            3y FY mean OI)`, so a trough year does not make the projected
+            rebound look aggressive. `3y_mean` = the FY mean was the binding
+            floor (the base was raised); `latest` = the latest/TTM base was
+            already >= the mean (or fewer than 2 FY periods were available).
+            Present ONLY on the cyclical DCF path; omitted (and thus byte-
+            identical) for all non-cyclical tickers and all non-DCF model
+            paths (DDM / FFO / revenue_multiple).
         growth_source:
           type: string
           enum: [analyst_blend, historical_only, default]
