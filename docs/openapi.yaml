@@ -460,6 +460,24 @@ components:
         dcf_value_per_share:
           type: number
           format: float
+        pffo_value_per_share:
+          type: number
+          format: float
+          description: |
+            REIT FFO-based per-share value (P/FFO × FFO/share). Present only on
+            REIT (FFO-model) responses. Always emitted for a REIT result, even
+            when the headline switches to the AFFO-based number.
+          example: 31.62
+        paffo_value_per_share:
+          type: number
+          format: float
+          description: |
+            REIT AFFO-based per-share value (P/FFO × AFFO/share, where
+            AFFO = FFO − MaintenanceCapEx). Present only when maintenance capex is
+            disclosed OR estimable (0.7× total capex). When present it equals the
+            headline dcf_value_per_share; when absent the headline is
+            pffo_value_per_share (VAL-3 Phase 2).
+          example: 27.13
         growth_rates:
           type: array
           items:
@@ -554,12 +572,13 @@ components:
             everything else to `multi_stage_dcf`.
         calculation_version:
           type: string
-          example: "4.8"
+          example: "4.9"
           description: |
             Calculation engine version. Bumped on shape-changing or breaking-numeric
             changes (e.g., 4.1 added Graham-floor diagnostic fields; 4.4 was the
             DC-1 parallel-views engine; 4.5 corrected operating NWC to exclude cash
-            equivalents — BUG-014).
+            equivalents — BUG-014; 4.7 added the DCF reinvestment/operating-leverage
+            model; 4.9 made the REIT headline AFFO-based — VAL-3 Phase 2).
         warnings:
           type: array
           items:

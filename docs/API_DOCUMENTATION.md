@@ -276,7 +276,7 @@ curl -H "X-API-Key: <key>" \
   "data_quality_score": 90,
   "data_quality_grade": "A",
   "calculation_method": "multi_stage_dcf",
-  "calculation_version": "4.6",
+  "calculation_version": "4.9",
   "warnings": [],
   "sanity_check": {
     "implied_pe": 18.5,
@@ -312,7 +312,7 @@ curl -H "X-API-Key: <key>" \
   "ncav_per_share": -0.765,
   "graham_floor_per_share": 0,
   "calculation_method": "revenue_multiple",
-  "calculation_version": "4.6",
+  "calculation_version": "4.9",
   "current_price": 11.20,
   "warnings": [
     "Applied 6.5x EV/Revenue multiple for MFG_SEMI sector",
@@ -348,7 +348,9 @@ When `total_liabilities` cannot be sourced from the underlying filings, the four
 | `growth_source` | string | How growth was estimated: `analyst_blend`, `historical_only`, `default` |
 | `growth_confidence` | string | Confidence level: `high`, `medium`, `low` |
 | `tangible_value_per_share` | float | Net tangible book value per share (floor value). Denominator priority chain: diluted shares first, then market basic, then financial basic — same chain as `dcf_value_per_share`, `ncav_per_share`, and the Graham fields. |
-| `dcf_value_per_share` | float | Intrinsic per-share value. For tickers routed to non-DCF models (DDM, FFO, revenue_multiple) this field carries that model's per-share output — `calculation_method` distinguishes which math fired. |
+| `dcf_value_per_share` | float | Intrinsic per-share value. For tickers routed to non-DCF models (DDM, FFO, revenue_multiple) this field carries that model's per-share output — `calculation_method` distinguishes which math fired. For REITs (`calculation_method: ffo`) this is the **AFFO**-based number when maintenance capex is available, else the FFO-based number (VAL-3 Phase 2). |
+| `pffo_value_per_share` | float | **REIT only.** FFO-based per-share value (P/FFO × FFO/share). Present on every REIT result. **Omitted** for non-REIT models. |
+| `paffo_value_per_share` | float | **REIT only.** AFFO-based per-share value (P/FFO × AFFO/share, where `AFFO = FFO − MaintenanceCapEx`; maintenance capex is disclosed or estimated at 0.7× total capex). Present only when AFFO is available; when present it equals the headline `dcf_value_per_share`. **Omitted** otherwise. |
 | `current_assets_per_share` | float | Current assets ÷ diluted shares — pure asset-side floor with no liability subtraction. **Omitted** when `total_liabilities` cannot be resolved. |
 | `ncav_per_share` | float | Graham's Net Current Asset Value per share: `(current_assets − total_liabilities) / diluted_shares`. **May be negative** for distressed companies (raw value, no clamping). **Omitted** when `total_liabilities` cannot be resolved. |
 | `graham_floor_per_share` | float | Graham's "buy below" trigger: `max(ncav_per_share × 2/3, 0)`. Clamps to 0 when NCAV is negative (represents "no asset floor exists"). |
@@ -362,7 +364,7 @@ When `total_liabilities` cannot be sourced from the underlying filings, the four
 | `data_quality_score` | number | 0-100 score reflecting data freshness and completeness — may be fractional (e.g. `85.5`), not strictly integer (see [§3.2.2](#322-data-quality-score)). |
 | `data_quality_grade` | string | Letter grade derived from `data_quality_score` (see [§3.2.2](#322-data-quality-score)). |
 | `calculation_method` | string | Which valuation model fired (see [§3.2.3](#323-calculation-method-values)). |
-| `calculation_version` | string | Engine math version. Bumped when model math changes; consumers can use this to detect engine upgrades affecting historical comparisons. Current engine: `4.6`. |
+| `calculation_version` | string | Engine math version. Bumped when model math changes; consumers can use this to detect engine upgrades affecting historical comparisons. Current engine: `4.9`. |
 | `assumption_profile` | string | Resolved assumption-profile ID in `archetype:maturity` form (e.g. `mature_large_bank:mature`). Identifies the calibration record (DCF horizon, terminal method, discount method, growth caps) the engine applied to this company. **Omitted** when no profile registry is wired (legacy/test paths). See [§3.2.7](#327-assumption_profile--resolution_trace). |
 | `resolution_trace` | object | Structured audit trail of *how* the assumption profile was selected — matched rule, fallback reason, config hash, missing facts. See [§3.2.7](#327-assumption_profile--resolution_trace). |
 | `sanity_check` | object | Cross-validation against sector median multiples (see [§3.2.4](#324-sanity-check)). |
@@ -539,7 +541,7 @@ Same `FairValueResponse` shape as GET, with one additional field when overrides 
   "wacc": 0.092,
   "dcf_value_per_share": 162.10,
   "calculation_method": "multi_stage_dcf",
-  "calculation_version": "4.6",
+  "calculation_version": "4.9",
   "applied_overrides": {
     "tax_rate":    { "value": 0.21,  "source": "request" },
     "horizon_years": { "value": 7,   "source": "request" }
@@ -672,7 +674,7 @@ The response has up to three top-level keys: `results[]` (successful valuations,
       "wacc": 0.092,
       "dcf_value_per_share": 156.42,
       "calculation_method": "multi_stage_dcf",
-      "calculation_version": "4.6",
+      "calculation_version": "4.9",
       "data_quality_score": 90,
       "data_quality_grade": "A",
       "...": "...full FairValueResponse fields..."
