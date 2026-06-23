@@ -1,6 +1,6 @@
 # VAL-1 — DCF model needs archetype-aware horizon, cyclical-base normalization, and explicit terminal handling
 
-**Status:** Phase 1 RESOLVED 2026-05-23. Phases 2-5 OPEN (gated on the unified `AssumptionProfile` work — Tier 2 P2 already lit Phase 2 horizon resolution in code; tracker still treats Phases 2-5 as in-flight until the cyclical-base / exit-multiple / diluted-forward strands all ship).
+**Status:** Phase 1 RESOLVED 2026-05-23. Phase 2 SHIPPED 2026-06-22 (archetype horizon). Phase 3 SHIPPED 2026-06-23 (cyclical-base normalization). Phases 4-5 OPEN (exit-multiple terminal / diluted-forward — gated on the unified `AssumptionProfile` work). CalculationVersion bump deferred to a single end-of-branch bump covering the whole VAL-1 arc.
 **Original filing:** 2026-05-06 as part of the cross-model review prompted by RM-1/2/3 findings on revenue_multiple.
 
 ---
@@ -78,12 +78,29 @@ Profile resolution is the same machinery that drives the other models — see VA
 
 Effort: ~1 day. Adds ~50 lines to service.go's DCF block, extends growth.Estimator to produce a longer rate slice when horizon ≥ 7.
 
-### Phase 3 — Cyclical-base normalization
+### Phase 3 — Cyclical-base normalization — SHIPPED 2026-06-23
 
-When the resolved profile is `(cyclical, *)`:
-- Use `max(latest_OI, mean_OI_3y)` as the base, not raw latest_OI.
-- Or use mid-cycle OI estimate (industry-specific; out of immediate scope but worth documenting as VAL-1.1 follow-up).
-- Add a `dcf_base_normalization` diagnostic field showing which method fired.
+When the resolved profile is `(cyclical, *)` (`cyclical_mid_cycle` | `cyclical_trough`):
+- Uses `max(latest/TTM OI, mean_OI_3y)` as the DCF base, not raw latest_OI. The
+  3-year mean is computed over FY-only periods via `GetRecentYears(3)` (clock-free).
+  The normalization is applied to the `baseOI` scalar at the single seam after the
+  BUG-015 TTM rebase and before the `<=0` guard, so it flows into BOTH the legacy
+  proportional DCF (`dcfInputs.BaseOperatingIncome`) and the Layer-A reinvestment
+  margin seed.
+- The `dcf_base_normalization` diagnostic field shows which method fired
+  (`3y_mean` when the floor bound; `latest` otherwise). Omitempty + present ONLY on
+  the cyclical DCF path → non-cyclical and DDM/FFO/revenue_multiple responses are
+  byte-identical.
+- Mid-cycle OI estimate (industry-specific) remains OUT OF SCOPE — documented as the
+  VAL-1.1 follow-up. The existing `RevenueBaseMethod`/`BaseMarginMethod` enums already
+  carry `two_year_average`/`mid_cycle` values for that richer normalization; Phase 3
+  deliberately uses the simple `max(latest, 3y_mean)` rule.
+
+Files: `internal/services/valuation/cyclical.go` (pure helper),
+`profile.IsCyclicalArchetype()` predicate, `service.go` seam + diagnostic stamp,
+`entities.ValuationResult.DCFBaseNormalization` + `handlers.FairValueResponse`
+DTO + `replay/diff.go` field-count (46→47). CalculationVersion deliberately NOT
+bumped here — a single end-of-branch bump covers the whole VAL-1 arc.
 
 Effort: ~1 day. Mirrors the cyclical handling in RM-3.
 
@@ -189,7 +206,7 @@ then — Phase 2 only made the 10y end work in production.
 ### Phase 2-5 (with unified profile work)
 - [x] `AssumptionProfile` machinery shared with RM-3 / VAL-2 / VAL-3.
 - [x] Horizon resolved from profile; per-archetype values sane. (Phase 2 SHIPPED 2026-06-22 — production estimator-length wiring + `LegacyDefaultHorizonYears` byte-identity preservation.)
-- [ ] Cyclical-base normalization fires when profile is `(cyclical, *)`.
+- [x] Cyclical-base normalization fires when profile is `(cyclical, *)`. (Phase 3 SHIPPED 2026-06-23 — `max(latest/TTM OI, 3y FY mean OI)` floor + `dcf_base_normalization` diagnostic; byte-identical for non-cyclical.)
 - [ ] Exit-multiple terminal optional and behind the profile.
 - [ ] Diluted-share-forward adjustment optional and behind the profile.
 - [ ] Comprehensive regression suite across (mature, growth, hyper-growth, cyclical) × (current, profile-driven) — produces a divergence report that humans can review before merging.

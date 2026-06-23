@@ -144,6 +144,13 @@ type ValuationResult struct {
 	DCFPerYearPV          []float64 `json:"dcf_per_year_pv,omitempty"`
 	DCFTerminalGrowthUsed float64   `json:"dcf_terminal_growth_used,omitempty"`
 
+	// DCFBaseNormalization records VAL-1 Phase 3 cyclical-base normalization:
+	// "3y_mean" when the 3-year FY mean operating income floored the DCF base
+	// (trough normalization fired), "latest" when the latest/TTM base was
+	// already >= the mean. Omitempty + populated ONLY on the cyclical DCF path,
+	// so non-cyclical and DDM/FFO/revenue_multiple responses are byte-identical.
+	DCFBaseNormalization string `json:"dcf_base_normalization,omitempty"`
+
 	// AppliedOverrides carries the set of knobs that were explicitly set by the
 	// request (source=="request"). Populated only when the request supplied at
 	// least one override; nil/omitted on the default path so default-path

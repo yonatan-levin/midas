@@ -249,6 +249,10 @@ type FairValueResponse struct {
 	DCFTerminalPctOfEV    float64                  `json:"dcf_terminal_pct_of_ev,omitempty"`
 	DCFPerYearPV          []float64                `json:"dcf_per_year_pv,omitempty"`
 	DCFTerminalGrowthUsed float64                  `json:"dcf_terminal_growth_used,omitempty"`
+	// DCFBaseNormalization (VAL-1 Phase 3): "latest" | "3y_mean". Omitempty +
+	// present only on the cyclical DCF path, so non-cyclical responses are
+	// byte-identical (no key emitted).
+	DCFBaseNormalization string `json:"dcf_base_normalization,omitempty" example:"3y_mean"`
 
 	// AppliedOverrides echoes the valuation knobs that were explicitly set by
 	// the request, each with the resolved value and source "request". Absent
@@ -798,6 +802,7 @@ func (h *FairValueHandler) buildFairValueResponse(ticker string, result *entitie
 		DCFTerminalPctOfEV:    result.DCFTerminalPctOfEV,
 		DCFPerYearPV:          result.DCFPerYearPV,
 		DCFTerminalGrowthUsed: result.DCFTerminalGrowthUsed,
+		DCFBaseNormalization:  result.DCFBaseNormalization,
 		// T10: copy applied_overrides from the service-layer entity carrier.
 		// Nil when result carries no overrides (default path); omitempty drops it.
 		AppliedOverrides: appliedOverrides,

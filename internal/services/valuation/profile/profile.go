@@ -189,3 +189,17 @@ func (r *ResolvedProfile) IsLegacyMatureLargeBankDDM() bool {
 	return r != nil && r.DividendForecastHorizon == 0 &&
 		r.Archetype == ArchetypeMatureLargeBank
 }
+
+// IsCyclicalArchetype reports whether the resolved profile is a cyclical
+// archetype (mid-cycle or trough). VAL-1 Phase 3 uses this to gate
+// cyclical-base normalization: for cyclical firms the DCF base operating
+// income is floored at the 3-year FY mean so a trough year doesn't make the
+// projected rebound look aggressive. Keeping the cyclical taxonomy inside the
+// profile package (mirrors IsLegacyMatureLargeBankDDM) means a future
+// cyclical_* archetype only updates this one predicate. Nil-safe: a nil
+// receiver returns false.
+func (r *ResolvedProfile) IsCyclicalArchetype() bool {
+	return r != nil &&
+		(r.Archetype == ArchetypeCyclicalMidCycle ||
+			r.Archetype == ArchetypeCyclicalTrough)
+}
