@@ -100,6 +100,24 @@ func validateProfile(id string, p AssumptionProfile) error {
 		// intent for a non-zero horizon.
 		return fmt.Errorf("profile %s: compound_growth_cap must be > 1.0 for non-zero horizon", id)
 	}
+	// VAL-3 Phase 3 (C1): terminal_multiple range guard. The exit-multiple
+	// forward path (DDM multi-stage, FFO/AFFO projection) multiplies the
+	// projected base by TerminalMultiple, so a typo'd 0 or negative value
+	// silently zeroes the forward leg with no error (fail-open). Bound it to
+	// (0, terminalMultipleCeiling] only when a non-zero horizon actually
+	// engages the forward path — horizon==0 profiles never read it. REIT
+	// terminal P/FFO multiples top out ~31x today, so 50 is a generous sanity
+	// ceiling that still catches a misplaced decimal (e.g. 240 instead of 24).
+	if p.HorizonYears > 0 {
+		if p.TerminalMultiple <= 0 {
+			return fmt.Errorf("profile %s: terminal_multiple must be > 0 when horizon_years > 0: %v",
+				id, p.TerminalMultiple)
+		}
+		if p.TerminalMultiple > terminalMultipleCeiling {
+			return fmt.Errorf("profile %s: terminal_multiple out of sane range (0,%.0f]: %v",
+				id, terminalMultipleCeiling, p.TerminalMultiple)
+		}
+	}
 	// Invariant 10 (T2-P4-W2 item 4): when both DividendForecastHorizon and
 	// PayoutPath are populated, their lengths MUST match. The runtime guard
 	// in models/ddm.go:342 (`i < len(p.PayoutPath)`) silently truncates the
@@ -122,6 +140,12 @@ func validateProfile(id string, p AssumptionProfile) error {
 	}
 	return nil
 }
+
+// terminalMultipleCeiling is the upper sanity bound on a profile's exit
+// terminal_multiple (VAL-3 Phase 3 C1). REIT terminal P/FFO multiples top out
+// near 31x today; 50 still catches a misplaced decimal (240 vs 24) without
+// rejecting any real calibration.
+const terminalMultipleCeiling = 50.0
 
 // marginCeiling is the hard validation cap on the converged operating-margin
 // target — no archetype may converge above it (spec §7.3 "margin expansion is

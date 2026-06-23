@@ -214,6 +214,50 @@ func TestLoadFromJSON_NegativeValidation(t *testing.T) {
     "software_like_scaling:standard_growth"`),
 			wantErrPart: "must be < target_operating_margin",
 		},
+		{
+			// VAL-3 Phase 3 (C1): a zero terminal_multiple with a non-zero
+			// horizon silently zeroes the forward leg; reject it as fail-open.
+			name: "terminal_multiple_zero_with_horizon",
+			config: replaceJSONField(minimalValidConfig,
+				`"horizon_years": 3, "compound_growth_cap": 1.5,
+      "revenue_base_method": "raw_ttm", "discount_method": "cost_of_equity",
+      "terminal_method": "gordon_growth", "stabilized": true, "fade_years": 0,
+      "terminal_multiple": 0.8`,
+				`"horizon_years": 3, "compound_growth_cap": 1.5,
+      "revenue_base_method": "raw_ttm", "discount_method": "cost_of_equity",
+      "terminal_method": "gordon_growth", "stabilized": true, "fade_years": 0,
+      "terminal_multiple": 0`),
+			wantErrPart: "terminal_multiple must be > 0",
+		},
+		{
+			// VAL-3 Phase 3 (C1): negative terminal_multiple is a config error.
+			name: "terminal_multiple_negative_with_horizon",
+			config: replaceJSONField(minimalValidConfig,
+				`"horizon_years": 3, "compound_growth_cap": 1.5,
+      "revenue_base_method": "raw_ttm", "discount_method": "cost_of_equity",
+      "terminal_method": "gordon_growth", "stabilized": true, "fade_years": 0,
+      "terminal_multiple": 0.8`,
+				`"horizon_years": 3, "compound_growth_cap": 1.5,
+      "revenue_base_method": "raw_ttm", "discount_method": "cost_of_equity",
+      "terminal_method": "gordon_growth", "stabilized": true, "fade_years": 0,
+      "terminal_multiple": -5`),
+			wantErrPart: "terminal_multiple must be > 0",
+		},
+		{
+			// VAL-3 Phase 3 (C1): a terminal_multiple above the sanity ceiling
+			// (likely a misplaced decimal, e.g. 240 instead of 24) is rejected.
+			name: "terminal_multiple_above_ceiling",
+			config: replaceJSONField(minimalValidConfig,
+				`"horizon_years": 3, "compound_growth_cap": 1.5,
+      "revenue_base_method": "raw_ttm", "discount_method": "cost_of_equity",
+      "terminal_method": "gordon_growth", "stabilized": true, "fade_years": 0,
+      "terminal_multiple": 0.8`,
+				`"horizon_years": 3, "compound_growth_cap": 1.5,
+      "revenue_base_method": "raw_ttm", "discount_method": "cost_of_equity",
+      "terminal_method": "gordon_growth", "stabilized": true, "fade_years": 0,
+      "terminal_multiple": 240`),
+			wantErrPart: "terminal_multiple out of sane range",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
