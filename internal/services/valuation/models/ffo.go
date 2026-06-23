@@ -286,7 +286,23 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 	}
 
 	// Headline defaults to the FFO-based value (bit-for-bit when AFFO absent).
+	//
+	// headlineBasePerShare is the per-share base that, multiplied by pffoMultiple,
+	// yields the headline trailing value. VAL-3 Phase 3 carries it forward into
+	// the forward projection so trailing and forward share the SAME base (FFO or
+	// AFFO) — never a mix. The invariant valuePerShare == headlineBasePerShare *
+	// pffoMultiple holds in every branch, including the floored-to-0 cases (base
+	// is set to 0 so the forward leg projects 0 → 0, matching the distressed
+	// trailing=0 signal).
 	valuePerShare := pffoValuePerShare
+	headlineBasePerShare := ffoPerShare
+	baseLabel := "FFO"
+	if pffoValuePerShare == 0 && ffoPerShare*pffoMultiple < 0 {
+		// pffoValuePerShare was floored to 0 above on negative FFO. Zero the base
+		// so the forward leg cannot project a negative FFO into a positive
+		// terminal multiple.
+		headlineBasePerShare = 0
+	}
 	paffoValuePerShare := 0.0
 	if affoAvailable {
 		affo := ffo - maintCapEx
@@ -295,10 +311,14 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 		if paffoValuePerShare < 0 {
 			// Decision D2: floor to 0 and keep the headline at PAFFO (0). A REIT
 			// whose maintenance capex exceeds FFO genuinely has ~0 distributable
-			// cash; falling back to PFFO would hide that distress signal.
+			// cash; falling back to PFFO would hide that distress signal. The
+			// forward base is likewise 0 so the distressed signal carries forward.
 			paffoValuePerShare = 0
+			headlineBasePerShare = 0
 			warnings = append(warnings, "AFFO-based value floored at 0 (maintenance capex exceeds FFO — distressed REIT)")
 		} else {
+			headlineBasePerShare = affoPerShare // forward projects AFFO too
+			baseLabel = "AFFO"
 			warnings = append(warnings, fmt.Sprintf(
 				"AFFO base used: FFO %.0f − maintenance capex %.0f = AFFO %.0f (headline is AFFO-based)", ffo, maintCapEx, affo))
 		}
@@ -313,6 +333,11 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 	// projected-growth curve as an FFO-growth proxy (spec §6.4 Option A);
 	// when FFO growth diverges materially from revenue growth a future
 	// follow-up (spec §6.4 Option B) will key off a dedicated FFO series.
+	//
+	// VAL-3 Phase 3 (G1): the forward leg projects the headline base
+	// (headlineBasePerShare — AFFO/share when AFFO available, else FFO/share),
+	// NOT ffoPerShare unconditionally. This keeps trailing and forward derived
+	// from the same base so their divergence stays interpretable.
 	trailingValue := valuePerShare
 	forwardValue := 0.0
 	horizonSelected := 0
@@ -325,15 +350,15 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 			rates = input.GrowthEstimate.ProjectedGrowthRates
 		}
 		if len(rates) >= p.HorizonYears && input.CostOfEquity > 0 {
-			// Project FFO/share forward using engine growth (revenue growth as
-			// FFO-growth proxy per spec §6.4 Option A).
-			forwardFFOPerShare := ffoPerShare
+			// Project the headline base/share forward using engine growth
+			// (revenue growth as FFO/AFFO-growth proxy per spec §6.4 Option A).
+			forwardBasePerShare := headlineBasePerShare
 			for i := 0; i < p.HorizonYears; i++ {
-				forwardFFOPerShare *= 1 + rates[i]
+				forwardBasePerShare *= 1 + rates[i]
 			}
 
 			// Apply terminal P/FFO multiple.
-			forwardValuePreDiscount := forwardFFOPerShare * p.TerminalMultiple
+			forwardValuePreDiscount := forwardBasePerShare * p.TerminalMultiple
 
 			// Discount at cost-of-equity (NOT WACC — VAL-3 spec correction).
 			discount := math.Pow(1+input.CostOfEquity, float64(p.HorizonYears))
@@ -347,8 +372,8 @@ func (m *FFOModel) Calculate(ctx context.Context, input *ModelInput) (*ModelResu
 			terminalMultipleUsed = p.TerminalMultiple
 
 			warnings = append(warnings,
-				fmt.Sprintf("VAL-3 P3 forward FFO: %dy at avg %.1f%% growth, terminal %.1fx P/FFO",
-					p.HorizonYears, avg(rates[:p.HorizonYears])*100, p.TerminalMultiple))
+				fmt.Sprintf("VAL-3 P3 forward %s: %dy at avg %.1f%% growth, terminal %.1fx P/FFO",
+					baseLabel, p.HorizonYears, avg(rates[:p.HorizonYears])*100, p.TerminalMultiple))
 		}
 	}
 
