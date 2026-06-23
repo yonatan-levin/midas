@@ -163,10 +163,7 @@ func NewService(
 	// subtract from the default-sourced horizon to preserve byte-identity (D2).
 	injectedStage3 := 0
 	if profileRegistry != nil {
-		maxHorizon := profileRegistry.MaxHorizonYears()
-		if maxHorizon > params.MaxDCFProjectionYears {
-			maxHorizon = params.MaxDCFProjectionYears
-		}
+		maxHorizon := min(profileRegistry.MaxHorizonYears(), params.MaxDCFProjectionYears)
 		if extra := maxHorizon - (estimatorCfg.Stage1Years + estimatorCfg.Stage2Years); extra > 0 {
 			estimatorCfg.Stage3Years = extra
 			injectedStage3 = extra
@@ -1001,10 +998,7 @@ func (s *Service) performValuation(
 	// and are validated against the real (longer) growthRateLen.
 	legacyDefaultHorizon := growthRateLen
 	if overrides.Stage3Years == nil && s.estimatorInjectedStage3 > 0 {
-		legacyDefaultHorizon = growthRateLen - s.estimatorInjectedStage3
-		if legacyDefaultHorizon < 0 {
-			legacyDefaultHorizon = 0
-		}
+		legacyDefaultHorizon = max(0, growthRateLen-s.estimatorInjectedStage3)
 	}
 
 	resolverDefaults := params.Defaults{
