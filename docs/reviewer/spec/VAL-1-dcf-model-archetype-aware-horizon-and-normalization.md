@@ -1,6 +1,6 @@
 # VAL-1 — DCF model needs archetype-aware horizon, cyclical-base normalization, and explicit terminal handling
 
-**Status:** Phase 1 RESOLVED 2026-05-23. Phase 2 SHIPPED 2026-06-22 (archetype horizon). Phase 3 SHIPPED 2026-06-23 (cyclical-base normalization). Phase 4 SHIPPED 2026-06-24 (profile-driven exit-multiple terminal, EV/EBITDA basis, 50/50 blend preserved). Phase 5 OPEN (diluted-forward — gated on the unified `AssumptionProfile` work). CalculationVersion bump deferred to a single end-of-branch bump covering the whole VAL-1 arc.
+**Status:** Phase 1 RESOLVED 2026-05-23. Phase 2 SHIPPED 2026-06-22 (archetype horizon). Phase 3 SHIPPED 2026-06-23 (cyclical-base normalization). Phase 4 SHIPPED 2026-06-24 (profile-driven exit-multiple terminal, EV/EBITDA basis, 50/50 blend preserved). Phase 5 SHIPPED 2026-06-24 (diluted-share-forward adjustment, DEFAULT-OFF + profile-gated; no profile enables it yet — ships a dormant capability). CalculationVersion bump deferred to a single end-of-branch bump covering the whole VAL-1 arc (Phase 5 is default-off ⇒ changes no production value, so the bump is deferred to the first config commit that flips the flag on a shipping profile).
 **Original filing:** 2026-05-06 as part of the cross-model review prompted by RM-1/2/3 findings on revenue_multiple.
 
 ---
@@ -142,14 +142,20 @@ bump covering the whole VAL-1 arc.
 
 Plan: `docs/reviewer/implementations/VAL-1-phase-4-exit-multiple-terminal-implementation-plan.md`.
 
-### Phase 5 — Diluted-share-forward adjustment
+### Phase 5 — Diluted-share-forward adjustment — SHIPPED 2026-06-24
 
 For high-SBC tickers:
-- Project diluted share count forward at historical SBC dilution rate.
-- Use forward-diluted shares for terminal equity-per-share calculation.
+- Project diluted share count forward at the historical dilution rate.
+- Use the forward-diluted count as the DCF per-share denominator.
 - Default off; enable via profile.
 
-Effort: ~1 day. Adds ~30 lines + tests.
+**As shipped:**
+- Two profile fields (`AssumptionProfile` + `ResolvedProfile`): `DilutedShareForwardEnabled bool` (default-off gate) and `MaxAnnualDilutionRate float64` (clamp ceiling; 0 ⇒ 8% code default). `validateProfile` range-checks the ceiling ∈ [0,1]. **No shipping profile sets the flag in `config/assumption_profiles.json` this phase — a dormant capability.**
+- **Derivation method = share-count CAGR across FY periods** (`deriveAnnualDilutionRate` in `internal/services/valuation/diluted_forward.go`): `rate = (sharesₙ/shares₀)^(1/years) − 1` over annual diluted-share counts, NOT an SBC-expense/price model (would need a price series + reintroduce noise). `StockBasedCompensation` is the ELIGIBILITY GATE (a non-trivial SBC issuer), not the rate source. Pure + clock-free (replay-deterministic). Ineligible (no-op) on <2 FY periods, no SBC, or rate ≤ 0 (flat/buyback decline never inflates value).
+- **Seam = DCF path only.** `service.go::performValuation` computes a LOCAL `denomShares` (= forward-diluted count when the adjustment fires, else `sharesOutstanding`) immediately before `dcfValuePerShare := equityValue / denomShares`. `sharesOutstanding` is left UNMUTATED — Graham, the sanity cross-check, and the already-computed tangible value all keep reading today's count. The alt-model path (`performAlternativeValuation`) is untouched.
+- **Diagnostics:** `dcf_forward_diluted_shares` (number) + `dcf_applied_dilution_rate` (number, decimal), both omitempty on `entities.ValuationResult` + `handlers.FairValueResponse`, registered in `replay/diff.go` (`countFairValueFields()` 49 → 51).
+- **Default-off byte-identity (3 layers):** (a) the flag defaults false; (b) on the no-op path `denomShares == sharesOutstanding`; (c) the two diagnostic fields stay zero → omitempty drops them. Pinned by `TestService_performValuation_DilutedForward_FlagOff_ByteIdentical` (`math.Float64bits` on `dcf_value_per_share`) + the unit-level `TestApplyDilutedShareForward_NoOp`.
+- **CalcVersion deferred:** stays `"4.8"` (default-off changes no production value).
 
 ## Recommendation
 
@@ -252,6 +258,6 @@ then — Phase 2 only made the 10y end work in production.
 - [x] Horizon resolved from profile; per-archetype values sane. (Phase 2 SHIPPED 2026-06-22 — production estimator-length wiring + `LegacyDefaultHorizonYears` byte-identity preservation.)
 - [x] Cyclical-base normalization fires when profile is `(cyclical, *)`. (Phase 3 SHIPPED 2026-06-23 — `max(latest/TTM OI, 3y FY mean OI)` floor + `dcf_base_normalization` diagnostic; byte-identical for non-cyclical.)
 - [x] Exit-multiple terminal optional and behind the profile. (Phase 4 SHIPPED 2026-06-24 — profile-driven via terminal-method provenance; EV/EBITDA basis; 50/50 Gordon blend preserved; both terminal estimates emitted.)
-- [ ] Diluted-share-forward adjustment optional and behind the profile.
+- [x] Diluted-share-forward adjustment optional and behind the profile. (Phase 5 SHIPPED 2026-06-24 — `DilutedShareForwardEnabled` default-off; derivation = FY share-count CAGR; diagnostics `dcf_forward_diluted_shares` + `dcf_applied_dilution_rate`; CalcVersion bump deferred to the first config flip.)
 - [ ] Comprehensive regression suite across (mature, growth, hyper-growth, cyclical) × (current, profile-driven) — produces a divergence report that humans can review before merging.
 - [ ] CHANGELOG/CLAUDE.md updated.

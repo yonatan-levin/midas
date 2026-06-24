@@ -261,6 +261,14 @@ type FairValueResponse struct {
 	// (byte-identical non-exit-multiple responses).
 	DCFGordonTerminalValue       float64 `json:"dcf_gordon_terminal_value,omitempty" example:"18200000000"`
 	DCFExitMultipleTerminalValue float64 `json:"dcf_exit_multiple_terminal_value,omitempty" example:"21000000000"`
+	// DCFForwardDilutedShares / DCFAppliedDilutionRate (VAL-1 Phase 5): the
+	// diluted share count projected to the DCF horizon and the clamped annual
+	// dilution rate (decimal, e.g. 0.04) used for the projection. Present only
+	// when the profile-gated, default-off diluted-share-forward adjustment fired
+	// on the DCF path; both omitempty so default-path and DDM/FFO/revenue_multiple
+	// responses are byte-identical.
+	DCFForwardDilutedShares float64 `json:"dcf_forward_diluted_shares,omitempty" example:"1250000000"`
+	DCFAppliedDilutionRate  float64 `json:"dcf_applied_dilution_rate,omitempty" example:"0.04"`
 
 	// AppliedOverrides echoes the valuation knobs that were explicitly set by
 	// the request, each with the resolved value and source "request". Absent
@@ -814,6 +822,10 @@ func (h *FairValueHandler) buildFairValueResponse(ticker string, result *entitie
 		// VAL-1 Phase 4: both raw terminal-value estimates.
 		DCFGordonTerminalValue:       result.DCFGordonTerminalValue,
 		DCFExitMultipleTerminalValue: result.DCFExitMultipleTerminalValue,
+		// VAL-1 Phase 5: forward-diluted denominator diagnostics. Both zero on the
+		// default/no-op path; omitempty drops them ⇒ byte-identical responses.
+		DCFForwardDilutedShares: result.DCFForwardDilutedShares,
+		DCFAppliedDilutionRate:  result.DCFAppliedDilutionRate,
 		// T10: copy applied_overrides from the service-layer entity carrier.
 		// Nil when result carries no overrides (default path); omitempty drops it.
 		AppliedOverrides: appliedOverrides,

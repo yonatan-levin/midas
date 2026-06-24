@@ -457,6 +457,12 @@ var goFieldToJSON = map[string]string{
 	// map and the field count in sync (the init() drift guard enforces it).
 	"DCFGordonTerminalValue":       "dcf_gordon_terminal_value",
 	"DCFExitMultipleTerminalValue": "dcf_exit_multiple_terminal_value",
+	// VAL-1 Phase 5: forward-diluted denominator diagnostics. Omitempty — absent
+	// on the default/no-op path (flag off, ineligible, or non-DCF model). Added in
+	// the same commit as the FairValueResponse fields + the count bump so this map
+	// and the field count stay in sync (the init() drift guard enforces it).
+	"DCFForwardDilutedShares": "dcf_forward_diluted_shares",
+	"DCFAppliedDilutionRate":  "dcf_applied_dilution_rate",
 	// T10: applied_overrides echoes request-sourced knobs. Omitempty — absent
 	// on default GET and POST{} paths. Added in the same commit as the struct
 	// field to keep this map and the field count in sync.
@@ -542,11 +548,12 @@ func nilOrType(p any) string {
 // guard above asserts the constant and reflection agree at package
 // load time.
 //
-// Current: 38 (FairValueResponse — 30 pre-T10 + AppliedOverrides +
+// Current: 40 (FairValueResponse — 30 pre-T10 + AppliedOverrides +
 // AssumptionSources + CleaningAdjustments + PFFOValuePerShare +
 // PAFFOValuePerShare [VAL-3 Phase 2] + DCFBaseNormalization [VAL-1
 // Phase 3] + DCFGordonTerminalValue + DCFExitMultipleTerminalValue
-// [VAL-1 Phase 4]) + 5 (Industry) + 8 (SanityCheck) = 51.
+// [VAL-1 Phase 4] + DCFForwardDilutedShares + DCFAppliedDilutionRate
+// [VAL-1 Phase 5]) + 5 (Industry) + 8 (SanityCheck) = 53.
 //
 // When a future commit extends FairValueResponse, Industry, or
 // SanityCheck:
@@ -556,12 +563,13 @@ func nilOrType(p any) string {
 //  3. Add an entry to goFieldToJSON for the new field's snake_case
 //     name (otherwise camelToSnake's best-effort conversion runs).
 func countFairValueFields() int {
-	// FairValueResponse: 38 top-level public fields (30 pre-T10 + AppliedOverrides
+	// FairValueResponse: 40 top-level public fields (30 pre-T10 + AppliedOverrides
 	// + AssumptionSources [Layer-B Phase-2] + CleaningAdjustments [TDB-11]
 	// + PFFOValuePerShare + PAFFOValuePerShare [VAL-3 Phase 2]
 	// + DCFBaseNormalization [VAL-1 Phase 3] + DCFGordonTerminalValue +
-	// DCFExitMultipleTerminalValue [VAL-1 Phase 4]).
+	// DCFExitMultipleTerminalValue [VAL-1 Phase 4] + DCFForwardDilutedShares +
+	// DCFAppliedDilutionRate [VAL-1 Phase 5]).
 	// Industry: 5 fields.
 	// SanityCheck: 8 fields.
-	return 38 + 5 + 8
+	return 40 + 5 + 8
 }

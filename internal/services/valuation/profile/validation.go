@@ -138,6 +138,14 @@ func validateProfile(id string, p AssumptionProfile) error {
 	if err := validateReinvestmentFields(id, p); err != nil {
 		return err
 	}
+	// VAL-1 Phase 5 — diluted-share-forward clamp ceiling. 0 is valid (means
+	// "use the code default"); a rate above 100%/yr is never a real calibration
+	// (a typo guard, mirroring reinvestmentFieldCeiling). The boolean gate itself
+	// needs no validation. Enforced regardless of the flag so a stray ceiling
+	// fails loud even before a profile is enabled.
+	if p.MaxAnnualDilutionRate < 0 || p.MaxAnnualDilutionRate > 1 {
+		return fmt.Errorf("profile %s: max_annual_dilution_rate out of range [0,1]: %.4f", id, p.MaxAnnualDilutionRate)
+	}
 	return nil
 }
 

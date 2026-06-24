@@ -161,6 +161,16 @@ type ValuationResult struct {
 	DCFGordonTerminalValue       float64 `json:"dcf_gordon_terminal_value,omitempty"`
 	DCFExitMultipleTerminalValue float64 `json:"dcf_exit_multiple_terminal_value,omitempty"`
 
+	// DCFForwardDilutedShares / DCFAppliedDilutionRate record the VAL-1 Phase 5
+	// diluted-share-forward adjustment (DCF path only). When a high-SBC profile
+	// opts in (DilutedShareForwardEnabled), the DCF per-share denominator is the
+	// diluted share count projected to the DCF horizon at DCFAppliedDilutionRate
+	// (the clamped historical share-count CAGR). Both are omitempty and stay zero
+	// on the default/no-op path (flag off, ineligible history, or non-DCF model),
+	// so default-path and DDM/FFO/revenue_multiple responses are byte-identical.
+	DCFForwardDilutedShares float64 `json:"dcf_forward_diluted_shares,omitempty"`
+	DCFAppliedDilutionRate  float64 `json:"dcf_applied_dilution_rate,omitempty"`
+
 	// AppliedOverrides carries the set of knobs that were explicitly set by the
 	// request (source=="request"). Populated only when the request supplied at
 	// least one override; nil/omitted on the default path so default-path

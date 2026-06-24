@@ -1533,7 +1533,21 @@ func (s *Service) performValuation(
 		latestFinancialData.PreferredEquity,
 		debtLikeClaims,
 	)
-	dcfValuePerShare := equityValue / sharesOutstanding
+	// VAL-1 Phase 5 — diluted-share-forward adjustment (DCF path only, DEFAULT-OFF).
+	// denomShares is the per-share denominator: today's diluted share count unless a
+	// high-SBC profile opts in (DilutedShareForwardEnabled) and the history is
+	// eligible, in which case it becomes the diluted count projected forward over the
+	// resolved DCF horizon at the derived dilution rate. sharesOutstanding itself is
+	// left UNMUTATED — Graham (below), the sanity cross-check, and the already-computed
+	// tangible value all keep reading today's count. With the flag off (every current
+	// profile) denomShares == sharesOutstanding, so dcf_value_per_share is byte-identical.
+	denomShares := sharesOutstanding
+	forwardShares, appliedDilutionRate, dilutionWarnings := s.applyDilutedShareForward(
+		ctx, sharesOutstanding, resolvedProfile, historicalData, projectionYears)
+	if appliedDilutionRate > 0 {
+		denomShares = forwardShares
+	}
+	dcfValuePerShare := equityValue / denomShares
 
 	// Stage 10 — "equity_bridge" calc trace: emit the bridge from enterprise value to
 	// per-share intrinsic value so operators can audit the equity conversion step.
@@ -1546,7 +1560,7 @@ func (s *Service) performValuation(
 			zap.Float64("preferred", latestFinancialData.PreferredEquity),
 			zap.Float64("debt_like_claims", debtLikeClaims),
 			zap.Float64("equity_value", equityValue),
-			zap.Float64("diluted_shares", sharesOutstanding),
+			zap.Float64("diluted_shares", denomShares),
 			zap.Float64("per_share", dcfValuePerShare),
 		)
 	}
@@ -1649,6 +1663,18 @@ func (s *Service) performValuation(
 	// non-exit-multiple responses are byte-identical.
 	result.DCFGordonTerminalValue = dcfResult.GordonTV
 	result.DCFExitMultipleTerminalValue = dcfResult.ExitMultipleTV
+
+	// VAL-1 Phase 5: stamp the forward-diluted denominator diagnostics + audit
+	// line ONLY when the adjustment fired (appliedDilutionRate > 0 ⇒ profile opted
+	// in + eligible history). On the no-op path forwardShares == sharesOutstanding,
+	// so the fields are left at zero (omitempty drops dcf_forward_diluted_shares /
+	// dcf_applied_dilution_rate) and dilutionWarnings is empty ⇒ byte-identical
+	// responses.
+	if appliedDilutionRate > 0 {
+		result.DCFForwardDilutedShares = forwardShares
+		result.DCFAppliedDilutionRate = appliedDilutionRate
+		result.Warnings = append(result.Warnings, dilutionWarnings...)
+	}
 
 	// Tier 2 P2: terminal-dominance sanity warning. When the discounted
 	// terminal value exceeds 80% of total EV, the model is implicitly
