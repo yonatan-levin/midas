@@ -198,7 +198,7 @@ type FairValueResponse struct {
 	DataQualityScore   float64               `json:"data_quality_score,omitempty" example:"85.5"`            // Data quality score (0-100)
 	DataQualityGrade   string                `json:"data_quality_grade,omitempty" example:"B"`               // Data quality grade (A-F)
 	CalculationMethod  string                `json:"calculation_method,omitempty" example:"multi_stage_dcf"` // Model used: multi_stage_dcf, ddm, ffo, revenue_multiple
-	CalculationVersion string                `json:"calculation_version,omitempty" example:"4.9"`            // Engine version that produced this result
+	CalculationVersion string                `json:"calculation_version,omitempty" example:"4.10"`            // Engine version that produced this result
 	Warnings           []string              `json:"warnings,omitempty"`                                     // Data quality or assumption warnings
 	SanityCheck        *entities.SanityCheck `json:"sanity_check,omitempty"`                                 // Multiples cross-check against sector medians
 	Industry           *Industry             `json:"industry,omitempty"`                                     // Dual industry classification (SIC + heuristic) for drift detection
