@@ -822,6 +822,20 @@ const docTemplate = `{
                     "type": "number",
                     "example": 85.5
                 },
+                "dcf_base_normalization": {
+                    "description": "DCFBaseNormalization (VAL-1 Phase 3): \"latest\" | \"3y_mean\". Omitempty +\npresent only on the cyclical DCF path, so non-cyclical responses are\nbyte-identical (no key emitted).",
+                    "type": "string",
+                    "example": "3y_mean"
+                },
+                "dcf_exit_multiple_terminal_value": {
+                    "type": "number",
+                    "example": 21000000000
+                },
+                "dcf_gordon_terminal_value": {
+                    "description": "DCFGordonTerminalValue / DCFExitMultipleTerminalValue (VAL-1 Phase 4):\nthe two raw terminal-value estimates (nominal, pre-discount, pre-blend) on\nan EV/EBITDA basis. The blended primary stays enterprise_value /\ndcf_value_per_share; dcf_terminal_method names the driving method.\ndcf_exit_multiple_terminal_value is omitted on the pure-Gordon path\n(byte-identical non-exit-multiple responses).",
+                    "type": "number",
+                    "example": 18200000000
+                },
                 "dcf_horizon_years": {
                     "type": "integer",
                     "example": 5

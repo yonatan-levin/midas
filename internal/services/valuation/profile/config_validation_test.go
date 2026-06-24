@@ -1,6 +1,8 @@
 package profile_test
 
 import (
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -67,4 +69,45 @@ func TestRealConfig_LoadsAndValidates(t *testing.T) {
 	// path (empty method) so DDM/DCF bit-for-bit is untouched by Layer A.
 	require.Empty(t, p.ReinvestmentMethod,
 		"mature_large_bank:mature must NOT opt into Layer A (preserves bit-for-bit)")
+}
+
+// TestRealConfig_ExitMultipleProfilesHavePositiveMultiple is the VAL-1 Phase 4
+// load-time invariant: every shipped profile that declares
+// terminal_method == "exit_multiple" MUST carry terminal_multiple > 0.
+//
+// Phase 4 lets a PROFILE-sourced exit_multiple drive the DCF terminal through
+// the same params precedence chain the request override uses. The resolver
+// returns a typed 422 (params.ParamError) when method == "exit_multiple" and no
+// positive multiple is resolvable. On the profile-driven path that 422 is now
+// reachable for profile-sourced methods too, so a shipped exit_multiple profile
+// with a zero/absent terminal_multiple would turn into a production 422 for
+// every ticker that routes to it. This test keeps that from ever shipping.
+func TestRealConfig_ExitMultipleProfilesHavePositiveMultiple(t *testing.T) {
+	raw, err := os.ReadFile("../../../../config/assumption_profiles.json")
+	require.NoError(t, err, "shipped assumption_profiles.json must be readable")
+
+	var cfg struct {
+		Profiles map[string]struct {
+			TerminalMethod   string  `json:"terminal_method"`
+			TerminalMultiple float64 `json:"terminal_multiple"`
+		} `json:"profiles"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &cfg), "assumption_profiles.json must parse")
+	require.NotEmpty(t, cfg.Profiles, "config must declare at least one profile")
+
+	exitMultipleCount := 0
+	for id, p := range cfg.Profiles {
+		if p.TerminalMethod != string(profile.TerminalExitMultiple) {
+			continue
+		}
+		exitMultipleCount++
+		require.Greater(t, p.TerminalMultiple, 0.0,
+			"profile %q declares terminal_method=exit_multiple but terminal_multiple=%v (must be >0 or the profile-driven path 422s)",
+			id, p.TerminalMultiple)
+	}
+	// Guard against a vacuous pass: the shipped config is expected to carry
+	// exit_multiple profiles (17 at plan time). If this drops to 0 the assertion
+	// above silently stops protecting anything.
+	require.Positive(t, exitMultipleCount,
+		"expected at least one exit_multiple profile in the shipped config")
 }

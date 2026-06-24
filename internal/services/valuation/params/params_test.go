@@ -194,3 +194,46 @@ func TestEffectiveValuationParams_ZeroValue(t *testing.T) {
 	assert.Nil(t, p.Provenance, "Provenance must be nil on zero-value struct (populated by Resolve*)")
 	assert.False(t, p.TerminalGrowthExplicit)
 }
+
+// TestTerminalMethodSource exercises the VAL-1 Phase 4 provenance accessor. The
+// service-layer exitMultiple gate switches on this Source to distinguish a
+// pure-default gordon_growth (legacy industry blend, byte-identical) from an
+// explicitly profile/request-sourced terminal_method (which may drive the
+// exit-multiple terminal). The accessor keeps the unexported knobTerminalMethod
+// constant inside params (no leak to the service).
+func TestTerminalMethodSource(t *testing.T) {
+	t.Run("nil provenance returns SourceDefault", func(t *testing.T) {
+		var p EffectiveValuationParams
+		assert.Equal(t, SourceDefault, p.TerminalMethodSource(),
+			"a zero-value struct (no Resolve* run) must read as SourceDefault, never panic")
+	})
+
+	t.Run("absent key returns SourceDefault", func(t *testing.T) {
+		p := EffectiveValuationParams{Provenance: map[string]Source{}}
+		assert.Equal(t, SourceDefault, p.TerminalMethodSource(),
+			"an empty provenance map must read as SourceDefault")
+	})
+
+	t.Run("default-resolved", func(t *testing.T) {
+		d := legacyDefaults()
+		p, err := ResolveInputs(d, Overrides{}, 7)
+		require.NoError(t, err)
+		assert.Equal(t, SourceDefault, p.TerminalMethodSource())
+	})
+
+	t.Run("profile-resolved", func(t *testing.T) {
+		d := legacyDefaults()
+		d.ProfileTerminalMethod = "exit_multiple"
+		d.ProfileTerminalMultiple = 12
+		p, err := ResolveInputs(d, Overrides{}, 7)
+		require.NoError(t, err)
+		assert.Equal(t, SourceProfile, p.TerminalMethodSource())
+	})
+
+	t.Run("request-resolved", func(t *testing.T) {
+		d := legacyDefaults()
+		p, err := ResolveInputs(d, Overrides{TerminalMethod: str("gordon_growth")}, 7)
+		require.NoError(t, err)
+		assert.Equal(t, SourceRequest, p.TerminalMethodSource())
+	})
+}

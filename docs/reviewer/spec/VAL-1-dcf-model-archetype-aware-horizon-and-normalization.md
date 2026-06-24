@@ -1,6 +1,6 @@
 # VAL-1 — DCF model needs archetype-aware horizon, cyclical-base normalization, and explicit terminal handling
 
-**Status:** Phase 1 RESOLVED 2026-05-23. Phase 2 SHIPPED 2026-06-22 (archetype horizon). Phase 3 SHIPPED 2026-06-23 (cyclical-base normalization). Phases 4-5 OPEN (exit-multiple terminal / diluted-forward — gated on the unified `AssumptionProfile` work). CalculationVersion bump deferred to a single end-of-branch bump covering the whole VAL-1 arc.
+**Status:** Phase 1 RESOLVED 2026-05-23. Phase 2 SHIPPED 2026-06-22 (archetype horizon). Phase 3 SHIPPED 2026-06-23 (cyclical-base normalization). Phase 4 SHIPPED 2026-06-24 (profile-driven exit-multiple terminal, EV/EBITDA basis, 50/50 blend preserved). Phase 5 OPEN (diluted-forward — gated on the unified `AssumptionProfile` work). CalculationVersion bump deferred to a single end-of-branch bump covering the whole VAL-1 arc.
 **Original filing:** 2026-05-06 as part of the cross-model review prompted by RM-1/2/3 findings on revenue_multiple.
 
 ---
@@ -104,14 +104,43 @@ bumped here — a single end-of-branch bump covers the whole VAL-1 arc.
 
 Effort: ~1 day. Mirrors the cyclical handling in RM-3.
 
-### Phase 4 — Exit-multiple terminal as an alternative to Gordon
+### Phase 4 — Exit-multiple terminal as an alternative to Gordon — SHIPPED 2026-06-24
 
 When the profile says `terminal_method: exit_multiple`:
-- Compute `year_N_revenue × mature_sector_EV/Revenue` as the terminal EV.
-- Compare against Gordon-implied terminal; emit both, primary chosen by profile.
+- The engine BLENDS the exit-multiple terminal value 50/50 with the Gordon
+  terminal value (preserved request-override semantics — `exit_multiple` is NOT
+  a pure exit-multiple terminal, and `gordon_growth` suppresses the blend).
+- Both raw terminal estimates are emitted as diagnostics:
+  `dcf_gordon_terminal_value` + `dcf_exit_multiple_terminal_value` (nominal,
+  pre-discount, pre-blend). The blended primary remains `enterprise_value` /
+  `dcf_value_per_share`; `dcf_terminal_method` names the driving method.
 - Useful for early-stage growth tickers where year-N is unlikely to be a Gordon-stable state.
 
-Effort: ~2 days. Adds a new code path; needs careful testing because it interacts with the sanity-check crosscheck.
+**BASIS DECISION (supersedes the original "EV/Revenue" wording):** the engine,
+the 17 shipped profile `terminal_multiple` values (3.0–25.0), and the
+sanity-check crosscheck all speak **EV/EBITDA** (terminal EBITDA × multiple,
+where terminal EBITDA = terminal operating income + scaled D&A). The original
+spec phrase `year_N_revenue × mature_sector_EV/Revenue` is **superseded** — Phase
+4 keeps the engine's existing, contract-stable EV/EBITDA definition (ARCH Option
+A: zero engine-math change). Switching to EV/Revenue would have required
+re-authoring all 17 profile multiples and changing `ExitMultipleTV` semantics for
+the shipped request-override path — explicitly out of scope.
+
+**Implementation (Option A — activate latent behavior):** the engine already had
+the exit-multiple math + the 50/50 blend, and `params` already plumbed
+`terminal_method`/`terminal_multiple` through config→profile→request precedence.
+The only change was the SERVICE-layer gate: it now switches on the resolved
+terminal-method PROVENANCE (`params.EffectiveValuationParams.TerminalMethodSource()`,
+returning `SourceDefault|SourceProfile|SourceRequest`) so a PROFILE-sourced
+`exit_multiple` drives the blend with the profile's `terminal_multiple`. The
+request-override branch is preserved verbatim. **Byte-identity:** a profile- or
+default-sourced `gordon_growth` ticker keeps the legacy industry-EV/EBITDA blend
+(today's gate only fired on a request override, so profiled-gordon tickers —
+banks, mature-large — already get the industry blend; suppressing them would have
+silently zeroed it). CalculationVersion bump deferred to the single end-of-branch
+bump covering the whole VAL-1 arc.
+
+Plan: `docs/reviewer/implementations/VAL-1-phase-4-exit-multiple-terminal-implementation-plan.md`.
 
 ### Phase 5 — Diluted-share-forward adjustment
 
@@ -143,8 +172,23 @@ Phase 2 (horizon):
 Phase 3 (cyclical base):
 - MXL fixture (semi at trough): when classified as `(cyclical, *)`, base uses 3y mean instead of latest. Per-share value differs from non-normalized run.
 
-Phase 4 (exit multiple):
-- Forward NVDA fixture: profile says `terminal_method: exit_multiple` → uses sector multiple at year 10. Assert primary value differs from Gordon-only.
+Phase 4 (exit multiple) — SHIPPED:
+- `TestService_DCF_ProfileExitMultiple_BlendsProfileMultiple`: profile says
+  `terminal_method: exit_multiple` → blends the PROFILE `terminal_multiple`
+  (engineered ≠ industry default); asserts a non-zero exit component and that EV
+  differs from the industry-blend counterfactual.
+- `TestService_DCF_ProfileGordonGrowth_KeepsIndustryBlend` +
+  `TestService_DCF_NoIndustryMultiple_PureGordon` +
+  `TestService_DCF_NoProfileVsGordonProfile_SameTerminal`: byte-identity pins —
+  profile/default `gordon_growth` keeps the legacy industry blend, pure-Gordon
+  when no industry multiple.
+- `TestService_Crosscheck_ExitMultipleProfile_NoSpuriousEVEBITDAFlag`: the
+  blended terminal must not raise a spurious EV/EBITDA divergence flag (benign
+  circularity, documented in `crosscheck.go`).
+- `TestTerminalMethodSource` (params): provenance accessor unit pins.
+- `TestRealConfig_ExitMultipleProfilesHavePositiveMultiple`: every shipped
+  `exit_multiple` profile carries `terminal_multiple > 0` (prevents the
+  resolvable-multiple 422).
 
 Phase 5 (diluted-forward):
 - TSLA fixture (high SBC): forward-diluted shares > current diluted shares; per-share value lower than non-adjusted. Pin the relationship.
@@ -207,7 +251,7 @@ then — Phase 2 only made the 10y end work in production.
 - [x] `AssumptionProfile` machinery shared with RM-3 / VAL-2 / VAL-3.
 - [x] Horizon resolved from profile; per-archetype values sane. (Phase 2 SHIPPED 2026-06-22 — production estimator-length wiring + `LegacyDefaultHorizonYears` byte-identity preservation.)
 - [x] Cyclical-base normalization fires when profile is `(cyclical, *)`. (Phase 3 SHIPPED 2026-06-23 — `max(latest/TTM OI, 3y FY mean OI)` floor + `dcf_base_normalization` diagnostic; byte-identical for non-cyclical.)
-- [ ] Exit-multiple terminal optional and behind the profile.
+- [x] Exit-multiple terminal optional and behind the profile. (Phase 4 SHIPPED 2026-06-24 — profile-driven via terminal-method provenance; EV/EBITDA basis; 50/50 Gordon blend preserved; both terminal estimates emitted.)
 - [ ] Diluted-share-forward adjustment optional and behind the profile.
 - [ ] Comprehensive regression suite across (mature, growth, hyper-growth, cyclical) × (current, profile-driven) — produces a divergence report that humans can review before merging.
 - [ ] CHANGELOG/CLAUDE.md updated.

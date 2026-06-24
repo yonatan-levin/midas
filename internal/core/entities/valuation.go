@@ -151,6 +151,16 @@ type ValuationResult struct {
 	// so non-cyclical and DDM/FFO/revenue_multiple responses are byte-identical.
 	DCFBaseNormalization string `json:"dcf_base_normalization,omitempty"`
 
+	// DCFGordonTerminalValue and DCFExitMultipleTerminalValue surface BOTH raw
+	// terminal-value estimates (VAL-1 Phase 4), nominal (before discounting and
+	// before the 50/50 blend). They mirror dcf.Result.GordonTV /
+	// dcf.Result.ExitMultipleTV. The blended primary remains EnterpriseValue /
+	// DCFValuePerShare; dcf_terminal_method tells the consumer which method drove
+	// the terminal. DCFExitMultipleTerminalValue is 0 (omitempty drops it) on the
+	// pure-Gordon path, so non-exit-multiple responses are byte-identical.
+	DCFGordonTerminalValue       float64 `json:"dcf_gordon_terminal_value,omitempty"`
+	DCFExitMultipleTerminalValue float64 `json:"dcf_exit_multiple_terminal_value,omitempty"`
+
 	// AppliedOverrides carries the set of knobs that were explicitly set by the
 	// request (source=="request"). Populated only when the request supplied at
 	// least one override; nil/omitted on the default path so default-path

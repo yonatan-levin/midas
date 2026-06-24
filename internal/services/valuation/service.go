@@ -1392,25 +1392,48 @@ func (s *Service) performValuation(
 	// Using p.TerminalMultiple unconditionally would regress every profiled
 	// ticker (e.g. AAPL profile multiple 5 vs TECH industry 18).
 	//
-	// MEDIUM (terminal_method honored as a selector): once the request has touched
-	// terminal_method or terminal_multiple, branch on the RESOLVED method so the
-	// selector is meaningful (the legacy code ignored it and averaged regardless):
-	//   - "gordon_growth"  → SUPPRESS the exit-multiple component (exitMultiple = 0),
-	//     producing a pure Gordon Growth TV (no blending).
-	//   - "exit_multiple"  → use p.TerminalMultiple, which the engine BLENDS 50/50
-	//     with Gordon Growth TV (dcf.CalculateDCF averages — it is not a pure exit
-	//     multiple; the DTO doc states this truthfully).
-	// TRACKED FOLLOW-UP (design §3.5-vs-§5/§6 reconciliation, sweep in T11):
-	// whether a profile-sourced terminal_method=exit_multiple should drive the
-	// DCF averaging WITHOUT a request override is a deliberate behavior-change
-	// decision, intentionally OUT OF SCOPE here to preserve byte-identity.
+	// VAL-1 Phase 4: honor a PROFILE-sourced terminal_method=exit_multiple, not
+	// only a request override. The decision keys off the RESOLUTION PROVENANCE of
+	// terminal_method (p.TerminalMethodSource()) so the value change is confined to
+	// tickers whose method was EXPLICITLY chosen by the profile or the request.
+	//
+	// Default starting point: the legacy industry-EV/EBITDA blend (industryExitMultiple).
+	//
+	//   - REQUEST path (terminal_method OR terminal_multiple overridden) — PRESERVED
+	//     VERBATIM from the shipped request-override contract: a request-selected
+	//     "gordon_growth" SUPPRESSES the blend (exitMultiple = 0, pure Gordon TV);
+	//     any other resolved method uses p.TerminalMultiple (the engine BLENDS 50/50
+	//     — it is NOT a pure exit multiple; the DTO doc states this truthfully). This
+	//     branch is byte-for-byte the legacy gate, so every existing override test
+	//     keeps passing unchanged.
+	//
+	//   - PROFILE path (no request override): NEW in Phase 4. A profile-sourced
+	//     "exit_multiple" now drives the blend with the PROFILE-resolved
+	//     p.TerminalMultiple (EV/EBITDA basis — applied to terminal EBITDA = terminal
+	//     OI + scaled D&A). A profile-sourced "gordon_growth" deliberately does
+	//     NOTHING here → exitMultiple stays industryExitMultiple, byte-identical to
+	//     today (today's gate only fired on a request override, so profile-gordon
+	//     tickers — banks, mature-large, etc. — already get the industry blend;
+	//     suppressing them would silently zero the blend for the whole profiled-gordon
+	//     universe).
+	//
+	// A pure-DEFAULT method (no profile, no override) matches NEITHER branch →
+	// exitMultiple stays industryExitMultiple → bit-for-bit identical to pre-Phase-4.
 	exitMultiple := industryExitMultiple
-	if overrides.TerminalMultiple != nil || overrides.TerminalMethod != nil {
+	switch {
+	case overrides.TerminalMultiple != nil || overrides.TerminalMethod != nil:
+		// Request-override path — legacy semantics preserved verbatim.
 		if terminalMethodLabel == string(profile.TerminalGordonGrowth) {
 			exitMultiple = 0 // suppress exit-multiple blending; pure Gordon Growth TV
 		} else {
 			exitMultiple = p.TerminalMultiple
 		}
+	case p.TerminalMethodSource() == params.SourceProfile &&
+		terminalMethodLabel == string(profile.TerminalExitMultiple):
+		// Phase 4: profile-driven exit multiple (no request override). Resolved
+		// through the same params precedence chain → p.TerminalMultiple folds in
+		// the profile's terminal_multiple.
+		exitMultiple = p.TerminalMultiple
 	}
 	if exitMultiple > 0 {
 		dcfInputs.ExitMultiple = exitMultiple
@@ -1620,6 +1643,12 @@ func (s *Service) performValuation(
 	// VAL-1 Phase 3: empty for non-cyclical profiles → omitempty drops it →
 	// byte-identical non-cyclical responses.
 	result.DCFBaseNormalization = baseNormalizationMethod
+	// VAL-1 Phase 4: surface BOTH raw terminal-value estimates (nominal,
+	// pre-discount, pre-blend) straight from the engine. ExitMultipleTV is 0 on
+	// the pure-Gordon path → omitempty drops dcf_exit_multiple_terminal_value →
+	// non-exit-multiple responses are byte-identical.
+	result.DCFGordonTerminalValue = dcfResult.GordonTV
+	result.DCFExitMultipleTerminalValue = dcfResult.ExitMultipleTV
 
 	// Tier 2 P2: terminal-dominance sanity warning. When the discounted
 	// terminal value exceeds 80% of total EV, the model is implicitly

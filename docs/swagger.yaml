@@ -427,6 +427,26 @@ definitions:
         description: Data quality score (0-100)
         example: 85.5
         type: number
+      dcf_base_normalization:
+        description: |-
+          DCFBaseNormalization (VAL-1 Phase 3): "latest" | "3y_mean". Omitempty +
+          present only on the cyclical DCF path, so non-cyclical responses are
+          byte-identical (no key emitted).
+        example: 3y_mean
+        type: string
+      dcf_exit_multiple_terminal_value:
+        example: 21000000000
+        type: number
+      dcf_gordon_terminal_value:
+        description: |-
+          DCFGordonTerminalValue / DCFExitMultipleTerminalValue (VAL-1 Phase 4):
+          the two raw terminal-value estimates (nominal, pre-discount, pre-blend) on
+          an EV/EBITDA basis. The blended primary stays enterprise_value /
+          dcf_value_per_share; dcf_terminal_method names the driving method.
+          dcf_exit_multiple_terminal_value is omitted on the pure-Gordon path
+          (byte-identical non-exit-multiple responses).
+        example: 18200000000
+        type: number
       dcf_horizon_years:
         example: 5
         type: integer

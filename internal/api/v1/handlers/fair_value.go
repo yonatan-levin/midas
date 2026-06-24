@@ -253,6 +253,14 @@ type FairValueResponse struct {
 	// present only on the cyclical DCF path, so non-cyclical responses are
 	// byte-identical (no key emitted).
 	DCFBaseNormalization string `json:"dcf_base_normalization,omitempty" example:"3y_mean"`
+	// DCFGordonTerminalValue / DCFExitMultipleTerminalValue (VAL-1 Phase 4):
+	// the two raw terminal-value estimates (nominal, pre-discount, pre-blend) on
+	// an EV/EBITDA basis. The blended primary stays enterprise_value /
+	// dcf_value_per_share; dcf_terminal_method names the driving method.
+	// dcf_exit_multiple_terminal_value is omitted on the pure-Gordon path
+	// (byte-identical non-exit-multiple responses).
+	DCFGordonTerminalValue       float64 `json:"dcf_gordon_terminal_value,omitempty" example:"18200000000"`
+	DCFExitMultipleTerminalValue float64 `json:"dcf_exit_multiple_terminal_value,omitempty" example:"21000000000"`
 
 	// AppliedOverrides echoes the valuation knobs that were explicitly set by
 	// the request, each with the resolved value and source "request". Absent
@@ -803,6 +811,9 @@ func (h *FairValueHandler) buildFairValueResponse(ticker string, result *entitie
 		DCFPerYearPV:          result.DCFPerYearPV,
 		DCFTerminalGrowthUsed: result.DCFTerminalGrowthUsed,
 		DCFBaseNormalization:  result.DCFBaseNormalization,
+		// VAL-1 Phase 4: both raw terminal-value estimates.
+		DCFGordonTerminalValue:       result.DCFGordonTerminalValue,
+		DCFExitMultipleTerminalValue: result.DCFExitMultipleTerminalValue,
 		// T10: copy applied_overrides from the service-layer entity carrier.
 		// Nil when result carries no overrides (default path); omitempty drops it.
 		AppliedOverrides: appliedOverrides,
