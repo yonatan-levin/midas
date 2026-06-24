@@ -6,7 +6,7 @@
 **Worktree root:** `c:\Users\Yonatan Levin\Documents\Programming\Projects\FinTech\Strade\midas\.claude\worktrees\val-3-affo-forward`
 
 References:
-- Spec: [VAL-3 tracker](../spec/VAL-3-ffo-affo-subsector-multiples-and-forward-projection.md) — Phase 3 (§ "Phase 3 — Forward FFO/AFFO projection"), Issue 4 (discount = cost of equity), Phase 3 acceptance checklist.
+- Spec: [VAL-3 tracker](VAL-3-ffo-affo-subsector-multiples-and-forward-projection.md) — Phase 3 (§ "Phase 3 — Forward FFO/AFFO projection"), Issue 4 (discount = cost of equity), Phase 3 acceptance checklist.
 - Model: [ffo.go](../../../internal/services/valuation/models/ffo.go) — existing forward scaffold at lines 252–297.
 - Result shape: [router.go](../../../internal/services/valuation/models/router.go) — `ModelResult` `TrailingValue`/`ForwardValue`/`HorizonSelected`/`TerminalMultiple` (lines 126–129); `ModelInput.Profile`/`GrowthEstimate`/`CostOfEquity` (lines 40–94).
 - Profile types: [profile.go](../../../internal/services/valuation/profile/profile.go) (`HorizonYears` L119, `TerminalMultiple` L128); [validation.go](../../../internal/services/valuation/profile/validation.go).

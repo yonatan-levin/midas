@@ -3,7 +3,7 @@
 MODE: PLAN_AND_CREATE
 ROLE: ARCH
 Status: DRAFT — ready for BACKEND execution under midas's own harness (delegated; run gates inside `midas/`).
-Spec authority: [VAL-3 spec](../spec/VAL-3-ffo-affo-subsector-multiples-and-forward-projection.md) — "Phase 2 — AFFO support" (§ lines 110-120) + Phase 2 acceptance checklist (§ lines 200-204).
+Spec authority: [VAL-3 spec](VAL-3-ffo-affo-subsector-multiples-and-forward-projection.md) — "Phase 2 — AFFO support" (§ lines 110-120) + Phase 2 acceptance checklist (§ lines 200-204).
 Engine version at time of writing: **4.8** (the task brief's "4.7" is stale — see [service.go:2044](../../../internal/services/valuation/service.go) and the `service_test.go` pins asserting `"4.8"`).
 
 ---
