@@ -133,3 +133,67 @@ func TestService_CyclicalBaseNormalization_NilProfileGuard(t *testing.T) {
 	assert.Empty(t, result.DCFBaseNormalization,
 		"nil profile path must leave the normalization field empty")
 }
+
+// TestService_CyclicalExitMultiple_Phase3And4CoOccur is the VAL-1 composition pin
+// for the PRODUCTION shape: the shipped config gives every cyclical profile
+// terminal_method=exit_multiple, so a cyclical ticker fires Phase 3 (3y-mean base
+// normalization) AND Phase 4 (profile-sourced exit-multiple terminal) on the SAME
+// valuation. Phase 3 tests pin gordon_growth and Phase 4 tests use non-cyclical
+// archetypes, so neither exercises the combination — this does.
+//
+// Uses loadP4TestRegistry (cyclical_trough + exit_multiple + a positive profile
+// multiple) so TerminalMethodSource()==SourceProfile, and the trough fixture so
+// max(latest, 3y_mean) raises the base. buildP4TestService wires the industry
+// EV/EBITDA default the blend reads against.
+func TestService_CyclicalExitMultiple_Phase3And4CoOccur(t *testing.T) {
+	const industryEVEBITDA = 8.0
+	const profileMultiple = 25.0 // far above the industry default → provably profile-driven
+
+	regCyclical := loadP4TestRegistry(t, "cyclical_trough", "standard_growth", "exit_multiple", profileMultiple)
+	svcCyclical := buildP4TestService(t, regCyclical, industryEVEBITDA)
+	hd, md, mc := createTroughTestData()
+
+	res, err := svcCyclical.performValuation(context.Background(), hd, md, mc, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+
+	// Phase 3 fired: the deep-trough latest OI was floored at the (higher) 3y FY mean.
+	assert.Equal(t, "3y_mean", res.DCFBaseNormalization,
+		"cyclical trough fixture must floor the DCF base at the 3y FY mean (Phase 3)")
+
+	// Phase 4 fired: the profile-sourced exit_multiple drove the terminal blend.
+	assert.Equal(t, "exit_multiple", res.DCFTerminalMethod,
+		"the resolved terminal method must come from the cyclical profile (Phase 4)")
+	assert.Greater(t, res.DCFExitMultipleTerminalValue, 0.0,
+		"a profile-sourced exit_multiple must produce a non-zero exit-multiple TV component")
+	assert.Greater(t, res.DCFGordonTerminalValue, 0.0,
+		"the Gordon component is always surfaced alongside the exit-multiple blend")
+
+	// Non-vacuity #1 (Phase 3 is live): a gordon-method control on the SAME cyclical
+	// trough fixture still normalizes the base, but its per-share value differs from
+	// the exit-multiple run — proving the exit-multiple terminal (Phase 4) materially
+	// changed the value on top of the shared Phase-3 base.
+	regGordon := loadP4TestRegistry(t, "cyclical_trough", "standard_growth", "gordon_growth", profileMultiple)
+	svcGordon := buildP4TestService(t, regGordon, industryEVEBITDA)
+	hd2, md2, mc2 := createTroughTestData()
+	resGordon, err := svcGordon.performValuation(context.Background(), hd2, md2, mc2, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, resGordon)
+
+	assert.Equal(t, "3y_mean", resGordon.DCFBaseNormalization,
+		"the gordon-method control on the same cyclical trough fixture also normalizes the base")
+	assert.NotEqual(t, math.Float64bits(resGordon.DCFValuePerShare), math.Float64bits(res.DCFValuePerShare),
+		"the profile exit_multiple terminal must move dcf_value_per_share vs a gordon-method run on the same Phase-3 base")
+
+	// Non-vacuity #2 (Phase 4 reads the PROFILE multiple, not the industry default):
+	// the same cyclical+exit_multiple profile with multiple==industry default yields a
+	// smaller exit-multiple TV, proving the profile multiple (25.0) drove the blend.
+	regExitIndustry := loadP4TestRegistry(t, "cyclical_trough", "standard_growth", "exit_multiple", industryEVEBITDA)
+	svcExitIndustry := buildP4TestService(t, regExitIndustry, industryEVEBITDA)
+	hd3, md3, mc3 := createTroughTestData()
+	resIndustry, err := svcExitIndustry.performValuation(context.Background(), hd3, md3, mc3, nil, nil)
+	require.NoError(t, err)
+	require.NotNil(t, resIndustry)
+	assert.Greater(t, res.DCFExitMultipleTerminalValue, resIndustry.DCFExitMultipleTerminalValue,
+		"the higher profile multiple (25.0) must produce a larger exit-multiple TV than the industry default (8.0)")
+}
