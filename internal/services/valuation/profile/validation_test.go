@@ -135,6 +135,21 @@ func TestLoadFromJSON_NegativeValidation(t *testing.T) {
 			wantErrPart: "payout_path length 6 must equal dividend_forecast_horizon 3",
 		},
 		{
+			// VAL-1 Phase 5: max_annual_dilution_rate is an optional clamp ceiling
+			// (0 ⇒ code default); a value above 1.0 (100%/yr) is never a real
+			// calibration and must fail load-time validation (validation.go §128).
+			name: "max_annual_dilution_rate_above_ceiling",
+			config: replaceJSONField(minimalValidConfig,
+				`"stable_dividend_growth": 0.03
+    },
+    "software_like_scaling:standard_growth"`,
+				`"stable_dividend_growth": 0.03,
+      "max_annual_dilution_rate": 1.5
+    },
+    "software_like_scaling:standard_growth"`),
+			wantErrPart: "max_annual_dilution_rate out of range",
+		},
+		{
 			// Layer A (§6.3): a garbage reinvestment_method enum is a config
 			// error, even though the field is optional.
 			name: "invalid_reinvestment_method",

@@ -155,7 +155,7 @@ For high-SBC tickers:
 - **Seam = DCF path only.** `service.go::performValuation` computes a LOCAL `denomShares` (= forward-diluted count when the adjustment fires, else `sharesOutstanding`) immediately before `dcfValuePerShare := equityValue / denomShares`. `sharesOutstanding` is left UNMUTATED — Graham, the sanity cross-check, and the already-computed tangible value all keep reading today's count. The alt-model path (`performAlternativeValuation`) is untouched.
 - **Diagnostics:** `dcf_forward_diluted_shares` (number) + `dcf_applied_dilution_rate` (number, decimal), both omitempty on `entities.ValuationResult` + `handlers.FairValueResponse`, registered in `replay/diff.go` (`countFairValueFields()` 49 → 51).
 - **Default-off byte-identity (3 layers):** (a) the flag defaults false; (b) on the no-op path `denomShares == sharesOutstanding`; (c) the two diagnostic fields stay zero → omitempty drops them. Pinned by `TestService_performValuation_DilutedForward_FlagOff_ByteIdentical` (`math.Float64bits` on `dcf_value_per_share`) + the unit-level `TestApplyDilutedShareForward_NoOp`.
-- **CalcVersion deferred:** stays `"4.8"` (default-off changes no production value).
+- **CalcVersion:** Phase 5 itself is default-off (changes no production value), so the bump was deferred to the VAL-1 end-of-branch reconciliation step. That step bumps the engine ONCE for the whole VAL-1 arc, `"4.8" → "4.9"`, because Phases 2-4 (archetype horizon / cyclical-base normalization / profile-driven exit-multiple) DO change DCF output for opted-in shipping profiles. Phase 5 remains default-off under 4.9.
 
 ## Recommendation
 
@@ -242,8 +242,9 @@ Phase 2 closes that gap (decisions D1–D3):
   `TestService_DCF_DefaultPath_ByteIdentity` (bit-for-bit vs a 7-rate reference).
 - Gordon terminal only; no DDM/FFO/revenue_multiple change; **no new response
   field** (the 5 diagnostic fields already exist) so the replay field-count guard
-  is not triggered. `CalculationVersion` stays `4.8` (the VAL-1 reconciliation
-  bump is a separate later step; the prior 4.7→4.8 bump already landed).
+  is not triggered. `CalculationVersion` is `4.9` as of the VAL-1 end-of-branch
+  reconciliation, which bumps the engine ONCE (`4.8 → 4.9`) for the whole VAL-1 arc
+  (Phases 2-5); the per-phase commits deferred the bump to that step.
 
 Tests: `TestService_DCF_ArchetypeHorizonGrid_ProductionWiring` (3/5/7/10 grid via
 production `NewService`), `TestNewService_DeriveStage3FromRegistryMaxHorizon`,

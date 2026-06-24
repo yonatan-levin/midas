@@ -368,7 +368,7 @@ definitions:
         type: string
       calculation_version:
         description: Engine version that produced this result
-        example: "4.9"
+        example: "4.10"
         type: string
       cleaning_adjustments:
         description: |-

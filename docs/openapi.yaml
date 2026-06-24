@@ -637,7 +637,7 @@ components:
             everything else to `multi_stage_dcf`.
         calculation_version:
           type: string
-          example: "4.9"
+          example: "4.10"
           description: |
             Calculation engine version. Bumped on shape-changing or breaking-numeric
             changes (e.g., 4.1 added Graham-floor diagnostic fields; 4.4 was the

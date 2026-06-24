@@ -974,7 +974,7 @@ func TestService_performValuation(t *testing.T) {
 		assert.Greater(t, result.GrowthRate, 0.0)
 		assert.Greater(t, result.EnterpriseValue, 0.0)
 		assert.Greater(t, result.DataFreshnessScore, 0)
-		assert.Equal(t, "4.9", result.CalculationVersion) // VAL-3 Phase 2 AFFO bump (was 4.8 SR-1/B3)
+		assert.Equal(t, "4.10", result.CalculationVersion) // VAL-1 Phases 2-5 bump (was 4.8 SR-1/B3)
 	})
 
 	t.Run("single period uses default growth rate", func(t *testing.T) {
@@ -2614,7 +2614,7 @@ func TestService_performValuation_NegativeOperatingIncome(t *testing.T) {
 	if result != nil {
 		assert.Equal(t, "revenue_multiple", result.CalculationMethod,
 			"Should use revenue multiple model for negative OI")
-		assert.Equal(t, "4.9", result.CalculationVersion) // VAL-3 Phase 2 AFFO bump (was 4.8 SR-1/B3)
+		assert.Equal(t, "4.10", result.CalculationVersion) // VAL-1 Phases 2-5 bump (was 4.8 SR-1/B3)
 		assert.Greater(t, result.DCFValuePerShare, 0.0,
 			"Revenue multiple should produce a positive value when revenue is available")
 	}
@@ -2655,7 +2655,7 @@ func TestService_performValuation_TrueFCF(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Greater(t, result.DCFValuePerShare, 0.0)
 	assert.Greater(t, result.EquityValue, 0.0)
-	assert.Equal(t, "4.9", result.CalculationVersion) // VAL-3 Phase 2 AFFO bump (was 4.8 SR-1/B3)
+	assert.Equal(t, "4.10", result.CalculationVersion) // VAL-1 Phases 2-5 bump (was 4.8 SR-1/B3)
 }
 
 func TestService_performValuation_GrowthCapping(t *testing.T) {
@@ -3112,7 +3112,7 @@ func TestService_performValuation_FINZeroDPS_FallbackToDCF(t *testing.T) {
 	if result != nil {
 		assert.Equal(t, "multi_stage_dcf", result.CalculationMethod,
 			"Should fall back to multi_stage_dcf when DDM fails and OI is positive")
-		assert.Equal(t, "4.9", result.CalculationVersion) // VAL-3 Phase 2 AFFO bump (was 4.8 SR-1/B3)
+		assert.Equal(t, "4.10", result.CalculationVersion) // VAL-1 Phases 2-5 bump (was 4.8 SR-1/B3)
 		assert.Greater(t, result.DCFValuePerShare, 0.0,
 			"DCF fallback should produce a positive value")
 		// S-2 nit: verify the fallback warning is present
@@ -4174,9 +4174,9 @@ func TestService_DCF_ProfileExitMultiple_TerminalIs5050Blend(t *testing.T) {
 	require.Greater(t, res.DCFExitMultipleTerminalValue, 0.0, "exit TV must be populated for the blend check")
 
 	// The 50/50 blend is the documented contract: the nominal terminal value
-	// equals the average of the two raw components. We re-discount the average to
-	// EV-share independently is unnecessary — the components themselves carry the
-	// invariant since dcf.CalculateDCF sets TerminalValueNominal = (gordon+exit)/2.
+	// equals the average of the two raw components. Re-discounting the average to
+	// an EV-per-share independently is unnecessary — the components themselves carry
+	// the invariant since dcf.CalculateDCF sets TerminalValueNominal = (gordon+exit)/2.
 	// Here we assert the diagnostics are internally consistent (both present and
 	// positive), which is the consumer-visible surface of the 50/50 blend.
 	assert.Greater(t, res.DCFGordonTerminalValue, 0.0)
@@ -4226,7 +4226,7 @@ func TestService_DCF_NoIndustryMultiple_PureGordon(t *testing.T) {
 		"the Gordon TV is always surfaced")
 }
 
-// TestService_DCF_ProfileExitMultiple_NoProfileGordonByteIdentity is the
+// TestService_DCF_NoProfileVsGordonProfile_SameTerminal is the
 // strongest byte-identity pin between two NON-exit paths: a gordon-profile run
 // and a nil-registry (no-profile) run, both with the same industry default,
 // produce IDENTICAL terminal-value diagnostics — neither is touched by Phase 4.
