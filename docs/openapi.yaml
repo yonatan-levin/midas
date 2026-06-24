@@ -598,6 +598,28 @@ components:
             `terminal_method == exit_multiple`, or the legacy industry-EV/EBITDA
             blend. Omitted (zero) on the pure-Gordon path, so non-exit-multiple
             responses are byte-identical.
+        dcf_forward_diluted_shares:
+          type: number
+          format: float
+          example: 1250000000
+          description: |
+            VAL-1 Phase 5. The diluted share count projected forward to the DCF
+            horizon at `dcf_applied_dilution_rate` and used as the DCF per-share
+            denominator. Populated only when the profile-gated, DEFAULT-OFF
+            diluted-share-forward adjustment fired (a high-SBC profile opted in
+            AND the FY share-count history is eligible). Omitted (zero) on the
+            default/no-op path and on DDM/FFO/revenue_multiple paths, so those
+            responses are byte-identical.
+        dcf_applied_dilution_rate:
+          type: number
+          format: float
+          example: 0.04
+          description: |
+            VAL-1 Phase 5. The clamped annual dilution rate (decimal, e.g.
+            `0.04`) — the historical diluted-share CAGR derived across FY
+            periods, capped at the profile's `max_annual_dilution_rate` (or an
+            8% code default) — used for the forward projection. Present only
+            when the diluted-share-forward adjustment fired; omitted otherwise.
         growth_source:
           type: string
           enum: [analyst_blend, historical_only, default]

@@ -160,6 +160,18 @@ type AssumptionProfile struct {
 	BaseMarginMethod       BaseMarginMethod `json:"base_margin_method,omitempty"`       // how to seed the base operating margin
 	TargetOperatingMargin  float64          `json:"target_operating_margin,omitempty"`  // archetype/industry-capped ceiling
 	MarginConvergenceYears int              `json:"margin_convergence_years,omitempty"` // years over which margin expands base → target
+
+	// --- VAL-1 Phase 5: diluted-share-forward adjustment (DCF path only) ---
+	//
+	// DEFAULT-OFF and ADDITIVE. When DilutedShareForwardEnabled is false (the zero
+	// value, the default for EVERY current profile, and the value when no profile
+	// resolves), the service-layer adjustment is a strict no-op and the DCF
+	// per-share denominator stays today's diluted share count — every ticker is
+	// byte-identical to the pre-Phase-5 engine. Only a profile that explicitly sets
+	// the flag projects the diluted share count forward at the derived historical
+	// dilution rate for high-SBC growth names (NVDA/TSLA-class). Spec VAL-1 Phase 5.
+	DilutedShareForwardEnabled bool    `json:"diluted_share_forward_enabled,omitempty"` // gate: project diluted shares forward (DCF denominator)
+	MaxAnnualDilutionRate      float64 `json:"max_annual_dilution_rate,omitempty"`      // clamp ceiling for the derived annual dilution rate; 0 ⇒ code default (8%)
 }
 
 // SizeThresholds carries archetype-specific revenue cutoffs used by the
