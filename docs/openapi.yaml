@@ -508,11 +508,15 @@ components:
           description: |
             How the engine computed the terminal value. `gordon_growth` =
             Gordon perpetual-growth formula on year-N FCF with the clamped
-            terminal growth rate (the only method today). `exit_multiple` =
-            year-N revenue × mature-sector EV/Revenue multiple, reserved for
-            future archetype profiles where Gordon stability is implausible
-            at the explicit-horizon boundary (VAL-1 Phase 4). Omitted on
-            non-DCF model paths.
+            terminal growth rate. `exit_multiple` = the engine BLENDS the
+            Gordon terminal value 50/50 with an exit-multiple terminal value
+            computed on an **EV/EBITDA** basis (terminal EBITDA × the resolved
+            `terminal_multiple`); it is NOT a pure exit-multiple terminal.
+            VAL-1 Phase 4: a resolved `AssumptionProfile.terminal_method ==
+            exit_multiple` now drives this (using the profile's
+            `terminal_multiple`), in addition to the existing request-override
+            selector. Non-profiled / `gordon_growth` tickers keep the legacy
+            industry-EV/EBITDA blend. Omitted on non-DCF model paths.
         dcf_terminal_pct_of_ev:
           type: number
           format: float
@@ -570,6 +574,30 @@ components:
             Present ONLY on the cyclical DCF path; omitted (and thus byte-
             identical) for all non-cyclical tickers and all non-DCF model
             paths (DDM / FFO / revenue_multiple).
+        dcf_gordon_terminal_value:
+          type: number
+          format: float
+          example: 18200000000
+          description: |
+            VAL-1 Phase 4. The Gordon-Growth terminal value component, nominal
+            (before discounting to present value and before the 50/50 blend).
+            Surfaced as a diagnostic alongside `dcf_exit_multiple_terminal_value`
+            so consumers can see both raw terminal estimates; the blended
+            primary remains `enterprise_value` / `dcf_value_per_share`. Omitted
+            when zero (non-DCF model paths).
+        dcf_exit_multiple_terminal_value:
+          type: number
+          format: float
+          example: 21000000000
+          description: |
+            VAL-1 Phase 4. The exit-multiple terminal value component on an
+            **EV/EBITDA** basis (terminal EBITDA × the resolved
+            `terminal_multiple`), nominal (before discounting and before the
+            50/50 blend with the Gordon component). Populated only when an exit
+            multiple is wired — a profile- or request-sourced
+            `terminal_method == exit_multiple`, or the legacy industry-EV/EBITDA
+            blend. Omitted (zero) on the pure-Gordon path, so non-exit-multiple
+            responses are byte-identical.
         growth_source:
           type: string
           enum: [analyst_blend, historical_only, default]

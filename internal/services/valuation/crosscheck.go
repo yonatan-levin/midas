@@ -72,6 +72,16 @@ func CalculateSanityCheck(
 
 	if ebitda > 0 {
 		check.ImpliedEVEBITDA = enterpriseValue / ebitda
+		// VAL-1 Phase 4 (benign circularity note): when the resolved profile's
+		// terminal_method == "exit_multiple", the DCF terminal value is BLENDED
+		// 50/50 with a sector EV/EBITDA multiple, so enterpriseValue is partly
+		// DEFINED by that sector multiple. The implied EV/EBITDA below is therefore
+		// pulled TOWARD the sector median — i.e. the circularity makes a SPURIOUS
+		// divergence flag LESS likely, never more (the safe direction). We do NOT
+		// de-circularize here: the crosscheck remains a sanity heuristic, and a
+		// blended terminal that converges toward the sector median is exactly the
+		// reconciliation the exit-multiple terminal intends. Pinned by
+		// TestService_Crosscheck_ExitMultipleProfile_NoSpuriousEVEBITDAFlag.
 		if flag, ok := FlagDivergence("EV/EBITDA", industry, check.ImpliedEVEBITDA, sectorEVEBITDA); ok {
 			check.Flags = append(check.Flags, flag)
 		}

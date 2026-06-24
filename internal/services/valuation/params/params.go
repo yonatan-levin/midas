@@ -305,6 +305,24 @@ func (p *EffectiveValuationParams) RequestOverrides() map[string]interface{} {
 	return out
 }
 
+// TerminalMethodSource reports the resolution Source of the terminal_method knob
+// (VAL-1 Phase 4). The service-layer exit-multiple gate switches on this Source
+// to confine the profile-driven exit-multiple terminal to tickers whose method
+// was EXPLICITLY supplied by the profile or request — a pure-default
+// gordon_growth ticker must keep the legacy industry-EV/EBITDA blend so its
+// valuation stays byte-identical.
+//
+// Returns SourceDefault when Provenance is nil or the key is absent (a
+// zero-value struct, or a path that never ran Resolve*). Keeping the lookup
+// here keeps the unexported knobTerminalMethod constant inside this package —
+// the service consumes a typed Source scalar, never the raw provenance map key.
+func (p *EffectiveValuationParams) TerminalMethodSource() Source {
+	if src, ok := p.Provenance[knobTerminalMethod]; ok {
+		return src
+	}
+	return SourceDefault
+}
+
 // ---------------------------------------------------------------------------
 // Defaults — the resolver's lower-precedence input (plan §3.4)
 //

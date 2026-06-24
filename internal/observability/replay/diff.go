@@ -451,6 +451,12 @@ var goFieldToJSON = map[string]string{
 	// paths. Added in the same commit as the FairValueResponse field to keep
 	// this map and the field count in sync (the init() drift guard enforces it).
 	"DCFBaseNormalization": "dcf_base_normalization",
+	// VAL-1 Phase 4: both raw terminal-value estimates (nominal, pre-blend).
+	// Omitempty — dcf_exit_multiple_terminal_value is absent on the pure-Gordon
+	// path. Added in the same commit as the FairValueResponse fields to keep this
+	// map and the field count in sync (the init() drift guard enforces it).
+	"DCFGordonTerminalValue":       "dcf_gordon_terminal_value",
+	"DCFExitMultipleTerminalValue": "dcf_exit_multiple_terminal_value",
 	// T10: applied_overrides echoes request-sourced knobs. Omitempty — absent
 	// on default GET and POST{} paths. Added in the same commit as the struct
 	// field to keep this map and the field count in sync.
@@ -536,10 +542,11 @@ func nilOrType(p any) string {
 // guard above asserts the constant and reflection agree at package
 // load time.
 //
-// Current: 36 (FairValueResponse — 30 pre-T10 + AppliedOverrides +
+// Current: 38 (FairValueResponse — 30 pre-T10 + AppliedOverrides +
 // AssumptionSources + CleaningAdjustments + PFFOValuePerShare +
 // PAFFOValuePerShare [VAL-3 Phase 2] + DCFBaseNormalization [VAL-1
-// Phase 3]) + 5 (Industry) + 8 (SanityCheck) = 49.
+// Phase 3] + DCFGordonTerminalValue + DCFExitMultipleTerminalValue
+// [VAL-1 Phase 4]) + 5 (Industry) + 8 (SanityCheck) = 51.
 //
 // When a future commit extends FairValueResponse, Industry, or
 // SanityCheck:
@@ -549,11 +556,12 @@ func nilOrType(p any) string {
 //  3. Add an entry to goFieldToJSON for the new field's snake_case
 //     name (otherwise camelToSnake's best-effort conversion runs).
 func countFairValueFields() int {
-	// FairValueResponse: 36 top-level public fields (30 pre-T10 + AppliedOverrides
+	// FairValueResponse: 38 top-level public fields (30 pre-T10 + AppliedOverrides
 	// + AssumptionSources [Layer-B Phase-2] + CleaningAdjustments [TDB-11]
 	// + PFFOValuePerShare + PAFFOValuePerShare [VAL-3 Phase 2]
-	// + DCFBaseNormalization [VAL-1 Phase 3]).
+	// + DCFBaseNormalization [VAL-1 Phase 3] + DCFGordonTerminalValue +
+	// DCFExitMultipleTerminalValue [VAL-1 Phase 4]).
 	// Industry: 5 fields.
 	// SanityCheck: 8 fields.
-	return 36 + 5 + 8
+	return 38 + 5 + 8
 }
