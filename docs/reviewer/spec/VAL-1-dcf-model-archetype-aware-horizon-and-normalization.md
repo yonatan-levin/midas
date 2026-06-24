@@ -1,6 +1,6 @@
 # VAL-1 — DCF model needs archetype-aware horizon, cyclical-base normalization, and explicit terminal handling
 
-**Status:** Phase 1 RESOLVED 2026-05-23. Phase 2 SHIPPED 2026-06-22 (archetype horizon). Phase 3 SHIPPED 2026-06-23 (cyclical-base normalization). Phase 4 SHIPPED 2026-06-24 (profile-driven exit-multiple terminal, EV/EBITDA basis, 50/50 blend preserved). Phase 5 SHIPPED 2026-06-24 (diluted-share-forward adjustment, DEFAULT-OFF + profile-gated; no profile enables it yet — ships a dormant capability). CalculationVersion bump deferred to a single end-of-branch bump covering the whole VAL-1 arc (Phase 5 is default-off ⇒ changes no production value, so the bump is deferred to the first config commit that flips the flag on a shipping profile).
+**Status:** Phase 1 RESOLVED 2026-05-23. Phase 2 SHIPPED 2026-06-22 (archetype horizon). Phase 3 SHIPPED 2026-06-23 (cyclical-base normalization). Phase 4 SHIPPED 2026-06-24 (profile-driven exit-multiple terminal, EV/EBITDA basis, 50/50 blend preserved). Phase 5 SHIPPED 2026-06-24 (diluted-share-forward adjustment, DEFAULT-OFF + profile-gated; no profile enables it yet — ships a dormant capability). CalculationVersion bump LANDED on rebase onto master post-VAL-3: engine now `4.10` (over VAL-3's `4.9`) — Phases 2-4 change DCF output for opted-in profiles; Phase 5 ships default-off. Replay `countFairValueFields()` = 53 (FairValueResponse 40 = master 35 + 5 VAL-1 dcf_* fields).
 **Original filing:** 2026-05-06 as part of the cross-model review prompted by RM-1/2/3 findings on revenue_multiple.
 
 ---
