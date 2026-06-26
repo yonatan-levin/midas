@@ -160,6 +160,9 @@ data/                   # SQLite database files (gitignored)
 
 ## Key Conventions
 
+### Working model (DECIDED 2026-06-26 — MANDATORY)
+- **Every task runs in its own git worktree — never a bare branch in the main `midas` worktree.** Before starting ANY task (feature, fix, refactor, docs, closeout), create a dedicated worktree: `git worktree add ../midas-<task-slug> -b <branch> master`, do ALL edits/tests/commits there, then fast-forward `master` from that branch and `git worktree remove` when done. Rationale (Tier 2 closeout Lesson A): doing branch work in the main worktree lets a parallel session's `git checkout` contaminate your merges/verification — it happened ~6× during the Tier 2 merges. The worktree gives each task an isolated checkout so cross-session `checkout` can never disturb it. The only standing exception remains the FORBIDDEN `midas-dc1-phase-5-followup/` worktree (never read/edit/test it). This is a workflow rule (where work happens), not a branching-strategy change — branches still exist, but they live in their own worktree.
+
 ### Code Style
 - **No globals** - All state managed through DI container
 - **Interface-first** - All external dependencies defined as interfaces in `internal/core/ports/`
