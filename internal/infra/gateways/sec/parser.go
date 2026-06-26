@@ -803,8 +803,24 @@ func (p *Parser) parsePeriodData(cik, period string, payload *periodPayload) (*e
 	// derivation step.
 	if val, exists := p.findValue(data, []string{
 		"Liabilities",
-	}); exists {
+	}); exists && val != 0 {
 		financialData.TotalLiabilities = val
+	} else if cur, curOK := p.findValue(data, []string{
+		"LiabilitiesCurrent",
+		"CurrentLiabilities",
+	}); curOK {
+		// T2-BS-3 fallback: some filers (AMD, KO) report the
+		// current/noncurrent split WITHOUT the rolled-up us-gaap:Liabilities
+		// umbrella, so first-hit above finds nothing (or a zero) and leaves
+		// TotalLiabilities=0. Derive it from the split when BOTH halves are
+		// present — current alone is not a reliable total, so we don't guess.
+		if noncur, noncurOK := p.findValue(data, []string{
+			"LiabilitiesNoncurrent",
+			// IFRS-full equivalent, mirroring the CurrentLiabilities alias above.
+			"NoncurrentLiabilities",
+		}); noncurOK {
+			financialData.TotalLiabilities = cur + noncur
+		}
 	}
 
 	if val, exists := p.findValue(data, []string{

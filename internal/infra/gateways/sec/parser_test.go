@@ -1899,6 +1899,87 @@ func factGroupUSD(val float64, fy int) ports.SECFactGroup {
 	}
 }
 
+// TestParsePeriodData_TotalLiabilities_Fallback_T2BS3 pins the Option A
+// fallback (tracker docs/reviewer/T2-BS-3-...): filers like AMD/KO report the
+// LiabilitiesCurrent / LiabilitiesNoncurrent split WITHOUT the rolled-up
+// us-gaap:Liabilities umbrella, so the parser must derive
+// TotalLiabilities = LiabilitiesCurrent + LiabilitiesNoncurrent. The umbrella
+// tag, when present and non-zero, still wins (precedence preserved).
+func TestParsePeriodData_TotalLiabilities_Fallback_T2BS3(t *testing.T) {
+	parser := NewParser(zap.NewNop())
+
+	tests := []struct {
+		name     string
+		usGAAP   map[string]ports.SECFactGroup
+		expected float64
+	}{
+		{
+			name: "umbrella absent, both splits present -> sum (AMD/KO case)",
+			usGAAP: map[string]ports.SECFactGroup{
+				"LiabilitiesCurrent":    factGroupUSD(20_000_000_000, 2023),
+				"LiabilitiesNoncurrent": factGroupUSD(29_126_000_000, 2023),
+			},
+			expected: 49_126_000_000,
+		},
+		{
+			name: "umbrella present non-zero -> umbrella wins over splits",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Liabilities":           factGroupUSD(50_000_000_000, 2023),
+				"LiabilitiesCurrent":    factGroupUSD(20_000_000_000, 2023),
+				"LiabilitiesNoncurrent": factGroupUSD(29_126_000_000, 2023),
+			},
+			expected: 50_000_000_000,
+		},
+		{
+			name: "umbrella present but zero -> fallback to split sum",
+			usGAAP: map[string]ports.SECFactGroup{
+				"Liabilities":           factGroupUSD(0, 2023),
+				"LiabilitiesCurrent":    factGroupUSD(20_000_000_000, 2023),
+				"LiabilitiesNoncurrent": factGroupUSD(29_126_000_000, 2023),
+			},
+			expected: 49_126_000_000,
+		},
+		{
+			name: "umbrella absent, only current split -> no reliable total, stays 0",
+			usGAAP: map[string]ports.SECFactGroup{
+				"LiabilitiesCurrent": factGroupUSD(20_000_000_000, 2023),
+			},
+			expected: 0,
+		},
+		{
+			name: "umbrella absent, only noncurrent split -> no reliable total, stays 0",
+			usGAAP: map[string]ports.SECFactGroup{
+				"LiabilitiesNoncurrent": factGroupUSD(29_126_000_000, 2023),
+			},
+			expected: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			// Minimal viable income-statement fields so a period is produced.
+			tt.usGAAP["Revenues"] = factGroupUSD(100_000_000_000, 2023)
+			tt.usGAAP["OperatingIncomeLoss"] = factGroupUSD(10_000_000_000, 2023)
+			tt.usGAAP["CommonStockSharesOutstanding"] = factGroupShares(1_000_000_000, 2023)
+
+			facts := &ports.SECCompanyFacts{
+				CIK:        "0000002488",
+				EntityName: "Test Filer Inc.",
+				Facts:      map[string]map[string]ports.SECFactGroup{"us-gaap": tt.usGAAP},
+			}
+
+			historical, err := parser.ParseFinancialData(context.Background(), facts)
+			require.NoError(t, err)
+			require.NotEmpty(t, historical.Data)
+
+			fd := historical.Data["2023FY"]
+			require.NotNil(t, fd)
+			assert.InDelta(t, tt.expected, fd.TotalLiabilities, 0.01)
+		})
+	}
+}
+
 // factGroupShares is a small helper for dimensionless share-count facts.
 func factGroupShares(val float64, fy int) ports.SECFactGroup {
 	return ports.SECFactGroup{

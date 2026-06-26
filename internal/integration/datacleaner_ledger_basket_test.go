@@ -306,30 +306,30 @@ func TestLedger_BasketSnapshot_ClusterPrediction(t *testing.T) {
 		"basket coverage degraded — fewer than 5 tickers exercised the ledger successfully (got %d)", passedCount.Load())
 }
 
-// TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction is the Phase 3 →
-// Phase 4 gate acceptance test (spec §10 item 4): for AMD and KO — the
-// two T2-BS-3 carve-out tickers where the SEC parser leaves
-// FinancialData.TotalLiabilities==0 alongside truthful component values
-// — Restated().TotalLiabilities MUST reconstruct to a positive value
-// from sum(components) + plug.
+// TestLedger_BasketSnapshot_T2BS3_ParserTruthful pins the T2-BS-3 Option A
+// parser fix (tracker docs/reviewer/T2-BS-3-...): AMD and KO report the
+// LiabilitiesCurrent / LiabilitiesNoncurrent split WITHOUT the rolled-up
+// us-gaap:Liabilities umbrella, which previously left
+// FinancialData.TotalLiabilities==0 (the "carve-out"). The parser now derives
+// TotalLiabilities = LiabilitiesCurrent + LiabilitiesNoncurrent, so re-parsing
+// the captured bundle yields a TRUTHFUL, positive AsReported value.
 //
-// This is the live-fixture sibling of
-// TestCleanedFinancialData_AsReported_PreservesParserZeros_AMD_KO
-// in internal/services/datacleaner/cleaneddata/t2bs3_test.go which uses
-// synthesized seeds. The live-fixture version pins that the
-// reconstruction works against real captured SEC data, which is the
-// signal Phase 4 ARCH needs before dispatching the consumer migration.
+// This SUPERSEDES the former carve-out acceptance test (which asserted
+// AsReported==0, the pre-fix behavior). The synthesized-seed sibling
+// TestCleanedFinancialData_AsReported_PreservesParserZeros_AMD_KO in
+// internal/services/datacleaner/cleaneddata/t2bs3_test.go still pins the
+// VIEW-layer contract (AsReported faithfully preserves whatever the parser
+// stamped) using a constructed zero — unaffected by this parser change.
 //
-// Per-ticker contract:
-//   - On AT LEAST ONE captured period for the ticker, AsReported and
-//     Restated produce a non-trivial reconstruction:
-//       AsReported().TotalLiabilities == 0
-//       Restated().TotalLiabilities   >  0
+// Per-ticker contract (Option A):
+//   - On AT LEAST ONE captured period for the ticker, the parser fallback
+//     produces a positive total and the views stay coherent:
+//     AsReported().TotalLiabilities  >  0
+//     Restated().TotalLiabilities    >= AsReported().TotalLiabilities
 //
-// Phase 4 then flips the Graham + WACC consumers to read
-// Restated().TotalLiabilities instead of data.TotalLiabilities, fixing
-// the AMD/KO downstream symptoms.
-func TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction(t *testing.T) {
+// Skips when the tier2-baseline fixtures are absent (BUG-016) — this test
+// can only run on a machine with the captured AMD/KO bundles checked out.
+func TestLedger_BasketSnapshot_T2BS3_ParserTruthful(t *testing.T) {
 	parser := sec.NewParser(zap.NewNop())
 
 	// Reuse the baseline-resolution pattern from the cluster-prediction
@@ -344,7 +344,11 @@ func TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction(t *testing.T) {
 			dateDirs = append(dateDirs, m)
 		}
 	}
-	require.NotEmpty(t, dateDirs)
+	if len(dateDirs) == 0 {
+		// BUG-016: the tier2-baseline subtree is gitignored and not present
+		// on every machine. Skip rather than hard-fail when it's absent.
+		t.Skipf("no tier2-baseline date dirs under %s (BUG-016)", baselineParent)
+	}
 	sort.Strings(dateDirs)
 	bundleRoot := dateDirs[len(dateDirs)-1]
 
@@ -372,9 +376,9 @@ func TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction(t *testing.T) {
 			require.NotEmpty(t, historical.Data)
 
 			// Walk every captured period and find at least one where the
-			// T2-BS-3 carve-out fires (parser-stamped TotalLiabilities==0
-			// alongside positive components that sum to a truthful total).
-			foundCarveOut := false
+			// T2-BS-3 Option A parser fallback produced a truthful total
+			// (positive AsReported) with coherent views.
+			foundTruthful := false
 			for _, period := range historical.GetSortedPeriods() {
 				fd := historical.Data[period]
 				if fd == nil || fd.FilingPeriod == "" || fd.FilingPeriod == "0" {
@@ -392,29 +396,25 @@ func TestLedger_BasketSnapshot_T2BS3_RestatedReconstruction(t *testing.T) {
 				asReported := views.AsReported()
 				restated := views.Restated()
 
-				// T2-BS-3 carve-out: only periods where AsReported pins
-				// TotalLiabilities==0 are the ones the parser dropped.
-				if asReported.TotalLiabilities != 0 {
-					continue
-				}
-
-				// On a carve-out period, Restated MUST reconstruct the
-				// truthful total from sum(components). The reconstructed
-				// value is the spec-§10-item-4 acceptance signal Phase 4
-				// depends on.
-				if restated.TotalLiabilities > 0 {
-					foundCarveOut = true
-					t.Logf("%s %s: AsReported.TotalLiabilities=0; Restated.TotalLiabilities=%.0f (T2-BS-3 reconstruction OK)",
-						ticker, fd.FilingPeriod, restated.TotalLiabilities)
+				// Option A: the parser now derives TotalLiabilities from the
+				// current/noncurrent split, so AsReported is positive (was 0
+				// pre-fix). Restated stays >= AsReported (it only adds
+				// restatement/overlay deltas on top of the reconstructed sum).
+				if asReported.TotalLiabilities > 0 {
+					foundTruthful = true
+					require.GreaterOrEqual(t, restated.TotalLiabilities, asReported.TotalLiabilities,
+						"%s %s: Restated must not drop below AsReported", ticker, fd.FilingPeriod)
+					t.Logf("%s %s: AsReported.TotalLiabilities=%.0f; Restated.TotalLiabilities=%.0f (T2-BS-3 Option A OK)",
+						ticker, fd.FilingPeriod, asReported.TotalLiabilities, restated.TotalLiabilities)
 					break
 				}
 			}
 
-			require.True(t, foundCarveOut,
-				"%s: no captured period exhibited the T2-BS-3 carve-out reconstruction "+
-					"(AsReported.TotalLiabilities==0 alongside Restated.TotalLiabilities>0). "+
-					"Phase 4 acceptance depends on this signal — investigate the parser "+
-					"or refresh the baseline if AMD/KO no longer hit the carve-out path.", ticker)
+			require.True(t, foundTruthful,
+				"%s: no captured period produced a positive AsReported.TotalLiabilities. "+
+					"The T2-BS-3 Option A parser fallback should derive it from "+
+					"LiabilitiesCurrent + LiabilitiesNoncurrent — investigate the parser "+
+					"or refresh the baseline.", ticker)
 		})
 	}
 }
