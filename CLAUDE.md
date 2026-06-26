@@ -163,6 +163,13 @@ data/                   # SQLite database files (gitignored)
 ### Working model (DECIDED 2026-06-26 — MANDATORY)
 - **Every task runs in its own git worktree — never a bare branch in the main `midas` worktree.** Before starting ANY task (feature, fix, refactor, docs, closeout), create a dedicated worktree: `git worktree add ../midas-<task-slug> -b <branch> master`, do ALL edits/tests/commits there, then fast-forward `master` from that branch and `git worktree remove` when done. Rationale (Tier 2 closeout Lesson A): doing branch work in the main worktree lets a parallel session's `git checkout` contaminate your merges/verification — it happened ~6× during the Tier 2 merges. The worktree gives each task an isolated checkout so cross-session `checkout` can never disturb it. The only standing exception remains the FORBIDDEN `midas-dc1-phase-5-followup/` worktree (never read/edit/test it). This is a workflow rule (where work happens), not a branching-strategy change — branches still exist, but they live in their own worktree.
 
+### Bug & finding tracking (DECIDED 2026-06-26 — MANDATORY)
+- **Every bug and every code-review finding MUST be recorded in TWO places so another session can pick it up: (1) a GitHub issue via the `/github-tracking` skill, and (2) a Markdown tracker in the relevant `docs/` folder.** Never leave a discovered bug or review finding living only in chat — chat context does not survive into the next session; `docs/` + GitHub do.
+  - **Bugs** → `docs/bugs/BUG-NNN-<slug>.md` (next sequential number; active in `docs/bugs/`, move to `docs/bugs/archive/` when RESOLVED). Pre-existing/unrelated failures discovered while doing other work still get filed (e.g. BUG-016).
+  - **Code-review findings** (from `/code-review`, REVIEWER, or zen-mcp cross-model) → the relevant `docs/reviewer/` tracker (a per-theme file like `CI-1-*.md`, or a new one). Group related findings into one tracker rather than scattering.
+  - **Cross-link both ways:** put the GitHub issue number in the doc's Status line (`GitHub issue: #NN`) and reference the doc path in the issue body. The doc is the durable detail; the issue is the cross-session/queryable handle.
+- Rationale: a finding that exists only in a finished session's transcript is effectively lost. Dual-tracking (docs for depth + GitHub for discoverability) is how findings survive session boundaries and reach whoever picks the work up next.
+
 ### Code Style
 - **No globals** - All state managed through DI container
 - **Interface-first** - All external dependencies defined as interfaces in `internal/core/ports/`
