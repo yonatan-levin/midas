@@ -415,9 +415,9 @@
       "dividend_forecast_horizon": 0,
       "stable_dividend_growth": 0.025
     },
-    "reit_commercial:standard_growth": {
-      "profile_id": "reit_commercial:standard_growth",
-      "archetype": "reit_commercial",
+    "reit_office:standard_growth": {
+      "profile_id": "reit_office:standard_growth",
+      "archetype": "reit_office",
       "maturity": "standard_growth",
       "horizon_years": 3,
       "compound_growth_cap": 1.2,
@@ -665,11 +665,11 @@
       "notes": "Tier 2 P4 (VAL-3 P3) — apartment REIT subsector with stable cash flows; default standard_growth maturity."
     },
     {
-      "id": "reit_commercial",
+      "id": "reit_office",
       "priority": 100,
       "industry_prefix": "REIT_OFFICE",
-      "archetype": "reit_commercial",
-      "notes": "Tier 2 P4 (VAL-3 P3) — office REIT subsector with secular headwinds; low terminal multiple. See docs/reviewer/T2-P4-W2 item 7 — archetype id retained as reit_commercial pending coordinated rename."
+      "archetype": "reit_office",
+      "notes": "Tier 2 P4 (VAL-3 P3) — office REIT subsector with secular headwinds; low terminal multiple."
     },
     {
       "id": "reit_industrial",

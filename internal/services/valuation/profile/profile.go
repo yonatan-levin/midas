@@ -32,7 +32,7 @@ const (
 	ArchetypeMaturingTechDividend   Archetype = "maturing_tech_first_dividend"
 	ArchetypeMatureDividendTech     Archetype = "mature_dividend_tech"
 	ArchetypeREITResidential        Archetype = "reit_residential"
-	ArchetypeREITCommercial         Archetype = "reit_commercial"
+	ArchetypeREITOffice             Archetype = "reit_office"
 	ArchetypeREITIndustrial         Archetype = "reit_industrial"
 	ArchetypeREITHealthcare         Archetype = "reit_healthcare"
 	ArchetypeREITDataCenter         Archetype = "reit_datacenter"

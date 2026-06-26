@@ -2,6 +2,7 @@ package models_test
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 
@@ -386,4 +387,103 @@ func TestDDM_MultiStage_ConfidenceVariesWithWarningCount(t *testing.T) {
 		assert.Equal(t, "low", result.Confidence,
 			"warning-count-adjusted confidence must be 'low' for >1 warning")
 	})
+}
+
+// TestDDM_MultiStage_PerArchetypeShippedConfigs closes T2-P4-W2 item 6 (the
+// per-archetype coverage GAP). Before this, the shared calculateMultiStage
+// path was pin-tested through a SINGLE profile shape
+// (maturing_tech_first_dividend, horizon=10). The other four shipped configs
+// that route through the same multi-stage code path — growth_bank ×2,
+// insurance_company:mature, mature_dividend_tech:mature — had no individual
+// regression pin, so a future change to the shared multi-stage math could
+// drift any of them silently.
+//
+// The field values below are lifted VERBATIM from the shipped
+// config/assumption_profiles.json so the pins guard the real configs, not
+// invented ones. Each row asserts the dispatcher routes to the multi-stage
+// branch (HorizonSelected mirrors the profile's DividendForecastHorizon),
+// produces a finite positive value, and stamps ModelType "ddm".
+//
+// NOTE on scope: the tracker suggested driving these through
+// testhelpers.RunValuation, but that helper is still a Phase-Bootstrap
+// t.Skip() stub (wiring a full fx-composed Service is a disproportionate,
+// separately-scoped effort). The shared multi-stage math lives in the model
+// layer, so model-level pins via ddm.Calculate cover exactly what item 6
+// asks for — matching how every other multi-stage test in this file already
+// exercises the path.
+func TestDDM_MultiStage_PerArchetypeShippedConfigs(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile profile.AssumptionProfile
+	}{
+		{
+			name: "growth_bank_standard_growth",
+			profile: profile.AssumptionProfile{
+				ProfileID:               "growth_bank:standard_growth",
+				Archetype:               profile.ArchetypeGrowthBank,
+				Maturity:                profile.MaturityStandardGrowth,
+				DividendForecastHorizon: 5,
+				PayoutPath:              []float64{0.30, 0.32, 0.34, 0.36, 0.38},
+				DPSGrowthCap:            0.12,
+				StableDividendGrowth:    0.035,
+			},
+		},
+		{
+			name: "growth_bank_high_growth",
+			profile: profile.AssumptionProfile{
+				ProfileID:               "growth_bank:high_growth",
+				Archetype:               profile.ArchetypeGrowthBank,
+				Maturity:                profile.MaturityHighGrowth,
+				DividendForecastHorizon: 7,
+				PayoutPath:              []float64{0.20, 0.22, 0.25, 0.28, 0.30, 0.32, 0.34},
+				DPSGrowthCap:            0.18,
+				StableDividendGrowth:    0.035,
+			},
+		},
+		{
+			name: "insurance_company_mature",
+			profile: profile.AssumptionProfile{
+				ProfileID:               "insurance_company:mature",
+				Archetype:               profile.ArchetypeInsuranceCompany,
+				Maturity:                profile.MaturityMature,
+				DividendForecastHorizon: 3,
+				PayoutPath:              []float64{0.35, 0.36, 0.37},
+				DPSGrowthCap:            0.06,
+				StableDividendGrowth:    0.03,
+			},
+		},
+		{
+			name: "mature_dividend_tech_mature",
+			profile: profile.AssumptionProfile{
+				ProfileID:               "mature_dividend_tech:mature",
+				Archetype:               profile.ArchetypeMatureDividendTech,
+				Maturity:                profile.MaturityMature,
+				DividendForecastHorizon: 5,
+				PayoutPath:              []float64{0.50, 0.52, 0.54, 0.56, 0.58},
+				DPSGrowthCap:            0.08,
+				StableDividendGrowth:    0.03,
+			},
+		},
+	}
+
+	ddm := models.NewDDMModel(zap.NewNop())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			input := testhelpers.BuildSyntheticAAPLishModelInput(t)
+			testhelpers.PatchFilingDatesFromAsOf(input)
+			input.Profile = &profile.ResolvedProfile{AssumptionProfile: tc.profile}
+
+			result, err := ddm.Calculate(context.Background(), input)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+
+			assert.Equal(t, "ddm", result.ModelType)
+			assert.Equal(t, tc.profile.DividendForecastHorizon, result.HorizonSelected,
+				"HorizonSelected must mirror the shipped profile's DividendForecastHorizon (multi-stage dispatch)")
+			assert.Greater(t, result.IntrinsicValuePerShare, 0.0,
+				"multi-stage DDM must produce a positive intrinsic value for %s", tc.profile.ProfileID)
+			assert.False(t, math.IsNaN(result.IntrinsicValuePerShare) || math.IsInf(result.IntrinsicValuePerShare, 0),
+				"intrinsic value must be finite for %s", tc.profile.ProfileID)
+		})
+	}
 }

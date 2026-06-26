@@ -234,7 +234,7 @@ func isValidArchetype(a Archetype) bool {
 		ArchetypeCyclicalMidCycle, ArchetypeCyclicalTrough, ArchetypeHypergrowthEarly,
 		ArchetypeHypergrowthProfitable, ArchetypePreRevenueBiotech,
 		ArchetypeMaturingTechDividend, ArchetypeMatureDividendTech,
-		ArchetypeREITResidential, ArchetypeREITCommercial, ArchetypeREITIndustrial,
+		ArchetypeREITResidential, ArchetypeREITOffice, ArchetypeREITIndustrial,
 		ArchetypeREITHealthcare, ArchetypeREITDataCenter, ArchetypeREITCellTower,
 		ArchetypeREITRetail, ArchetypeREITSpecialty:
 		return true

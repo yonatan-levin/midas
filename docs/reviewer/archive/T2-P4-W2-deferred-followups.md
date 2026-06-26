@@ -1,6 +1,6 @@
 # T2-P4-W2 — Tier 2 deferred follow-up findings consolidated from 12 B-V-R-Q gates
 
-**Status:** OPEN
+**Status:** CLOSED 2026-06-25 — all 12 items resolved/executed (items 6 + 7 closed on branch `chore/t2-p4-w2-close-items-6-7`)
 **Severity:** MIXED (mostly NIT / LOW, one CONCERN, one LATENT, one MINOR, one DEFERRED)
 **Filed:** 2026-05-21 by Tier 2 Closeout sweep (consolidates findings from B-V-R-Q gates against P2/P3/P4)
 **Phase context:** Tier 2 — surfaced during the 12 parallel quality gates (3 phases × 4 gates each: BACKEND / VERIFIER / REVIEWER / QA)
@@ -76,26 +76,28 @@ This tracker captures 12 items that span style nits, latent invariants, a covera
 - **Resolution:** Chose the **shared helper** strategy (tracker-recommended). Extracted the ROE / payout-ratio / P/BV cross-check + warning-count-adjusted confidence ladder out of `calculateLegacyGordon` into a new method `runDividendDiagnostics(ctx, latest, input, dps, dividendGrowth, costOfEquity, valuePerShare, initialWarnings) ([]string, string)` on `*DDMModel`. The legacy path now invokes the helper with `initialWarnings=nil` and is byte-identical at its three load-bearing floats (`IntrinsicValuePerShare`, `EquityValue`, `EnterpriseValue`) plus `ModelType`, `Confidence`, and `Warnings` slice — `TestDDM_LegacyPath_BitForBit` (JPM/BAC/WFC × Float64bits) passes pre- and post-refactor. The multi-stage path now seeds the helper with its "DDM multi-stage: …" preamble warning so the diagnostics layer over the preamble; the dividend-growth input to the P/BV cross-check is the profile's terminal Gordon growth rate (the rate anchoring the perpetuity tail). New tests in `internal/services/valuation/models/ddm_multistage_test.go` pin: (a) ROE diagnostic now emits when ROE data is available, (b) payout diagnostic emits in a degenerate-payout scenario (DPS ≈ EPS), (c) P/BV cross-check fires when implied vs ROE-justified diverges, (d) confidence ladders from "medium" (preamble-only) to "low" (preamble + ≥1 diagnostic) — the multi-stage path can never naturally produce "high" because the preamble warning occupies the zero-warning slot. Validation: `go test -run TestDDM_LegacyPath_BitForBit ./internal/services/valuation/models/` PASS (pre + post); `go test ./internal/services/valuation/models/...` PASS; `go test ./...` PASS.
 - **Priority:** Before Tier 3 (parity concern; will accumulate if Tier 3 adds more branches)
 
-### 6. GAP — `ddm_multistage_test.go` covers shared math via one profile only
+### 6. GAP — `ddm_multistage_test.go` covers shared math via one profile only — **RESOLVED 2026-06-25 (branch `chore/t2-p4-w2-close-items-6-7`)**
 
 - **Severity:** GAP (test coverage)
 - **Surfacing gate:** P3 VERIFIER (CONCERN-1 finding)
 - **Location:** `internal/services/valuation/models/ddm_multistage_test.go`
 - **Why not fixed at merge:** Tests use `maturing_tech_first_dividend` profile to exercise the shared multi-stage math. The other 4 archetype configurations that share the same code path (growth_bank × 2, insurance_company:mature, mature_dividend_tech:mature) aren't pin-tested individually. Pin tests were deferred until `testhelpers.RunValuation` lands (cross-package test helper that lets phase tests drive a full `Service.Valuate` call without re-wiring fx).
 - **Suggested resolution:** Once `testhelpers.RunValuation` is available, add per-archetype regression pins for each of the 4 uncovered configurations (1 pin test per archetype × maturity bucket).
+- **Resolution:** `testhelpers.RunValuation` was re-confirmed STILL a `t.Skip()` Phase-Bootstrap stub (wiring a full fx-composed Service is a disproportionate, separately-scoped effort), so the literal precondition never occurred. Closed at the **model level** instead — added `TestDDM_MultiStage_PerArchetypeShippedConfigs` (table-driven, 4 subtests) driving each of the 4 named configs through `ddm.Calculate` directly, matching how every other multi-stage test in the file already exercises the shared `calculateMultiStage` path. Field values are lifted verbatim from `config/assumption_profiles.json`; each subtest asserts multi-stage dispatch (`HorizonSelected == DividendForecastHorizon`), positive + finite intrinsic value, and `ModelType == "ddm"`. `TestDDM_LegacyPath_BitForBit` stays GREEN. Validated VERIFIER (VERIFIED) → REVIEWER (APPROVE_WITH_NITS) → QA (PASS).
 - **Priority:** Before Tier 3 (depends on `testhelpers.RunValuation` shipping)
 
 ---
 
 ## From P4 gates
 
-### 7. DEFERRED — `ArchetypeREITCommercial` enum rename
+### 7. DEFERRED — `ArchetypeREITCommercial` enum rename — **RESOLVED 2026-06-25 (branch `chore/t2-p4-w2-close-items-6-7`)**
 
 - **Severity:** DEFERRED
 - **Surfacing gate:** P4 REVIEWER (NIT-1) + P4 BACKEND
 - **Location:** `internal/services/valuation/profile/profile.go` (archetype enum), `config/assumption_profiles.json` (rule entry); industry_prefix is `REIT_OFFICE` while archetype id remains `reit_commercial`
 - **Why not fixed at merge:** Out-of-scope refactor would cascade through `profile.go` + `validation.go` + multiple consumers (test fixtures, golden files, plan doc references). The P4 defect-fixup chose to document the asymmetric naming in the rule's `notes` field instead.
 - **Suggested resolution:** Coordinate with a type-system audit pass; rename `ArchetypeREITCommercial` → `ArchetypeREITOffice` (or alternative agreed naming) and update all consumers in a single coordinated commit.
+- **Resolution:** Full coordinated rename executed (HUMAN-approved the full scope including the string value). Go identifier `ArchetypeREITCommercial` → `ArchetypeREITOffice` AND string value `"reit_commercial"` → `"reit_office"` across `profile.go` (const), `validation.go` (`isValidArchetype` switch), and `config/assumption_profiles.json` (profile key + `profile_id` + `archetype`; rule `id` + `archetype`; `industry_prefix` already `REIT_OFFICE`, unchanged; rule `notes` shortened — this also self-closes the item-9 pointer note). The whole chain is now consistent: classifier prefix `REIT_OFFICE` → rule archetype `reit_office` → profile `reit_office:standard_growth`. **Public-contract effect:** the `assumption_profile` response field for office REITs changes from `reit_commercial:standard_growth` to `reit_office:standard_growth`; verified NO golden fixture / replay baseline / OpenAPI example / integration test pins the old value (grep-confirmed), so NO `CalculationVersion` bump (label, not a calculation). Zero residual `reit_commercial` references in `.go`/`.json`. Validated VERIFIER (VERIFIED) → REVIEWER (APPROVE_WITH_NITS) → QA (PASS).
 - **Priority:** Before Tier 3 (asymmetry is a footgun for new contributors)
 
 ### 8. MINOR — Per-function coverage on FFO subsector loaders below 90% — RESOLVED 2026-05-23
@@ -173,10 +175,10 @@ Validation: `go test ./internal/observability/replay/...` PASS; `go test ./...` 
 Move to `docs/reviewer/archive/` once:
 
 - ~~Items 1, 2, 3, 9, 10, 11 (NIT / cleanup batch) are resolved in a single polishing-pass commit OR explicitly waived~~ — items 2, 9, 10 RESOLVED 2026-05-23 (commit `106c960`); items 1, 3 RESOLVED 2026-05-23 (branch `chore/t2-p4-w2-batch-1-3-doc-and-comment`); item 11 RESOLVED 2026-05-23 (branch `refactor/t2-p4-w2-item11-patch-filing-dates-helper`)
-- Item 4 (LATENT validation invariant) is added to `profile/validation.go` with a test
+- ~~Item 4 (LATENT validation invariant) is added to `profile/validation.go` with a test~~ [RESOLVED 2026-05-23 — commit `f9fc2c9`; `PayoutPath` length invariant live in `profile/validation.go`]
 - ~~Item 5 (CONCERN — DDM multi-stage diagnostics parity) is either implemented OR explicitly deferred to a Tier 3 design note~~ [RESOLVED 2026-05-23 — branch `refactor/t2-p4-w2-item5-ddm-diagnostics-parity`]
-- Item 6 (GAP — per-archetype DDM pins) lands once `testhelpers.RunValuation` ships
-- Item 7 (DEFERRED — `ArchetypeREITCommercial` rename) is either executed OR explicitly deferred to a named Tier 3 phase
+- ~~Item 6 (GAP — per-archetype DDM pins) lands once `testhelpers.RunValuation` ships~~ [RESOLVED 2026-06-25 — closed at model level via `TestDDM_MultiStage_PerArchetypeShippedConfigs`; `RunValuation` still a stub, see item 6]
+- ~~Item 7 (DEFERRED — `ArchetypeREITCommercial` rename) is either executed OR explicitly deferred to a named Tier 3 phase~~ [RESOLVED 2026-06-25 — full `reit_commercial`→`reit_office` rename, see item 7]
 - ~~Item 8 (MINOR — FFO loader coverage) has a regression test added OR is explicitly waived (package-level gate continues to pass)~~ [RESOLVED 2026-05-23 — branch `test/t2-p4-w2-item8-ffo-loader-coverage`]
 - ~~Item 12 (replay `ResolutionTrace` walker) scope is confirmed and either resolved or refiled~~ [RESOLVED 2026-05-23 — see item 12]
 
