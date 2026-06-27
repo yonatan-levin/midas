@@ -130,7 +130,7 @@ The SEC-side fact data confirms the Revenue-magnitude asymmetry. From `artifacts
 **Cross-check against Ford / KO / AMD:**
 - Ford Q3 2023: CA writedown = $7.3B (from shadow), implying Inventory ≈ $18.3B. Quarterly revenue ≈ $42B → turnover = 2.29 (< 3.0) → obsolete → A5 fires.
 - Ford FY 2023: Annual revenue ≈ $170B → turnover = 9.3 (> 3.0) → not obsolete. Inventory / TotalAssets ≈ 18.3/270 ≈ 6.8% → < 25% threshold → A5 no-ops.
-- KO/AMD have similar mechanics; their TL=0 parser dropouts (tracked separately at `docs/reviewer/T2-BS-3-parser-totalliabilities-zero-amd-ko.md`) are orthogonal to this finding.
+- KO/AMD have similar mechanics; their TL=0 parser dropouts (tracked separately at `docs/reviewer/archive/T2-BS-3-parser-totalliabilities-zero-amd-ko.md`) are orthogonal to this finding.
 
 **Cross-check against AAPL** (the basket's no-CA/TA control): AAPL has very high inventory turnover (~40-50× annual) and inventory ratio is below 2% of total assets. A5 no-ops on BOTH FY and Qx periods because `isObsolete = false` (turnover > 3.0) AND `inventoryRatio <= threshold` (≈ 2% < 25%). The AAPL shadow snapshot at `internal/integration/testdata/recompute-shadow/AAPL.json` shows ZERO CA/TA divergences across all 12 periods — consistent.
 
@@ -222,7 +222,7 @@ If experiment 1 or 2 confirms, change this tracker's status to RESOLVED-NOT-A-BU
   - `config/datacleaner/rules.json` lines 12-90 — A1/A2/A4/A5 rule definitions (no period-type field).
 - **Related trackers:**
   - `docs/reviewer/DC-1-datacleaner-component-primitive-and-parallel-views.md` — parent DC-1 tracker; this finding is recorded under its open-questions section after PR-2 wrap-up.
-  - `docs/reviewer/T2-BS-3-parser-totalliabilities-zero-amd-ko.md` — orthogonal AMD/KO TL=0 parser dropout; visible on the same FY rows in `AMD.json` / `KO.json` snapshots but unrelated mechanism.
+  - `docs/reviewer/archive/T2-BS-3-parser-totalliabilities-zero-amd-ko.md` — orthogonal AMD/KO TL=0 parser dropout; visible on the same FY rows in `AMD.json` / `KO.json` snapshots but unrelated mechanism.
 - **Spec / plan references:**
   - `docs/refactoring/spec/datacleaner-component-primitive-and-parallel-views-spec.md` — DC-1 spec (FY-NULL is outside the spec's mutation-symmetry remit; resolution is a future heuristic-review subtask).
   - `docs/refactoring/archive/datacleaner-component-primitive-and-parallel-views-phase-2-implementation-plan.md` — PR-2 plan (this tracker is Task 2.7's deliverable).
