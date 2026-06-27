@@ -704,6 +704,10 @@ func (s *Service) performValuation(
 		return nil, fmt.Errorf("%w: incomplete macro data", ErrInsufficientData)
 	}
 
+	// se collapses the repeated `if s.calcEmitter != nil { s.calcEmitter.Emit(...) }`
+	// guard for the per-stage calc traces below (SR-1 A7). Emit-only; no math.
+	se := s.newStageEmitter(ctx)
+
 	// Calculate historical growth rate from SEC data.
 	historicalGrowth, err := historicalData.CalculateAverageGrowthRate(5)
 	if err != nil {
@@ -1113,21 +1117,19 @@ func (s *Service) performValuation(
 
 	// Stage 6 — "wacc" calc trace: emit every WACC component so operators can audit
 	// the cost-of-capital build-up (beta ladder, risk premiums, debt cost, final rate).
-	if s.calcEmitter != nil {
-		s.calcEmitter.Emit(ctx, "wacc",
-			zap.String("ticker", historicalData.Ticker),
-			zap.Float64("rf", riskFreeRate),
-			zap.Float64("beta_raw", rawBeta),
-			zap.Float64("beta_blume", blumeBeta),
-			zap.Float64("beta_unlevered", unleveredBeta),
-			zap.Float64("beta_relevered", releveredBeta),
-			zap.Float64("erp", p.MarketRiskPremium), // S4: the ERP actually fed to WACC
-			zap.Float64("crp", countryRiskPremium),
-			zap.Float64("tax_rate", p.TaxRate), // S6: the tax rate actually fed to WACC
-			zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
-			zap.Float64("wacc", waccResult.WACC),
-		)
-	}
+	se.calc("wacc",
+		zap.String("ticker", historicalData.Ticker),
+		zap.Float64("rf", riskFreeRate),
+		zap.Float64("beta_raw", rawBeta),
+		zap.Float64("beta_blume", blumeBeta),
+		zap.Float64("beta_unlevered", unleveredBeta),
+		zap.Float64("beta_relevered", releveredBeta),
+		zap.Float64("erp", p.MarketRiskPremium), // S4: the ERP actually fed to WACC
+		zap.Float64("crp", countryRiskPremium),
+		zap.Float64("tax_rate", p.TaxRate), // S6: the tax rate actually fed to WACC
+		zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
+		zap.Float64("wacc", waccResult.WACC),
+	)
 
 	// Tier-1 narrate: wacc.computed. Spec §5 row 13 fields. Carries the
 	// final WACC and the major inputs so a reader can sanity-check it.
@@ -1307,13 +1309,11 @@ func (s *Service) performValuation(
 				zap.String("ticker", historicalData.Ticker),
 				zap.Float64("latest_base_oi", baseOI),
 				zap.Float64("mean_3y_oi", normalizedOI))
-			if s.calcEmitter != nil {
-				s.calcEmitter.Emit(ctx, "cyclical_base_normalization",
-					zap.String("ticker", historicalData.Ticker),
-					zap.String("method", method),
-					zap.Float64("latest_base_oi", baseOI),
-					zap.Float64("mean_3y_oi", normalizedOI))
-			}
+			se.calc("cyclical_base_normalization",
+				zap.String("ticker", historicalData.Ticker),
+				zap.String("method", method),
+				zap.Float64("latest_base_oi", baseOI),
+				zap.Float64("mean_3y_oi", normalizedOI))
 			baseOI = normalizedOI
 		}
 	}
@@ -1460,12 +1460,12 @@ func (s *Service) performValuation(
 
 	// Stage 7 — "fcf_projection" calc trace: emit per-year growth rates and FCF
 	// projections so operators can audit the explicit forecast period.
-	if s.calcEmitter != nil {
+	{
 		fcfSeries := make([]float64, len(dcfResult.Projections))
 		for i, p := range dcfResult.Projections {
 			fcfSeries[i] = p.FreeCashFlow
 		}
-		s.calcEmitter.Emit(ctx, "fcf_projection",
+		se.calc("fcf_projection",
 			zap.String("ticker", historicalData.Ticker),
 			zap.Int("years", dcfResult.ProjectionYears),
 			zap.Float64s("growth_rates", growthEstimate.ProjectedGrowthRates),
@@ -1475,7 +1475,7 @@ func (s *Service) performValuation(
 
 	// Stage 8 — "terminal_value" calc trace: emit terminal-value build-up so operators
 	// can see the Gordon Growth vs. exit-multiple averaging outcome.
-	if s.calcEmitter != nil {
+	{
 		// Gordon-Growth TV component before exit-multiple averaging. Read it
 		// directly from the engine (dcf.Result.GordonTV) rather than re-deriving:
 		// the legacy re-derivation assumed terminalFCF = TerminalYearFCF×(1+g),
@@ -1489,7 +1489,7 @@ func (s *Service) performValuation(
 		// dcf.Result.ExitMultipleTV (zero on the Gordon-only path), so we surface it
 		// directly rather than back-calculating via 2*averaged - gordon.
 		exitMultipleUsed := math.Abs(dcfResult.TerminalValueNominal-gordonTV) > 1e-6
-		s.calcEmitter.Emit(ctx, "terminal_value",
+		se.calc("terminal_value",
 			zap.String("ticker", historicalData.Ticker),
 			zap.Float64("gordon_tv", gordonTV),
 			zap.Float64("exit_multiple_tv", dcfResult.ExitMultipleTV),
@@ -1501,14 +1501,12 @@ func (s *Service) performValuation(
 
 	// Stage 9 — "discount" calc trace: emit the PV of explicit period and terminal
 	// value to show how enterprise value is assembled from discounted cash flows.
-	if s.calcEmitter != nil {
-		s.calcEmitter.Emit(ctx, "discount",
-			zap.String("ticker", historicalData.Ticker),
-			zap.Float64("pv_explicit", dcfResult.ExplicitPeriodValue),
-			zap.Float64("pv_terminal", dcfResult.TerminalValue),
-			zap.Float64("enterprise_value", dcfResult.EnterpriseValue),
-		)
-	}
+	se.calc("discount",
+		zap.String("ticker", historicalData.Ticker),
+		zap.Float64("pv_explicit", dcfResult.ExplicitPeriodValue),
+		zap.Float64("pv_terminal", dcfResult.TerminalValue),
+		zap.Float64("enterprise_value", dcfResult.EnterpriseValue),
+	)
 
 	// Equity value bridge: EV - Debt + Cash - MinorityInterest - PreferredEquity
 	//                       - DebtLikeClaims = Equity Value
@@ -1551,19 +1549,17 @@ func (s *Service) performValuation(
 
 	// Stage 10 — "equity_bridge" calc trace: emit the bridge from enterprise value to
 	// per-share intrinsic value so operators can audit the equity conversion step.
-	if s.calcEmitter != nil {
-		s.calcEmitter.Emit(ctx, "equity_bridge",
-			zap.String("ticker", historicalData.Ticker),
-			zap.Float64("cash", latestFinancialData.CashAndCashEquivalents),
-			zap.Float64("debt", waccRestated.InterestBearingDebt),
-			zap.Float64("minority_interest", latestFinancialData.MinorityInterest),
-			zap.Float64("preferred", latestFinancialData.PreferredEquity),
-			zap.Float64("debt_like_claims", debtLikeClaims),
-			zap.Float64("equity_value", equityValue),
-			zap.Float64("diluted_shares", denomShares),
-			zap.Float64("per_share", dcfValuePerShare),
-		)
-	}
+	se.calc("equity_bridge",
+		zap.String("ticker", historicalData.Ticker),
+		zap.Float64("cash", latestFinancialData.CashAndCashEquivalents),
+		zap.Float64("debt", waccRestated.InterestBearingDebt),
+		zap.Float64("minority_interest", latestFinancialData.MinorityInterest),
+		zap.Float64("preferred", latestFinancialData.PreferredEquity),
+		zap.Float64("debt_like_claims", debtLikeClaims),
+		zap.Float64("equity_value", equityValue),
+		zap.Float64("diluted_shares", denomShares),
+		zap.Float64("per_share", dcfValuePerShare),
+	)
 
 	// Calculate data freshness score
 	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
@@ -1808,16 +1804,14 @@ func (s *Service) performValuation(
 		// Stage 11 — "cross_check" calc trace: emit implied multiples vs. sector medians
 		// so operators can see whether the DCF output is in a reasonable range.
 		// Only emitted when industryMultiples is configured and the check actually ran.
-		if s.calcEmitter != nil {
-			s.calcEmitter.Emit(ctx, "cross_check",
-				zap.String("ticker", historicalData.Ticker),
-				zap.Float64("implied_pe", sanity.ImpliedPE),
-				zap.Float64("implied_ev_ebitda", sanity.ImpliedEVEBITDA),
-				zap.Float64("sector_median_pe", sanity.SectorMedianPE),
-				zap.Float64("sector_median_ev_ebitda", sanity.SectorMedianEVEBITDA),
-				zap.Strings("flags", sanity.Flags),
-			)
-		}
+		se.calc("cross_check",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Float64("implied_pe", sanity.ImpliedPE),
+			zap.Float64("implied_ev_ebitda", sanity.ImpliedEVEBITDA),
+			zap.Float64("sector_median_pe", sanity.SectorMedianPE),
+			zap.Float64("sector_median_ev_ebitda", sanity.SectorMedianEVEBITDA),
+			zap.Strings("flags", sanity.Flags),
+		)
 
 		// Tier-1 narrate: crosscheck.evaluated. Spec §5 row 16 fields.
 		// deviation_sigma is approximated as |1 - implied_pe/sector_pe| (no
