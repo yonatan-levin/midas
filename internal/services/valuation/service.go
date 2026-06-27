@@ -1417,7 +1417,6 @@ func (s *Service) resolveValuationInputs(ctx context.Context, v *valuationCtx) e
 	macroData := v.macroData
 	opts := v.opts
 	cleaned := v.cleaned
-	se := s.newStageEmitter(ctx)
 
 	// Calculate historical growth rate from SEC data.
 	historicalGrowth, err := historicalData.CalculateAverageGrowthRate(5)
@@ -1745,6 +1744,114 @@ func (s *Service) resolveValuationInputs(ctx context.Context, v *valuationCtx) e
 		return err
 	}
 
+	// Beta ladder + country-risk premium + WACC (stages J–L). Extracted to
+	// computeWACC; called here at the original position so read-order is
+	// preserved (SR-1 A7).
+	v.p = p
+	v.latestFinancialData = latestFinancialData
+	if err := s.computeWACC(ctx, v); err != nil {
+		return err
+	}
+	// Re-bind the WACC outputs as locals for the terminal-growth + model-
+	// selection stages that follow (and the function's final write-back).
+	beta := v.beta
+	riskFreeRate := v.riskFreeRate
+	rawBeta := v.rawBeta
+	blumeBeta := v.blumeBeta
+	unleveredBeta := v.unleveredBeta
+	releveredBeta := v.releveredBeta
+	waccRestated := v.waccRestated
+	countryRiskPremium := v.countryRiskPremium
+	waccResult := v.waccResult
+
+	// Terminal growth (S1): finalize against the COMPUTED WACC via the params
+	// resolver. ResolveTerminal's auto-derive path is a byte-identical port of the
+	// legacy calculateTerminalGrowthRate (same cap 0.03, floor 0.02, WACC-2% spread,
+	// 0.01 degenerate floor) — see params/resolve.go. historicalCAGR is the same
+	// growthEstimate.SummaryGrowthRate() the legacy call used.
+	if err := params.ResolveTerminal(&p, waccResult.WACC, growthEstimate.SummaryGrowthRate()); err != nil {
+		// Propagate the typed *params.ParamError (e.g. explicit terminal_growth_rate
+		// >= WACC) so the handler maps it to 422 (T8). Default path never errors.
+		return err
+	}
+	terminalGrowthRate := p.TerminalGrowthRate
+	growthEstimate.TerminalGrowthRate = terminalGrowthRate
+
+	// Select the appropriate valuation model based on industry and financials.
+	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace;
+	// ticker is threaded in so that trace entry carries it self-describingly (M-1a).
+	// DC-1 Phase 4 (C-3): the router's negative-OI routing reads the Restated
+	// view so model selection reflects restated earnings.
+	selectedModel := s.modelRouter.SelectModel(ctx, historicalData.Ticker, industryCode, restatedViewOr(cleaned, latestFinancialData))
+
+	// Tier-1 narrate: model.selected. Spec §5 row 14 fields. Reason is
+	// intentionally coarse — full reasoning lives in the calclog
+	// model_selection trace which fires from inside SelectModel.
+	{
+		modelName := "none"
+		reason := "no model registered"
+		if selectedModel != nil {
+			modelName = selectedModel.ModelType()
+			reason = "router selection"
+		}
+		narrate.From(ctx).Emit(ctx, narrate.PhaseModelSelected, narrate.OutcomeOK, "",
+			zap.String("model", modelName),
+			zap.String("reason", reason),
+		)
+		if b := artifact.From(ctx); b != nil {
+			b.Snapshot(ctx, "model.selected", "14-model-selection.json", map[string]any{
+				"model":         modelName,
+				"reason":        reason,
+				"industry_code": industryCode,
+			})
+		}
+	}
+
+	// --- Write resolved inputs back onto the carrier (SR-1 A7). ---
+	v.overrides = overrides
+	v.growthEstimate = growthEstimate
+	v.latestFinancialData = latestFinancialData
+	v.latestPeriod = latestPeriod
+	v.tangibleValuePerShare = tangibleValuePerShare
+	v.industryCode = industryCode
+	v.sicLabel = sicLabel
+	v.heuristicCode = heuristicCode
+	v.heuristicName = heuristicName
+	v.sharesOutstanding = sharesOutstanding
+	v.resolvedProfile = resolvedProfile
+	v.resolutionTrace = resolutionTrace
+	v.guidanceResolution = guidanceResolution
+	v.hasOverrides = hasOverrides
+	v.industryExitMultiple = industryExitMultiple
+	v.p = p
+	v.selectedModel = selectedModel
+	v.waccRestated = waccRestated
+	v.rawBeta = rawBeta
+	v.blumeBeta = blumeBeta
+	v.unleveredBeta = unleveredBeta
+	v.releveredBeta = releveredBeta
+	v.beta = beta
+	v.riskFreeRate = riskFreeRate
+	v.countryRiskPremium = countryRiskPremium
+	v.waccResult = waccResult
+	v.terminalGrowthRate = terminalGrowthRate
+	return nil
+}
+
+// computeWACC runs the beta ladder (Blume + unlever/relever), the country-risk
+// premium lookup, the WACC calculation + its metrics, and the wacc-stage
+// emissions (calc trace + narrate + artifact). It reads v.p / v.latestFinancialData
+// (set by the caller just before invocation) plus the carrier inputs, and writes
+// the beta fields, waccRestated, countryRiskPremium, and waccResult back onto v.
+// Read-order is byte-identical to the original 1748–1864 (SR-1 A7).
+func (s *Service) computeWACC(ctx context.Context, v *valuationCtx) error {
+	historicalData := v.historicalData
+	marketData := v.marketData
+	cleaned := v.cleaned
+	latestFinancialData := v.latestFinancialData
+	p := v.p
+	se := s.newStageEmitter(ctx)
+
 	// Determine beta and risk-free rate from the resolved params (S4). On the
 	// default path p.Beta == marketData.GetEffectiveBeta() and
 	// p.RiskFreeRate == macroData.GetEffectiveRiskFreeRate(), so WACC is unchanged.
@@ -1863,77 +1970,16 @@ func (s *Service) resolveValuationInputs(ctx context.Context, v *valuationCtx) e
 		})
 	}
 
-	// Terminal growth (S1): finalize against the COMPUTED WACC via the params
-	// resolver. ResolveTerminal's auto-derive path is a byte-identical port of the
-	// legacy calculateTerminalGrowthRate (same cap 0.03, floor 0.02, WACC-2% spread,
-	// 0.01 degenerate floor) — see params/resolve.go. historicalCAGR is the same
-	// growthEstimate.SummaryGrowthRate() the legacy call used.
-	if err := params.ResolveTerminal(&p, waccResult.WACC, growthEstimate.SummaryGrowthRate()); err != nil {
-		// Propagate the typed *params.ParamError (e.g. explicit terminal_growth_rate
-		// >= WACC) so the handler maps it to 422 (T8). Default path never errors.
-		return err
-	}
-	terminalGrowthRate := p.TerminalGrowthRate
-	growthEstimate.TerminalGrowthRate = terminalGrowthRate
-
-	// Select the appropriate valuation model based on industry and financials.
-	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace;
-	// ticker is threaded in so that trace entry carries it self-describingly (M-1a).
-	// DC-1 Phase 4 (C-3): the router's negative-OI routing reads the Restated
-	// view so model selection reflects restated earnings.
-	selectedModel := s.modelRouter.SelectModel(ctx, historicalData.Ticker, industryCode, restatedViewOr(cleaned, latestFinancialData))
-
-	// Tier-1 narrate: model.selected. Spec §5 row 14 fields. Reason is
-	// intentionally coarse — full reasoning lives in the calclog
-	// model_selection trace which fires from inside SelectModel.
-	{
-		modelName := "none"
-		reason := "no model registered"
-		if selectedModel != nil {
-			modelName = selectedModel.ModelType()
-			reason = "router selection"
-		}
-		narrate.From(ctx).Emit(ctx, narrate.PhaseModelSelected, narrate.OutcomeOK, "",
-			zap.String("model", modelName),
-			zap.String("reason", reason),
-		)
-		if b := artifact.From(ctx); b != nil {
-			b.Snapshot(ctx, "model.selected", "14-model-selection.json", map[string]any{
-				"model":         modelName,
-				"reason":        reason,
-				"industry_code": industryCode,
-			})
-		}
-	}
-
-	// --- Write resolved inputs back onto the carrier (SR-1 A7). ---
-	v.overrides = overrides
-	v.growthEstimate = growthEstimate
-	v.latestFinancialData = latestFinancialData
-	v.latestPeriod = latestPeriod
-	v.tangibleValuePerShare = tangibleValuePerShare
-	v.industryCode = industryCode
-	v.sicLabel = sicLabel
-	v.heuristicCode = heuristicCode
-	v.heuristicName = heuristicName
-	v.sharesOutstanding = sharesOutstanding
-	v.resolvedProfile = resolvedProfile
-	v.resolutionTrace = resolutionTrace
-	v.guidanceResolution = guidanceResolution
-	v.hasOverrides = hasOverrides
-	v.industryExitMultiple = industryExitMultiple
-	v.p = p
-	v.selectedModel = selectedModel
-	v.waccRestated = waccRestated
+	// --- Write WACC outputs back onto the carrier (SR-1 A7). ---
+	v.beta = beta
+	v.riskFreeRate = riskFreeRate
 	v.rawBeta = rawBeta
 	v.blumeBeta = blumeBeta
 	v.unleveredBeta = unleveredBeta
 	v.releveredBeta = releveredBeta
-	v.beta = beta
-	v.riskFreeRate = riskFreeRate
+	v.waccRestated = waccRestated
 	v.countryRiskPremium = countryRiskPremium
 	v.waccResult = waccResult
-	v.terminalGrowthRate = terminalGrowthRate
 	return nil
 }
 
