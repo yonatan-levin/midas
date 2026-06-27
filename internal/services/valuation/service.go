@@ -704,496 +704,43 @@ func (s *Service) performValuation(
 		return nil, fmt.Errorf("%w: incomplete macro data", ErrInsufficientData)
 	}
 
-	// se collapses the repeated `if s.calcEmitter != nil { s.calcEmitter.Emit(...) }`
-	// guard for the per-stage calc traces below (SR-1 A7). Emit-only; no math.
+	v := &valuationCtx{
+		historicalData: historicalData,
+		marketData:     marketData,
+		macroData:      macroData,
+		opts:           opts,
+		cleaned:        cleaned,
+	}
+
+	if err := s.resolveValuationInputs(ctx, v); err != nil {
+		return nil, err
+	}
+
+	// Re-bind the carrier outputs produced by resolveValuationInputs as locals
+	// so the still-inline DCF / assemble body below reads byte-identically to the
+	// pre-extraction code (SR-1 A7; later commits move these blocks into runDCF /
+	// assembleResult). Pure plumbing — no read reordered.
 	se := s.newStageEmitter(ctx)
-
-	// Calculate historical growth rate from SEC data.
-	historicalGrowth, err := historicalData.CalculateAverageGrowthRate(5)
-	if err != nil {
-		historicalGrowth = &growth.CalculationResult{
-			GrowthRate:  s.config.Valuation.DefaultTerminalGrowthCap,
-			Method:      "default",
-			DataQuality: "low",
-			IsReliable:  false,
-		}
-	}
-
-	// Fetch analyst consensus estimates with caching (optional, degrades gracefully).
-	// Cached separately with 7-day TTL since analyst estimates change infrequently.
-	analystData := s.getAnalystEstimates(ctx, historicalData.Ticker)
-
-	// Calculate ROIC-sustainable growth ceiling
-	sustainableGrowth := 0.0
-	latestForROIC, _ := historicalData.GetLatestPeriod()
-	if latestForROIC != nil {
-		// DC-1 Phase 4 (C-2): ROIC NOPAT numerator and invested-capital
-		// denominator both read the Restated() view so the ratio stays
-		// coherent under earnings/equity restatements (C1-C7 touch
-		// NormalizedOperatingIncome; A2/A4/A5 EquityOffsets touch
-		// StockholdersEquity). Mixing Restated NOPAT with as-reported equity
-		// would inflate ROIC for any company with impairments. TaxRate and
-		// CashAndCashEquivalents are NOT Restater-touched today and stay on
-		// the legacy entity read. cleaned may be nil on test/no-cleaner paths
-		// — fall back to the legacy direct reads then.
-		roicView := restatedViewOr(cleaned, latestForROIC)
-		nopat := roicView.NormalizedOperatingIncome * (1 - latestForROIC.TaxRate)
-		investedCapital := growth.CalculateInvestedCapital(
-			roicView.StockholdersEquity,
-			roicView.InterestBearingDebt,
-			latestForROIC.CashAndCashEquivalents,
-		)
-		sustainableGrowth = growth.CalculateSustainableGrowth(nopat, investedCapital, s.growthEstimator.Config().DefaultPayoutRatio)
-	}
-
-	// --- Request-valuation-overrides (T5/S3): per-request growth estimator. ---
-	//
-	// §3.7 ordering: the estimator's staging config (stage1/2/3, max, min) must be
-	// resolved BEFORE the estimator runs, but ResolveInputs runs later (after the
-	// estimate, when growthRateLen is known). So we normalize the request Overrides
-	// here and, ONLY when a staging/min/max knob is overridden, build a per-request
-	// estimator with the overridden config. When NO such override is present we
-	// reuse the shared s.growthEstimator EXACTLY as before — the fast/default path
-	// is untouched and byte-identical.
-	//
-	// The Overrides carrier is normalized once here (legacy OverrideBeta/RiskFree
-	// folded in idempotently) and reused below for ResolveInputs, so the two never
-	// diverge on which knobs the request set.
-	overrides := s.normalizeOverrides(opts)
-
-	// estimator selects the Estimator used for THIS request's growth estimate.
-	// Default: the shared, pre-built s.growthEstimator (no allocation, no behavior
-	// change). Override: a per-request Estimator (see growthEstimatorFor).
-	estimator := s.growthEstimator
-	if overridesAffectEstimator(overrides) {
-		// Layer-2 pre-check (T2 ValidateEstimatorConfig): reject an invalid staging
-		// config (min > max, or stage-sum < 1) BEFORE the estimator runs, so it never
-		// executes with a nonsensical config. ResolveInputs re-asserts the same
-		// invariants idempotently afterwards. Propagate the typed *params.ParamError
-		// so the handler maps it to 422 (T8); never a 500.
-		if err := params.ValidateEstimatorConfig(s.estimatorDefaults(), overrides); err != nil {
-			return nil, err
-		}
-		estimator = s.growthEstimatorFor(overrides)
-	}
-
-	// Produce multi-stage growth estimate (analyst + historical blend).
-	// ctx is passed through so EstimateGrowthRates can emit stage-5 "growth" trace.
-	// Ticker is threaded in so the emitted trace carries it self-describingly (M-1a).
-	growthEstimate := estimator.EstimateGrowthRates(ctx, historicalData.Ticker, analystData, historicalGrowth, sustainableGrowth)
-
-	// Tier-1 narrate: growth.estimated. Spec §5 row 12 fields. Reports
-	// year-1 + terminal growth and the actual analyst/historical blend
-	// weights the estimator applied. G-1 (closed 2026-05-23): weights now
-	// reflect the real per-analyst-count bucket (e.g. 0.80/0.20 for n>=10,
-	// 0.0/1.0 when no analyst coverage) rather than a coarse 0.5/0.5 flag.
-	{
-		gYear1 := 0.0
-		if rates := growthEstimate.ProjectedGrowthRates; len(rates) > 0 {
-			gYear1 = rates[0]
-		}
-		gOutcome := narrate.OutcomeOK
-		if !historicalGrowth.IsReliable {
-			gOutcome = narrate.OutcomePartial
-		}
-		narrate.From(ctx).Emit(ctx, narrate.PhaseGrowthEstimated, gOutcome, "",
-			zap.Int("stage_count", len(growthEstimate.ProjectedGrowthRates)),
-			zap.Float64("analyst_weight", growthEstimate.AnalystWeight),
-			zap.Float64("historical_weight", growthEstimate.HistoricalWeight),
-			zap.Float64("g_year_1", gYear1),
-			zap.Float64("g_terminal", growthEstimate.TerminalGrowthRate),
-		)
-		if b := artifact.From(ctx); b != nil {
-			b.Snapshot(ctx, "growth.estimated", "12-growth-curve.json", growthEstimate)
-			b.AddSchemaVersion("GrowthEstimate", 1)
-		}
-	}
-
-	// Get the latest financial data for asset calculations
-	latestFinancialData, latestPeriod := historicalData.GetLatestPeriod()
-	if latestFinancialData == nil {
-		return nil, fmt.Errorf("%w: no latest financial data available", ErrInsufficientData)
-	}
-
-	// Calculate tangible value per share
-	// DC-1 Phase 4 (C-5): tangible value reads the AsReported view's
-	// TangibleAssets (identity-copied parser value — see the helper's godoc for
-	// why AsReported, not Restated).
-	tangibleValuePerShare := s.calculateTangibleValuePerShare(asReportedViewOr(cleaned, latestFinancialData), marketData)
-
-	// --- Phase 3: Industry-aware model selection ---
-	industryCode, sicLabel, heuristicCode, heuristicName := s.classifyTickerIndustry(ctx, historicalData, latestFinancialData)
-
-	// Resolve shares outstanding (needed by both DCF and alternative models)
-	// Priority: diluted (most conservative) > market basic (most current) > financial basic
-	sharesOutstanding := latestFinancialData.DilutedSharesOutstanding
-	if sharesOutstanding <= 0 {
-		sharesOutstanding = marketData.SharesOutstanding
-	}
-	if sharesOutstanding <= 0 {
-		sharesOutstanding = latestFinancialData.SharesOutstanding
-	}
-	if sharesOutstanding <= 0 {
-		return nil, fmt.Errorf("%w: shares outstanding not available", ErrInsufficientData)
-	}
-
-	// --- Tier 2 P0b: resolve the AssumptionProfile from current request facts. ---
-	//
-	// Pure deterministic resolution from a neutral Facts DTO; replay determinism
-	// preserved (no time.Now(), no I/O). Failure modes:
-	//   - unknown industry  → conservative software_like_scaling fallback;
-	//                         trace.Source=SourceFallback surfaces the choice
-	//   - nil registry      → skip resolution entirely (test-only path); model
-	//                         consumers receive ModelInput.Profile=nil and take
-	//                         their legacy branches — byte-identical responses
-	//   - malformed config  → would have failed startup (fx.Provide bubbles up
-	//                         the LoadFromJSON error)
-	//
-	// All downstream consumers are NO-OP in P0b — the field is declared and
-	// stamped onto the bundle + response, but model code reads it in P1-P4.
-	// This is intentional: P0b only ships the plumbing so P1-P4 land cleanly.
-	var resolvedProfile *profile.ResolvedProfile
-	var resolutionTrace profile.ResolutionTrace
-	if s.profileRegistry != nil {
-		// Build Facts from in-scope entities. Pointer types distinguish "no
-		// signal" (nil) from "zero is meaningful" (non-nil pointer to zero);
-		// see profile/facts.go for the contract. A truly pre-revenue ticker
-		// (Revenue==0 AND OperatingIncome==0) gets Revenue=nil so the
-		// resolver's Stage-2 maturity bucketing falls through to the
-		// "no_revenue_signal" branch instead of misclassifying as ultra-mature.
-		// DC-1 Phase 4 (C-3): NOPAT-fallback guard + OI/NI facts read the
-		// Restated view (earnings restatements C1-C7 touch
-		// NormalizedOperatingIncome). Revenue is NOT Restater-touched and
-		// stays on the entity. NetIncome is not Restater-touched today either,
-		// but reads the view for coherence + forward-compatibility (§4.2.2).
-		factsRestated := restatedViewOr(cleaned, latestFinancialData)
-		var revenuePtr *float64
-		if !(latestFinancialData.Revenue == 0 && factsRestated.NormalizedOperatingIncome == 0) {
-			v := latestFinancialData.Revenue
-			revenuePtr = &v
-		}
-		oiVal := factsRestated.OperatingIncome
-		niVal := factsRestated.NetIncome
-		facts := profile.Facts{
-			Industry:           industryCode,
-			IndustryNormalized: strings.ToUpper(strings.TrimSpace(industryCode)),
-			Revenue:            revenuePtr,
-			OperatingIncome:    &oiVal,
-			NetIncome:          &niVal,
-			// RevenueGrowthYoY uses the FY-key-sorted helper (Tier 2 P0b
-			// entity addition) so the result is deterministic even when
-			// FilingDate isn't stamped on every period.
-			RevenueGrowthYoY: historicalData.RecentYoYGrowth(),
-		}
-		resolvedProfile, resolutionTrace = s.profileRegistry.Resolve(facts)
-
-		s.log(ctx).Debug("AssumptionProfile resolved",
-			zap.String("ticker", historicalData.Ticker),
-			zap.String("profile_id", resolutionTrace.ProfileID),
-			zap.String("source", string(resolutionTrace.Source)),
-			zap.String("matched_rule_id", resolutionTrace.MatchedRuleID),
-		)
-
-		// Tier-3 artifact bundle: stamp the resolved profile + trace so
-		// replay tooling can short-circuit to the captured snapshot for
-		// perfect determinism (spec §3.3, §7.3). Nil-safe via the bundle's
-		// own nil-receiver guard.
-		if resolvedProfile != nil {
-			snapshot := resolvedProfile.AssumptionProfile
-			artifact.From(ctx).SetAssumptionProfileManifest(ctx, profile.AssumptionProfileManifest{
-				ProfileID:        resolvedProfile.ProfileID,
-				Source:           resolutionTrace.Source,
-				ResolverVersion:  resolutionTrace.ResolverVersion,
-				ConfigVersion:    resolutionTrace.ConfigVersion,
-				ConfigHash:       resolutionTrace.ConfigHash,
-				ResolvedSnapshot: &snapshot,
-				Trace:            resolutionTrace,
-			})
-		}
-	}
-
-	// --- Layer B Phase 2: resolve guidance + assumption authority. ---
-	//
-	// Runs AFTER profile resolution and BEFORE DCF-input construction (spec
-	// §"data-flow placement"). The loader is keyed by (CIK, as-of=s.clock.Now()):
-	// the existing Clock seam pins replay determinism (replay binds the clock to
-	// manifest.started_at). On the PRODUCTION default (empty GuidanceRoot) the
-	// loader returns Absent ⇒ no anchors ⇒ the DCF path below is byte-identical
-	// to the Layer-A 4.7 engine (NF1 — the master invariant).
-	//
-	// UserOverriddenKnobs is empty in Phase 2 (params carries no per-near-term-
-	// knob override yet), but is threaded so the §9 level-1 precedence is
-	// structurally correct and future-proof. A content-hash MISMATCH on a present
-	// fixture propagates as a hard error (F2); every other fixture failure
-	// degrades to the absent path inside the resolver (NF4).
-	guidanceResolution, err := s.resolveGuidance(ctx, latestFinancialData.CIK, s.clock.Now(), resolvedProfile, nil)
-	if err != nil {
-		return nil, fmt.Errorf("guidance resolution failed: %w", err)
-	}
-
-	// --- Request-valuation-overrides (T4): resolve the EffectiveValuationParams. ---
-	//
-	// §3.7 ordering: the WACC-independent knobs (beta/rf/MRP/tax, growth staging,
-	// horizon, terminal method/multiple) are resolved HERE — after the growth
-	// estimate (growthRateLen known) and after industry + profile resolution (the
-	// industry exit-multiple default + profile horizon/method/multiple feed the
-	// Defaults). Terminal growth is finalized in ResolveTerminal AFTER WACC.
-	//
-	// PRIME DIRECTIVE: on the default path (empty Overrides) every resolved value
-	// equals today's source read, so WACC + DCF are byte-identical. The Defaults
-	// below project the EXACT legacy sources the old code read inline.
-	hasOverrides := opts.hasAnyOverride()
-
-	// opts may be nil (e.g. internal/scheduler callers, tests). hasAnyOverride is
-	// nil-safe; the Overrides carrier itself must be read through a nil guard.
-	// A zero-value params.Overrides has all-nil pointer fields, so the resolver
-	// takes every default — preserving the legacy nil-opts behavior exactly.
-	//
-	// `overrides` was already normalized above (before the growth estimate) by
-	// s.normalizeOverrides — including folding the legacy OverrideBeta/RiskFree
-	// scalars into the carrier — and is reused here so the estimator-selection
-	// path and the resolver path never diverge on which knobs the request set.
-
-	// growthRateLen mirrors the legacy projectionYears computation
-	// (len(growthEstimate.ProjectedGrowthRates), with the 0→5 fallback) so the
-	// resolver's horizon-vs-length clamp matches the pre-T4 silent clamp exactly.
-	growthRateLen := len(growthEstimate.ProjectedGrowthRates)
-	if growthRateLen == 0 {
-		growthRateLen = 5 // fallback (mirrors the legacy projectionYears == 0 → 5)
-	}
-
-	// IndustryExitMultiple is the same industry EV/EBITDA lookup the legacy
-	// exit-multiple block performed inline; 0 when no industry default exists.
-	var industryExitMultiple float64
-	if s.industryMultiples != nil && s.industryMultiples.EVEBITDAMultiples != nil {
-		industryExitMultiple = LookupMultiple(s.industryMultiples.EVEBITDAMultiples, industryCode)
-	}
-
-	// Profile-derived knob baselines: pass through ONLY when the resolved profile
-	// carries a value, exactly mirroring the legacy gates at service.go (horizon:
-	// `resolvedProfile != nil && resolvedProfile.HorizonYears > 0`; method:
-	// `resolvedProfile.TerminalMethod != ""`). The resolver re-applies the same
-	// >0 / != "" gating internally, so passing zero/"" is a no-op default.
-	var profileHorizonYears int
-	var profileTerminalMethod string
-	var profileTerminalMultiple float64
-	if resolvedProfile != nil {
-		profileHorizonYears = resolvedProfile.HorizonYears
-		profileTerminalMethod = string(resolvedProfile.TerminalMethod)
-		profileTerminalMultiple = resolvedProfile.TerminalMultiple
-	}
-
-	// Estimator stage years: the configured stages of the estimator that ACTUALLY
-	// ran this request (shared default 3/4/0, OR the per-request override config
-	// when staging/min/max was overridden — T5/S3). Feeding the resolver the same
-	// estimator's config keeps the resolved Stage*/Max/Min in lock-step with the
-	// growth slice the estimator just produced. On the default path estimator ==
-	// s.growthEstimator, so this is byte-identical to T4.
-	estCfg := estimator.Config()
-
-	// VAL-1 Phase 2 (D2): the legacy default-sourced horizon = growthRateLen with the
-	// Phase-2-injected shared Stage3 removed, so an un-profiled / no-override ticker
-	// keeps its pre-Phase-2 horizon (7 for the shared 3/4 estimator) even though the
-	// shared slice is now longer. We subtract estimatorInjectedStage3 ONLY when the
-	// request did not explicitly override stage3_years — a request-chosen Stage3 is a
-	// legitimate caller staging choice that was honored pre-Phase-2 too, so it must
-	// flow into growthRateLen unaltered. The resolver uses this value only on the
-	// default-sourced branch; profile/request horizons win via the precedence chain
-	// and are validated against the real (longer) growthRateLen.
-	legacyDefaultHorizon := growthRateLen
-	if overrides.Stage3Years == nil && s.estimatorInjectedStage3 > 0 {
-		legacyDefaultHorizon = max(0, growthRateLen-s.estimatorInjectedStage3)
-	}
-
-	resolverDefaults := params.Defaults{
-		TerminalGrowthCap: s.config.Valuation.DefaultTerminalGrowthCap,
-		MaxGrowthRate:     s.config.Valuation.DCFMaxGrowthRate,
-		MinGrowthRate:     s.config.Valuation.DCFMinGrowthRate,
-		Stage1Years:       estCfg.Stage1Years,
-		Stage2Years:       estCfg.Stage2Years,
-		Stage3Years:       estCfg.Stage3Years,
-
-		LegacyDefaultHorizonYears: legacyDefaultHorizon,
-
-		// WACC inputs + tax — the EXACT legacy default sources.
-		Beta:              marketData.GetEffectiveBeta(),
-		RiskFreeRate:      macroData.GetEffectiveRiskFreeRate(),
-		MarketRiskPremium: macroData.MarketRiskPremium,
-		TaxRate:           latestFinancialData.TaxRate,
-
-		ProfileHorizonYears:     profileHorizonYears,
-		ProfileTerminalMethod:   profileTerminalMethod,
-		ProfileTerminalMultiple: profileTerminalMultiple,
-		IndustryExitMultiple:    industryExitMultiple,
-	}
-
-	p, err := params.ResolveInputs(resolverDefaults, overrides, growthRateLen)
-	if err != nil {
-		// Propagate the typed *params.ParamError so the handler can map it to 422
-		// (T8). Never swallow — a cross-knob violation is a caller error, not a 500.
-		return nil, err
-	}
-
-	// Determine beta and risk-free rate from the resolved params (S4). On the
-	// default path p.Beta == marketData.GetEffectiveBeta() and
-	// p.RiskFreeRate == macroData.GetEffectiveRiskFreeRate(), so WACC is unchanged.
-	beta := p.Beta
-	riskFreeRate := p.RiskFreeRate
-
-	// Phase 4: Beta improvements — Blume adjustment + unlever/relever.
-	// Track each beta stage so we can include all values in the stage-6 "wacc" trace.
-	rawBeta := beta
-	blumeBeta := wacc.BlumeAdjustedBeta(beta)
-	beta = blumeBeta
-	unleveredBeta := blumeBeta // default: same as blume if no relever conditions met
-	releveredBeta := blumeBeta // default: same as blume if no relever conditions met
-
-	// Unlever beta to remove capital structure effect, then relever at current D/E.
-	// For a single company this is near-identity, but it normalizes extreme D/E betas
-	// and prepares the pipeline for industry-average beta comparison.
-	// DC-1 Phase 4 (C-4 / B3 routing flip): WACC capital-structure inputs read
-	// Restated().InterestBearingDebt + Restated().InterestExpense. After C-4
-	// deletes the B1/B2/B3 dispatcher dual-writes (below),
-	// Restated().InterestBearingDebt is the parser-stamped value with NO B-rule
-	// inflation — B1+B2+B3 amounts flow ONLY into InvestedCapital().DebtLikeClaims
-	// (the EV→Equity bridge), NOT into the capital-structure denominator. This
-	// is the substantive accuracy correction: contingent/lease/pension claims
-	// are shareholder claims, not interest-bearing capital. C6 capitalized
-	// interest restates InterestExpense via the Restated view.
-	//
-	// CF-2 (T5): the Hamada unlever/relever tax shield reads the resolved
-	// p.TaxRate (was latestFinancialData.TaxRate) so a tax_rate override moves the
-	// beta-ladder tax shield COHERENTLY with WACC (which already reads p.TaxRate at
-	// the cost-of-debt step). DEFAULT-PATH BYTE-IDENTICAL: with no tax override
-	// p.TaxRate == latestFinancialData.TaxRate, so the unlevered / relevered betas
-	// — and thus WACC — are unchanged bit-for-bit. TaxRate is not Restater-touched
-	// (and not a view field), which is why the resolver's default source for it is
-	// the entity read.
-	waccRestated := restatedViewOr(cleaned, latestFinancialData)
-	marketEquity := marketData.CalculateMarketValue()
-	if marketEquity > 0 && waccRestated.InterestBearingDebt > 0 {
-		debtEquityRatio := waccRestated.InterestBearingDebt / marketEquity
-		unleveredBeta = wacc.UnleveredBeta(blumeBeta, p.TaxRate, debtEquityRatio)
-		releveredBeta = wacc.RelleveredBeta(unleveredBeta, p.TaxRate, debtEquityRatio)
-		beta = releveredBeta
-	}
-
-	s.log(ctx).Debug("Beta adjustments applied",
-		zap.String("ticker", historicalData.Ticker),
-		zap.Float64("raw_beta", rawBeta),
-		zap.Float64("adjusted_beta", beta))
-
-	// Phase 4: Look up country risk premium for international / ADR companies.
-	// US-domiciled companies get CRP = 0, so the formula is backward-compatible.
-	countryCode := GetCountryForTicker(historicalData.Ticker)
-	countryRiskPremium := GetCountryRiskPremium(s.countryRiskMap, countryCode)
-	if countryRiskPremium > 0 {
-		s.log(ctx).Info("Country risk premium applied",
-			zap.String("ticker", historicalData.Ticker),
-			zap.String("country", countryCode),
-			zap.Float64("crp", countryRiskPremium))
-	}
-
-	// Calculate WACC (with CRP for international companies)
-	waccInputs := wacc.Inputs{
-		RiskFreeRate:        riskFreeRate,        // p.RiskFreeRate (S4)
-		MarketRiskPremium:   p.MarketRiskPremium, // S4: was macroData.MarketRiskPremium
-		Beta:                beta,                // p.Beta, after the Blume/relever ladder (S4)
-		CountryRiskPremium:  countryRiskPremium,
-		MarketValueOfEquity: marketData.CalculateMarketValue(),
-		MarketValueOfDebt:   waccRestated.InterestBearingDebt, // B-rules NO LONGER feed this (B3 flip realized)
-		InterestExpense:     waccRestated.InterestExpense,     // C6 restater touches this
-		TaxRate:             p.TaxRate,                        // S6/R6: was latestFinancialData.TaxRate (coherent tax override)
-	}
-
-	waccResult, err := wacc.Calculate(waccInputs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate WACC: %w", err)
-	}
-
-	// Record WACC calculation metric
-	s.metricsService.IncWACCCalculations()
-	s.metricsService.SetAverageWACC(waccResult.WACC)
-
-	// Stage 6 — "wacc" calc trace: emit every WACC component so operators can audit
-	// the cost-of-capital build-up (beta ladder, risk premiums, debt cost, final rate).
-	se.calc("wacc",
-		zap.String("ticker", historicalData.Ticker),
-		zap.Float64("rf", riskFreeRate),
-		zap.Float64("beta_raw", rawBeta),
-		zap.Float64("beta_blume", blumeBeta),
-		zap.Float64("beta_unlevered", unleveredBeta),
-		zap.Float64("beta_relevered", releveredBeta),
-		zap.Float64("erp", p.MarketRiskPremium), // S4: the ERP actually fed to WACC
-		zap.Float64("crp", countryRiskPremium),
-		zap.Float64("tax_rate", p.TaxRate), // S6: the tax rate actually fed to WACC
-		zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
-		zap.Float64("wacc", waccResult.WACC),
-	)
-
-	// Tier-1 narrate: wacc.computed. Spec §5 row 13 fields. Carries the
-	// final WACC and the major inputs so a reader can sanity-check it.
-	narrate.From(ctx).Emit(ctx, narrate.PhaseWACCComputed, narrate.OutcomeOK, "",
-		zap.Float64("cost_of_equity", waccResult.CostOfEquity),
-		zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
-		zap.Float64("weight_equity", waccResult.WeightOfEquity),
-		zap.Float64("wacc", waccResult.WACC),
-		zap.Bool("country_premium_applied", countryRiskPremium > 0),
-	)
-	// Tier-3 artifact bundle: snapshot WACC inputs + result.
-	if b := artifact.From(ctx); b != nil {
-		b.Snapshot(ctx, "wacc.computed", "13-wacc.json", map[string]any{
-			"inputs":         waccInputs,
-			"result":         waccResult,
-			"raw_beta":       rawBeta,
-			"blume_beta":     blumeBeta,
-			"unlevered_beta": unleveredBeta,
-			"relevered_beta": releveredBeta,
-		})
-	}
-
-	// Terminal growth (S1): finalize against the COMPUTED WACC via the params
-	// resolver. ResolveTerminal's auto-derive path is a byte-identical port of the
-	// legacy calculateTerminalGrowthRate (same cap 0.03, floor 0.02, WACC-2% spread,
-	// 0.01 degenerate floor) — see params/resolve.go. historicalCAGR is the same
-	// growthEstimate.SummaryGrowthRate() the legacy call used.
-	if err := params.ResolveTerminal(&p, waccResult.WACC, growthEstimate.SummaryGrowthRate()); err != nil {
-		// Propagate the typed *params.ParamError (e.g. explicit terminal_growth_rate
-		// >= WACC) so the handler maps it to 422 (T8). Default path never errors.
-		return nil, err
-	}
-	terminalGrowthRate := p.TerminalGrowthRate
-	growthEstimate.TerminalGrowthRate = terminalGrowthRate
-
-	// Select the appropriate valuation model based on industry and financials.
-	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace;
-	// ticker is threaded in so that trace entry carries it self-describingly (M-1a).
-	// DC-1 Phase 4 (C-3): the router's negative-OI routing reads the Restated
-	// view so model selection reflects restated earnings.
-	selectedModel := s.modelRouter.SelectModel(ctx, historicalData.Ticker, industryCode, restatedViewOr(cleaned, latestFinancialData))
-
-	// Tier-1 narrate: model.selected. Spec §5 row 14 fields. Reason is
-	// intentionally coarse — full reasoning lives in the calclog
-	// model_selection trace which fires from inside SelectModel.
-	{
-		modelName := "none"
-		reason := "no model registered"
-		if selectedModel != nil {
-			modelName = selectedModel.ModelType()
-			reason = "router selection"
-		}
-		narrate.From(ctx).Emit(ctx, narrate.PhaseModelSelected, narrate.OutcomeOK, "",
-			zap.String("model", modelName),
-			zap.String("reason", reason),
-		)
-		if b := artifact.From(ctx); b != nil {
-			b.Snapshot(ctx, "model.selected", "14-model-selection.json", map[string]any{
-				"model":         modelName,
-				"reason":        reason,
-				"industry_code": industryCode,
-			})
-		}
-	}
+	overrides := v.overrides
+	growthEstimate := v.growthEstimate
+	latestFinancialData := v.latestFinancialData
+	latestPeriod := v.latestPeriod
+	tangibleValuePerShare := v.tangibleValuePerShare
+	industryCode := v.industryCode
+	sicLabel := v.sicLabel
+	heuristicCode := v.heuristicCode
+	heuristicName := v.heuristicName
+	sharesOutstanding := v.sharesOutstanding
+	resolvedProfile := v.resolvedProfile
+	resolutionTrace := v.resolutionTrace
+	guidanceResolution := v.guidanceResolution
+	hasOverrides := v.hasOverrides
+	industryExitMultiple := v.industryExitMultiple
+	p := v.p
+	selectedModel := v.selectedModel
+	waccRestated := v.waccRestated
+	terminalGrowthRate := v.terminalGrowthRate
+	waccResult := v.waccResult
 
 	var dcfFallbackWarning string
 
@@ -1855,6 +1402,539 @@ func (s *Service) performValuation(
 	}
 
 	return result, nil
+}
+
+// resolveValuationInputs runs validation-adjacent setup through model
+// selection — stages A–N of the original performValuation (growth estimate,
+// industry classification, AssumptionProfile + guidance resolution, params
+// resolution, the beta ladder + WACC, terminal-growth finalization, and model
+// selection). It mutates v in place; read-order is byte-identical to the
+// original 711–1196. WACC is computed inline here (extracted to computeWACC in a
+// later commit at the same line position).
+func (s *Service) resolveValuationInputs(ctx context.Context, v *valuationCtx) error {
+	historicalData := v.historicalData
+	marketData := v.marketData
+	macroData := v.macroData
+	opts := v.opts
+	cleaned := v.cleaned
+	se := s.newStageEmitter(ctx)
+
+	// Calculate historical growth rate from SEC data.
+	historicalGrowth, err := historicalData.CalculateAverageGrowthRate(5)
+	if err != nil {
+		historicalGrowth = &growth.CalculationResult{
+			GrowthRate:  s.config.Valuation.DefaultTerminalGrowthCap,
+			Method:      "default",
+			DataQuality: "low",
+			IsReliable:  false,
+		}
+	}
+
+	// Fetch analyst consensus estimates with caching (optional, degrades gracefully).
+	// Cached separately with 7-day TTL since analyst estimates change infrequently.
+	analystData := s.getAnalystEstimates(ctx, historicalData.Ticker)
+
+	// Calculate ROIC-sustainable growth ceiling
+	sustainableGrowth := 0.0
+	latestForROIC, _ := historicalData.GetLatestPeriod()
+	if latestForROIC != nil {
+		// DC-1 Phase 4 (C-2): ROIC NOPAT numerator and invested-capital
+		// denominator both read the Restated() view so the ratio stays
+		// coherent under earnings/equity restatements (C1-C7 touch
+		// NormalizedOperatingIncome; A2/A4/A5 EquityOffsets touch
+		// StockholdersEquity). Mixing Restated NOPAT with as-reported equity
+		// would inflate ROIC for any company with impairments. TaxRate and
+		// CashAndCashEquivalents are NOT Restater-touched today and stay on
+		// the legacy entity read. cleaned may be nil on test/no-cleaner paths
+		// — fall back to the legacy direct reads then.
+		roicView := restatedViewOr(cleaned, latestForROIC)
+		nopat := roicView.NormalizedOperatingIncome * (1 - latestForROIC.TaxRate)
+		investedCapital := growth.CalculateInvestedCapital(
+			roicView.StockholdersEquity,
+			roicView.InterestBearingDebt,
+			latestForROIC.CashAndCashEquivalents,
+		)
+		sustainableGrowth = growth.CalculateSustainableGrowth(nopat, investedCapital, s.growthEstimator.Config().DefaultPayoutRatio)
+	}
+
+	// --- Request-valuation-overrides (T5/S3): per-request growth estimator. ---
+	//
+	// §3.7 ordering: the estimator's staging config (stage1/2/3, max, min) must be
+	// resolved BEFORE the estimator runs, but ResolveInputs runs later (after the
+	// estimate, when growthRateLen is known). So we normalize the request Overrides
+	// here and, ONLY when a staging/min/max knob is overridden, build a per-request
+	// estimator with the overridden config. When NO such override is present we
+	// reuse the shared s.growthEstimator EXACTLY as before — the fast/default path
+	// is untouched and byte-identical.
+	//
+	// The Overrides carrier is normalized once here (legacy OverrideBeta/RiskFree
+	// folded in idempotently) and reused below for ResolveInputs, so the two never
+	// diverge on which knobs the request set.
+	overrides := s.normalizeOverrides(opts)
+
+	// estimator selects the Estimator used for THIS request's growth estimate.
+	// Default: the shared, pre-built s.growthEstimator (no allocation, no behavior
+	// change). Override: a per-request Estimator (see growthEstimatorFor).
+	estimator := s.growthEstimator
+	if overridesAffectEstimator(overrides) {
+		// Layer-2 pre-check (T2 ValidateEstimatorConfig): reject an invalid staging
+		// config (min > max, or stage-sum < 1) BEFORE the estimator runs, so it never
+		// executes with a nonsensical config. ResolveInputs re-asserts the same
+		// invariants idempotently afterwards. Propagate the typed *params.ParamError
+		// so the handler maps it to 422 (T8); never a 500.
+		if err := params.ValidateEstimatorConfig(s.estimatorDefaults(), overrides); err != nil {
+			return err
+		}
+		estimator = s.growthEstimatorFor(overrides)
+	}
+
+	// Produce multi-stage growth estimate (analyst + historical blend).
+	// ctx is passed through so EstimateGrowthRates can emit stage-5 "growth" trace.
+	// Ticker is threaded in so the emitted trace carries it self-describingly (M-1a).
+	growthEstimate := estimator.EstimateGrowthRates(ctx, historicalData.Ticker, analystData, historicalGrowth, sustainableGrowth)
+
+	// Tier-1 narrate: growth.estimated. Spec §5 row 12 fields. Reports
+	// year-1 + terminal growth and the actual analyst/historical blend
+	// weights the estimator applied. G-1 (closed 2026-05-23): weights now
+	// reflect the real per-analyst-count bucket (e.g. 0.80/0.20 for n>=10,
+	// 0.0/1.0 when no analyst coverage) rather than a coarse 0.5/0.5 flag.
+	{
+		gYear1 := 0.0
+		if rates := growthEstimate.ProjectedGrowthRates; len(rates) > 0 {
+			gYear1 = rates[0]
+		}
+		gOutcome := narrate.OutcomeOK
+		if !historicalGrowth.IsReliable {
+			gOutcome = narrate.OutcomePartial
+		}
+		narrate.From(ctx).Emit(ctx, narrate.PhaseGrowthEstimated, gOutcome, "",
+			zap.Int("stage_count", len(growthEstimate.ProjectedGrowthRates)),
+			zap.Float64("analyst_weight", growthEstimate.AnalystWeight),
+			zap.Float64("historical_weight", growthEstimate.HistoricalWeight),
+			zap.Float64("g_year_1", gYear1),
+			zap.Float64("g_terminal", growthEstimate.TerminalGrowthRate),
+		)
+		if b := artifact.From(ctx); b != nil {
+			b.Snapshot(ctx, "growth.estimated", "12-growth-curve.json", growthEstimate)
+			b.AddSchemaVersion("GrowthEstimate", 1)
+		}
+	}
+
+	// Get the latest financial data for asset calculations
+	latestFinancialData, latestPeriod := historicalData.GetLatestPeriod()
+	if latestFinancialData == nil {
+		return fmt.Errorf("%w: no latest financial data available", ErrInsufficientData)
+	}
+
+	// Calculate tangible value per share
+	// DC-1 Phase 4 (C-5): tangible value reads the AsReported view's
+	// TangibleAssets (identity-copied parser value — see the helper's godoc for
+	// why AsReported, not Restated).
+	tangibleValuePerShare := s.calculateTangibleValuePerShare(asReportedViewOr(cleaned, latestFinancialData), marketData)
+
+	// --- Phase 3: Industry-aware model selection ---
+	industryCode, sicLabel, heuristicCode, heuristicName := s.classifyTickerIndustry(ctx, historicalData, latestFinancialData)
+
+	// Resolve shares outstanding (needed by both DCF and alternative models)
+	// Priority: diluted (most conservative) > market basic (most current) > financial basic
+	sharesOutstanding := latestFinancialData.DilutedSharesOutstanding
+	if sharesOutstanding <= 0 {
+		sharesOutstanding = marketData.SharesOutstanding
+	}
+	if sharesOutstanding <= 0 {
+		sharesOutstanding = latestFinancialData.SharesOutstanding
+	}
+	if sharesOutstanding <= 0 {
+		return fmt.Errorf("%w: shares outstanding not available", ErrInsufficientData)
+	}
+
+	// --- Tier 2 P0b: resolve the AssumptionProfile from current request facts. ---
+	//
+	// Pure deterministic resolution from a neutral Facts DTO; replay determinism
+	// preserved (no time.Now(), no I/O). Failure modes:
+	//   - unknown industry  → conservative software_like_scaling fallback;
+	//                         trace.Source=SourceFallback surfaces the choice
+	//   - nil registry      → skip resolution entirely (test-only path); model
+	//                         consumers receive ModelInput.Profile=nil and take
+	//                         their legacy branches — byte-identical responses
+	//   - malformed config  → would have failed startup (fx.Provide bubbles up
+	//                         the LoadFromJSON error)
+	//
+	// All downstream consumers are NO-OP in P0b — the field is declared and
+	// stamped onto the bundle + response, but model code reads it in P1-P4.
+	// This is intentional: P0b only ships the plumbing so P1-P4 land cleanly.
+	var resolvedProfile *profile.ResolvedProfile
+	var resolutionTrace profile.ResolutionTrace
+	if s.profileRegistry != nil {
+		// Build Facts from in-scope entities. Pointer types distinguish "no
+		// signal" (nil) from "zero is meaningful" (non-nil pointer to zero);
+		// see profile/facts.go for the contract. A truly pre-revenue ticker
+		// (Revenue==0 AND OperatingIncome==0) gets Revenue=nil so the
+		// resolver's Stage-2 maturity bucketing falls through to the
+		// "no_revenue_signal" branch instead of misclassifying as ultra-mature.
+		// DC-1 Phase 4 (C-3): NOPAT-fallback guard + OI/NI facts read the
+		// Restated view (earnings restatements C1-C7 touch
+		// NormalizedOperatingIncome). Revenue is NOT Restater-touched and
+		// stays on the entity. NetIncome is not Restater-touched today either,
+		// but reads the view for coherence + forward-compatibility (§4.2.2).
+		factsRestated := restatedViewOr(cleaned, latestFinancialData)
+		var revenuePtr *float64
+		if !(latestFinancialData.Revenue == 0 && factsRestated.NormalizedOperatingIncome == 0) {
+			v := latestFinancialData.Revenue
+			revenuePtr = &v
+		}
+		oiVal := factsRestated.OperatingIncome
+		niVal := factsRestated.NetIncome
+		facts := profile.Facts{
+			Industry:           industryCode,
+			IndustryNormalized: strings.ToUpper(strings.TrimSpace(industryCode)),
+			Revenue:            revenuePtr,
+			OperatingIncome:    &oiVal,
+			NetIncome:          &niVal,
+			// RevenueGrowthYoY uses the FY-key-sorted helper (Tier 2 P0b
+			// entity addition) so the result is deterministic even when
+			// FilingDate isn't stamped on every period.
+			RevenueGrowthYoY: historicalData.RecentYoYGrowth(),
+		}
+		resolvedProfile, resolutionTrace = s.profileRegistry.Resolve(facts)
+
+		s.log(ctx).Debug("AssumptionProfile resolved",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("profile_id", resolutionTrace.ProfileID),
+			zap.String("source", string(resolutionTrace.Source)),
+			zap.String("matched_rule_id", resolutionTrace.MatchedRuleID),
+		)
+
+		// Tier-3 artifact bundle: stamp the resolved profile + trace so
+		// replay tooling can short-circuit to the captured snapshot for
+		// perfect determinism (spec §3.3, §7.3). Nil-safe via the bundle's
+		// own nil-receiver guard.
+		if resolvedProfile != nil {
+			snapshot := resolvedProfile.AssumptionProfile
+			artifact.From(ctx).SetAssumptionProfileManifest(ctx, profile.AssumptionProfileManifest{
+				ProfileID:        resolvedProfile.ProfileID,
+				Source:           resolutionTrace.Source,
+				ResolverVersion:  resolutionTrace.ResolverVersion,
+				ConfigVersion:    resolutionTrace.ConfigVersion,
+				ConfigHash:       resolutionTrace.ConfigHash,
+				ResolvedSnapshot: &snapshot,
+				Trace:            resolutionTrace,
+			})
+		}
+	}
+
+	// --- Layer B Phase 2: resolve guidance + assumption authority. ---
+	//
+	// Runs AFTER profile resolution and BEFORE DCF-input construction (spec
+	// §"data-flow placement"). The loader is keyed by (CIK, as-of=s.clock.Now()):
+	// the existing Clock seam pins replay determinism (replay binds the clock to
+	// manifest.started_at). On the PRODUCTION default (empty GuidanceRoot) the
+	// loader returns Absent ⇒ no anchors ⇒ the DCF path below is byte-identical
+	// to the Layer-A 4.7 engine (NF1 — the master invariant).
+	//
+	// UserOverriddenKnobs is empty in Phase 2 (params carries no per-near-term-
+	// knob override yet), but is threaded so the §9 level-1 precedence is
+	// structurally correct and future-proof. A content-hash MISMATCH on a present
+	// fixture propagates as a hard error (F2); every other fixture failure
+	// degrades to the absent path inside the resolver (NF4).
+	guidanceResolution, err := s.resolveGuidance(ctx, latestFinancialData.CIK, s.clock.Now(), resolvedProfile, nil)
+	if err != nil {
+		return fmt.Errorf("guidance resolution failed: %w", err)
+	}
+
+	// --- Request-valuation-overrides (T4): resolve the EffectiveValuationParams. ---
+	//
+	// §3.7 ordering: the WACC-independent knobs (beta/rf/MRP/tax, growth staging,
+	// horizon, terminal method/multiple) are resolved HERE — after the growth
+	// estimate (growthRateLen known) and after industry + profile resolution (the
+	// industry exit-multiple default + profile horizon/method/multiple feed the
+	// Defaults). Terminal growth is finalized in ResolveTerminal AFTER WACC.
+	//
+	// PRIME DIRECTIVE: on the default path (empty Overrides) every resolved value
+	// equals today's source read, so WACC + DCF are byte-identical. The Defaults
+	// below project the EXACT legacy sources the old code read inline.
+	hasOverrides := opts.hasAnyOverride()
+
+	// opts may be nil (e.g. internal/scheduler callers, tests). hasAnyOverride is
+	// nil-safe; the Overrides carrier itself must be read through a nil guard.
+	// A zero-value params.Overrides has all-nil pointer fields, so the resolver
+	// takes every default — preserving the legacy nil-opts behavior exactly.
+	//
+	// `overrides` was already normalized above (before the growth estimate) by
+	// s.normalizeOverrides — including folding the legacy OverrideBeta/RiskFree
+	// scalars into the carrier — and is reused here so the estimator-selection
+	// path and the resolver path never diverge on which knobs the request set.
+
+	// growthRateLen mirrors the legacy projectionYears computation
+	// (len(growthEstimate.ProjectedGrowthRates), with the 0→5 fallback) so the
+	// resolver's horizon-vs-length clamp matches the pre-T4 silent clamp exactly.
+	growthRateLen := len(growthEstimate.ProjectedGrowthRates)
+	if growthRateLen == 0 {
+		growthRateLen = 5 // fallback (mirrors the legacy projectionYears == 0 → 5)
+	}
+
+	// IndustryExitMultiple is the same industry EV/EBITDA lookup the legacy
+	// exit-multiple block performed inline; 0 when no industry default exists.
+	var industryExitMultiple float64
+	if s.industryMultiples != nil && s.industryMultiples.EVEBITDAMultiples != nil {
+		industryExitMultiple = LookupMultiple(s.industryMultiples.EVEBITDAMultiples, industryCode)
+	}
+
+	// Profile-derived knob baselines: pass through ONLY when the resolved profile
+	// carries a value, exactly mirroring the legacy gates at service.go (horizon:
+	// `resolvedProfile != nil && resolvedProfile.HorizonYears > 0`; method:
+	// `resolvedProfile.TerminalMethod != ""`). The resolver re-applies the same
+	// >0 / != "" gating internally, so passing zero/"" is a no-op default.
+	var profileHorizonYears int
+	var profileTerminalMethod string
+	var profileTerminalMultiple float64
+	if resolvedProfile != nil {
+		profileHorizonYears = resolvedProfile.HorizonYears
+		profileTerminalMethod = string(resolvedProfile.TerminalMethod)
+		profileTerminalMultiple = resolvedProfile.TerminalMultiple
+	}
+
+	// Estimator stage years: the configured stages of the estimator that ACTUALLY
+	// ran this request (shared default 3/4/0, OR the per-request override config
+	// when staging/min/max was overridden — T5/S3). Feeding the resolver the same
+	// estimator's config keeps the resolved Stage*/Max/Min in lock-step with the
+	// growth slice the estimator just produced. On the default path estimator ==
+	// s.growthEstimator, so this is byte-identical to T4.
+	estCfg := estimator.Config()
+
+	// VAL-1 Phase 2 (D2): the legacy default-sourced horizon = growthRateLen with the
+	// Phase-2-injected shared Stage3 removed, so an un-profiled / no-override ticker
+	// keeps its pre-Phase-2 horizon (7 for the shared 3/4 estimator) even though the
+	// shared slice is now longer. We subtract estimatorInjectedStage3 ONLY when the
+	// request did not explicitly override stage3_years — a request-chosen Stage3 is a
+	// legitimate caller staging choice that was honored pre-Phase-2 too, so it must
+	// flow into growthRateLen unaltered. The resolver uses this value only on the
+	// default-sourced branch; profile/request horizons win via the precedence chain
+	// and are validated against the real (longer) growthRateLen.
+	legacyDefaultHorizon := growthRateLen
+	if overrides.Stage3Years == nil && s.estimatorInjectedStage3 > 0 {
+		legacyDefaultHorizon = max(0, growthRateLen-s.estimatorInjectedStage3)
+	}
+
+	resolverDefaults := params.Defaults{
+		TerminalGrowthCap: s.config.Valuation.DefaultTerminalGrowthCap,
+		MaxGrowthRate:     s.config.Valuation.DCFMaxGrowthRate,
+		MinGrowthRate:     s.config.Valuation.DCFMinGrowthRate,
+		Stage1Years:       estCfg.Stage1Years,
+		Stage2Years:       estCfg.Stage2Years,
+		Stage3Years:       estCfg.Stage3Years,
+
+		LegacyDefaultHorizonYears: legacyDefaultHorizon,
+
+		// WACC inputs + tax — the EXACT legacy default sources.
+		Beta:              marketData.GetEffectiveBeta(),
+		RiskFreeRate:      macroData.GetEffectiveRiskFreeRate(),
+		MarketRiskPremium: macroData.MarketRiskPremium,
+		TaxRate:           latestFinancialData.TaxRate,
+
+		ProfileHorizonYears:     profileHorizonYears,
+		ProfileTerminalMethod:   profileTerminalMethod,
+		ProfileTerminalMultiple: profileTerminalMultiple,
+		IndustryExitMultiple:    industryExitMultiple,
+	}
+
+	p, err := params.ResolveInputs(resolverDefaults, overrides, growthRateLen)
+	if err != nil {
+		// Propagate the typed *params.ParamError so the handler can map it to 422
+		// (T8). Never swallow — a cross-knob violation is a caller error, not a 500.
+		return err
+	}
+
+	// Determine beta and risk-free rate from the resolved params (S4). On the
+	// default path p.Beta == marketData.GetEffectiveBeta() and
+	// p.RiskFreeRate == macroData.GetEffectiveRiskFreeRate(), so WACC is unchanged.
+	beta := p.Beta
+	riskFreeRate := p.RiskFreeRate
+
+	// Phase 4: Beta improvements — Blume adjustment + unlever/relever.
+	// Track each beta stage so we can include all values in the stage-6 "wacc" trace.
+	rawBeta := beta
+	blumeBeta := wacc.BlumeAdjustedBeta(beta)
+	beta = blumeBeta
+	unleveredBeta := blumeBeta // default: same as blume if no relever conditions met
+	releveredBeta := blumeBeta // default: same as blume if no relever conditions met
+
+	// Unlever beta to remove capital structure effect, then relever at current D/E.
+	// For a single company this is near-identity, but it normalizes extreme D/E betas
+	// and prepares the pipeline for industry-average beta comparison.
+	// DC-1 Phase 4 (C-4 / B3 routing flip): WACC capital-structure inputs read
+	// Restated().InterestBearingDebt + Restated().InterestExpense. After C-4
+	// deletes the B1/B2/B3 dispatcher dual-writes (below),
+	// Restated().InterestBearingDebt is the parser-stamped value with NO B-rule
+	// inflation — B1+B2+B3 amounts flow ONLY into InvestedCapital().DebtLikeClaims
+	// (the EV→Equity bridge), NOT into the capital-structure denominator. This
+	// is the substantive accuracy correction: contingent/lease/pension claims
+	// are shareholder claims, not interest-bearing capital. C6 capitalized
+	// interest restates InterestExpense via the Restated view.
+	//
+	// CF-2 (T5): the Hamada unlever/relever tax shield reads the resolved
+	// p.TaxRate (was latestFinancialData.TaxRate) so a tax_rate override moves the
+	// beta-ladder tax shield COHERENTLY with WACC (which already reads p.TaxRate at
+	// the cost-of-debt step). DEFAULT-PATH BYTE-IDENTICAL: with no tax override
+	// p.TaxRate == latestFinancialData.TaxRate, so the unlevered / relevered betas
+	// — and thus WACC — are unchanged bit-for-bit. TaxRate is not Restater-touched
+	// (and not a view field), which is why the resolver's default source for it is
+	// the entity read.
+	waccRestated := restatedViewOr(cleaned, latestFinancialData)
+	marketEquity := marketData.CalculateMarketValue()
+	if marketEquity > 0 && waccRestated.InterestBearingDebt > 0 {
+		debtEquityRatio := waccRestated.InterestBearingDebt / marketEquity
+		unleveredBeta = wacc.UnleveredBeta(blumeBeta, p.TaxRate, debtEquityRatio)
+		releveredBeta = wacc.RelleveredBeta(unleveredBeta, p.TaxRate, debtEquityRatio)
+		beta = releveredBeta
+	}
+
+	s.log(ctx).Debug("Beta adjustments applied",
+		zap.String("ticker", historicalData.Ticker),
+		zap.Float64("raw_beta", rawBeta),
+		zap.Float64("adjusted_beta", beta))
+
+	// Phase 4: Look up country risk premium for international / ADR companies.
+	// US-domiciled companies get CRP = 0, so the formula is backward-compatible.
+	countryCode := GetCountryForTicker(historicalData.Ticker)
+	countryRiskPremium := GetCountryRiskPremium(s.countryRiskMap, countryCode)
+	if countryRiskPremium > 0 {
+		s.log(ctx).Info("Country risk premium applied",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("country", countryCode),
+			zap.Float64("crp", countryRiskPremium))
+	}
+
+	// Calculate WACC (with CRP for international companies)
+	waccInputs := wacc.Inputs{
+		RiskFreeRate:        riskFreeRate,        // p.RiskFreeRate (S4)
+		MarketRiskPremium:   p.MarketRiskPremium, // S4: was macroData.MarketRiskPremium
+		Beta:                beta,                // p.Beta, after the Blume/relever ladder (S4)
+		CountryRiskPremium:  countryRiskPremium,
+		MarketValueOfEquity: marketData.CalculateMarketValue(),
+		MarketValueOfDebt:   waccRestated.InterestBearingDebt, // B-rules NO LONGER feed this (B3 flip realized)
+		InterestExpense:     waccRestated.InterestExpense,     // C6 restater touches this
+		TaxRate:             p.TaxRate,                        // S6/R6: was latestFinancialData.TaxRate (coherent tax override)
+	}
+
+	waccResult, err := wacc.Calculate(waccInputs)
+	if err != nil {
+		return fmt.Errorf("failed to calculate WACC: %w", err)
+	}
+
+	// Record WACC calculation metric
+	s.metricsService.IncWACCCalculations()
+	s.metricsService.SetAverageWACC(waccResult.WACC)
+
+	// Stage 6 — "wacc" calc trace: emit every WACC component so operators can audit
+	// the cost-of-capital build-up (beta ladder, risk premiums, debt cost, final rate).
+	se.calc("wacc",
+		zap.String("ticker", historicalData.Ticker),
+		zap.Float64("rf", riskFreeRate),
+		zap.Float64("beta_raw", rawBeta),
+		zap.Float64("beta_blume", blumeBeta),
+		zap.Float64("beta_unlevered", unleveredBeta),
+		zap.Float64("beta_relevered", releveredBeta),
+		zap.Float64("erp", p.MarketRiskPremium), // S4: the ERP actually fed to WACC
+		zap.Float64("crp", countryRiskPremium),
+		zap.Float64("tax_rate", p.TaxRate), // S6: the tax rate actually fed to WACC
+		zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
+		zap.Float64("wacc", waccResult.WACC),
+	)
+
+	// Tier-1 narrate: wacc.computed. Spec §5 row 13 fields. Carries the
+	// final WACC and the major inputs so a reader can sanity-check it.
+	narrate.From(ctx).Emit(ctx, narrate.PhaseWACCComputed, narrate.OutcomeOK, "",
+		zap.Float64("cost_of_equity", waccResult.CostOfEquity),
+		zap.Float64("cost_of_debt", waccResult.CostOfDebtAfterTax),
+		zap.Float64("weight_equity", waccResult.WeightOfEquity),
+		zap.Float64("wacc", waccResult.WACC),
+		zap.Bool("country_premium_applied", countryRiskPremium > 0),
+	)
+	// Tier-3 artifact bundle: snapshot WACC inputs + result.
+	if b := artifact.From(ctx); b != nil {
+		b.Snapshot(ctx, "wacc.computed", "13-wacc.json", map[string]any{
+			"inputs":         waccInputs,
+			"result":         waccResult,
+			"raw_beta":       rawBeta,
+			"blume_beta":     blumeBeta,
+			"unlevered_beta": unleveredBeta,
+			"relevered_beta": releveredBeta,
+		})
+	}
+
+	// Terminal growth (S1): finalize against the COMPUTED WACC via the params
+	// resolver. ResolveTerminal's auto-derive path is a byte-identical port of the
+	// legacy calculateTerminalGrowthRate (same cap 0.03, floor 0.02, WACC-2% spread,
+	// 0.01 degenerate floor) — see params/resolve.go. historicalCAGR is the same
+	// growthEstimate.SummaryGrowthRate() the legacy call used.
+	if err := params.ResolveTerminal(&p, waccResult.WACC, growthEstimate.SummaryGrowthRate()); err != nil {
+		// Propagate the typed *params.ParamError (e.g. explicit terminal_growth_rate
+		// >= WACC) so the handler maps it to 422 (T8). Default path never errors.
+		return err
+	}
+	terminalGrowthRate := p.TerminalGrowthRate
+	growthEstimate.TerminalGrowthRate = terminalGrowthRate
+
+	// Select the appropriate valuation model based on industry and financials.
+	// ctx is passed through so SelectModel emits stage-4 "model_selection" trace;
+	// ticker is threaded in so that trace entry carries it self-describingly (M-1a).
+	// DC-1 Phase 4 (C-3): the router's negative-OI routing reads the Restated
+	// view so model selection reflects restated earnings.
+	selectedModel := s.modelRouter.SelectModel(ctx, historicalData.Ticker, industryCode, restatedViewOr(cleaned, latestFinancialData))
+
+	// Tier-1 narrate: model.selected. Spec §5 row 14 fields. Reason is
+	// intentionally coarse — full reasoning lives in the calclog
+	// model_selection trace which fires from inside SelectModel.
+	{
+		modelName := "none"
+		reason := "no model registered"
+		if selectedModel != nil {
+			modelName = selectedModel.ModelType()
+			reason = "router selection"
+		}
+		narrate.From(ctx).Emit(ctx, narrate.PhaseModelSelected, narrate.OutcomeOK, "",
+			zap.String("model", modelName),
+			zap.String("reason", reason),
+		)
+		if b := artifact.From(ctx); b != nil {
+			b.Snapshot(ctx, "model.selected", "14-model-selection.json", map[string]any{
+				"model":         modelName,
+				"reason":        reason,
+				"industry_code": industryCode,
+			})
+		}
+	}
+
+	// --- Write resolved inputs back onto the carrier (SR-1 A7). ---
+	v.overrides = overrides
+	v.growthEstimate = growthEstimate
+	v.latestFinancialData = latestFinancialData
+	v.latestPeriod = latestPeriod
+	v.tangibleValuePerShare = tangibleValuePerShare
+	v.industryCode = industryCode
+	v.sicLabel = sicLabel
+	v.heuristicCode = heuristicCode
+	v.heuristicName = heuristicName
+	v.sharesOutstanding = sharesOutstanding
+	v.resolvedProfile = resolvedProfile
+	v.resolutionTrace = resolutionTrace
+	v.guidanceResolution = guidanceResolution
+	v.hasOverrides = hasOverrides
+	v.industryExitMultiple = industryExitMultiple
+	v.p = p
+	v.selectedModel = selectedModel
+	v.waccRestated = waccRestated
+	v.rawBeta = rawBeta
+	v.blumeBeta = blumeBeta
+	v.unleveredBeta = unleveredBeta
+	v.releveredBeta = releveredBeta
+	v.beta = beta
+	v.riskFreeRate = riskFreeRate
+	v.countryRiskPremium = countryRiskPremium
+	v.waccResult = waccResult
+	v.terminalGrowthRate = terminalGrowthRate
+	return nil
 }
 
 // classifyTickerIndustry resolves the SIC-based industry code + the balance-sheet
