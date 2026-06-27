@@ -723,9 +723,20 @@ func (s *Service) performValuation(
 		return result, err
 	}
 
-	// Re-bind the carrier outputs needed by the still-inline assemble body below
-	// (SR-1 A7; commit 3d moves this block into assembleResult). Pure plumbing —
-	// no read reordered.
+	return s.assembleResult(ctx, v)
+}
+
+// assembleResult builds the final ValuationResult from the carrier (freshness
+// score, Graham floor, profile + DCF diagnostics, all result.Warnings appends,
+// the multiples sanity cross-check, and the Tier-3 artifact snapshot). It is a
+// pure block-move of the former inline performValuation tail (SR-1 A7) and runs
+// only on the DCF path (the alt-model path returns from runDCF). No expression
+// rewritten, no read reordered.
+func (s *Service) assembleResult(ctx context.Context, v *valuationCtx) (*entities.ValuationResult, error) {
+	historicalData := v.historicalData
+	marketData := v.marketData
+	macroData := v.macroData
+	cleaned := v.cleaned
 	se := s.newStageEmitter(ctx)
 	latestFinancialData := v.latestFinancialData
 	latestPeriod := v.latestPeriod
