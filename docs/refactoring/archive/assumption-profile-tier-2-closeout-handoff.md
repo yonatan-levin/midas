@@ -1,5 +1,7 @@
 # Tier 2 (AssumptionProfile) — Closeout Handoff
 
+> **ARCHIVED 2026-06-27 — historical point-in-time snapshot; do not treat its figures as current.** Tier 2 shipped and has since been built upon. Known drift vs current master: engine is now `CalculationVersion 4.10` (not 4.2); the `reit_commercial` archetype-id asymmetry noted in §2 was RESOLVED — renamed to `reit_office` (T2-P4-W2 items 6+7, 2026-06-26); the T2-P4-W2 deferred-followups tracker is CLOSED and archived (`docs/reviewer/archive/`). For current state read `CLAUDE.md` + `docs/THESIS.md`. Retained for the Lessons-learned (§6) and historical record.
+
 **Session window:** 2026-05-19 → 2026-05-22
 **Final master HEAD:** `3ce7ca7`
 **Status:** **TIER 2 SHIPPED ✅** — all 8 phases (Bootstrap, P0a, P0b, P1, P2, P3, P4, Closeout) + T2-P4-W1 reconciliation + defect-fixup sweep all on master with verified evidence.

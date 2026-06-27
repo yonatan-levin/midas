@@ -90,9 +90,11 @@ Lead with the rule. The **Why** lets future sessions judge edge cases. The **How
 
 ### 2026-06-04 — Use isolated git worktrees for changes, never edit on `master`
 
+> **PARTIALLY SUPERSEDED 2026-06-27 (see the 2026-06-27 entry below):** the worktree-isolation requirement still stands in full, but the **mechanism preference is reversed** — use **`git worktree add`** (portable across every agent/CLI), NOT the framework-specific `EnterWorktree` tool. Read the EnterWorktree references in this entry as historical.
+
 **Rule:** For any non-trivial change, work in an isolated **git worktree** (via the native `EnterWorktree` tool, which places it under `.claude/worktrees/`), not a plain branch in the main checkout — and never make edits on `master`'s working tree. A branch alone is insufficient; the *working tree* must be isolated. Prefer the native `EnterWorktree` tool over `git worktree add` (the `superpowers:using-git-worktrees` skill flags the latter as the wrong choice when a native tool exists).
 
-**Why:** 2026-06-04 — I made doc edits directly on `master`, then "corrected" it by creating a plain branch in the *same* main checkout. The user pointed out the project guidelines specify worktrees, not branches (`TOOLS_REFERENCE.md` row 47 → `superpowers:using-git-worktrees`; "Lesson A" in `docs/refactoring/implementations/assumption-profile-tier-2-closeout-handoff.md`). This repo runs multiple concurrent sessions/worktrees; the shared main checkout gets its branch swapped underneath a session, which has already caused replay contamination (see `docs/reviewer/archive/T2-P4-W1-classifier-prefix-mismatch.md`). A worktree isolates the working tree, not just the branch pointer.
+**Why:** 2026-06-04 — I made doc edits directly on `master`, then "corrected" it by creating a plain branch in the *same* main checkout. The user pointed out the project guidelines specify worktrees, not branches (`TOOLS_REFERENCE.md` row 47 → `superpowers:using-git-worktrees`; "Lesson A" in `docs/refactoring/archive/assumption-profile-tier-2-closeout-handoff.md`). This repo runs multiple concurrent sessions/worktrees; the shared main checkout gets its branch swapped underneath a session, which has already caused replay contamination (see `docs/reviewer/archive/T2-P4-W1-classifier-prefix-mismatch.md`). A worktree isolates the working tree, not just the branch pointer.
 
 **How to apply:**
 - At the start of any change, if `git rev-parse --git-dir` equals `--git-common-dir` (you're in the main checkout, not a linked worktree), create one with the native `EnterWorktree` tool.
@@ -163,6 +165,22 @@ location nobody browses.
 **How to apply:** All bucket-A accuracy/calibration work. Use the gap (and `EXTREME_GAP`) to *triage*; justify every engine change by an independent correctness rationale (valuation theory or a real defect), then use the gap only as corroboration. Disambiguate "bent ruler" from "real bubble" via the price-free flags: a one-sided below-market skew is the engine's fault only when those flags *also* fire; clean internals + persistent skew → believe the model. See `cmd/accuracy/README.md` §"The gap is a signal, not a target".
 
 **Source:** A/C/D re-focus — A-0 4.8 baseline session, 2026-06-20.
+
+---
+
+### 2026-06-27 — Use `git worktree add` for worktree isolation, not the framework-specific `EnterWorktree`
+
+**Rule:** The worktree-isolation requirement (2026-06-04 entry) stands, but the **mechanism is `git worktree add`** — `git worktree add ../midas-<task-slug> -b <branch> master`, do all edits/tests/commits there, fast-forward `master` from the branch, then `git worktree remove`. Do NOT use the `EnterWorktree` tool. This reverses the 2026-06-04 "prefer EnterWorktree" preference.
+
+**Why:** 2026-06-27 — the user's explicit reason: `git` is available to **every** agent/CLI, whereas `EnterWorktree` is a Claude-framework tool. Standardizing on the portable mechanism keeps the worktree discipline reproducible by any agent (other Claude sessions, other tools, a human) regardless of harness. The 2026-06-04 entry's reliance on `superpowers:using-git-worktrees` (which flags `git worktree add` as wrong "when a native tool exists") is overridden here precisely because the native tool is not universally available.
+
+**How to apply:**
+- Start of any non-trivial change: `git worktree add ../midas-<slug> -b <branch> master`; work and commit there.
+- Finish: fast-forward `master` from the branch in the main checkout, then `git worktree remove ../midas-<slug>` and delete the merged branch.
+- The forbidden `midas-dc1-phase-5-followup/` worktree exception still holds.
+- Mirrors the `CLAUDE.md` "Working model (DECIDED 2026-06-26 — MANDATORY)" convention.
+
+**Source:** User callout 2026-06-27 ("I prefer the git add tool because it's available to all agents rather than be dependent on Claude framework").
 
 ---
 
