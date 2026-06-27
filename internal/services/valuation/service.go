@@ -676,6 +676,18 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 // performValuation executes the valuation calculation logic.
 // opts may be nil; when provided, its fields override data-source values in the WACC calculation.
 //
+// SR-1 A7: performValuation is a thin orchestrator over a 3-phase pipeline,
+// each phase a method that threads intermediate state through the *valuationCtx
+// carrier (no behavior of its own):
+//   - resolveValuationInputs: validation-adjacent setup → growth estimate →
+//     industry classification → AssumptionProfile + guidance → params → the beta
+//     ladder + WACC (computeWACC) → terminal growth → model selection.
+//   - runDCF: the alt-model early-return plus the standard multi-stage DCF
+//     through the equity-value bridge. Returns done=true when an alternative
+//     (non-DCF) model produced the final result (assembleResult is then skipped).
+//   - assembleResult: freshness, Graham floor, result build + all Warnings
+//     appends, the multiples sanity cross-check, and the artifact snapshot.
+//
 // DC-1 Phase 4: cleaned carries the three-view accessor surface
 // (AsReported / Restated / InvestedCapital) over the post-clean latest-period
 // *FinancialData. It may be nil (no cleaner wired, cleaning failed, or a test
