@@ -716,13 +716,17 @@ func (s *Service) performValuation(
 		return nil, err
 	}
 
-	// Re-bind the carrier outputs produced by resolveValuationInputs as locals
-	// so the still-inline DCF / assemble body below reads byte-identically to the
-	// pre-extraction code (SR-1 A7; later commits move these blocks into runDCF /
-	// assembleResult). Pure plumbing — no read reordered.
+	// SR-1 A7: the DCF stages (alt-model early-return + standard multi-stage DCF
+	// through the equity bridge) live in runDCF. A true `done` means an alternative
+	// model produced the final result; runDCF then returns it directly.
+	if result, done, err := s.runDCF(ctx, v); err != nil || done {
+		return result, err
+	}
+
+	// Re-bind the carrier outputs needed by the still-inline assemble body below
+	// (SR-1 A7; commit 3d moves this block into assembleResult). Pure plumbing —
+	// no read reordered.
 	se := s.newStageEmitter(ctx)
-	overrides := v.overrides
-	growthEstimate := v.growthEstimate
 	latestFinancialData := v.latestFinancialData
 	latestPeriod := v.latestPeriod
 	tangibleValuePerShare := v.tangibleValuePerShare
@@ -735,378 +739,25 @@ func (s *Service) performValuation(
 	resolutionTrace := v.resolutionTrace
 	guidanceResolution := v.guidanceResolution
 	hasOverrides := v.hasOverrides
-	industryExitMultiple := v.industryExitMultiple
 	p := v.p
-	selectedModel := v.selectedModel
-	waccRestated := v.waccRestated
-	terminalGrowthRate := v.terminalGrowthRate
 	waccResult := v.waccResult
-
-	var dcfFallbackWarning string
-
-	// If an alternative model (non-DCF) is selected, use it.
-	// When the primary model fails but the company has positive OI,
-	// performAlternativeValuation returns errFallbackToDCF to signal DCF fallback.
-	if selectedModel != nil && selectedModel.ModelType() != "multi_stage_dcf" {
-		altResult, altErr := s.performAlternativeValuation(
-			ctx, selectedModel, historicalData, marketData, macroData,
-			growthEstimate, waccResult, latestFinancialData, latestPeriod,
-			tangibleValuePerShare, sharesOutstanding, industryCode,
-			resolvedProfile, cleaned, &p,
-		)
-		if errors.Is(altErr, errFallbackToDCF) {
-			s.log(ctx).Info("Falling back to standard DCF after alternative model failure",
-				zap.String("ticker", historicalData.Ticker),
-				zap.String("primary_model", selectedModel.ModelType()))
-			dcfFallbackWarning = fmt.Sprintf("Primary model (%s) could not value this company; fell back to multi_stage_dcf", selectedModel.ModelType())
-		} else if altErr != nil {
-			return nil, altErr
-		} else {
-			// Attach SIC classification metadata on the alt-model path too, so
-			// the response exposes it regardless of which valuation model ran.
-			altResult.SICCodeRaw = historicalData.SICCode
-			altResult.IndustrySIC = sicLabel
-			// W-1: heuristic GICS plumbing is also attached on the alt-model
-			// path so the API surface is identical across model selections.
-			altResult.IndustryHeuristicCode = heuristicCode
-			altResult.IndustryHeuristicName = heuristicName
-			// Tier 2 P0b: stamp the resolved profile + audit trace on the
-			// alt-model path so the response surfaces the calibration record
-			// regardless of which valuation model produced the value.
-			if resolvedProfile != nil {
-				altResult.AssumptionProfile = resolvedProfile.ProfileID
-				traceCopy := resolutionTrace
-				altResult.ResolutionTrace = &traceCopy
-			}
-			// Layer B Phase 2: surface guidance source tags + per-assumption
-			// sources on the alt-model path too. Guidance is DCF-path-only — it
-			// NEVER anchors a DDM/FFO/revenue_multiple value (those values are
-			// untouched). Both calls are strict no-ops on the absent path (empty
-			// warnings + empty Sources ⇒ omitted field), so DDM/FFO/RM responses
-			// stay byte-identical to the 4.7 engine (NF1).
-			altResult.Warnings = append(altResult.Warnings, guidanceResolution.Warnings...)
-			stampAssumptionSources(altResult, guidanceResolution.Sources)
-			return altResult, nil
-		}
-	}
-
-	// --- Standard multi-stage DCF path (existing logic) ---
-
-	// Guard: standard DCF requires positive operating income.
-	// Companies with negative OI are routed to revenue_multiple model above.
-	//
-	// DC-1 Phase 4 (C-2 signature flip / C-3 read migration): effectiveOI and
-	// the negative-OI sentinel read the Restated view so the guard matches the
-	// OI the engine actually uses after earnings restatements (C1-C7).
-	dcfRestated := restatedViewOr(cleaned, latestFinancialData)
-	baseOI := effectiveOI(dcfRestated)
-
-	// BUG-015 audit trail: the TTM source tag + lossy-path warning are surfaced
-	// on result.Warnings (mirrors RM-1's "revenue_base: ..." convention) only
-	// when the OI base was actually annualized below (quarter-latest path).
-	var ttmOperatingIncomeSource, ttmOperatingIncomeWarning string
-
-	// BUG-015: when the latest filing is a 10-Q, effectiveOI returns a SINGLE
-	// quarter of operating income (~4× too small) while the other DCF base
-	// terms — averageCapExAndDA and calculateNetWorkingCapitalChange — are
-	// already annual (GetRecentYears over FY periods). Mixing a quarterly OI
-	// base with annual D&A/CapEx/ΔNWC drives projected FCF negative for
-	// 10-Q-latest tickers (e.g. KO, AMD). Annualize ONLY the OI base via the
-	// TTM helper (TTM_4Q / prior-bridge — NOT a crude ×4, which ignores
-	// seasonality). For an FY-latest period we leave baseOI EXACTLY as
-	// effectiveOI(dcfRestated) so FY-latest tickers stay bit-for-bit (the TTM
-	// helper's FY passthrough would read the entity's NormalizedOperatingIncome
-	// rather than the Restated-view OI, which could differ when a C1-C7 Restater
-	// fired on the latest period). Mirrors RM-1's TTM revenue base.
-	//
-	// We annualize ONLY when the latest period is an explicit quarter. An
-	// unknown/malformed suffix is treated like FY (left untouched) — the
-	// conservative choice that preserves existing behavior for any non-standard
-	// period key rather than silently re-basing it.
-	if _, latestSub := parsePeriodSuffix(latestPeriod); latestSub == periodSuffixQuarter {
-		ttmOI, oiSource, oiWarning := historicalData.TrailingTwelveMonthsOperatingIncome()
-		if ttmOI > 0 {
-			baseOI = ttmOI
-			ttmOperatingIncomeSource = oiSource
-			ttmOperatingIncomeWarning = oiWarning
-			s.log(ctx).Info("Using TTM operating income for DCF base (latest filing is a quarter)",
-				zap.String("ticker", historicalData.Ticker),
-				zap.String("latest_period", latestPeriod),
-				zap.String("oi_source", oiSource),
-				zap.Float64("ttm_operating_income", ttmOI),
-				zap.Float64("single_quarter_operating_income", effectiveOI(dcfRestated)))
-		}
-	}
-
-	// VAL-1 Phase 3: cyclical-base normalization. For a cyclical archetype a
-	// trough-year base makes the projected rebound look aggressive, so the DCF
-	// base OI is floored at the 3-year FY mean (max(latest/TTM, 3y_mean)). This
-	// is applied to the baseOI scalar BEFORE the <=0 guard and BEFORE both
-	// downstream consumers (dcfInputs.BaseOperatingIncome and the Layer-A
-	// reinvestment margin seed in applyReinvestmentModel), so the normalized
-	// base flows into both DCF paths consistently. baseNormalizationMethod stays
-	// "" for non-cyclical profiles, so the diagnostic is omitempty-dropped and
-	// non-cyclical responses are byte-identical to today.
-	var baseNormalizationMethod string
-	if resolvedProfile != nil && resolvedProfile.IsCyclicalArchetype() {
-		normalizedOI, method := normalizeCyclicalBaseOI(baseOI, historicalData)
-		baseNormalizationMethod = method
-		if method == "3y_mean" {
-			s.log(ctx).Info("Cyclical-base normalization: flooring DCF base OI at 3y FY mean",
-				zap.String("ticker", historicalData.Ticker),
-				zap.Float64("latest_base_oi", baseOI),
-				zap.Float64("mean_3y_oi", normalizedOI))
-			se.calc("cyclical_base_normalization",
-				zap.String("ticker", historicalData.Ticker),
-				zap.String("method", method),
-				zap.Float64("latest_base_oi", baseOI),
-				zap.Float64("mean_3y_oi", normalizedOI))
-			baseOI = normalizedOI
-		}
-	}
-
-	if baseOI <= 0 {
-		// Report baseOI (the value that actually failed the guard) — on the
-		// quarter-latest path this is the TTM-annualized base, not the
-		// single-quarter restated NOI.
-		return nil, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, baseOI)
-	}
-
-	// Calculate net working capital change from historical data if available
-	nwcChange := s.calculateNetWorkingCapitalChange(historicalData, latestFinancialData, cleaned)
-
-	// Perform DCF calculation with multi-stage growth rates.
-	//
-	// S2 (T4): horizon + terminal method come from the resolved params. The
-	// resolver already applied the legacy precedence (growth-rate length ←
-	// profile.HorizonYears>0 ← request override) AND the legacy silent clamp
-	// (horizon ≤ stage-sum, horizon ≤ growth-rate length) for profile/default-
-	// sourced horizons — the previous inline `if profileHorizon > projectionYears`
-	// guard now lives in params.ResolveInputs. On the default path p.HorizonYears
-	// equals the old clamped projectionYears (growthRateLen == stageSum for the
-	// shared 3/4/0 estimator), so the DCF horizon is byte-identical.
-	projectionYears := p.HorizonYears
-	terminalMethodLabel := p.TerminalMethod
-
-	// Truncate the growth-rate slice fed into the DCF to match the
-	// chosen horizon. dcf.CalculateDCF treats GrowthRates[i] as the rate
-	// for year i+1, so mismatched lengths would drift the projection.
-	growthRatesForDCF := growthEstimate.ProjectedGrowthRates
-	if len(growthRatesForDCF) > projectionYears {
-		growthRatesForDCF = growthRatesForDCF[:projectionYears]
-	}
-
-	dcfInputs := dcf.Inputs{
-		BaseOperatingIncome: baseOI,
-		GrowthRate:          growthEstimate.SummaryGrowthRate(), // backward-compatible summary
-		GrowthRates:         growthRatesForDCF,
-		TerminalGrowthRate:  terminalGrowthRate,
-		WACC:                waccResult.WACC,
-		ProjectionYears:     projectionYears,
-		TaxRate:             p.TaxRate, // S6: was latestFinancialData.TaxRate (default-path identical)
-	}
-
-	// Use true FCF when D&A and CapEx data are available.
-	// Average CapEx and D&A over available annual periods to smooth cyclical spikes
-	// (e.g., MSFT's $30B AI infrastructure buildout year shouldn't define all future CapEx).
-	avgDA, avgCapEx := s.averageCapExAndDA(historicalData)
-	if avgDA > 0 || avgCapEx > 0 {
-		dcfInputs.UseTrueFCF = true
-		dcfInputs.DepreciationAndAmortization = avgDA
-		dcfInputs.CapitalExpenditures = avgCapEx
-		dcfInputs.NetWorkingCapitalChange = nwcChange
-		s.log(ctx).Info("Using true FCF calculation (smoothed over available periods)",
-			zap.String("ticker", historicalData.Ticker),
-			zap.Float64("avg_da", avgDA),
-			zap.Float64("avg_capex", avgCapEx),
-			zap.Float64("nwc_change", nwcChange))
-	} else {
-		s.log(ctx).Info("Falling back to NOPAT-based FCF (D&A/CapEx unavailable)",
-			zap.String("ticker", historicalData.Ticker))
-	}
-	usingNOPATFallback := !dcfInputs.UseTrueFCF
-
-	// Phase 4 / S5 (T4): Wire exit-multiple terminal value.
-	// When available, DCF averages Gordon Growth TV with exit-multiple TV to reduce model risk.
-	//
-	// BYTE-IDENTITY: the legacy DCF averaging used the INDUSTRY EV/EBITDA lookup
-	// EXCLUSIVELY (industryExitMultiple) — it never consulted the profile's
-	// terminal_multiple. So the default/profile path keeps using
-	// industryExitMultiple verbatim. p.TerminalMultiple (which folds in the
-	// profile multiple) is read ONLY when the REQUEST explicitly touched the
-	// multiple or selected terminal_method — those are non-canonical,
-	// cache-bypassed responses where honoring the override is the desired effect.
-	// Using p.TerminalMultiple unconditionally would regress every profiled
-	// ticker (e.g. AAPL profile multiple 5 vs TECH industry 18).
-	//
-	// VAL-1 Phase 4: honor a PROFILE-sourced terminal_method=exit_multiple, not
-	// only a request override. The decision keys off the RESOLUTION PROVENANCE of
-	// terminal_method (p.TerminalMethodSource()) so the value change is confined to
-	// tickers whose method was EXPLICITLY chosen by the profile or the request.
-	//
-	// Default starting point: the legacy industry-EV/EBITDA blend (industryExitMultiple).
-	//
-	//   - REQUEST path (terminal_method OR terminal_multiple overridden) — PRESERVED
-	//     VERBATIM from the shipped request-override contract: a request-selected
-	//     "gordon_growth" SUPPRESSES the blend (exitMultiple = 0, pure Gordon TV);
-	//     any other resolved method uses p.TerminalMultiple (the engine BLENDS 50/50
-	//     — it is NOT a pure exit multiple; the DTO doc states this truthfully). This
-	//     branch is byte-for-byte the legacy gate, so every existing override test
-	//     keeps passing unchanged.
-	//
-	//   - PROFILE path (no request override): NEW in Phase 4. A profile-sourced
-	//     "exit_multiple" now drives the blend with the PROFILE-resolved
-	//     p.TerminalMultiple (EV/EBITDA basis — applied to terminal EBITDA = terminal
-	//     OI + scaled D&A). A profile-sourced "gordon_growth" deliberately does
-	//     NOTHING here → exitMultiple stays industryExitMultiple, byte-identical to
-	//     today (today's gate only fired on a request override, so profile-gordon
-	//     tickers — banks, mature-large, etc. — already get the industry blend;
-	//     suppressing them would silently zero the blend for the whole profiled-gordon
-	//     universe).
-	//
-	// A pure-DEFAULT method (no profile, no override) matches NEITHER branch →
-	// exitMultiple stays industryExitMultiple → bit-for-bit identical to pre-Phase-4.
-	exitMultiple := industryExitMultiple
-	switch {
-	case overrides.TerminalMultiple != nil || overrides.TerminalMethod != nil:
-		// Request-override path — legacy semantics preserved verbatim.
-		if terminalMethodLabel == string(profile.TerminalGordonGrowth) {
-			exitMultiple = 0 // suppress exit-multiple blending; pure Gordon Growth TV
-		} else {
-			exitMultiple = p.TerminalMultiple
-		}
-	case p.TerminalMethodSource() == params.SourceProfile &&
-		terminalMethodLabel == string(profile.TerminalExitMultiple):
-		// Phase 4: profile-driven exit multiple (no request override). Resolved
-		// through the same params precedence chain → p.TerminalMultiple folds in
-		// the profile's terminal_multiple.
-		exitMultiple = p.TerminalMultiple
-	}
-	if exitMultiple > 0 {
-		dcfInputs.ExitMultiple = exitMultiple
-		s.log(ctx).Debug("Exit multiple wired for terminal value averaging",
-			zap.String("ticker", historicalData.Ticker),
-			zap.String("industry", industryCode),
-			zap.String("terminal_method", terminalMethodLabel),
-			zap.Float64("exit_multiple", exitMultiple))
-	}
-
-	// Tier 2 Layer A: derive the reinvestment / operating-leverage trajectory
-	// from the resolved profile and feed it into the DCF (spec §5-§7). No-op on
-	// the legacy proportional path; returns audit source lines for result.Warnings.
-	reinvestmentWarnings := s.applyReinvestmentModel(ctx, &dcfInputs, resolvedProfile, baseOI, historicalData, growthRatesForDCF, guidanceResolution.Anchors)
-
-	dcfResult, err := dcf.CalculateDCF(dcfInputs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to calculate DCF: %w", err)
-	}
-
-	// Record DCF calculation metrics
-	s.metricsService.IncDCFCalculations()
-	s.metricsService.SetAverageGrowthRate(growthEstimate.SummaryGrowthRate())
-
-	// Stage 7 — "fcf_projection" calc trace: emit per-year growth rates and FCF
-	// projections so operators can audit the explicit forecast period.
-	{
-		fcfSeries := make([]float64, len(dcfResult.Projections))
-		for i, p := range dcfResult.Projections {
-			fcfSeries[i] = p.FreeCashFlow
-		}
-		se.calc("fcf_projection",
-			zap.String("ticker", historicalData.Ticker),
-			zap.Int("years", dcfResult.ProjectionYears),
-			zap.Float64s("growth_rates", growthEstimate.ProjectedGrowthRates),
-			zap.Float64s("fcf_series", fcfSeries),
-		)
-	}
-
-	// Stage 8 — "terminal_value" calc trace: emit terminal-value build-up so operators
-	// can see the Gordon Growth vs. exit-multiple averaging outcome.
-	{
-		// Gordon-Growth TV component before exit-multiple averaging. Read it
-		// directly from the engine (dcf.Result.GordonTV) rather than re-deriving:
-		// the legacy re-derivation assumed terminalFCF = TerminalYearFCF×(1+g),
-		// which is WRONG on the Layer-A reinvestment path (where terminal FCF is
-		// consistency-derived from terminal growth + ROIC). On the legacy path
-		// GordonTV equals the prior re-derivation, so this is bit-for-bit there.
-		gordonTV := dcfResult.GordonTV
-		// exit_multiple_used is true when TerminalValueNominal differs from the pure
-		// Gordon Growth value — i.e. pkg/finance/dcf averaged an exit-multiple TV in.
-		// Post-M-1c the raw exit_multiple_tv component is also persisted on
-		// dcf.Result.ExitMultipleTV (zero on the Gordon-only path), so we surface it
-		// directly rather than back-calculating via 2*averaged - gordon.
-		exitMultipleUsed := math.Abs(dcfResult.TerminalValueNominal-gordonTV) > 1e-6
-		se.calc("terminal_value",
-			zap.String("ticker", historicalData.Ticker),
-			zap.Float64("gordon_tv", gordonTV),
-			zap.Float64("exit_multiple_tv", dcfResult.ExitMultipleTV),
-			zap.Bool("exit_multiple_used", exitMultipleUsed),
-			zap.Float64("averaged_tv", dcfResult.TerminalValueNominal),
-			zap.Float64("terminal_growth", terminalGrowthRate),
-		)
-	}
-
-	// Stage 9 — "discount" calc trace: emit the PV of explicit period and terminal
-	// value to show how enterprise value is assembled from discounted cash flows.
-	se.calc("discount",
-		zap.String("ticker", historicalData.Ticker),
-		zap.Float64("pv_explicit", dcfResult.ExplicitPeriodValue),
-		zap.Float64("pv_terminal", dcfResult.TerminalValue),
-		zap.Float64("enterprise_value", dcfResult.EnterpriseValue),
-	)
-
-	// Equity value bridge: EV - Debt + Cash - MinorityInterest - PreferredEquity
-	//                       - DebtLikeClaims = Equity Value
-	// M-1d: minority interest and preferred equity are subtracted to produce
-	// common-shareholder claim only.
-	//
-	// DC-1 Phase 4 (C-4 / B3 routing flip): debt reads Restated().InterestBearingDebt
-	// (B-rule amounts no longer inflate it after the dispatcher dual-write
-	// deletion below). The NEW sixth term subtracts
-	// InvestedCapital().DebtLikeClaims — the B1 (lease) + B2 (pension) + B3
-	// (contingent) overlay amounts that compete with shareholders for cash
-	// flows. For tickers with no B-rule fires DebtLikeClaims == 0 and the
-	// bridge is unchanged. Cash / MinorityInterest / PreferredEquity are not
-	// Restater-touched and stay on the entity.
-	bridgeInvestedCap := investedCapitalOr(cleaned, latestFinancialData)
-	debtLikeClaims := bridgeInvestedCap.DebtLikeClaims
-	equityValue := dcf.CalculateEquityValueWithDebtLikeClaims(
-		dcfResult.EnterpriseValue,
-		waccRestated.InterestBearingDebt,
-		latestFinancialData.CashAndCashEquivalents,
-		latestFinancialData.MinorityInterest,
-		latestFinancialData.PreferredEquity,
-		debtLikeClaims,
-	)
-	// VAL-1 Phase 5 — diluted-share-forward adjustment (DCF path only, DEFAULT-OFF).
-	// denomShares is the per-share denominator: today's diluted share count unless a
-	// high-SBC profile opts in (DilutedShareForwardEnabled) and the history is
-	// eligible, in which case it becomes the diluted count projected forward over the
-	// resolved DCF horizon at the derived dilution rate. sharesOutstanding itself is
-	// left UNMUTATED — Graham (below), the sanity cross-check, and the already-computed
-	// tangible value all keep reading today's count. With the flag off (every current
-	// profile) denomShares == sharesOutstanding, so dcf_value_per_share is byte-identical.
-	denomShares := sharesOutstanding
-	forwardShares, appliedDilutionRate, dilutionWarnings := s.applyDilutedShareForward(
-		ctx, sharesOutstanding, resolvedProfile, historicalData, projectionYears)
-	if appliedDilutionRate > 0 {
-		denomShares = forwardShares
-	}
-	dcfValuePerShare := equityValue / denomShares
-
-	// Stage 10 — "equity_bridge" calc trace: emit the bridge from enterprise value to
-	// per-share intrinsic value so operators can audit the equity conversion step.
-	se.calc("equity_bridge",
-		zap.String("ticker", historicalData.Ticker),
-		zap.Float64("cash", latestFinancialData.CashAndCashEquivalents),
-		zap.Float64("debt", waccRestated.InterestBearingDebt),
-		zap.Float64("minority_interest", latestFinancialData.MinorityInterest),
-		zap.Float64("preferred", latestFinancialData.PreferredEquity),
-		zap.Float64("debt_like_claims", debtLikeClaims),
-		zap.Float64("equity_value", equityValue),
-		zap.Float64("diluted_shares", denomShares),
-		zap.Float64("per_share", dcfValuePerShare),
-	)
+	terminalGrowthRate := v.terminalGrowthRate
+	growthEstimate := v.growthEstimate
+	baseOI := v.baseOI
+	baseNormalizationMethod := v.baseNormalizationMethod
+	ttmOperatingIncomeSource := v.ttmOperatingIncomeSource
+	ttmOperatingIncomeWarning := v.ttmOperatingIncomeWarning
+	projectionYears := v.projectionYears
+	terminalMethodLabel := v.terminalMethodLabel
+	usingNOPATFallback := v.usingNOPATFallback
+	reinvestmentWarnings := v.reinvestmentWarnings
+	dcfResult := v.dcfResult
+	equityValue := v.equityValue
+	dcfValuePerShare := v.dcfValuePerShare
+	forwardShares := v.forwardShares
+	appliedDilutionRate := v.appliedDilutionRate
+	dilutionWarnings := v.dilutionWarnings
+	dcfFallbackWarning := v.dcfFallbackWarning
 
 	// Calculate data freshness score
 	dataFreshnessScore := s.calculateDataFreshnessScore(latestFinancialData, marketData, macroData)
@@ -1402,6 +1053,423 @@ func (s *Service) performValuation(
 	}
 
 	return result, nil
+}
+
+// runDCF runs the standard multi-stage DCF path (alt-model early-return plus
+// the DCF stages through the equity-value bridge). It is a pure block-move of
+// the former inline performValuation body (SR-1 A7). It reads its inputs from v
+// and writes its outputs back to v. The bool return is true when an alternative
+// (non-DCF) model produced the final ValuationResult, in which case that result
+// is returned directly and assembleResult is skipped.
+func (s *Service) runDCF(ctx context.Context, v *valuationCtx) (*entities.ValuationResult, bool, error) {
+	se := s.newStageEmitter(ctx)
+	historicalData := v.historicalData
+	marketData := v.marketData
+	macroData := v.macroData
+	cleaned := v.cleaned
+	overrides := v.overrides
+	growthEstimate := v.growthEstimate
+	latestFinancialData := v.latestFinancialData
+	latestPeriod := v.latestPeriod
+	tangibleValuePerShare := v.tangibleValuePerShare
+	industryCode := v.industryCode
+	sicLabel := v.sicLabel
+	heuristicCode := v.heuristicCode
+	heuristicName := v.heuristicName
+	sharesOutstanding := v.sharesOutstanding
+	resolvedProfile := v.resolvedProfile
+	resolutionTrace := v.resolutionTrace
+	guidanceResolution := v.guidanceResolution
+	industryExitMultiple := v.industryExitMultiple
+	p := v.p
+	selectedModel := v.selectedModel
+	waccRestated := v.waccRestated
+	terminalGrowthRate := v.terminalGrowthRate
+	waccResult := v.waccResult
+
+	var dcfFallbackWarning string
+
+	// If an alternative model (non-DCF) is selected, use it.
+	// When the primary model fails but the company has positive OI,
+	// performAlternativeValuation returns errFallbackToDCF to signal DCF fallback.
+	if selectedModel != nil && selectedModel.ModelType() != "multi_stage_dcf" {
+		altResult, altErr := s.performAlternativeValuation(
+			ctx, selectedModel, historicalData, marketData, macroData,
+			growthEstimate, waccResult, latestFinancialData, latestPeriod,
+			tangibleValuePerShare, sharesOutstanding, industryCode,
+			resolvedProfile, cleaned, &p,
+		)
+		if errors.Is(altErr, errFallbackToDCF) {
+			s.log(ctx).Info("Falling back to standard DCF after alternative model failure",
+				zap.String("ticker", historicalData.Ticker),
+				zap.String("primary_model", selectedModel.ModelType()))
+			dcfFallbackWarning = fmt.Sprintf("Primary model (%s) could not value this company; fell back to multi_stage_dcf", selectedModel.ModelType())
+		} else if altErr != nil {
+			return nil, false, altErr
+		} else {
+			// Attach SIC classification metadata on the alt-model path too, so
+			// the response exposes it regardless of which valuation model ran.
+			altResult.SICCodeRaw = historicalData.SICCode
+			altResult.IndustrySIC = sicLabel
+			// W-1: heuristic GICS plumbing is also attached on the alt-model
+			// path so the API surface is identical across model selections.
+			altResult.IndustryHeuristicCode = heuristicCode
+			altResult.IndustryHeuristicName = heuristicName
+			// Tier 2 P0b: stamp the resolved profile + audit trace on the
+			// alt-model path so the response surfaces the calibration record
+			// regardless of which valuation model produced the value.
+			if resolvedProfile != nil {
+				altResult.AssumptionProfile = resolvedProfile.ProfileID
+				traceCopy := resolutionTrace
+				altResult.ResolutionTrace = &traceCopy
+			}
+			// Layer B Phase 2: surface guidance source tags + per-assumption
+			// sources on the alt-model path too. Guidance is DCF-path-only — it
+			// NEVER anchors a DDM/FFO/revenue_multiple value (those values are
+			// untouched). Both calls are strict no-ops on the absent path (empty
+			// warnings + empty Sources ⇒ omitted field), so DDM/FFO/RM responses
+			// stay byte-identical to the 4.7 engine (NF1).
+			altResult.Warnings = append(altResult.Warnings, guidanceResolution.Warnings...)
+			stampAssumptionSources(altResult, guidanceResolution.Sources)
+			return altResult, true, nil
+		}
+	}
+
+	// --- Standard multi-stage DCF path (existing logic) ---
+
+	// Guard: standard DCF requires positive operating income.
+	// Companies with negative OI are routed to revenue_multiple model above.
+	//
+	// DC-1 Phase 4 (C-2 signature flip / C-3 read migration): effectiveOI and
+	// the negative-OI sentinel read the Restated view so the guard matches the
+	// OI the engine actually uses after earnings restatements (C1-C7).
+	dcfRestated := restatedViewOr(cleaned, latestFinancialData)
+	baseOI := effectiveOI(dcfRestated)
+
+	// BUG-015 audit trail: the TTM source tag + lossy-path warning are surfaced
+	// on result.Warnings (mirrors RM-1's "revenue_base: ..." convention) only
+	// when the OI base was actually annualized below (quarter-latest path).
+	var ttmOperatingIncomeSource, ttmOperatingIncomeWarning string
+
+	// BUG-015: when the latest filing is a 10-Q, effectiveOI returns a SINGLE
+	// quarter of operating income (~4× too small) while the other DCF base
+	// terms — averageCapExAndDA and calculateNetWorkingCapitalChange — are
+	// already annual (GetRecentYears over FY periods). Mixing a quarterly OI
+	// base with annual D&A/CapEx/ΔNWC drives projected FCF negative for
+	// 10-Q-latest tickers (e.g. KO, AMD). Annualize ONLY the OI base via the
+	// TTM helper (TTM_4Q / prior-bridge — NOT a crude ×4, which ignores
+	// seasonality). For an FY-latest period we leave baseOI EXACTLY as
+	// effectiveOI(dcfRestated) so FY-latest tickers stay bit-for-bit (the TTM
+	// helper's FY passthrough would read the entity's NormalizedOperatingIncome
+	// rather than the Restated-view OI, which could differ when a C1-C7 Restater
+	// fired on the latest period). Mirrors RM-1's TTM revenue base.
+	//
+	// We annualize ONLY when the latest period is an explicit quarter. An
+	// unknown/malformed suffix is treated like FY (left untouched) — the
+	// conservative choice that preserves existing behavior for any non-standard
+	// period key rather than silently re-basing it.
+	if _, latestSub := parsePeriodSuffix(latestPeriod); latestSub == periodSuffixQuarter {
+		ttmOI, oiSource, oiWarning := historicalData.TrailingTwelveMonthsOperatingIncome()
+		if ttmOI > 0 {
+			baseOI = ttmOI
+			ttmOperatingIncomeSource = oiSource
+			ttmOperatingIncomeWarning = oiWarning
+			s.log(ctx).Info("Using TTM operating income for DCF base (latest filing is a quarter)",
+				zap.String("ticker", historicalData.Ticker),
+				zap.String("latest_period", latestPeriod),
+				zap.String("oi_source", oiSource),
+				zap.Float64("ttm_operating_income", ttmOI),
+				zap.Float64("single_quarter_operating_income", effectiveOI(dcfRestated)))
+		}
+	}
+
+	// VAL-1 Phase 3: cyclical-base normalization. For a cyclical archetype a
+	// trough-year base makes the projected rebound look aggressive, so the DCF
+	// base OI is floored at the 3-year FY mean (max(latest/TTM, 3y_mean)). This
+	// is applied to the baseOI scalar BEFORE the <=0 guard and BEFORE both
+	// downstream consumers (dcfInputs.BaseOperatingIncome and the Layer-A
+	// reinvestment margin seed in applyReinvestmentModel), so the normalized
+	// base flows into both DCF paths consistently. baseNormalizationMethod stays
+	// "" for non-cyclical profiles, so the diagnostic is omitempty-dropped and
+	// non-cyclical responses are byte-identical to today.
+	var baseNormalizationMethod string
+	if resolvedProfile != nil && resolvedProfile.IsCyclicalArchetype() {
+		normalizedOI, method := normalizeCyclicalBaseOI(baseOI, historicalData)
+		baseNormalizationMethod = method
+		if method == "3y_mean" {
+			s.log(ctx).Info("Cyclical-base normalization: flooring DCF base OI at 3y FY mean",
+				zap.String("ticker", historicalData.Ticker),
+				zap.Float64("latest_base_oi", baseOI),
+				zap.Float64("mean_3y_oi", normalizedOI))
+			se.calc("cyclical_base_normalization",
+				zap.String("ticker", historicalData.Ticker),
+				zap.String("method", method),
+				zap.Float64("latest_base_oi", baseOI),
+				zap.Float64("mean_3y_oi", normalizedOI))
+			baseOI = normalizedOI
+		}
+	}
+
+	if baseOI <= 0 {
+		// Report baseOI (the value that actually failed the guard) — on the
+		// quarter-latest path this is the TTM-annualized base, not the
+		// single-quarter restated NOI.
+		return nil, false, fmt.Errorf("%w: company has non-positive operating income (%.2f); standard DCF requires positive operating income", ErrModelNotApplicable, baseOI)
+	}
+
+	// Calculate net working capital change from historical data if available
+	nwcChange := s.calculateNetWorkingCapitalChange(historicalData, latestFinancialData, cleaned)
+
+	// Perform DCF calculation with multi-stage growth rates.
+	//
+	// S2 (T4): horizon + terminal method come from the resolved params. The
+	// resolver already applied the legacy precedence (growth-rate length ←
+	// profile.HorizonYears>0 ← request override) AND the legacy silent clamp
+	// (horizon ≤ stage-sum, horizon ≤ growth-rate length) for profile/default-
+	// sourced horizons — the previous inline `if profileHorizon > projectionYears`
+	// guard now lives in params.ResolveInputs. On the default path p.HorizonYears
+	// equals the old clamped projectionYears (growthRateLen == stageSum for the
+	// shared 3/4/0 estimator), so the DCF horizon is byte-identical.
+	projectionYears := p.HorizonYears
+	terminalMethodLabel := p.TerminalMethod
+
+	// Truncate the growth-rate slice fed into the DCF to match the
+	// chosen horizon. dcf.CalculateDCF treats GrowthRates[i] as the rate
+	// for year i+1, so mismatched lengths would drift the projection.
+	growthRatesForDCF := growthEstimate.ProjectedGrowthRates
+	if len(growthRatesForDCF) > projectionYears {
+		growthRatesForDCF = growthRatesForDCF[:projectionYears]
+	}
+
+	dcfInputs := dcf.Inputs{
+		BaseOperatingIncome: baseOI,
+		GrowthRate:          growthEstimate.SummaryGrowthRate(), // backward-compatible summary
+		GrowthRates:         growthRatesForDCF,
+		TerminalGrowthRate:  terminalGrowthRate,
+		WACC:                waccResult.WACC,
+		ProjectionYears:     projectionYears,
+		TaxRate:             p.TaxRate, // S6: was latestFinancialData.TaxRate (default-path identical)
+	}
+
+	// Use true FCF when D&A and CapEx data are available.
+	// Average CapEx and D&A over available annual periods to smooth cyclical spikes
+	// (e.g., MSFT's $30B AI infrastructure buildout year shouldn't define all future CapEx).
+	avgDA, avgCapEx := s.averageCapExAndDA(historicalData)
+	if avgDA > 0 || avgCapEx > 0 {
+		dcfInputs.UseTrueFCF = true
+		dcfInputs.DepreciationAndAmortization = avgDA
+		dcfInputs.CapitalExpenditures = avgCapEx
+		dcfInputs.NetWorkingCapitalChange = nwcChange
+		s.log(ctx).Info("Using true FCF calculation (smoothed over available periods)",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Float64("avg_da", avgDA),
+			zap.Float64("avg_capex", avgCapEx),
+			zap.Float64("nwc_change", nwcChange))
+	} else {
+		s.log(ctx).Info("Falling back to NOPAT-based FCF (D&A/CapEx unavailable)",
+			zap.String("ticker", historicalData.Ticker))
+	}
+	usingNOPATFallback := !dcfInputs.UseTrueFCF
+
+	// Phase 4 / S5 (T4): Wire exit-multiple terminal value.
+	// When available, DCF averages Gordon Growth TV with exit-multiple TV to reduce model risk.
+	//
+	// BYTE-IDENTITY: the legacy DCF averaging used the INDUSTRY EV/EBITDA lookup
+	// EXCLUSIVELY (industryExitMultiple) — it never consulted the profile's
+	// terminal_multiple. So the default/profile path keeps using
+	// industryExitMultiple verbatim. p.TerminalMultiple (which folds in the
+	// profile multiple) is read ONLY when the REQUEST explicitly touched the
+	// multiple or selected terminal_method — those are non-canonical,
+	// cache-bypassed responses where honoring the override is the desired effect.
+	// Using p.TerminalMultiple unconditionally would regress every profiled
+	// ticker (e.g. AAPL profile multiple 5 vs TECH industry 18).
+	//
+	// VAL-1 Phase 4: honor a PROFILE-sourced terminal_method=exit_multiple, not
+	// only a request override. The decision keys off the RESOLUTION PROVENANCE of
+	// terminal_method (p.TerminalMethodSource()) so the value change is confined to
+	// tickers whose method was EXPLICITLY chosen by the profile or the request.
+	//
+	// Default starting point: the legacy industry-EV/EBITDA blend (industryExitMultiple).
+	//
+	//   - REQUEST path (terminal_method OR terminal_multiple overridden) — PRESERVED
+	//     VERBATIM from the shipped request-override contract: a request-selected
+	//     "gordon_growth" SUPPRESSES the blend (exitMultiple = 0, pure Gordon TV);
+	//     any other resolved method uses p.TerminalMultiple (the engine BLENDS 50/50
+	//     — it is NOT a pure exit multiple; the DTO doc states this truthfully). This
+	//     branch is byte-for-byte the legacy gate, so every existing override test
+	//     keeps passing unchanged.
+	//
+	//   - PROFILE path (no request override): NEW in Phase 4. A profile-sourced
+	//     "exit_multiple" now drives the blend with the PROFILE-resolved
+	//     p.TerminalMultiple (EV/EBITDA basis — applied to terminal EBITDA = terminal
+	//     OI + scaled D&A). A profile-sourced "gordon_growth" deliberately does
+	//     NOTHING here → exitMultiple stays industryExitMultiple, byte-identical to
+	//     today (today's gate only fired on a request override, so profile-gordon
+	//     tickers — banks, mature-large, etc. — already get the industry blend;
+	//     suppressing them would silently zero the blend for the whole profiled-gordon
+	//     universe).
+	//
+	// A pure-DEFAULT method (no profile, no override) matches NEITHER branch →
+	// exitMultiple stays industryExitMultiple → bit-for-bit identical to pre-Phase-4.
+	exitMultiple := industryExitMultiple
+	switch {
+	case overrides.TerminalMultiple != nil || overrides.TerminalMethod != nil:
+		// Request-override path — legacy semantics preserved verbatim.
+		if terminalMethodLabel == string(profile.TerminalGordonGrowth) {
+			exitMultiple = 0 // suppress exit-multiple blending; pure Gordon Growth TV
+		} else {
+			exitMultiple = p.TerminalMultiple
+		}
+	case p.TerminalMethodSource() == params.SourceProfile &&
+		terminalMethodLabel == string(profile.TerminalExitMultiple):
+		// Phase 4: profile-driven exit multiple (no request override). Resolved
+		// through the same params precedence chain → p.TerminalMultiple folds in
+		// the profile's terminal_multiple.
+		exitMultiple = p.TerminalMultiple
+	}
+	if exitMultiple > 0 {
+		dcfInputs.ExitMultiple = exitMultiple
+		s.log(ctx).Debug("Exit multiple wired for terminal value averaging",
+			zap.String("ticker", historicalData.Ticker),
+			zap.String("industry", industryCode),
+			zap.String("terminal_method", terminalMethodLabel),
+			zap.Float64("exit_multiple", exitMultiple))
+	}
+
+	// Tier 2 Layer A: derive the reinvestment / operating-leverage trajectory
+	// from the resolved profile and feed it into the DCF (spec §5-§7). No-op on
+	// the legacy proportional path; returns audit source lines for result.Warnings.
+	reinvestmentWarnings := s.applyReinvestmentModel(ctx, &dcfInputs, resolvedProfile, baseOI, historicalData, growthRatesForDCF, guidanceResolution.Anchors)
+
+	dcfResult, err := dcf.CalculateDCF(dcfInputs)
+	if err != nil {
+		return nil, false, fmt.Errorf("failed to calculate DCF: %w", err)
+	}
+
+	// Record DCF calculation metrics
+	s.metricsService.IncDCFCalculations()
+	s.metricsService.SetAverageGrowthRate(growthEstimate.SummaryGrowthRate())
+
+	// Stage 7 — "fcf_projection" calc trace: emit per-year growth rates and FCF
+	// projections so operators can audit the explicit forecast period.
+	{
+		fcfSeries := make([]float64, len(dcfResult.Projections))
+		for i, p := range dcfResult.Projections {
+			fcfSeries[i] = p.FreeCashFlow
+		}
+		se.calc("fcf_projection",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Int("years", dcfResult.ProjectionYears),
+			zap.Float64s("growth_rates", growthEstimate.ProjectedGrowthRates),
+			zap.Float64s("fcf_series", fcfSeries),
+		)
+	}
+
+	// Stage 8 — "terminal_value" calc trace: emit terminal-value build-up so operators
+	// can see the Gordon Growth vs. exit-multiple averaging outcome.
+	{
+		// Gordon-Growth TV component before exit-multiple averaging. Read it
+		// directly from the engine (dcf.Result.GordonTV) rather than re-deriving:
+		// the legacy re-derivation assumed terminalFCF = TerminalYearFCF×(1+g),
+		// which is WRONG on the Layer-A reinvestment path (where terminal FCF is
+		// consistency-derived from terminal growth + ROIC). On the legacy path
+		// GordonTV equals the prior re-derivation, so this is bit-for-bit there.
+		gordonTV := dcfResult.GordonTV
+		// exit_multiple_used is true when TerminalValueNominal differs from the pure
+		// Gordon Growth value — i.e. pkg/finance/dcf averaged an exit-multiple TV in.
+		// Post-M-1c the raw exit_multiple_tv component is also persisted on
+		// dcf.Result.ExitMultipleTV (zero on the Gordon-only path), so we surface it
+		// directly rather than back-calculating via 2*averaged - gordon.
+		exitMultipleUsed := math.Abs(dcfResult.TerminalValueNominal-gordonTV) > 1e-6
+		se.calc("terminal_value",
+			zap.String("ticker", historicalData.Ticker),
+			zap.Float64("gordon_tv", gordonTV),
+			zap.Float64("exit_multiple_tv", dcfResult.ExitMultipleTV),
+			zap.Bool("exit_multiple_used", exitMultipleUsed),
+			zap.Float64("averaged_tv", dcfResult.TerminalValueNominal),
+			zap.Float64("terminal_growth", terminalGrowthRate),
+		)
+	}
+
+	// Stage 9 — "discount" calc trace: emit the PV of explicit period and terminal
+	// value to show how enterprise value is assembled from discounted cash flows.
+	se.calc("discount",
+		zap.String("ticker", historicalData.Ticker),
+		zap.Float64("pv_explicit", dcfResult.ExplicitPeriodValue),
+		zap.Float64("pv_terminal", dcfResult.TerminalValue),
+		zap.Float64("enterprise_value", dcfResult.EnterpriseValue),
+	)
+
+	// Equity value bridge: EV - Debt + Cash - MinorityInterest - PreferredEquity
+	//                       - DebtLikeClaims = Equity Value
+	// M-1d: minority interest and preferred equity are subtracted to produce
+	// common-shareholder claim only.
+	//
+	// DC-1 Phase 4 (C-4 / B3 routing flip): debt reads Restated().InterestBearingDebt
+	// (B-rule amounts no longer inflate it after the dispatcher dual-write
+	// deletion below). The NEW sixth term subtracts
+	// InvestedCapital().DebtLikeClaims — the B1 (lease) + B2 (pension) + B3
+	// (contingent) overlay amounts that compete with shareholders for cash
+	// flows. For tickers with no B-rule fires DebtLikeClaims == 0 and the
+	// bridge is unchanged. Cash / MinorityInterest / PreferredEquity are not
+	// Restater-touched and stay on the entity.
+	bridgeInvestedCap := investedCapitalOr(cleaned, latestFinancialData)
+	debtLikeClaims := bridgeInvestedCap.DebtLikeClaims
+	equityValue := dcf.CalculateEquityValueWithDebtLikeClaims(
+		dcfResult.EnterpriseValue,
+		waccRestated.InterestBearingDebt,
+		latestFinancialData.CashAndCashEquivalents,
+		latestFinancialData.MinorityInterest,
+		latestFinancialData.PreferredEquity,
+		debtLikeClaims,
+	)
+	// VAL-1 Phase 5 — diluted-share-forward adjustment (DCF path only, DEFAULT-OFF).
+	// denomShares is the per-share denominator: today's diluted share count unless a
+	// high-SBC profile opts in (DilutedShareForwardEnabled) and the history is
+	// eligible, in which case it becomes the diluted count projected forward over the
+	// resolved DCF horizon at the derived dilution rate. sharesOutstanding itself is
+	// left UNMUTATED — Graham (below), the sanity cross-check, and the already-computed
+	// tangible value all keep reading today's count. With the flag off (every current
+	// profile) denomShares == sharesOutstanding, so dcf_value_per_share is byte-identical.
+	denomShares := sharesOutstanding
+	forwardShares, appliedDilutionRate, dilutionWarnings := s.applyDilutedShareForward(
+		ctx, sharesOutstanding, resolvedProfile, historicalData, projectionYears)
+	if appliedDilutionRate > 0 {
+		denomShares = forwardShares
+	}
+	dcfValuePerShare := equityValue / denomShares
+
+	// Stage 10 — "equity_bridge" calc trace: emit the bridge from enterprise value to
+	// per-share intrinsic value so operators can audit the equity conversion step.
+	se.calc("equity_bridge",
+		zap.String("ticker", historicalData.Ticker),
+		zap.Float64("cash", latestFinancialData.CashAndCashEquivalents),
+		zap.Float64("debt", waccRestated.InterestBearingDebt),
+		zap.Float64("minority_interest", latestFinancialData.MinorityInterest),
+		zap.Float64("preferred", latestFinancialData.PreferredEquity),
+		zap.Float64("debt_like_claims", debtLikeClaims),
+		zap.Float64("equity_value", equityValue),
+		zap.Float64("diluted_shares", denomShares),
+		zap.Float64("per_share", dcfValuePerShare),
+	)
+
+	v.baseOI = baseOI
+	v.baseNormalizationMethod = baseNormalizationMethod
+	v.ttmOperatingIncomeSource = ttmOperatingIncomeSource
+	v.ttmOperatingIncomeWarning = ttmOperatingIncomeWarning
+	v.projectionYears = projectionYears
+	v.terminalMethodLabel = terminalMethodLabel
+	v.usingNOPATFallback = usingNOPATFallback
+	v.reinvestmentWarnings = reinvestmentWarnings
+	v.dcfResult = dcfResult
+	v.equityValue = equityValue
+	v.dcfValuePerShare = dcfValuePerShare
+	v.denomShares = denomShares
+	v.forwardShares = forwardShares
+	v.appliedDilutionRate = appliedDilutionRate
+	v.dilutionWarnings = dilutionWarnings
+	v.dcfFallbackWarning = dcfFallbackWarning
+	return nil, false, nil
 }
 
 // resolveValuationInputs runs validation-adjacent setup through model
