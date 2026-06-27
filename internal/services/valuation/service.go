@@ -1487,7 +1487,6 @@ func (s *Service) runDCF(ctx context.Context, v *valuationCtx) (*entities.Valuat
 	v.dcfResult = dcfResult
 	v.equityValue = equityValue
 	v.dcfValuePerShare = dcfValuePerShare
-	v.denomShares = denomShares
 	v.forwardShares = forwardShares
 	v.appliedDilutionRate = appliedDilutionRate
 	v.dilutionWarnings = dilutionWarnings

@@ -69,7 +69,6 @@ type valuationCtx struct {
 	dcfResult                 *dcf.Result
 	equityValue               float64
 	dcfValuePerShare          float64
-	denomShares               float64
 	forwardShares             float64
 	appliedDilutionRate       float64
 	dilutionWarnings          []string
