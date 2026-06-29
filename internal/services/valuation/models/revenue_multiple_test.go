@@ -534,7 +534,7 @@ func TestRevenueMultipleModel_resolveMultiple(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mult, source := model.resolveMultiple(tt.sic, tt.industry)
+			mult, source, _ := model.resolveMultiple(tt.sic, tt.industry)
 			if mult != tt.wantMultiple {
 				t.Errorf("multiple = %v, want %v", mult, tt.wantMultiple)
 			}
@@ -570,7 +570,7 @@ func TestRevenueMultipleModel_resolveMultiple_ZeroRegression(t *testing.T) {
 		{"9999", "UNKNOWN"},  // falls to default
 	}
 	for _, c := range cases {
-		mult, source := model.resolveMultiple(c.sic, c.industry)
+		mult, source, _ := model.resolveMultiple(c.sic, c.industry)
 		legacy := model.getMultiple(c.industry)
 		if math.Float64bits(mult) != math.Float64bits(legacy) {
 			t.Errorf("sic=%q industry=%q: resolveMultiple=%v (bits %x) != getMultiple=%v (bits %x)",

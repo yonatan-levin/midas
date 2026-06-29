@@ -125,11 +125,16 @@ func NewRevenueMultipleModelWithDamodaran(
 // When the Damodaran tables are nil (config absent, or a test ctor that did not
 // inject them) tier (1) is skipped and the result is bit-for-bit identical to
 // getMultiple(industry) — the zero-regression guarantee.
-func (m *RevenueMultipleModel) resolveMultiple(sic, industry string) (multiple float64, source string) {
-	if multiple, _, ok := lookupDamodaranMultiple(sic, m.sicToDamodaran, m.damodaran); ok {
-		return multiple, "Damodaran " + m.datasetDate
+// The third return value is the matched Damodaran industry name (e.g.
+// "Semiconductor") on the Damodaran path, or "" on the Phase 1 / fallback path.
+// It is used ONLY to enrich the audit warning line — the contract `source`
+// string ("Damodaran <date>" / "sector-bucket") deliberately excludes it so the
+// response field value stays stable.
+func (m *RevenueMultipleModel) resolveMultiple(sic, industry string) (multiple float64, source, damodaranIndustry string) {
+	if multiple, matchedIndustry, ok := lookupDamodaranMultiple(sic, m.sicToDamodaran, m.damodaran); ok {
+		return multiple, "Damodaran " + m.datasetDate, matchedIndustry
 	}
-	return m.getMultiple(industry), "sector-bucket"
+	return m.getMultiple(industry), "sector-bucket", ""
 }
 
 // ModelType returns the model identifier.
@@ -167,7 +172,7 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 	// Select the appropriate EV/Revenue multiple for this industry. RM-2
 	// Phase 2: resolveMultiple tries the Damodaran-by-SIC table first and
 	// degrades to the Phase 1 sector bucket; multipleSource records which won.
-	multiple, multipleSource := m.resolveMultiple(input.SICCode, input.Industry)
+	multiple, multipleSource, damodaranIndustry := m.resolveMultiple(input.SICCode, input.Industry)
 
 	// Calculate enterprise value
 	enterpriseValue := revenue * multiple
@@ -209,7 +214,11 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 	// (mirrors the revenue_base: convention) so dashboards can pivot on the
 	// source without parsing the response struct. "Damodaran <date>" vs
 	// "sector-bucket" — both are part of the public contract.
-	warnings = append(warnings, fmt.Sprintf("multiple_source: %s", multipleSource))
+	if damodaranIndustry != "" {
+		warnings = append(warnings, fmt.Sprintf("multiple_source: %s (industry=%s)", multipleSource, damodaranIndustry))
+	} else {
+		warnings = append(warnings, fmt.Sprintf("multiple_source: %s", multipleSource))
+	}
 
 	// RM-1.A: stale-data check (T7 from spec, deferred from the entity layer).
 	// Lives here at the consumer rather than in HistoricalFinancialData so the
