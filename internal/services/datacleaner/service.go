@@ -172,7 +172,24 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 
 	// Validate input data
 	if err := s.ValidateData(data); err != nil {
-		return nil, fmt.Errorf("data validation failed: %w", err)
+		wrapped := fmt.Errorf("data validation failed: %w", err)
+		// RPL-8: emit the output snapshot + FinancialData schema stamp so this
+		// early return stays SYMMETRIC with the 10-clean-input.json snapshot
+		// above. Banks/insurers legitimately carry Revenue=0 and fail
+		// ValidateData here; without this their bundles were missing
+		// 10-clean-output.json + the schema stamp, forcing replay to need
+		// --allow-schema-drift. The emitted CleanedData is an unmodified copy of
+		// the input (cleaning was skipped) and the trace records the validation
+		// error. The function still returns (nil, err) — the contract callers
+		// depend on is unchanged; the snapshot is a pure side effect.
+		cleanedData := *data
+		s.snapshotCleanOutput(ctx, &entities.CleaningResult{
+			Success:     false,
+			Timestamp:   startTime,
+			CleanedData: &cleanedData,
+			Errors:      []string{wrapped.Error()},
+		})
+		return nil, wrapped
 	}
 
 	// Check cache if enabled
@@ -256,6 +273,11 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	if err != nil {
 		result.Errors = append(result.Errors, err.Error())
 		result.ProcessingTime = time.Since(startTime)
+		// RPL-8: keep the output snapshot symmetric with 10-clean-input.json on
+		// this partial-result early return too. result.CleanedData carries
+		// whatever adjustments were applied before the dispatch error; the trace
+		// records the error. Then return the partial result as before.
+		s.snapshotCleanOutput(ctx, result)
 		return result, nil // Return partial result rather than error
 	}
 
@@ -337,41 +359,78 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 		zap.Int("flags_raised", len(result.Flags)),
 	)
 
-	// Tier-3 artifact bundle: snapshot the cleaner output (the cleaned
-	// FinancialData) and the per-rule trace (the CleaningResult itself).
-	if b := artifact.From(ctx); b != nil {
-		b.Snapshot(ctx, "clean.normalized", "10-clean-output.json", result.CleanedData)
-		b.Snapshot(ctx, "clean.normalized", "10-clean-trace.json", result)
-		// DC-1 Phase 2 PR-2 Task 2.1 bumped FinancialData 7 → 8 for the first
-		// AdjustmentLedger / Overlays population. DC-1 Phase 3 Task 3.10 bumps
-		// 8 → 9 atomically with the first commit that populates previously-
-		// zero omitempty fields on LedgerEntry / OverlaySpec — A2 TaxShieldDTA
-		// (Q2 resolution, Task 3.7) and B3 AIProvenance hashes (Q4 resolution,
-		// Task 3.8). Replay drift output stays diagnostic until tier2-baseline
-		// bundles are refreshed.
-		//
-		// TDB-2 bumps 9 → 10 atomically with the new omitempty
-		// OperatingLeaseRightOfUseAsset field (A6 right-of-use asset).
-		b.AddSchemaVersion("FinancialData", 10)
-
-		// Phase 2.B — auto-on-quality-flag trigger. Count flags at or above
-		// the bundle's configured severity threshold and report the count
-		// back to the bundle. The trace middleware reads this post-c.Next()
-		// to decide whether to Promote with TriggerOnQualityFlag.
-		//
-		// LOW-2 note: the count is recorded unconditionally on any bundle
-		// (eager OR deferred). On EAGER bundles (manual ?trace=1 / header
-		// path) the recorded count is dead state — manual promotion already
-		// flushed the bundle to disk and the trigger ladder never consults
-		// the count. We accept that wasted state because (a) the alternative
-		// is plumbing a "is-deferred" flag through the bundle API just to
-		// gate one Add(), and (b) the count fields are atomic.Int64 so the
-		// eager-bundle write is a single atomic op — cheaper than the gate
-		// would be.
-		recordQualityFlagCount(ctx, result.Flags)
-	}
+	// Tier-3 artifact bundle: snapshot the cleaner output + per-rule trace and
+	// stamp the FinancialData schema version. Factored into a helper (RPL-8) so
+	// every return path that wrote 10-clean-input.json also writes the matching
+	// 10-clean-output.json / 10-clean-trace.json and the schema stamp — see the
+	// early-return call sites in ValidateData / applyActiveAdjustments above.
+	s.snapshotCleanOutput(ctx, result)
 
 	return result, nil
+}
+
+// snapshotCleanOutput writes the post-clean artifact-bundle snapshots
+// (10-clean-output.json + 10-clean-trace.json), stamps the FinancialData
+// schema version, and records the quality-flag count for the auto-on-flag
+// trigger. It is a no-op when no bundle is attached to ctx.
+//
+// RPL-8: this is invoked from BOTH the happy path AND the early-return paths
+// (ValidateData failure, applyActiveAdjustments partial result) so the output
+// snapshot is SYMMETRIC with the 10-clean-input.json snapshot written at the
+// top of CleanFinancialData. Banks/insurers legitimately carry Revenue=0 and
+// early-return at ValidateData; before this fix their bundles were missing the
+// output snapshot + FinancialData schema stamp, forcing replay to need
+// --allow-schema-drift.
+//
+// result.CleanedData is the correct payload to emit even on the skipped-clean
+// paths: it is set early (the "cleanedData := *data" copy) so it is non-nil and
+// carries the unmodified input — an honest "cleaning was skipped" output that
+// replay's parsed→clean diff needs. The trace (result) carries Success=false /
+// Errors on those paths, which is the intended signal.
+func (s *service) snapshotCleanOutput(ctx context.Context, result *entities.CleaningResult) {
+	b := artifact.From(ctx)
+	if b == nil {
+		return
+	}
+	// result is always non-nil at every call site; CleanedData is set early in
+	// CleanFinancialData. Guard defensively so the helper is independently safe.
+	if result == nil {
+		return
+	}
+
+	b.Snapshot(ctx, "clean.normalized", "10-clean-output.json", result.CleanedData)
+	b.Snapshot(ctx, "clean.normalized", "10-clean-trace.json", result)
+	// DC-1 Phase 2 PR-2 Task 2.1 bumped FinancialData 7 → 8 for the first
+	// AdjustmentLedger / Overlays population. DC-1 Phase 3 Task 3.10 bumps
+	// 8 → 9 atomically with the first commit that populates previously-
+	// zero omitempty fields on LedgerEntry / OverlaySpec — A2 TaxShieldDTA
+	// (Q2 resolution, Task 3.7) and B3 AIProvenance hashes (Q4 resolution,
+	// Task 3.8). Replay drift output stays diagnostic until tier2-baseline
+	// bundles are refreshed.
+	//
+	// TDB-2 bumps 9 → 10 atomically with the new omitempty
+	// OperatingLeaseRightOfUseAsset field (A6 right-of-use asset).
+	b.AddSchemaVersion("FinancialData", 10)
+
+	// Phase 2.B — auto-on-quality-flag trigger. Count flags at or above
+	// the bundle's configured severity threshold and report the count
+	// back to the bundle. The trace middleware reads this post-c.Next()
+	// to decide whether to Promote with TriggerOnQualityFlag.
+	//
+	// On the early-return paths result.Flags is empty (validation failed or
+	// adjustment dispatch errored before flags were populated), so this is a
+	// harmless no-op there; the happy path is unchanged.
+	//
+	// LOW-2 note: the count is recorded unconditionally on any bundle
+	// (eager OR deferred). On EAGER bundles (manual ?trace=1 / header
+	// path) the recorded count is dead state — manual promotion already
+	// flushed the bundle to disk and the trigger ladder never consults
+	// the count. We accept that wasted state because (a) the alternative
+	// is plumbing a "is-deferred" flag through the bundle API just to
+	// gate one Add(), and (b) the count fields are atomic.Int64 so the
+	// eager-bundle write is a single atomic op — cheaper than the gate
+	// would be.
+	recordQualityFlagCount(ctx, result.Flags)
 }
 
 // CleanFinancialDataWithViews runs CleanFinancialData and wraps the cleaned
