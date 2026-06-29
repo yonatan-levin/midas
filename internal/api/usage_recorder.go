@@ -73,7 +73,13 @@ func (r *usageRecorder) Enqueue(job usageRecordJob) {
 	select {
 	case r.queue <- job:
 	default:
-		r.logger.Warn("usage-recording queue full; dropping usage record",
+		// Log the drop on the request-scoped logger when available so the WARN
+		// carries request_id/key_id; fall back to the pool logger otherwise.
+		logger := job.logger
+		if logger == nil {
+			logger = r.logger
+		}
+		logger.Warn("usage-recording queue full; dropping usage record",
 			zap.String("endpoint", job.record.Endpoint))
 	}
 }

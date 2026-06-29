@@ -251,7 +251,17 @@ func (s *Server) setupMiddleware() {
 	// credentials (the only valid wildcard form).
 	corsOrigins := s.config.Server.CORSAllowedOrigins
 	allowCredentials := len(corsOrigins) > 0
-	if !allowCredentials {
+	// A literal "*" in the configured list is normalized by gin-contrib/cors to
+	// AllowAllOrigins — which combined with credentials is the exact spec-invalid
+	// combo this guards against. So a wildcard entry forces credentials OFF, the
+	// same posture as an empty (wildcard) list.
+	for _, o := range corsOrigins {
+		if o == "*" {
+			allowCredentials = false
+			break
+		}
+	}
+	if len(corsOrigins) == 0 {
 		corsOrigins = []string{"*"}
 	}
 	s.engine.Use(cors.New(cors.Config{
