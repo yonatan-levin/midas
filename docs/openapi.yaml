@@ -443,6 +443,16 @@ components:
           type: boolean
           description: True when SIC and heuristic agree per the canonical mapping
           example: true
+        multiple_source:
+          type: string
+          description: |
+            RM-2 Phase 2 — provenance of the EV/Revenue multiple. Present only on
+            `revenue_multiple` responses; omitted entirely for DCF / DDM / FFO.
+            `"Damodaran <date>"` means the raw SIC resolved a Damodaran NYU-Stern
+            sector EV/Sales multiple; `"sector-bucket"` means it fell back to the
+            Phase 1 classifier-bucket multiple. The exact strings are part of the
+            contract (dashboards / replay tooling key off them).
+          example: "Damodaran 2026-01-01"
     FairValueResponse:
       type: object
       properties:
