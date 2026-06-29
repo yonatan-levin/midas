@@ -120,7 +120,7 @@ func (v *ValuationMetricsWrapper) WrapValuationOperation(
 		status = "error"
 		// Classify error type for better monitoring
 		errorType := classifyValuationError(err)
-		v.metricsService.RecordValuationError(ticker, errorType)
+		v.metricsService.RecordValuationError(errorType)
 	}
 
 	// Record the valuation request

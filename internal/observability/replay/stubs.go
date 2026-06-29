@@ -295,7 +295,7 @@ func (s *noOpMetricsService) IncWACCCalculations()     { atomic.AddUint64(&s.cal
 func (s *noOpMetricsService) RecordValuationRequest(ticker, requestType, status string, duration time.Duration) {
 	atomic.AddUint64(&s.calls, 1)
 }
-func (s *noOpMetricsService) RecordValuationError(ticker, errorType string) {
+func (s *noOpMetricsService) RecordValuationError(errorType string) {
 	atomic.AddUint64(&s.calls, 1)
 }
 func (s *noOpMetricsService) RecordSECAPIRequest(endpoint, status string) {

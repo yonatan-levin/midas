@@ -62,7 +62,7 @@ func TestValuationMetrics(t *testing.T) {
 
 	// Test error recording
 	assert.NotPanics(t, func() {
-		service.RecordValuationError("AAPL", "data_fetch_error")
+		service.RecordValuationError("data_fetch_error")
 	})
 }
 

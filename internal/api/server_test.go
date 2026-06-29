@@ -1442,7 +1442,7 @@ func (s *stubMetricsService) RecordHTTPRequest(_, _ string, _ int, _ time.Durati
 func (s *stubMetricsService) IncHTTPRequestsInFlight()                                     {}
 func (s *stubMetricsService) DecHTTPRequestsInFlight()                                     {}
 func (s *stubMetricsService) RecordValuationRequest(_, _, _ string, _ time.Duration)       {}
-func (s *stubMetricsService) RecordValuationError(_, _ string)                             {}
+func (s *stubMetricsService) RecordValuationError(_ string)                                {}
 func (s *stubMetricsService) IncDCFCalculations()                                          {}
 func (s *stubMetricsService) IncWACCCalculations()                                         {}
 func (s *stubMetricsService) RecordSECAPIRequest(_, _ string)                              {}

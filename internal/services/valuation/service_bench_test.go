@@ -143,7 +143,7 @@ func BenchmarkService_CalculateValuation_SingleTicker(b *testing.B) {
 	// Handle both success and error cases for metrics
 	mockMetrics.On("RecordValuationRequest", ticker, "single", "success", mock.AnythingOfType("time.Duration")).Return().Maybe()
 	mockMetrics.On("RecordValuationRequest", ticker, "single", "error", mock.AnythingOfType("time.Duration")).Return().Maybe()
-	mockMetrics.On("RecordValuationError", ticker, mock.AnythingOfType("string")).Return().Maybe()
+	mockMetrics.On("RecordValuationError", mock.AnythingOfType("string")).Return().Maybe()
 	mockMetrics.On("IncDCFCalculations").Return().Maybe()
 	mockMetrics.On("IncWACCCalculations").Return().Maybe()
 	mockMetrics.On("SetAverageWACC", mock.AnythingOfType("float64")).Return().Maybe()

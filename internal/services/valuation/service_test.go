@@ -59,8 +59,8 @@ func (m *MockMetricsService) RecordValuationRequest(ticker, requestType, status 
 	m.Called(ticker, requestType, status, duration)
 }
 
-func (m *MockMetricsService) RecordValuationError(ticker, errorType string) {
-	m.Called(ticker, errorType)
+func (m *MockMetricsService) RecordValuationError(errorType string) {
+	m.Called(errorType)
 }
 
 func (m *MockMetricsService) IncDCFCalculations() {
@@ -1681,7 +1681,7 @@ func (f *FakeMetricsService) IncHTTPRequestsInFlight() {}
 func (f *FakeMetricsService) DecHTTPRequestsInFlight() {}
 func (f *FakeMetricsService) RecordValuationRequest(ticker, requestType, status string, duration time.Duration) {
 }
-func (f *FakeMetricsService) RecordValuationError(ticker, errorType string)                 {}
+func (f *FakeMetricsService) RecordValuationError(errorType string)                         {}
 func (f *FakeMetricsService) IncDCFCalculations()                                           {}
 func (f *FakeMetricsService) IncWACCCalculations()                                          {}
 func (f *FakeMetricsService) RecordSECAPIRequest(endpoint, status string)                   {}
@@ -2136,7 +2136,7 @@ func TestService_CalculateValuation_PerformValuationError(t *testing.T) {
 
 	// Expect error metrics to be recorded (this is the path we want to cover)
 	freshMetrics.On("RecordValuationRequest", "BAD", "single", "error", mock.AnythingOfType("time.Duration")).Return()
-	freshMetrics.On("RecordValuationError", "BAD", "calculation_failed").Return()
+	freshMetrics.On("RecordValuationError", "calculation_failed").Return()
 	freshMetrics.On("IncWACCCalculations").Return()
 	freshMetrics.On("SetAverageWACC", mock.AnythingOfType("float64")).Return()
 
@@ -2148,7 +2148,7 @@ func TestService_CalculateValuation_PerformValuationError(t *testing.T) {
 
 	// Verify error metrics were called
 	freshMetrics.AssertCalled(t, "RecordValuationRequest", "BAD", "single", "error", mock.AnythingOfType("time.Duration"))
-	freshMetrics.AssertCalled(t, "RecordValuationError", "BAD", "calculation_failed")
+	freshMetrics.AssertCalled(t, "RecordValuationError", "calculation_failed")
 	freshCache.AssertExpectations(t)
 }
 

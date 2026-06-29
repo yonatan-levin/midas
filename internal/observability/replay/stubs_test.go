@@ -188,7 +188,7 @@ func TestNoOpMetricsService_AllMethodsAreNoOpsAndIncrementCallsCount(t *testing.
 	svc.IncWACCCalculations()
 	svc.RecordHTTPRequest("GET", "/x", 200, time.Millisecond, 100)
 	svc.RecordValuationRequest("AAPL", "single", "ok", time.Second)
-	svc.RecordValuationError("AAPL", "x")
+	svc.RecordValuationError("x")
 	svc.RecordSECAPIRequest("/x", "ok")
 	svc.RecordMarketAPIRequest("yfinance", "ok")
 	svc.RecordMacroAPIRequest("fred", "ok")

@@ -165,13 +165,17 @@ func (s *Service) initMetrics(registry *prometheus.Registry) {
 		[]string{"method", "endpoint"},
 	)
 
-	// API-specific Metrics
+	// API-specific Metrics.
+	// No ticker label on these three: a watchlist of thousands of tickers ×
+	// status/type would explode series cardinality. Same rule the datacleaner
+	// counter follows below (TDB-4) — ticker stays in the audit log, not the
+	// metric dimension (SR-1 B5).
 	s.valuationRequestsTotal = factory.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "dcf_valuation_requests_total",
 			Help: "Total number of DCF valuation requests",
 		},
-		[]string{"ticker", "request_type", "status"},
+		[]string{"request_type", "status"},
 	)
 
 	s.valuationDuration = factory.NewHistogramVec(
@@ -180,7 +184,7 @@ func (s *Service) initMetrics(registry *prometheus.Registry) {
 			Help:    "Time spent calculating DCF valuations",
 			Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0},
 		},
-		[]string{"ticker", "request_type"},
+		[]string{"request_type"},
 	)
 
 	s.valuationErrorsTotal = factory.NewCounterVec(
@@ -188,7 +192,7 @@ func (s *Service) initMetrics(registry *prometheus.Registry) {
 			Name: "dcf_valuation_errors_total",
 			Help: "Total number of DCF valuation errors",
 		},
-		[]string{"ticker", "error_type"},
+		[]string{"error_type"},
 	)
 
 	s.dcfCalculationsTotal = factory.NewCounter(prometheus.CounterOpts{
@@ -402,9 +406,12 @@ func (s *Service) DecHTTPRequestsInFlight() {
 }
 
 // Valuation Metrics Methods
+// RecordValuationRequest records a valuation request. ticker is intentionally
+// kept as a parameter (not a metric label) so it can drive unique-ticker state
+// tracking and be logged by callers — see B5 on the no-ticker-label rule.
 func (s *Service) RecordValuationRequest(ticker, requestType, status string, duration time.Duration) {
-	s.valuationRequestsTotal.WithLabelValues(ticker, requestType, status).Inc()
-	s.valuationDuration.WithLabelValues(ticker, requestType).Observe(duration.Seconds())
+	s.valuationRequestsTotal.WithLabelValues(requestType, status).Inc()
+	s.valuationDuration.WithLabelValues(requestType).Observe(duration.Seconds())
 
 	// Update internal state
 	s.state.totalValuations++
@@ -421,8 +428,11 @@ func (s *Service) RecordValuationRequest(ticker, requestType, status string, dur
 	s.state.uniqueTickers[ticker] = true
 }
 
-func (s *Service) RecordValuationError(ticker, errorType string) {
-	s.valuationErrorsTotal.WithLabelValues(ticker, errorType).Inc()
+// RecordValuationError records a valuation error by type. ticker is deliberately
+// not a parameter here: it would be a metric label only, and that label is dropped
+// for cardinality reasons (B5). Callers log the ticker on the error path.
+func (s *Service) RecordValuationError(errorType string) {
+	s.valuationErrorsTotal.WithLabelValues(errorType).Inc()
 	s.state.failedValuations++
 }
 

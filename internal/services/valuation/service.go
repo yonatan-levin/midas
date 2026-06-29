@@ -610,7 +610,7 @@ func (s *Service) CalculateValuation(ctx context.Context, ticker string, opts *V
 	result, err := s.performValuation(ctx, historicalData, marketData, macroData, opts, cleaned)
 	if err != nil {
 		s.metricsService.RecordValuationRequest(ticker, "single", "error", time.Since(start))
-		s.metricsService.RecordValuationError(ticker, "calculation_failed")
+		s.metricsService.RecordValuationError("calculation_failed")
 		return nil, fmt.Errorf("failed to perform valuation: %w", err)
 	}
 

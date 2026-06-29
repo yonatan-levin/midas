@@ -145,7 +145,7 @@ type MetricsService interface {
 
 	// Valuation Metrics
 	RecordValuationRequest(ticker, requestType, status string, duration time.Duration)
-	RecordValuationError(ticker, errorType string)
+	RecordValuationError(errorType string)
 	IncDCFCalculations()
 	IncWACCCalculations()
 
