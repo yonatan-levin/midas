@@ -142,6 +142,10 @@ pids
 *.seed
 *.pid.lock
 
+# RM-2 Phase 2: local raw Damodaran .xls snapshots written by cmd/refresh-damodaran.
+# The committed canonical artifact is config/damodaran_sector_multiples.json.
+data/damodaran/
+
 # Coverage directory used by tools like istanbul
 *.lcov
 

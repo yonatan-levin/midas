@@ -45,7 +45,7 @@ type RevenueMultipleModel struct {
 	// tier (1) and behaves exactly like Phase 1 — the zero-regression path.
 	damodaran      map[string]float64 // Damodaran industry name -> EV/Sales
 	sicToDamodaran map[string]string  // SIC code -> Damodaran industry name
-	datasetDate    string             // e.g. "2026-01-05"; "" when table absent
+	datasetDate    string             // e.g. "2026-01-01"; "" when table absent
 
 	logger *zap.Logger
 }
