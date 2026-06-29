@@ -84,6 +84,12 @@ type ValuationResult struct {
 	IndustryHeuristicCode string `json:"industry_heuristic_code,omitempty"` // GICS sector code from the balance-sheet heuristic (e.g. "45")
 	IndustryHeuristicName string `json:"industry_heuristic_name,omitempty"` // Human-readable GICS sector name (e.g. "Information Technology")
 
+	// RM-2 Phase 2: provenance of the EV/Revenue multiple. Populated only by the
+	// revenue_multiple model — "Damodaran <date>" (SIC resolved a Damodaran
+	// sector EV/Sales) or "sector-bucket" (Phase 1 classifier-bucket fallback).
+	// DCF / DDM / FFO leave it "" so omitempty drops it from their responses.
+	MultipleSource string `json:"multiple_source,omitempty"`
+
 	// IFRS / FPI transparency fields (Phase B12 of the IFRS-FPI plan,
 	// docs/refactoring/archive/ifrs-foreign-private-issuer-support-spec.md).
 	//
