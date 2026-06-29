@@ -23,7 +23,9 @@ package artifact
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 )
@@ -120,4 +122,27 @@ func writeConfigSnapshot(bundleRoot string, snap ConfigSnapshot) error {
 		return fmt.Errorf("artifact: write config snapshot %s: %w", path, err)
 	}
 	return nil
+}
+
+// ReadConfigSnapshot reads 00-config.json from bundleRoot. Returns found=false
+// (no error) when the file is absent — pre-1.2 bundles legitimately lack it, and
+// callers fall back to the hand-mirrored defaults. Returns a wrapped error only on
+// a present-but-unreadable / malformed file. This is the read-side mirror of
+// writeConfigSnapshot, consumed by the replay binary (RPL-9) to overlay the
+// bundle's captured production config onto its hand-mirrored fallback defaults.
+func ReadConfigSnapshot(bundleRoot string) (snap ConfigSnapshot, found bool, err error) {
+	path := filepath.Join(bundleRoot, ConfigSnapshotFileName)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		// Absent file is the back-compat signal, not an error: pre-1.2
+		// bundles never wrote 00-config.json.
+		if errors.Is(err, fs.ErrNotExist) {
+			return ConfigSnapshot{}, false, nil
+		}
+		return ConfigSnapshot{}, false, fmt.Errorf("artifact: read config snapshot %s: %w", path, err)
+	}
+	if err := json.Unmarshal(body, &snap); err != nil {
+		return ConfigSnapshot{}, false, fmt.Errorf("artifact: unmarshal config snapshot %s: %w", path, err)
+	}
+	return snap, true, nil
 }

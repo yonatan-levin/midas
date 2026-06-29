@@ -196,5 +196,51 @@ func TestConfigSnapshot_IsZero(t *testing.T) {
 	assert.False(t, nonZero.IsZero(), "ConfigSnapshot with any populated field must NOT report IsZero")
 }
 
+// TestReadConfigSnapshot_RoundTrip verifies the exported reader
+// (RPL-9 consumer side) decodes a written 00-config.json back to the exact
+// ConfigSnapshot, reporting found=true. This is the symmetric counterpart to
+// the OpenBundle/Promote writer tests above.
+func TestReadConfigSnapshot_RoundTrip(t *testing.T) {
+	root := t.TempDir()
+	want := fixtureConfigSnapshot()
+
+	body, err := json.MarshalIndent(want, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(root, artifact.ConfigSnapshotFileName), body, 0o644))
+
+	got, found, err := artifact.ReadConfigSnapshot(root)
+	require.NoError(t, err)
+	assert.True(t, found, "expected found=true for a present 00-config.json")
+	assert.Equal(t, want, got, "round-tripped snapshot must equal the written one")
+}
+
+// TestReadConfigSnapshot_AbsentFile pins the back-compat signal: a bundle
+// directory without 00-config.json (pre-1.2 layout) reports found=false with a
+// nil error, so the replay consumer can fall back to its hand-mirrored defaults
+// without treating the absence as a failure.
+func TestReadConfigSnapshot_AbsentFile(t *testing.T) {
+	root := t.TempDir() // deliberately empty — no snapshot file
+
+	got, found, err := artifact.ReadConfigSnapshot(root)
+	require.NoError(t, err, "absent 00-config.json must NOT be an error")
+	assert.False(t, found, "expected found=false when 00-config.json is absent")
+	assert.True(t, got.IsZero(), "absent file must yield the zero-value snapshot")
+}
+
+// TestReadConfigSnapshot_Malformed verifies a present-but-corrupt
+// 00-config.json surfaces a non-nil error (fail-loud), distinct from the absent
+// case — a malformed bundle artifact must not be silently ignored.
+func TestReadConfigSnapshot_Malformed(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, artifact.ConfigSnapshotFileName),
+		[]byte("{not valid json"), 0o644))
+
+	got, found, err := artifact.ReadConfigSnapshot(root)
+	require.Error(t, err, "malformed 00-config.json must return an error")
+	assert.False(t, found, "found must be false on a malformed snapshot")
+	assert.True(t, got.IsZero(), "malformed read must yield the zero-value snapshot")
+}
+
 // Touch context import (in case future test additions need it).
 var _ = context.Background

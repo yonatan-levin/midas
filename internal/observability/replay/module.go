@@ -13,6 +13,7 @@ import (
 	"github.com/midas/dcf-valuation-api/internal/api/v1/handlers"
 	"github.com/midas/dcf-valuation-api/internal/config"
 	"github.com/midas/dcf-valuation-api/internal/core/ports"
+	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
 	"github.com/midas/dcf-valuation-api/internal/observability/calclog"
 	"github.com/midas/dcf-valuation-api/internal/services/datacleaner"
 	aiSvc "github.com/midas/dcf-valuation-api/internal/services/datacleaner/ai"
@@ -68,7 +69,7 @@ func Module(bundleDir string, opts Options) fx.Option {
 		// (NewDataCleanerService, NewValuationService, etc.) receive the
 		// same shape they receive in production wiring.
 		// --------------------------------------------------------------
-		fx.Provide(replayConfig),
+		fx.Provide(func() (*config.Config, error) { return replayConfig(bundleDir) }),
 		fx.Provide(replayLogger),
 		fx.Provide(calclog.NewEmitter),
 
@@ -217,58 +218,65 @@ func Module(bundleDir string, opts Options) fx.Option {
 	)
 }
 
-// replayConfig builds a minimal *config.Config sufficient to drive the
-// production *valuation.Service constructor without any external I/O.
-// The valuation engine reads only Valuation.* knobs and the datacleaner
-// reads cfg.DataCleaner.* heavily. We mirror the production defaults
-// from setDefaults() at internal/config/config.go:387 — staying in lock-step
-// so a default change shows up here as a test failure when datacleaner
-// fails to initialize.
+// replayConfig builds a *config.Config sufficient to drive the production
+// *valuation.Service constructor without any external I/O. It has two layers:
+//
+//  1. BASE: the hand-mirrored production viper defaults from setDefaults() at
+//     internal/config/config.go (the RPL-10 fallback, below). The datacleaner
+//     reads cfg.DataCleaner.* heavily; the valuation engine reads Valuation.*.
+//  2. OVERLAY: if the bundle carries a 00-config.json snapshot (1.2+ bundles,
+//     RPL-9), its captured Valuation + Macro fields override the base. For
+//     these bundles the snapshot — not the hand-mirror — is the source of truth.
+//
+// For pre-1.2 bundles (no snapshot file) the base is returned unchanged, so the
+// hand-mirror remains the fallback. A present-but-corrupt snapshot fails loudly
+// (returns an error) — consistent with replay's strict schema/hash drift
+// philosophy: a malformed bundle artifact must not be silently ignored.
 //
 // SEC / Market / Macro config fields are unused because we supply bundle
-// gateways that ignore them.
-func replayConfig() *config.Config {
-	return &config.Config{
+// gateways that ignore them; the Macro manual-rate fields ARE overlaid because
+// BundleMacroGateway reads cfg.Macro.ManualMarketRiskPremium.
+func replayConfig(bundleDir string) (*config.Config, error) {
+	base := &config.Config{
 		Valuation: config.ValuationConfig{
-			// RPL-10 (2026-05-22): mirror ALL non-zero production viper
-			// defaults from internal/config/config.go:setDefaults() —
-			// not just the few currently consumed by replay-reachable
-			// code paths. Defense-in-depth: cycles 1+2+3 of the
-			// replay-fidelity debug each fixed one instance of "replay-
-			// side config field hand-copied wrong from production
-			// default" (DCFMaxGrowthRate, DCFMinGrowthRate,
-			// DefaultTerminalGrowthCap). Mirroring the rest closes the
-			// trap for the day a future engine change starts reading
-			// any of the remaining fields. Parity is pinned by
-			// TestReplayConfig_MirrorsAllValuationViperDefaults — that
-			// test fails the moment someone adds a new viper default
-			// without mirroring it here.
+			// FALLBACK MIRROR (pre-1.2 bundles only). RPL-9 has now
+			// LANDED: for 1.2+ bundles the bundle's 00-config.json is the
+			// source of truth and the overlay below (after this literal)
+			// overrides these defaults. This hand-mirror remains the BASE
+			// before the overlay AND the sole config for pre-1.2 bundles
+			// that lack the snapshot file.
 			//
-			// The growth caps in particular feed
-			// *growth.Estimator.MaxGrowthRate / MinGrowthRate via
-			// valuation.NewService:88-93 and are consulted directly in
-			// service.go:569 as the terminal-growth fallback when
-			// historical CAGR computation errors out. They are NOT
-			// snapshotted into the bundle today, so the replay-side
-			// config must mirror production defaults — any divergence
-			// silently clips/floors the blended Stage 1 growth rate
-			// when |blended| > replay-cap (which cascades through the
-			// Stage 2 fade interpolation and corrupts every projected
-			// rate, the `growth_rate` summary, DCF value, etc.), OR
-			// substitutes a different terminal-growth rate when the
-			// historical fallback fires (sparse OI history, all-
-			// negative OI, etc.) — the MXL bundle does not exercise
-			// the fallback because its analyst+historical data is
-			// clean, but biotech/startup-shape bundles will. Debug
-			// cycle 2 (MAJOR-1 / MXL 2026-05-13): the prior 0.40 /
-			// -0.10 values clipped MXL's blended 0.516 down to 0.40,
-			// producing a ~0.10 absolute drop on every stage and 9
-			// drift fields in replay diffs against a production-
-			// captured 17-response.json (which had used the 0.50 cap).
-			// Bundles captured against a non-default production config
-			// cannot be faithfully replayed until the manifest
-			// captures config (RPL-9 tracker; RPL-10 is the stopgap
-			// mirror). Regression-pinned by
+			// RPL-10 (2026-05-22) fallback-parity discipline still applies
+			// to the pre-1.2 path: mirror ALL non-zero production viper
+			// defaults from internal/config/config.go:setDefaults() — not
+			// just the few currently consumed by replay-reachable code
+			// paths. Defense-in-depth: cycles 1+2+3 of the replay-fidelity
+			// debug each fixed one instance of "replay-side config field
+			// hand-copied wrong from production default" (DCFMaxGrowthRate,
+			// DCFMinGrowthRate, DefaultTerminalGrowthCap). For a 1.2+ bundle
+			// captured against a non-default production config the snapshot
+			// now carries that config faithfully, so such a bundle replays
+			// correctly without touching this mirror. For an OLD (pre-1.2)
+			// bundle the mirror is all there is, so it must still match
+			// production defaults — pinned by
+			// TestReplayConfig_MirrorsAllValuationViperDefaults, which fails
+			// the moment someone adds a new viper default without mirroring
+			// it here.
+			//
+			// Why the growth caps matter (historical context, cycle 2 / MXL
+			// 2026-05-13): they feed *growth.Estimator.MaxGrowthRate /
+			// MinGrowthRate via valuation.NewService:88-93 and are consulted
+			// in service.go:569 as the terminal-growth fallback when
+			// historical CAGR computation errors out. Any divergence
+			// silently clips/floors the blended Stage 1 growth rate when
+			// |blended| > cap (cascading through the Stage 2 fade and
+			// corrupting every projected rate, the `growth_rate` summary,
+			// DCF value, etc.), OR substitutes a different terminal-growth
+			// rate when the historical fallback fires (sparse / all-negative
+			// OI). The prior 0.40 / -0.10 values clipped MXL's blended 0.516
+			// down to 0.40 — a ~0.10 drop on every stage and 9 drift fields
+			// against a production-captured 17-response.json (which used the
+			// 0.50 cap). Regression-pinned by
 			// TestReplayFidelity_MXLClassFixture_ZeroDiffs in
 			// integration_test.go.
 			//
@@ -335,6 +343,38 @@ func replayConfig() *config.Config {
 			LogFlags:            true,
 		},
 	}
+
+	// RPL-9 overlay: if the bundle carries a 00-config.json snapshot
+	// (1.2+ bundles), its captured config is the source of truth and
+	// overrides the hand-mirrored base above. A present-but-corrupt
+	// snapshot fails loudly — a malformed bundle artifact must not be
+	// silently ignored (consistent with replay's strict schema/hash drift
+	// philosophy). An absent snapshot (pre-1.2 bundle) leaves the base
+	// untouched.
+	snap, found, err := artifact.ReadConfigSnapshot(bundleDir)
+	if err != nil {
+		return nil, err
+	}
+	// Keep this overlay in sync with the fields on artifact.ConfigSnapshot
+	// (internal/observability/artifact/config_snapshot.go). A field captured
+	// there but NOT overlaid here is a silent partial-overlay drift —
+	// TestReplayConfig_BundleSnapshotOverridesHandMirror asserts all 11 fields
+	// precisely to catch that.
+	if found {
+		base.Valuation.DefaultMarketRiskPremium = snap.Valuation.DefaultMarketRiskPremium
+		base.Valuation.DefaultTerminalGrowthCap = snap.Valuation.DefaultTerminalGrowthCap
+		base.Valuation.DefaultTaxRate = snap.Valuation.DefaultTaxRate
+		base.Valuation.MinDataPointsForGrowth = snap.Valuation.MinDataPointsForGrowth
+		base.Valuation.DCFProjectionYears = snap.Valuation.DCFProjectionYears
+		base.Valuation.DCFMaxGrowthRate = snap.Valuation.DCFMaxGrowthRate
+		base.Valuation.DCFMinGrowthRate = snap.Valuation.DCFMinGrowthRate
+		base.Valuation.DCFIterationTolerance = snap.Valuation.DCFIterationTolerance
+		base.Valuation.DCFMaxIterations = snap.Valuation.DCFMaxIterations
+		base.Macro.ManualRiskFreeRate = snap.Macro.ManualRiskFreeRate
+		base.Macro.ManualMarketRiskPremium = snap.Macro.ManualMarketRiskPremium
+	}
+
+	return base, nil
 }
 
 // resolveDataCleanerConfigPath finds the repo's config/datacleaner/<name>
