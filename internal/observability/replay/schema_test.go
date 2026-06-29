@@ -1,10 +1,16 @@
 package replay
 
 import (
+	"context"
+	"encoding/json"
 	"maps"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/midas/dcf-valuation-api/internal/observability/artifact"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/guidance"
+	"github.com/midas/dcf-valuation-api/internal/services/valuation/profile"
 )
 
 // TestCurrentSchemaVersions_HasAllKnownProducers is a static pin: the
@@ -28,10 +34,79 @@ func TestCurrentSchemaVersions_HasAllKnownProducers(t *testing.T) {
 		"SECCompanyFacts",   // infra/gateways/sec/client.go
 		"MarketData",        // infra/gateways/market/yfinance_client.go
 		"MacroData",         // infra/gateways/macro/gateway.go
+		// RPL-10 (#28): these two were stamped by the artifact bundle
+		// (SetAssumptionProfileManifest / SetGuidanceResolution) but absent
+		// from CurrentSchemaVersions, so every fresh bundle showed schema
+		// drift. The static list above failed to catch the omission; the
+		// dynamic round-trip guard below now does as well.
+		"AssumptionProfileManifest", // observability/artifact/bundle.go
+		"GuidanceResolution",        // observability/artifact/bundle.go
 	}
 	for _, e := range expected {
 		if _, ok := CurrentSchemaVersions[e]; !ok {
 			t.Errorf("CurrentSchemaVersions missing producer-stamped entity %q", e)
+		}
+	}
+}
+
+// TestCurrentSchemaVersions_RegistersEveryStampedEntity is the RPL-10 (#28)
+// teeth: it drives the REAL artifact producers (the same SetX calls
+// production code makes) through a hermetic OpenBundle round-trip, reads the
+// manifest back off disk, and asserts every entity the bundle stamped is
+// registered in CurrentSchemaVersions. This is the dynamic guard the static
+// list above could not be — if a future producer stamps an entity without
+// registering it here, this fails the build instead of silently forcing
+// --allow-schema-drift on every fresh bundle.
+//
+// Producers exercised: SetAssumptionProfileManifest + SetGuidanceResolution
+// (the two RPL-10 regression entities) plus a cleaner-style
+// AddSchemaVersion("FinancialData", ...) so the round-trip also covers the
+// direct stamping path.
+func TestCurrentSchemaVersions_RegistersEveryStampedEntity(t *testing.T) {
+	cfg := artifact.Config{Enabled: true, RootPath: t.TempDir()}
+	b, err := artifact.OpenBundle(cfg, "rid-rpl10", "AMD", artifact.TriggerQuery)
+	if err != nil {
+		t.Fatalf("OpenBundle: %v", err)
+	}
+	if b == nil {
+		t.Fatal("OpenBundle returned nil bundle")
+	}
+
+	ctx := context.Background()
+	// Zero-value manifest/stage are sufficient: we assert on the stamped
+	// schema_versions keys, not on the snapshot bodies.
+	b.SetAssumptionProfileManifest(ctx, profile.AssumptionProfileManifest{})
+	b.SetGuidanceResolution(ctx, guidance.BundleStage{
+		Resolution: guidance.ResolutionEnvelope{Status: "absent"},
+	})
+	b.AddSchemaVersion("FinancialData", CurrentSchemaVersions["FinancialData"])
+
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	mfBody, err := os.ReadFile(filepath.Join(b.Root(), "00-manifest.json"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var mf artifact.Manifest
+	if err := json.Unmarshal(mfBody, &mf); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+
+	if len(mf.SchemaVersions) == 0 {
+		t.Fatal("manifest stamped no schema_versions; round-trip produced nothing to check")
+	}
+	for entity, stampedVer := range mf.SchemaVersions {
+		curVer, ok := CurrentSchemaVersions[entity]
+		if !ok {
+			t.Errorf("bundle stamped %q (v%d) but CurrentSchemaVersions does not register it "+
+				"(RPL-10 class regression — add it to the map in the same commit as the producer)",
+				entity, stampedVer)
+			continue
+		}
+		if curVer != stampedVer {
+			t.Errorf("bundle stamped %q at v%d but CurrentSchemaVersions has v%d", entity, stampedVer, curVer)
 		}
 	}
 }

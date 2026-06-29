@@ -20,16 +20,20 @@ import (
 // build.
 //
 // Current entries reflect the producers that call b.AddSchemaVersion in
-// the codebase as of Phase R1:
-//   - internal/services/datacleaner/service.go            -> FinancialData=7
+// the codebase:
+//   - internal/services/datacleaner/service.go            -> FinancialData=10
 //   - internal/services/valuation/service.go              -> GrowthEstimate=1, ValuationResult=2
 //   - internal/api/v1/handlers/fair_value.go              -> FairValueResponse=1
 //   - internal/infra/gateways/sec/client.go               -> SECCompanyFacts=3
 //   - internal/infra/gateways/market/yfinance_client.go   -> MarketData=1
 //   - internal/infra/gateways/macro/gateway.go            -> MacroData=1
+//   - internal/observability/artifact/bundle.go
+//     SetAssumptionProfileManifest -> AssumptionProfileManifest=1
+//     SetGuidanceResolution        -> GuidanceResolution=1
 //
 // If a future producer stamps a new entity, append it here in the same
-// commit.
+// commit. The schema_test.go static pin + dynamic round-trip guard fail
+// the build if a stamped-but-unregistered entity slips through (RPL-10).
 var CurrentSchemaVersions = map[string]int{
 	// DC-1 Phase 2 PR-2 Task 2.1 bumped FinancialData 7 → 8 atomically with
 	// the first PR that POPULATES AdjustmentLedger / Overlays from a native
@@ -63,6 +67,16 @@ var CurrentSchemaVersions = map[string]int{
 	"SECCompanyFacts":   3,
 	"MarketData":        1,
 	"MacroData":         1,
+
+	// RPL-10 (#28): the artifact bundle stamps these two entities at v1 via
+	// SetAssumptionProfileManifest / SetGuidanceResolution
+	// (internal/observability/artifact/bundle.go), but they were omitted here.
+	// CompareSchemaVersions flagged every fresh bundle as MissingFromCurrent
+	// drift, forcing --allow-schema-drift on every `--from=parsed` replay.
+	// Registering them at the version the current build stamps (1) restores
+	// drift-free replay for current bundles.
+	"AssumptionProfileManifest": 1,
+	"GuidanceResolution":        1,
 }
 
 // SchemaDriftEntry describes a single mismatch between a bundle's stamped

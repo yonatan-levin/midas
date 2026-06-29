@@ -14,7 +14,9 @@
     "SECCompanyFacts": 3,
     "MarketData": 1,
     "MacroData": 1,
-    "GrowthEstimate": 1
+    "GrowthEstimate": 1,
+    "AssumptionProfileManifest": 1,
+    "GuidanceResolution": 1
   },
   "git_sha": "cafef00d",
   "build_version": "v0.0.0-stale"

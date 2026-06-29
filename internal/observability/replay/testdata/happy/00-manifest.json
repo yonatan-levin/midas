@@ -15,7 +15,9 @@
     "FairValueResponse": 1,
     "SECCompanyFacts": 3,
     "MarketData": 1,
-    "MacroData": 1
+    "MacroData": 1,
+    "AssumptionProfileManifest": 1,
+    "GuidanceResolution": 1
   },
   "git_sha": "deadbeef",
   "build_version": "v0.9.0-rc1"
