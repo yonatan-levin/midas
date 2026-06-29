@@ -37,6 +37,13 @@ type ModelInput struct {
 	GrowthEstimate *entities.GrowthEstimate
 	Industry       string
 
+	// SICCode is the raw SEC SIC code (e.g. "3674"); "" when SEC data lacked
+	// it. RM-2 Phase 2: the revenue_multiple model uses it to resolve a
+	// Damodaran sector EV/Sales multiple (SIC-first), falling back to the
+	// Phase 1 classifier-code bucket on input.Industry when unmapped. Other
+	// models ignore it.
+	SICCode string
+
 	// Pre-computed financial metrics
 	WACC         float64
 	CostOfEquity float64
@@ -136,6 +143,13 @@ type ModelResult struct {
 	// PAFFO is set it equals the headline IntrinsicValuePerShare.
 	PFFOValuePerShare  float64 `json:"pffo_value_per_share,omitempty"`
 	PAFFOValuePerShare float64 `json:"paffo_value_per_share,omitempty"`
+
+	// MultipleSource is the provenance of the EV/Revenue multiple used by the
+	// revenue_multiple model: "Damodaran <dataset-date>" when a SIC resolved a
+	// Damodaran sector multiple, else "sector-bucket" (Phase 1 fallback).
+	// omitempty: only revenue_multiple populates it; DDM/FFO/DCF leave it ""
+	// so their responses stay byte-identical. RM-2 Phase 2.
+	MultipleSource string `json:"multiple_source,omitempty"`
 }
 
 // ModelRouter selects the appropriate valuation model based on industry classification
