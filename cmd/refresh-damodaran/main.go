@@ -173,7 +173,8 @@ func findSheet(wb *xls.WorkBook, name string) (*xls.WorkSheet, error) {
 	return nil, fmt.Errorf("workbook shape guard: sheet %q not found (Damodaran layout may have changed)", name)
 }
 
-// readDatasetDate decodes the Excel serial in cell B1 to a YYYY-MM-DD string.
+// readDatasetDate reads the "YYYY.MM" date string in cell B1 and canonicalizes
+// it to a YYYY-MM-DD string via parseDatasetDate.
 func readDatasetDate(sheet *xls.WorkSheet) (string, error) {
 	row := sheet.Row(dateCellRow)
 	if row == nil {
