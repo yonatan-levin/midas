@@ -2289,11 +2289,15 @@ func (s *Service) performAlternativeValuation(
 	}
 
 	modelInput := &models.ModelInput{
-		HistoricalData:         historicalData,
-		MarketData:             marketData,
-		MacroData:              macroData,
-		GrowthEstimate:         growthEstimate,
-		Industry:               industryCode,
+		HistoricalData: historicalData,
+		MarketData:     marketData,
+		MacroData:      macroData,
+		GrowthEstimate: growthEstimate,
+		Industry:       industryCode,
+		// RM-2 Phase 2: thread the raw SEC SIC so revenue_multiple can resolve a
+		// Damodaran-by-SIC EV/Sales multiple; "" when SEC data lacked it (the
+		// model falls back to the Phase 1 classifier bucket).
+		SICCode:                historicalData.SICCode,
 		WACC:                   waccResult.WACC,
 		CostOfEquity:           waccResult.CostOfEquity,
 		TaxRate:                modelTaxRate,
@@ -2396,6 +2400,10 @@ func (s *Service) performAlternativeValuation(
 		// no headline re-derivation here. Both omitempty — zero on non-FFO paths.
 		PFFOValuePerShare:  modelResult.PFFOValuePerShare,
 		PAFFOValuePerShare: modelResult.PAFFOValuePerShare,
+		// RM-2 Phase 2: EV/Revenue multiple provenance. Populated only by
+		// revenue_multiple ("Damodaran <date>" or "sector-bucket"); DDM/FFO
+		// leave it "" so omitempty drops it from their responses.
+		MultipleSource:     modelResult.MultipleSource,
 		CalculationVersion: "4.10", // 4.10 = VAL-1 Phases 2-5 (DCF archetype changes); engine-wide alt-model stamp. Prior 4.9 = VAL-3 Phase 2 AFFO (FFO headline). DDM/FFO/revenue_multiple alt-model numerics bit-for-bit.
 		Warnings:           modelResult.Warnings,
 	}
