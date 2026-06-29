@@ -41,5 +41,5 @@ This supersedes the partial `todo-burndown-part2-closeout.md` (which covered onl
 - Burn-down catalog (reconciled): `docs/integration/TODO_TASKS_CATALOG.md` — see the "2026-06-08/09 — TDB BURN-DOWN COMPLETE" pass.
 - Per-item trackers (archived): `docs/reviewer/archive/TDB-*.md`.
 - Per-item specs/plans (live design record): `docs/refactoring/spec/tdb-*.md` + `docs/refactoring/implementations/tdb-*.md`.
-- Partial (TDB-7/1/2) closeout: `docs/reviewer/todo-burndown-part2-closeout.md`.
+- Partial (TDB-7/1/2) closeout: `docs/reviewer/archive/todo-burndown-part2-closeout.md`.
 - Obsolete handoff (archived): `docs/reviewer/archive/todo-burndown-next-session-handoff.md`.
