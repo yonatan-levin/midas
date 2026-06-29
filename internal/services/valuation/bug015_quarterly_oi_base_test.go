@@ -147,7 +147,7 @@ func TestService_performValuation_BUG015_QuarterlyLatest_UsesTTMBase(t *testing.
 	require.NotEmpty(t, oiBaseWarning, "expected an operating_income_base provenance warning on the quarter-latest DCF path; warnings=%v", resultTTM.Warnings)
 	assert.Contains(t, oiBaseWarning, "source=TTM_4Q",
 		"4 contiguous quarters should resolve to TTM_4Q; got %q", oiBaseWarning)
-	assert.Equal(t, "4.10", resultTTM.CalculationVersion) // VAL-1 Phases 2-5 bump (was 4.8 SR-1/B3)
+	assert.Equal(t, "4.11", resultTTM.CalculationVersion) // RM-2 Phase 2 bump (was 4.10 VAL-1)
 
 	// The TTM-annualized OI base must yield a positive DCF value: the
 	// single-quarter base drives this KO-shaped fixture negative (the BUG-015
@@ -246,6 +246,6 @@ func TestService_performValuation_BUG015_FYLatestInvariance(t *testing.T) {
 		assert.False(t, strings.HasPrefix(w, "operating_income_base:"),
 			"FY-latest must not annualize OI base; unexpected warning: %q", w)
 	}
-	assert.Equal(t, "4.10", result.CalculationVersion) // VAL-1 Phases 2-5 bump (was 4.8 SR-1/B3)
+	assert.Equal(t, "4.11", result.CalculationVersion) // RM-2 Phase 2 bump (was 4.10 VAL-1)
 	assert.Greater(t, result.DCFValuePerShare, 0.0)
 }
