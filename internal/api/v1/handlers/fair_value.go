@@ -60,7 +60,7 @@ type Industry struct {
 	// RM-2 Phase 2: EV/Revenue multiple provenance. Present only on
 	// revenue_multiple responses ("Damodaran <date>" or "sector-bucket");
 	// omitted entirely for DCF/DDM/FFO.
-	MultipleSource string `json:"multiple_source,omitempty" example:"Damodaran 2026-01-05"`
+	MultipleSource string `json:"multiple_source,omitempty" example:"Damodaran 2026-01-01"`
 }
 
 // sicToGICS is the canonical mapping from SIC-classifier labels (as emitted by

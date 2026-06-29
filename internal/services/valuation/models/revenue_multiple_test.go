@@ -486,7 +486,7 @@ func TestRevenueMultipleModel_resolveMultiple(t *testing.T) {
 		"3674": "Semiconductor",
 		"9999": "Nonexistent Industry", // dangling: absent from damodaran table
 	}
-	model := NewRevenueMultipleModelWithDamodaran(phase1, damodaran, xwalk, "2026-01-05", testLogger())
+	model := NewRevenueMultipleModelWithDamodaran(phase1, damodaran, xwalk, "2026-01-01", testLogger())
 
 	tests := []struct {
 		name         string
@@ -500,7 +500,7 @@ func TestRevenueMultipleModel_resolveMultiple(t *testing.T) {
 			sic:          "3674",
 			industry:     "MFG_SEMI", // Phase 1 would give 6.5; Damodaran must win
 			wantMultiple: 15.7006,
-			wantSource:   "Damodaran 2026-01-05",
+			wantSource:   "Damodaran 2026-01-01",
 		},
 		{
 			name:         "unmapped SIC falls back to Phase 1 prefix bucket",
@@ -590,7 +590,7 @@ func TestRevenueMultipleModel_Calculate_DamodaranSIC(t *testing.T) {
 	phase1 := map[string]float64{"default": 2.0, "MFG_SEMI": 6.5}
 	damodaran := map[string]float64{"Semiconductor": 15.7006}
 	xwalk := map[string]string{"3674": "Semiconductor"}
-	model := NewRevenueMultipleModelWithDamodaran(phase1, damodaran, xwalk, "2026-01-05", testLogger())
+	model := NewRevenueMultipleModelWithDamodaran(phase1, damodaran, xwalk, "2026-01-01", testLogger())
 
 	input := &ModelInput{
 		HistoricalData: &entities.HistoricalFinancialData{
@@ -616,8 +616,8 @@ func TestRevenueMultipleModel_Calculate_DamodaranSIC(t *testing.T) {
 
 	// EV = 1B * 15.7006 (Damodaran), NOT 1B * 6.5 (Phase 1 bucket).
 	assert.InDelta(t, 15.7006e9, result.EnterpriseValue, 1.0)
-	assert.Equal(t, "Damodaran 2026-01-05", result.MultipleSource)
-	assertHasWarningPrefix(t, result.Warnings, "multiple_source: Damodaran 2026-01-05")
+	assert.Equal(t, "Damodaran 2026-01-01", result.MultipleSource)
+	assertHasWarningPrefix(t, result.Warnings, "multiple_source: Damodaran 2026-01-01")
 }
 
 // TestRevenueMultipleModel_Calculate_UnmappedSIC_SectorBucket confirms the
@@ -626,7 +626,7 @@ func TestRevenueMultipleModel_Calculate_UnmappedSIC_SectorBucket(t *testing.T) {
 	phase1 := map[string]float64{"default": 2.0, "MFG_SEMI": 6.5}
 	damodaran := map[string]float64{"Semiconductor": 15.7006}
 	xwalk := map[string]string{"3674": "Semiconductor"}
-	model := NewRevenueMultipleModelWithDamodaran(phase1, damodaran, xwalk, "2026-01-05", testLogger())
+	model := NewRevenueMultipleModelWithDamodaran(phase1, damodaran, xwalk, "2026-01-01", testLogger())
 
 	input := &ModelInput{
 		HistoricalData: &entities.HistoricalFinancialData{
