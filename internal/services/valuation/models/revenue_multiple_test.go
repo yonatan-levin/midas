@@ -2,6 +2,7 @@ package models
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -58,9 +59,10 @@ func TestRevenueMultipleModel_Calculate_StandardTech(t *testing.T) {
 	assert.Equal(t, "revenue_multiple", result.ModelType)
 	assert.InDelta(t, 26.5, result.IntrinsicValuePerShare, 0.01)
 	assert.Equal(t, "low", result.Confidence, "revenue multiple should always be low confidence")
-	// Warnings: base + multiple + revenue_base source line + negative OI = 4.
+	// Warnings: base + multiple + revenue_base source line + multiple_source
+	// line (RM-2 Phase 2) + negative OI = 5.
 	// FY-only data routes through ANNUAL_FY (no ttmWarning).
-	assert.Len(t, result.Warnings, 4)
+	assert.Len(t, result.Warnings, 5)
 	// RM-1: source line MUST be present so dashboards can pivot on it.
 	assertHasWarningPrefix(t, result.Warnings, "revenue_base: source=ANNUAL_FY")
 }
@@ -460,11 +462,198 @@ func TestRevenueMultipleModel_Calculate_PositiveOI(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 
-	// RM-1: warnings = base + multiple info + revenue_base source line.
-	// No negative-OI warning fires because OI is positive. FY-only data
-	// routes through ANNUAL_FY so no ttmWarning is appended either.
-	assert.Len(t, result.Warnings, 3)
+	// RM-1: warnings = base + multiple info + revenue_base source line +
+	// multiple_source line (RM-2 Phase 2). No negative-OI warning fires because
+	// OI is positive. FY-only data routes through ANNUAL_FY so no ttmWarning is
+	// appended either.
+	assert.Len(t, result.Warnings, 4)
 	assertHasWarningPrefix(t, result.Warnings, "revenue_base: source=ANNUAL_FY")
+}
+
+// TestRevenueMultipleModel_resolveMultiple covers the RM-2 Phase 2 four-tier
+// resolution order and the provenance source string contract.
+func TestRevenueMultipleModel_resolveMultiple(t *testing.T) {
+	phase1 := map[string]float64{
+		"default":   2.0,
+		"MFG_SEMI":  6.5,
+		"TECH_SAAS": 8.0,
+	}
+	damodaran := map[string]float64{
+		"Semiconductor":                   15.7006,
+		"Software (System & Application)": 11.4088,
+	}
+	xwalk := map[string]string{
+		"3674": "Semiconductor",
+		"9999": "Nonexistent Industry", // dangling: absent from damodaran table
+	}
+	model := NewRevenueMultipleModelWithDamodaran(phase1, damodaran, xwalk, "2026-01-05", testLogger())
+
+	tests := []struct {
+		name         string
+		sic          string
+		industry     string
+		wantMultiple float64
+		wantSource   string
+	}{
+		{
+			name:         "mapped SIC wins over classifier bucket (Damodaran first)",
+			sic:          "3674",
+			industry:     "MFG_SEMI", // Phase 1 would give 6.5; Damodaran must win
+			wantMultiple: 15.7006,
+			wantSource:   "Damodaran 2026-01-05",
+		},
+		{
+			name:         "unmapped SIC falls back to Phase 1 prefix bucket",
+			sic:          "1234",
+			industry:     "TECH_SAAS",
+			wantMultiple: 8.0,
+			wantSource:   "sector-bucket",
+		},
+		{
+			name:         "empty SIC falls back to Phase 1 bucket",
+			sic:          "",
+			industry:     "MFG_SEMI",
+			wantMultiple: 6.5,
+			wantSource:   "sector-bucket",
+		},
+		{
+			name:         "dangling crosswalk entry degrades to Phase 1 (no panic)",
+			sic:          "9999",
+			industry:     "MFG_SEMI",
+			wantMultiple: 6.5,
+			wantSource:   "sector-bucket",
+		},
+		{
+			name:         "unknown industry falls back to default bucket",
+			sic:          "1234",
+			industry:     "UNKNOWN",
+			wantMultiple: 2.0,
+			wantSource:   "sector-bucket",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mult, source := model.resolveMultiple(tt.sic, tt.industry)
+			if mult != tt.wantMultiple {
+				t.Errorf("multiple = %v, want %v", mult, tt.wantMultiple)
+			}
+			if source != tt.wantSource {
+				t.Errorf("source = %q, want %q", source, tt.wantSource)
+			}
+		})
+	}
+}
+
+// TestRevenueMultipleModel_resolveMultiple_ZeroRegression is the load-bearing
+// pin: when the Damodaran tables are nil (config absent / a ctor that did not
+// inject them), resolveMultiple's multiplier is bit-for-bit identical to the
+// legacy getMultiple(industry) — even for a SIC that WOULD have resolved a
+// Damodaran multiple had the tables been present.
+func TestRevenueMultipleModel_resolveMultiple_ZeroRegression(t *testing.T) {
+	phase1 := map[string]float64{
+		"default":   2.0,
+		"MFG_SEMI":  6.5,
+		"TECH_SAAS": 8.0,
+		"HEALTH":    3.0,
+	}
+	// No Damodaran tables injected → tier (1) is skipped entirely.
+	model := NewRevenueMultipleModelWithMultiples(phase1, testLogger())
+
+	cases := []struct {
+		sic      string
+		industry string
+	}{
+		{"3674", "MFG_SEMI"}, // SIC mapped in production, but tables nil here
+		{"", "TECH_SAAS"},    // empty SIC
+		{"1234", "HEALTH"},   // unmapped SIC
+		{"9999", "UNKNOWN"},  // falls to default
+	}
+	for _, c := range cases {
+		mult, source := model.resolveMultiple(c.sic, c.industry)
+		legacy := model.getMultiple(c.industry)
+		if math.Float64bits(mult) != math.Float64bits(legacy) {
+			t.Errorf("sic=%q industry=%q: resolveMultiple=%v (bits %x) != getMultiple=%v (bits %x)",
+				c.sic, c.industry, mult, math.Float64bits(mult), legacy, math.Float64bits(legacy))
+		}
+		if source != "sector-bucket" {
+			t.Errorf("sic=%q industry=%q: source = %q, want sector-bucket (nil tables)",
+				c.sic, c.industry, source)
+		}
+	}
+}
+
+// TestRevenueMultipleModel_Calculate_DamodaranSIC is the end-to-end pin: a
+// mapped SIC drives the Damodaran multiple into EV and stamps MultipleSource +
+// the multiple_source: warning line.
+func TestRevenueMultipleModel_Calculate_DamodaranSIC(t *testing.T) {
+	phase1 := map[string]float64{"default": 2.0, "MFG_SEMI": 6.5}
+	damodaran := map[string]float64{"Semiconductor": 15.7006}
+	xwalk := map[string]string{"3674": "Semiconductor"}
+	model := NewRevenueMultipleModelWithDamodaran(phase1, damodaran, xwalk, "2026-01-05", testLogger())
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "MXL",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					Revenue:                   1000000000,
+					OperatingIncome:           -50000000,
+					NormalizedOperatingIncome: -50000000,
+					FilingDate:                time.Now(),
+					FilingPeriod:              "2023FY",
+				},
+			},
+		},
+		Industry:          "MFG_SEMI",
+		SICCode:           "3674",
+		SharesOutstanding: 100000000,
+	}
+
+	result, err := model.Calculate(context.Background(), input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// EV = 1B * 15.7006 (Damodaran), NOT 1B * 6.5 (Phase 1 bucket).
+	assert.InDelta(t, 15.7006e9, result.EnterpriseValue, 1.0)
+	assert.Equal(t, "Damodaran 2026-01-05", result.MultipleSource)
+	assertHasWarningPrefix(t, result.Warnings, "multiple_source: Damodaran 2026-01-05")
+}
+
+// TestRevenueMultipleModel_Calculate_UnmappedSIC_SectorBucket confirms the
+// fallback path stamps "sector-bucket" and uses the Phase 1 multiple.
+func TestRevenueMultipleModel_Calculate_UnmappedSIC_SectorBucket(t *testing.T) {
+	phase1 := map[string]float64{"default": 2.0, "MFG_SEMI": 6.5}
+	damodaran := map[string]float64{"Semiconductor": 15.7006}
+	xwalk := map[string]string{"3674": "Semiconductor"}
+	model := NewRevenueMultipleModelWithDamodaran(phase1, damodaran, xwalk, "2026-01-05", testLogger())
+
+	input := &ModelInput{
+		HistoricalData: &entities.HistoricalFinancialData{
+			Ticker: "FOO",
+			Data: map[string]*entities.FinancialData{
+				"2023FY": {
+					Revenue:                   1000000000,
+					OperatingIncome:           -50000000,
+					NormalizedOperatingIncome: -50000000,
+					FilingDate:                time.Now(),
+					FilingPeriod:              "2023FY",
+				},
+			},
+		},
+		Industry:          "MFG_SEMI",
+		SICCode:           "1234", // unmapped
+		SharesOutstanding: 100000000,
+	}
+
+	result, err := model.Calculate(context.Background(), input)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	// EV = 1B * 6.5 (Phase 1 bucket).
+	assert.InDelta(t, 6.5e9, result.EnterpriseValue, 1.0)
+	assert.Equal(t, "sector-bucket", result.MultipleSource)
+	assertHasWarningPrefix(t, result.Warnings, "multiple_source: sector-bucket")
 }
 
 // TestRevenueMultipleModel_Calculate_RM1_TTMWiring verifies the consumer
