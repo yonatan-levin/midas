@@ -227,6 +227,24 @@ func (aa *AssetAdjuster) ApplyA6RightOfUseAssets(ctx context.Context, working *e
 		}, nil
 	}
 
+	// Skip path 1b (TDB-2 REVIEWER NIT a): non-positive total assets — the ROU
+	// ratio is undefined (rou/0 → +Inf, which would spuriously clear the
+	// materiality gate and fire A6 with a nonsense ratio). Skip instead of
+	// dividing. A1 goodwill shares this gap on working.TotalAssets; fixing that
+	// is out of scope for this NIT (tracked alongside A6).
+	if working.TotalAssets <= 0 {
+		return AdjusterOutput{
+			LedgerEntries: []entities.LedgerEntry{{
+				Timestamp:  now,
+				AdjusterID: adjusterIDA6RightOfUseExclusion,
+				RuleID:     rule.ID,
+				Fired:      false,
+				Reasoning:  "Total assets non-positive; ROU ratio undefined",
+				SkipReason: fmt.Sprintf("Total assets %.0f <= 0; cannot compute ROU ratio", working.TotalAssets),
+			}},
+		}, nil
+	}
+
 	rouRatio := rou / working.TotalAssets
 
 	// Skip path 2: below the materiality threshold, mirroring A1 goodwill.

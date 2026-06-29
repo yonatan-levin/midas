@@ -25,23 +25,60 @@ import (
 func TestA6A7_DDMBanks_DoNotFire(t *testing.T) {
 	// SR-1 A3: the adapter struct was deleted; call ApplyA6RightOfUseAssets
 	// directly on the AssetAdjuster (the production dispatch path).
-	a6 := NewAssetAdjuster()
+	aa := NewAssetAdjuster()
 	cleaningCtx := &entities.CleaningContext{}
 
-	// Synthetic JPM-shaped balance sheet: huge total assets, NO ROU asset
-	// (banks do not capitalize operating leases at any material scale).
-	bank := &entities.FinancialData{
-		Ticker:                        "JPM",
-		TotalAssets:                   3_900_000_000_000.0, // ~$3.9T
-		OperatingLeaseRightOfUseAsset: 0.0,                 // banks: no material ROU
-		CashAndCashEquivalents:        500_000_000_000.0,
-		Revenue:                       170_000_000_000.0,
+	// TDB-2 REVIEWER NIT (b): cover all three mature-large-bank tickers that
+	// TestDDM_LegacyPath_BitForBit pins bit-for-bit (JPM/BAC/WFC), not JPM
+	// alone. Synthetic bank-shaped balance sheets: huge total assets, NO
+	// operating-lease ROU (banks do not capitalize operating leases at any
+	// material scale), large operating cash reserves.
+	banks := []struct {
+		ticker      string
+		totalAssets float64
+		cash        float64
+		revenue     float64
+	}{
+		{"JPM", 3_900_000_000_000.0, 500_000_000_000.0, 170_000_000_000.0},
+		{"BAC", 3_200_000_000_000.0, 400_000_000_000.0, 100_000_000_000.0},
+		{"WFC", 1_900_000_000_000.0, 200_000_000_000.0, 80_000_000_000.0},
 	}
 
-	a6Out, err := a6.ApplyA6RightOfUseAssets(context.Background(), bank, productionRightOfUseRule(), cleaningCtx)
-	require.NoError(t, err)
-	require.Len(t, a6Out.LedgerEntries, 1)
-	assert.False(t, a6Out.LedgerEntries[0].Fired,
-		"A6 must take the no-ROU skip path on a bank balance sheet")
-	assert.Empty(t, a6Out.Overlays, "A6 emits no overlay when ROU is absent")
+	for _, b := range banks {
+		t.Run(b.ticker, func(t *testing.T) {
+			bank := &entities.FinancialData{
+				Ticker:                        b.ticker,
+				TotalAssets:                   b.totalAssets,
+				OperatingLeaseRightOfUseAsset: 0.0, // banks: no material ROU
+				CashAndCashEquivalents:        b.cash,
+				Revenue:                       b.revenue,
+			}
+
+			// A6 must take the no-ROU skip path — no overlay reaches invested
+			// capital, so InvestedCapital().TotalAssets is unchanged.
+			a6Out, err := aa.ApplyA6RightOfUseAssets(context.Background(), bank, productionRightOfUseRule(), cleaningCtx)
+			require.NoError(t, err)
+			require.Len(t, a6Out.LedgerEntries, 1)
+			assert.False(t, a6Out.LedgerEntries[0].Fired,
+				"A6 must take the no-ROU skip path on a bank balance sheet")
+			assert.Empty(t, a6Out.Overlays, "A6 emits no overlay when ROU is absent")
+
+			// A7 DOES fire on a bank (cash >> 10% of revenue), but its overlay
+			// can ONLY target the view-only ExcessCash field — NO DDM input (or
+			// EV→Equity bridge term) reads it, so the DDM mature-large-bank path
+			// stays byte-identical regardless. Pin that structural guarantee
+			// rather than asserting A7 skips (it does not).
+			a7Out, err := aa.ApplyA7ExcessCash(context.Background(), bank, productionExcessCashRule(), cleaningCtx)
+			require.NoError(t, err)
+			// A7 MUST actually fire here (bank cash >> 10%-of-revenue floor), or
+			// the Field assertion below would pass vacuously and the "A7 does
+			// fire" guarantee would be untested.
+			require.NotEmpty(t, a7Out.Overlays,
+				"A7 should fire on a bank: cash far exceeds the operating-cash floor")
+			for _, ov := range a7Out.Overlays {
+				assert.Equalf(t, "ExcessCash", ov.Field,
+					"A7 overlay must target only the view-only ExcessCash field, never a DDM/bridge input (got %q)", ov.Field)
+			}
+		})
+	}
 }

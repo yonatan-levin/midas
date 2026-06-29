@@ -127,6 +127,28 @@ func TestA6RightOfUseAdjuster_Adjuster_Interface_Contract(t *testing.T) {
 		assert.Empty(t, entry.SkipMetrics, "no-ROU skip path does not carry threshold SkipMetrics")
 	})
 
+	t.Run("skip path (TotalAssets<=0) guards the ROU ratio divide (TDB-2 NIT a)", func(t *testing.T) {
+		// ROU present but total assets non-positive: rou/0 would be +Inf and
+		// spuriously clear the materiality gate. The guard must skip cleanly.
+		for _, ta := range []float64{0.0, -1_000_000.0} {
+			data := &entities.FinancialData{
+				OperatingLeaseRightOfUseAsset: 200_000.0,
+				TotalAssets:                   ta,
+			}
+
+			out, err := adj.ApplyA6RightOfUseAssets(context.Background(), data, rule, cleaningCtx)
+			require.NoError(t, err)
+
+			require.Len(t, out.LedgerEntries, 1)
+			assert.Empty(t, out.Overlays, "guard must NOT emit an overlay (no +Inf-driven fire)")
+			assert.Empty(t, out.Flags)
+
+			entry := out.LedgerEntries[0]
+			assert.False(t, entry.Fired, "TotalAssets<=0 must take the skip path, not fire")
+			assert.Contains(t, entry.SkipReason, "Total assets")
+		}
+	})
+
 	t.Run("skip path (below 5%) emits Fired:false ledger entry with SkipMetrics", func(t *testing.T) {
 		// ROU ratio = 30_000 / 1_000_000 = 3% — below the 5% threshold.
 		data := &entities.FinancialData{
