@@ -179,8 +179,12 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 	if s.config.EnableCaching {
 		cacheKey := generateCacheKey(data)
 		if cachedResult := s.getCachedResult(cacheKey); cachedResult != nil {
-			// Update processing time for the cache hit
-			cachedResult.ProcessingTime = time.Since(startTime)
+			// Return a shallow COPY with the fresh processing time (SR-1 B6):
+			// the cached pointer is shared across concurrent requests, so writing
+			// ProcessingTime on it directly is a data race (a write visible to
+			// readers holding the same pointer). Copy first, mutate the copy.
+			r := *cachedResult
+			r.ProcessingTime = time.Since(startTime)
 			// Phase 2.B fix (REVIEWER HIGH-1): record qualifying flag count
 			// on cache HITS too. Without this, the auto-on-quality-flag
 			// trigger only ever fires on the FIRST request for a flagged
@@ -190,8 +194,8 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 			// Repeat queries on the same suspect ticker are precisely the
 			// requests operators are most likely to be diagnosing, so they
 			// must not be silently dropped from the trigger path.
-			recordQualityFlagCount(ctx, cachedResult.Flags)
-			return cachedResult, nil
+			recordQualityFlagCount(ctx, r.Flags)
+			return &r, nil
 		}
 	}
 
