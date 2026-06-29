@@ -108,6 +108,118 @@ func TestCleanFinancialData_SnapshotSymmetry_RevenueZeroTicker_RPL8(t *testing.T
 	}
 }
 
+// TestCleanFinancialData_SnapshotSymmetry_CacheHit_RPL8 is the regression pin
+// for the CACHE-HIT leg of RPL-8 (#25), found+fixed by REVIEWER in 5276272.
+//
+// The bug: with enable_caching ON (the default), CleanFinancialData writes the
+// INPUT snapshot 10-clean-input.json, then on a warm cache returns the cached
+// result BEFORE the output snapshot block — leaving the cache-hit bundle missing
+// 10-clean-output.json + 10-clean-trace.json + the FinancialData schema stamp,
+// the same drift the validation-fail early return suffered. The fix routes the
+// cache-hit return through snapshotCleanOutput so the output snapshot + schema
+// stamp stay symmetric, and removed a now-redundant standalone
+// recordQualityFlagCount (RecordQualityFlagCount ADDS — not idempotent — so
+// double-calling would double-count and could spuriously trip the
+// auto-on-quality-flag trigger).
+//
+// This test calls CleanFinancialData twice against the same service instance
+// with the SAME input (a normal Revenue>0 ticker — the cache hit is the point,
+// not the revenue), injecting a SEPARATE eager bundle for each call so the
+// second (cache-hit) bundle can be asserted on in isolation. It asserts:
+//
+//   - the second call IS a cache hit (it returns the exact pointer the first
+//     call cached — getCachedResult hands back the stored *CleaningResult);
+//   - the cache-hit bundle has 10-clean-output.json + 10-clean-trace.json and
+//     stamps FinancialData=10 in the manifest (the symmetry the fix restores);
+//   - the cache-hit bundle's QualityFlagCount is NOT doubled — it equals the
+//     first (cache-miss) call's count, proving the redundant
+//     recordQualityFlagCount removal.
+//
+// Pre-fix evidence (teeth): commenting out the cache-hit snapshotCleanOutput
+// call makes 10-clean-output.json absent and FinancialData unstamped (0) on the
+// second bundle, failing this test.
+func TestCleanFinancialData_SnapshotSymmetry_CacheHit_RPL8(t *testing.T) {
+	const schemaFinancialData = 10 // current FinancialData bundle schema version
+
+	cfg := createTestConfig()
+	// The whole point of this test is the cache-HIT early return, so caching
+	// must be ON. createTestConfig() enables it; assert the prerequisite so a
+	// future config change can't silently turn this into a two-cache-miss test.
+	require.True(t, cfg.DataCleaner.EnableCaching,
+		"test prerequisite: DataCleaner.EnableCaching must be true to exercise the cache-hit path")
+	svc, err := NewDataCleanerService(cfg, &mockAIServiceDataCleaner{}, nil)
+	require.NoError(t, err)
+
+	// One FinancialData reused across both calls. generateCacheKey hashes
+	// (Ticker, FilingPeriod, FilingDate.Unix()), so identical input lands on the
+	// same cache entry. Revenue>0 normal ticker — drives the happy path on call
+	// one (which populates the cache) so call two is a clean cache hit.
+	data := createTestFinancialDataWithIssues()
+
+	// runOnce opens a fresh EAGER bundle, runs CleanFinancialData with it on ctx,
+	// closes the bundle (flushing the worker queue + writing the manifest), and
+	// returns the bundle + the cleaning result. The bundle is kept (not just its
+	// root) so the test can read QualityFlagCount() — that count lives on the
+	// in-memory bundle (atomic.Int64), not in the persisted manifest.
+	runOnce := func(rid string) (*artifact.Bundle, *entities.CleaningResult) {
+		root := t.TempDir()
+		b, err := artifact.OpenBundle(
+			artifact.Config{Enabled: true, RootPath: root},
+			rid, data.Ticker, artifact.TriggerQuery,
+		)
+		require.NoError(t, err)
+		require.NotNil(t, b)
+
+		ctx := artifact.Inject(context.Background(), b)
+		result, cleanErr := svc.CleanFinancialData(ctx, data)
+		require.NoError(t, cleanErr)
+		require.NotNil(t, result)
+
+		require.NoError(t, b.Close())
+		return b, result
+	}
+
+	// First call — cache MISS. Walks the full pipeline and populates the cache.
+	b1, r1 := runOnce("rid-rpl8-cache-miss")
+
+	// Second call — cache HIT. The fix routes this early return through
+	// snapshotCleanOutput.
+	b2, r2 := runOnce("rid-rpl8-cache-hit")
+
+	// Prove the second call really was a cache hit: getCachedResult returns the
+	// exact stored pointer, so the cache-hit result IS the first call's result.
+	require.Same(t, r1, r2,
+		"second call must return the cached result pointer (cache HIT); a re-run would allocate a new result")
+
+	root2 := b2.Root()
+
+	// The cache-hit bundle must carry BOTH the input AND output snapshots — the
+	// symmetry the fix restores.
+	assertBundleFileExists(t, root2, "10-clean-input.json")
+	assertBundleFileExists(t, root2, "10-clean-output.json")
+	assertBundleFileExists(t, root2, "10-clean-trace.json")
+
+	// The FinancialData schema stamp must be recorded on the cache-hit path too,
+	// so replay does not need --allow-schema-drift on a warm-cache bundle.
+	mfBody, err := os.ReadFile(filepath.Join(root2, "00-manifest.json"))
+	require.NoError(t, err)
+	var mf artifact.Manifest
+	require.NoError(t, json.Unmarshal(mfBody, &mf))
+	assert.Equal(t, schemaFinancialData, mf.SchemaVersions["FinancialData"],
+		"FinancialData schema version must be stamped on the cache-hit snapshot path")
+
+	// The cache-hit bundle's quality-flag count must NOT be doubled: it must
+	// equal the cache-miss count, proving snapshotCleanOutput records the count
+	// exactly once (the standalone recordQualityFlagCount that used to live on
+	// the cache-hit path was removed because RecordQualityFlagCount ADDS, so
+	// calling both would double-count). This holds whether or not the fixture
+	// raises qualifying flags — equality is the load-bearing property, not the
+	// magnitude — so it stays robust without a brittle exact-count assertion.
+	assert.Equal(t, b1.QualityFlagCount(), b2.QualityFlagCount(),
+		"cache-hit bundle quality-flag count must equal the cache-miss count (not doubled); got first=%d second=%d",
+		b1.QualityFlagCount(), b2.QualityFlagCount())
+}
+
 // assertBundleFileExists fails the test if name is missing under bundleRoot.
 func assertBundleFileExists(t *testing.T, bundleRoot, name string) {
 	t.Helper()
