@@ -239,13 +239,22 @@ func (s *Server) setupMiddleware() {
 	// the access log middleware wrapper so panics are caught before accessLog reads the status.
 	s.engine.Use(gin.CustomRecovery(s.panicHandler))
 
-	// 7. CORS
+	// 7. CORS (SR-1 B9). A wildcard origin combined with AllowCredentials:true is
+	// spec-invalid — browsers reject it and some proxies normalize it unsafely.
+	// So credentials are enabled ONLY when an explicit origin allow-list is
+	// configured; an empty list falls back to a wildcard origin WITHOUT
+	// credentials (the only valid wildcard form).
+	corsOrigins := s.config.Server.CORSAllowedOrigins
+	allowCredentials := len(corsOrigins) > 0
+	if !allowCredentials {
+		corsOrigins = []string{"*"}
+	}
 	s.engine.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"*"}, // TODO: Configure appropriately for production
+		AllowOrigins:     corsOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Content-Length", "Accept-Encoding", "X-CSRF-Token", "Authorization", "X-API-Key", "X-Request-ID", "X-Midas-Trace"},
 		ExposeHeaders:    []string{"Content-Length", "X-Request-ID"},
-		AllowCredentials: true,
+		AllowCredentials: allowCredentials,
 		MaxAge:           12 * time.Hour,
 	}))
 
@@ -263,7 +272,7 @@ func (s *Server) setupRoutes() {
 	)
 	// Health check endpoints (no authentication required)
 	s.engine.GET("/health", s.healthCheck)
-	s.engine.GET("/ready", s.readinessCheck)
+	s.engine.GET("/ready", s.healthHandler.Readiness)
 	s.engine.GET("/version", s.versionInfo)
 
 	// Prometheus metrics endpoint (no authentication required for monitoring).
@@ -752,20 +761,6 @@ func (s *Server) healthCheck(c *gin.Context) {
 		"status":    "ok",
 		"timestamp": time.Now().UTC(),
 		"service":   "dcf-valuation-api",
-	})
-}
-
-// readinessCheck checks if the service is ready to handle requests
-func (s *Server) readinessCheck(c *gin.Context) {
-	// TODO: Check database connectivity, external service health, etc.
-	c.JSON(http.StatusOK, gin.H{
-		"status":    "ready",
-		"timestamp": time.Now().UTC(),
-		"checks": gin.H{
-			"database":      "ok",
-			"external_apis": "ok",
-			"cache":         "ok",
-		},
 	})
 }
 

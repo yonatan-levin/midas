@@ -193,6 +193,13 @@ type ServerConfig struct {
 	ReadTimeout  time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout time.Duration `mapstructure:"write_timeout"`
 	IdleTimeout  time.Duration `mapstructure:"idle_timeout"`
+	// CORSAllowedOrigins is the explicit allow-list of browser origins. When
+	// non-empty, those origins are allowed WITH credentials. When empty (the
+	// default), CORS falls back to a wildcard origin WITHOUT credentials —
+	// the only spec-compliant wildcard form (a wildcard origin + credentials
+	// is rejected by browsers; see SR-1 B9). Set this in production to enable
+	// credentialed cross-origin requests from known front-ends.
+	CORSAllowedOrigins []string `mapstructure:"cors_allowed_origins"`
 }
 
 // DatabaseConfig holds database connection settings

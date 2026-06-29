@@ -443,6 +443,70 @@ func TestHealthHandler_DetailedHealthCheck_UnhealthyWhenDBFails(t *testing.T) {
 	assert.Equal(t, "unhealthy", resp.Checks["database"].Status)
 }
 
+// ---- Tests for Readiness (/ready) — SR-1 B9 ----
+
+func TestHealthHandler_Readiness_ReadyWhenHealthy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler, deps := newTestHealthHandler(t)
+
+	// Cache passes (the readiness probe gates on database + cache only).
+	deps.cache.On("Set", mock.Anything, mock.AnythingOfType("string"), "test", time.Minute).Return(nil)
+	deps.cache.On("Get", mock.Anything, mock.AnythingOfType("string"), mock.Anything).
+		Run(func(args mock.Arguments) {
+			dest := args.Get(2).(*string)
+			*dest = "test"
+		}).Return(nil)
+	deps.cache.On("Delete", mock.Anything, mock.AnythingOfType("string")).Return(nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/ready", nil)
+
+	handler.Readiness(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ready", resp["status"])
+	assert.NotEmpty(t, resp["timestamp"])
+	checks, ok := resp["checks"].(map[string]interface{})
+	require.True(t, ok, "checks should be an object")
+	assert.Contains(t, checks, "database")
+	assert.Contains(t, checks, "cache")
+}
+
+func TestHealthHandler_Readiness_NotReadyWhenDBFails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler, deps := newTestHealthHandler(t)
+
+	// Close the database to force a ping failure → not ready → 503.
+	_ = deps.db.Close()
+
+	// Cache still passes; readiness must still fail on the DB alone.
+	deps.cache.On("Set", mock.Anything, mock.AnythingOfType("string"), "test", time.Minute).Return(nil)
+	deps.cache.On("Get", mock.Anything, mock.AnythingOfType("string"), mock.Anything).
+		Run(func(args mock.Arguments) {
+			dest := args.Get(2).(*string)
+			*dest = "test"
+		}).Return(nil)
+	deps.cache.On("Delete", mock.Anything, mock.AnythingOfType("string")).Return(nil)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest("GET", "/ready", nil)
+
+	handler.Readiness(c)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "not_ready", resp["status"])
+}
+
 func TestHealthHandler_DetailedHealthCheck_CacheWriteFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

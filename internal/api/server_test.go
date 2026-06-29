@@ -287,7 +287,12 @@ func TestServer_permissionsToStrings(t *testing.T) {
 }
 
 // ===================================================================
-// Group 2: Simple handler tests (healthCheck, readinessCheck, versionInfo)
+// Group 2: Simple handler tests (healthCheck, versionInfo)
+//
+// NOTE: the /ready probe now delegates to HealthHandler.Readiness (a real DB
+// ping, SR-1 B9) rather than a hardcoded-"ok" stub on *Server. Its behavior is
+// tested in the handlers package (TestHealthHandler_Readiness_*), where a test
+// DB can be wired and a failure injected.
 // ===================================================================
 
 func TestServer_healthCheck(t *testing.T) {
@@ -302,26 +307,6 @@ func TestServer_healthCheck(t *testing.T) {
 	assert.Equal(t, "ok", body["status"])
 	assert.Equal(t, "dcf-valuation-api", body["service"])
 	assert.NotEmpty(t, body["timestamp"], "should include a timestamp")
-}
-
-func TestServer_readinessCheck(t *testing.T) {
-	s := newMinimalServer()
-	s.engine.GET("/ready", s.readinessCheck)
-
-	w := performRequest(s.engine, http.MethodGet, "/ready", nil)
-
-	assert.Equal(t, http.StatusOK, w.Code)
-
-	body := parseJSONBody(t, w)
-	assert.Equal(t, "ready", body["status"])
-	assert.NotEmpty(t, body["timestamp"])
-
-	// Verify nested checks object
-	checks, ok := body["checks"].(map[string]interface{})
-	require.True(t, ok, "checks should be an object")
-	assert.Equal(t, "ok", checks["database"])
-	assert.Equal(t, "ok", checks["external_apis"])
-	assert.Equal(t, "ok", checks["cache"])
 }
 
 func TestServer_versionInfo(t *testing.T) {

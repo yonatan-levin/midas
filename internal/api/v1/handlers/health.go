@@ -203,6 +203,43 @@ func (h *HealthHandler) DetailedHealthCheck(c *gin.Context) {
 	c.JSON(statusCode, response)
 }
 
+// Readiness handles GET /ready — a truthful readiness probe (SR-1 B9).
+// Unlike the prior hardcoded-"ok" stub, it actually pings the liveness-critical
+// dependencies (database, cache) via the same checks DetailedHealthCheck uses,
+// and returns 503 when any is unhealthy so orchestrators/load-balancers stop
+// routing traffic to a broken instance. External-API health is intentionally
+// NOT gated here — those are per-request upstream dependencies, not a reason to
+// pull the whole instance out of rotation.
+func (h *HealthHandler) Readiness(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	checks := map[string]HealthCheck{
+		"database": h.checkDatabase(ctx),
+		"cache":    h.checkCache(ctx),
+	}
+
+	ready := true
+	for _, check := range checks {
+		if check.Status == "unhealthy" {
+			ready = false
+			break
+		}
+	}
+
+	status := "ready"
+	statusCode := http.StatusOK
+	if !ready {
+		status = "not_ready"
+		statusCode = http.StatusServiceUnavailable
+	}
+
+	c.JSON(statusCode, gin.H{
+		"status":    status,
+		"timestamp": time.Now().UTC(),
+		"checks":    checks,
+	})
+}
+
 // GetMetrics handles GET /api/v1/metrics
 // @Summary      Application & system metrics (JSON)
 // @Description  Returns JSON-formatted system metrics (Go runtime, memory, GC), application metrics (total requests, latency, error and cache-hit rates, DB connections), and business metrics (valuation counts, average WACC and growth, unique tickers served). Distinct from the Prometheus exposition endpoint served at the root GET /metrics.
