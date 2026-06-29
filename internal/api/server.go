@@ -58,6 +58,7 @@ type Server struct {
 	rateLimiter      *ratelimit.RateLimiter
 	healthHandler    *handlers.HealthHandler
 	metricsService   *metrics.Service
+	usageRecorder    *usageRecorder
 }
 
 // NewServer creates a new HTTP server instance
@@ -91,6 +92,10 @@ func NewServer(
 		healthHandler:    healthHandler,
 		metricsService:   metricsService,
 	}
+
+	// Bounded async usage-recording pool (SR-1 B11) — replaces a per-request
+	// goroutine. Started here so it is ready before any request is served.
+	server.usageRecorder = newUsageRecorder(authService.RecordUsage, logger)
 
 	// Phase 2.B post-launch (REVIEWER MEDIUM-1): emit a Warn during boot when
 	// an operator set logging.artifact_store.triggers.quality_flag_threshold
@@ -673,28 +678,28 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 			zap.String("async_task", "record_usage"),
 		)
 
-		// Record usage asynchronously (don't block request).
-		// ResponseStatus / ResponseTimeMs are recorded as zero — the async path
-		// fires before the handler completes, and there is no post-response
-		// hook wired to back-fill these. Accepted tradeoff: RecordUsage captures
-		// the key+endpoint+IP for billing/audit; response attributes come from
-		// Prometheus metrics instead.
-		go func() {
-			asyncCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			err := s.authService.RecordUsage(asyncCtx, keyInfo.ID, entities.UsageRecord{
+		// Record usage asynchronously on the bounded worker pool (SR-1 B11) —
+		// non-blocking; a saturated queue sheds the record rather than stalling
+		// the request. The gin.Context-derived fields (path, UA, client IP) are
+		// read HERE on the request goroutine and passed by value, so the worker
+		// never touches the request's *gin.Context concurrently.
+		//
+		// ResponseStatus / ResponseTimeMs are recorded as zero — usage is
+		// enqueued before the handler completes and there is no post-response
+		// hook wired to back-fill them. Accepted tradeoff: this row captures
+		// key+endpoint+IP for billing/audit; response attributes come from the
+		// Prometheus metrics instead. Analysts must NOT trust these two columns.
+		s.usageRecorder.Enqueue(usageRecordJob{
+			keyID: keyInfo.ID,
+			record: entities.UsageRecord{
 				Endpoint:       c.Request.URL.Path,
 				ResponseStatus: 0,
 				ResponseTimeMs: 0,
 				UserAgent:      c.Request.UserAgent(),
 				IPAddress:      c.ClientIP(),
-			})
-
-			if err != nil {
-				reqLogger.Error("Failed to record API usage", zap.Error(err))
-			}
-		}()
+			},
+			logger: reqLogger,
+		})
 
 		// Log successful auth with the now-enriched request-scoped logger
 		logctx.From(c.Request.Context()).Debug("API key authenticated successfully",

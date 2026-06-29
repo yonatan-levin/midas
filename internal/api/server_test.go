@@ -127,6 +127,13 @@ func newMinimalServer() *Server {
 			Port:        "8080",
 		},
 		engine: gin.New(),
+		// No-op usage recorder so the auth middleware's Enqueue is safe in
+		// tests without invoking a real RecordUsage / mock-repo expectation
+		// (the recorder itself is unit-tested in usage_recorder_test.go).
+		usageRecorder: newUsageRecorder(
+			func(context.Context, string, entities.UsageRecord) error { return nil },
+			zap.NewNop(),
+		),
 	}
 }
 
