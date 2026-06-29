@@ -222,6 +222,16 @@ location nobody browses.
 **How to apply:** Applies only to `internal/` refactors. Cross-package changes spanning `internal/` + `pkg/` + `cmd/` should still be split by package.
 ```
 
+```markdown
+### 2026-06-29 — Archive completed reviewer/refactoring trackers to `archive/` (hard decision)
+
+**Rule:** A `docs/reviewer/` (and `docs/refactoring/`) tracker, plan, or closeout is **moved to the sibling `archive/` subfolder once ALL its tracked work is terminal** — i.e. every item carries a closing STATUS (`DONE` / `RESOLVED` / `WONT-FIX` / `DEFERRED-and-tracked-elsewhere`) AND the corresponding code is merged to `master`. A doc with ANY still-open/partial item stays live at the top level. A plan whose feature has shipped is archived (with its parent tracker, or independently once the feature merges).
+
+**Why:** User asked (2026-06-29) why completed docs still sit at the top level. Top-level `docs/reviewer/` is the *active* surface; `archive/` is the historical record (65+ docs already there). Keeping shipped trackers/plans at top level makes "what's still open" unreadable.
+
+**How to apply:** On completion of a tracked effort, `git mv` the doc into `…/archive/`. **Sweep references atomically** in the same commit — `rg` the old path across live docs/code (NOT inside any `archive/`, which is frozen) and repoint each hit; the closeout commit that archives a doc also fixes its inbound links. First application: `SR-1-A7-performvaluation-refactor-plan.md` + `todo-burndown-part2-closeout.md` archived 2026-06-29.
+```
+
 ---
 
 ## Change Log
@@ -231,3 +241,4 @@ location nobody browses.
 | 2026-04-18 | Initial empty template. No active rules yet. |
 | 2026-06-04 | Added 3 active rules — isolated-worktrees, AGENTS.md-is-not-a-history-log, API-doc-sync + swag-version-pinning. |
 | 2026-06-20 | Added active rule — accuracy market-gap is a screening signal, never an optimization target. |
+| 2026-06-29 | Added active rule — archive completed reviewer/refactoring trackers to `archive/` with an atomic reference sweep. |
