@@ -211,7 +211,21 @@ func (s *service) CleanFinancialData(ctx context.Context, data *entities.Financi
 			// Repeat queries on the same suspect ticker are precisely the
 			// requests operators are most likely to be diagnosing, so they
 			// must not be silently dropped from the trigger path.
-			recordQualityFlagCount(ctx, r.Flags)
+			//
+			// RPL-8: keep the output snapshot symmetric with the
+			// 10-clean-input.json written above on the cache-HIT early return
+			// too. enable_caching defaults to true, so a traced request that
+			// lands on a warm cache would otherwise produce the very
+			// drift-needing bundle (input snapshot, no output snapshot/trace/
+			// schema stamp) this fix exists to eliminate. We snapshot the COPY
+			// r (NOT the shared cachedResult) so the SR-1 B6 no-shared-mutation
+			// invariant is preserved. snapshotCleanOutput ALSO records the
+			// quality-flag count, so it subsumes the standalone
+			// recordQualityFlagCount that previously lived here — calling both
+			// would double-count (RecordQualityFlagCount Adds, it is not
+			// idempotent). Both are no-ops when no bundle is attached, so the
+			// no-bundle case is unaffected.
+			s.snapshotCleanOutput(ctx, &r)
 			return &r, nil
 		}
 	}
