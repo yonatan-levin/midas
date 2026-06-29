@@ -388,7 +388,7 @@ func (dc *DataCoordinator) fetchMacroData(ctx context.Context) (*entities.MacroD
 	macroData := &entities.MacroData{
 		AsOf:               treasuryRates.AsOf,
 		RiskFreeRate:       treasuryRates.Yield10Year,
-		RiskFreeRate3Month: treasuryRates.Yield2Year,
+		RiskFreeRate3Month: treasuryRates.Yield3Month,
 		MarketRiskPremium:  marketRiskPremium,
 		Source:             "coordinator",
 	}

@@ -107,7 +107,9 @@ func (f *fakeMarketGateway) HealthCheck(ctx context.Context) error { return nil 
 type fakeMacroGateway struct{}
 
 func (f *fakeMacroGateway) GetTreasuryRates(ctx context.Context) (*entities.TreasuryRates, error) {
-	return &entities.TreasuryRates{AsOf: time.Now(), Yield2Year: 0.04, Yield10Year: 0.045}, nil
+	// Distinct 3-month vs 2-year yields so a mislabel (B8 regression) is observable:
+	// before the fix RiskFreeRate3Month carried Yield2Year (0.04), now it carries Yield3Month (0.025).
+	return &entities.TreasuryRates{AsOf: time.Now(), Yield3Month: 0.025, Yield2Year: 0.04, Yield10Year: 0.045}, nil
 }
 func (f *fakeMacroGateway) GetMarketRiskPremium(ctx context.Context) (float64, error) {
 	return 0.05, nil
@@ -300,6 +302,26 @@ func TestDataCoordinator_FetchMacroData_RiskPremiumError(t *testing.T) {
 	}
 	if !contains(err.Error(), "market risk premium") {
 		t.Errorf("error should mention 'market risk premium', got: %v", err)
+	}
+}
+
+// TestDataCoordinator_FetchMacroData_ThreeMonthYield verifies that the 3-month
+// risk-free rate field carries the 3-month treasury yield, not the 2-year yield
+// (B8 regression: coordinator.go previously stored Yield2Year in RiskFreeRate3Month).
+func TestDataCoordinator_FetchMacroData_ThreeMonthYield(t *testing.T) {
+	cfg := &DataFetcherConfig{ConcurrentFetching: false, MaxRetries: 3}
+	dc := NewDataCoordinator(cfg, &fakeSECGateway{mapping: map[string]string{}}, &fakeMarketGateway{}, &fakeMacroGateway{}, newTestMemoryCache())
+
+	macroData, err := dc.fetchMacroData(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// fakeMacroGateway returns Yield3Month=0.025, Yield2Year=0.04.
+	if macroData.RiskFreeRate3Month != 0.025 {
+		t.Errorf("RiskFreeRate3Month should carry the 3-month yield (0.025), got %v", macroData.RiskFreeRate3Month)
+	}
+	if macroData.RiskFreeRate != 0.045 {
+		t.Errorf("RiskFreeRate should carry the 10-year yield (0.045), got %v", macroData.RiskFreeRate)
 	}
 }
 
