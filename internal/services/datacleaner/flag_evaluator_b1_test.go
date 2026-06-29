@@ -29,7 +29,7 @@ import (
 //     the PascalCase dataMap built by createRiskWarningFlags, so NO configured
 //     flag could trigger; production always fell back to hardcoded flags.
 //
-// See docs/reviewer/SR-1-simplify-and-code-review-candidates.md §B1.
+// See docs/reviewer/archive/SR-1-simplify-and-code-review-candidates.md §B1.
 
 // alwaysTriggerConfig returns a minimal config whose single flag triggers on
 // any dataMap that carries always_true=true. Includes a log action so the

@@ -22,7 +22,7 @@ import (
 // The corrected shape mirrors the TSM debt-components pattern: umbrella
 // first-hit, then sumValues over the disjoint current+noncurrent components.
 //
-// See docs/reviewer/SR-1-simplify-and-code-review-candidates.md §B4.
+// See docs/reviewer/archive/SR-1-simplify-and-code-review-candidates.md §B4.
 func TestParser_ParseFinancialData_TotalAssetsComponentFallback(t *testing.T) {
 	logger := zap.NewNop()
 	parser := NewParser(logger)

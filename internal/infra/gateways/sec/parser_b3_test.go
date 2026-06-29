@@ -35,7 +35,7 @@ import (
 //     (0, 1] — a ratio outside that band (tiny pre-tax income years) would
 //     corrupt the A2/A5 TaxShieldDTA computation, so it is left at 0.
 //
-// See docs/reviewer/SR-1-simplify-and-code-review-candidates.md §B3.
+// See docs/reviewer/archive/SR-1-simplify-and-code-review-candidates.md §B3.
 func TestParser_ParseFinancialData_EarningsNormalizationSources(t *testing.T) {
 	logger := zap.NewNop()
 	parser := NewParser(logger)

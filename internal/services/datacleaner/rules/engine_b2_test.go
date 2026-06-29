@@ -25,7 +25,7 @@ import (
 //     resolves industry-only special rules (read-only fallback scan) so
 //     callers that look up special rules by ID keep working.
 //
-// See docs/reviewer/SR-1-simplify-and-code-review-candidates.md §B2.
+// See docs/reviewer/archive/SR-1-simplify-and-code-review-candidates.md §B2.
 func TestLoadIndustryRules_DoesNotMutateBaseRules(t *testing.T) {
 	rulesFile := createTempFile(t, "rules.json", createTestRulesJSON())
 	industryFile := createTempFile(t, "tech.json", createTestIndustryJSON())

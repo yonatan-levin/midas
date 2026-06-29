@@ -90,6 +90,13 @@ type NearTermAnchors struct {
 	OperatingMarginYear1 *float64
 	RevenueGrowthYear1   *float64
 
+	// Year-2 anchors are INTENTIONAL forward-compat (SR-1 B12): the Phase-2
+	// resolver only ever sets the Year-1 fields (anchorYear1 is the sole
+	// setter), so today these stay nil and applyNearTermAnchors no-ops them.
+	// They are consumed already so a future Layer-B Phase-3 (FY+1 guidance
+	// envelopes) can populate them without touching the consumer. Until Phase 3
+	// wires a producer, a guidance fixture carrying an FY+1 figure correctly
+	// anchors nothing here — by design, not a bug.
 	CapExYear2           *float64
 	OperatingMarginYear2 *float64
 	RevenueGrowthYear2   *float64
