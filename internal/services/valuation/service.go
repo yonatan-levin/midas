@@ -827,7 +827,7 @@ func (s *Service) assembleResult(ctx context.Context, v *valuationCtx) (*entitie
 		CurrentPrice:        marketData.SharePrice,
 		DataFreshnessScore:  dataFreshnessScore,
 		CalculationMethod:   "multi_stage_dcf",
-		CalculationVersion:  "4.10", // 4.10 = VAL-1 Phases 2-5 (archetype horizon / cyclical-base normalization / profile-driven exit-multiple) change DCF output for opted-in profiles; diluted-forward is default-off. Prior 4.9 = VAL-3 Phase 2 AFFO (REIT FFO headline). DDM/FFO/revenue_multiple numerics bit-for-bit; the bump is engine-wide for a single version stamp.
+		CalculationVersion:  "4.11", // 4.11 = RM-2 Phase 2 (revenue_multiple multiplier is Damodaran-by-SIC for mapped SICs). Prior 4.10 = VAL-1 Phases 2-5 (DCF archetype changes). DCF/DDM/FFO numerics bit-for-bit; engine-wide single version stamp.
 		// Industry metadata for the API response surface. Both the SIC label
 		// and the heuristic GICS code/name flow through the valuation service
 		// directly — see spec 2026-04-23-industry-in-response-design.md.
@@ -2289,11 +2289,15 @@ func (s *Service) performAlternativeValuation(
 	}
 
 	modelInput := &models.ModelInput{
-		HistoricalData:         historicalData,
-		MarketData:             marketData,
-		MacroData:              macroData,
-		GrowthEstimate:         growthEstimate,
-		Industry:               industryCode,
+		HistoricalData: historicalData,
+		MarketData:     marketData,
+		MacroData:      macroData,
+		GrowthEstimate: growthEstimate,
+		Industry:       industryCode,
+		// RM-2 Phase 2: thread the raw SEC SIC so revenue_multiple can resolve a
+		// Damodaran-by-SIC EV/Sales multiple; "" when SEC data lacked it (the
+		// model falls back to the Phase 1 classifier bucket).
+		SICCode:                historicalData.SICCode,
 		WACC:                   waccResult.WACC,
 		CostOfEquity:           waccResult.CostOfEquity,
 		TaxRate:                modelTaxRate,
@@ -2396,7 +2400,11 @@ func (s *Service) performAlternativeValuation(
 		// no headline re-derivation here. Both omitempty — zero on non-FFO paths.
 		PFFOValuePerShare:  modelResult.PFFOValuePerShare,
 		PAFFOValuePerShare: modelResult.PAFFOValuePerShare,
-		CalculationVersion: "4.10", // 4.10 = VAL-1 Phases 2-5 (DCF archetype changes); engine-wide alt-model stamp. Prior 4.9 = VAL-3 Phase 2 AFFO (FFO headline). DDM/FFO/revenue_multiple alt-model numerics bit-for-bit.
+		// RM-2 Phase 2: EV/Revenue multiple provenance. Populated only by
+		// revenue_multiple ("Damodaran <date>" or "sector-bucket"); DDM/FFO
+		// leave it "" so omitempty drops it from their responses.
+		MultipleSource:     modelResult.MultipleSource,
+		CalculationVersion: "4.11", // 4.11 = RM-2 Phase 2 (revenue_multiple Damodaran-by-SIC multiplier); engine-wide alt-model stamp. Prior 4.10 = VAL-1 Phases 2-5. DDM/FFO alt-model numerics bit-for-bit; revenue_multiple multiplier changes for mapped SICs.
 		Warnings:           modelResult.Warnings,
 	}
 

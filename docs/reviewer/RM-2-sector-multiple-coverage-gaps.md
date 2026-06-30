@@ -1,6 +1,6 @@
 # RM-2 — Sector EV/Revenue multiples are coarsely categorised; semis/biotech/SaaS hit a 1.5× MFG default
 
-**Status:** PHASE 1 RESOLVED (2026-05-23) — Phase 2 (Damodaran sprint) remains OPEN. Filed 2026-05-06 during live-API verification of the Graham-floor PR.
+**Status:** PHASE 1 RESOLVED (2026-05-23); PHASE 2 (Damodaran sprint) IMPLEMENTED 2026-06-29 on branch `feat/rm-2-p2-damodaran-multiples` (Phase 1 retained as fallback; RM-2.5 DEFERRED). RM-2.4 (regional split) remains the only OPEN follow-up. Filed 2026-05-06 during live-API verification of the Graham-floor PR.
 **GitHub issue:** [#14](https://github.com/yonatan-levin/midas/issues/14) (mirrors this tracker; covers Phase 2 + the absorbed TDB-9 override-file work in RM-2.5).
 **Severity:** Major. Compounds with RM-1 to produce silent ~25× understatements of fair value for negative-OI tickers in tech/biotech/finance sectors.
 **Origin:** Live MXL response showed `revenue_multiple` applying `1.5×` (the MFG default) to a fabless semiconductor whose peer-group EV/Revenue is in the 6-12× range. Investigation revealed `config/industry_multiples.json` has only a handful of broad sector entries and no semiconductor-specific bucket.
@@ -201,6 +201,8 @@ That deferred work has no other home, so it is tracked here (it shares RM-2's cl
 
 **Distinction from RM-2.1.2:** RM-2.1.2 fixes the *multiplier emission* (classifier → code → `industry_multiples.json`); RM-2.5 fixes the *cleaning-rule overrides* (code → `<sector>.json`). They share the classifier-emission dependency but are independent deliverables. **Driver gate (unchanged from TDB-9):** a sector whose base-rule cleaning is demonstrably wrong, or this RM-2 sprint. The verbatim 5-step add procedure + the Financials/DDM bit-for-bit caution live in the in-code note at `loadIndustryRules` — do NOT add a bare mapping line.
 
+**RM-2.5 disposition (Phase 2 close, 2026-06-29 — B12): DEFER, no code.** RM-2.5 is a *different axis* from the Phase 2 valuation-multiple work — datacleaner cleaning-rule overrides, not EV/Revenue multiples. Only GICS `20` (Industrials) is reachable-and-uncovered, and it already degrades gracefully to base `rules.json` with a non-fatal warning (a working default, not a bug). Authoring `industrials.json` requires domain-validated override content + a reviewed recompute-shadow regeneration (would drift the shadow snapshots and expand the blast radius for no multiple-related benefit), and there is no concrete driver (no demonstrably-wrong Industrials cleaning). Revisit when an Industrials cleaning defect surfaces.
+
 ## Acceptance for closing this tracker
 
 ### Phase 1 acceptance
@@ -210,11 +212,14 @@ That deferred work has no other home, so it is tracked here (it shares RM-2's cl
 - [x] No regression on AAPL, MSFT, GOOGL (positive-OI; don't route to revenue_multiple). Verified via `go test ./...` (all 40+ packages PASS).
 - [x] All tests pass. `go test ./...` PASS on `feat/rm-2-p1-sector-multiple-buckets`.
 
-### Phase 2 acceptance (supersedes Phase 1)
-- [ ] Damodaran data ingested and committed (snapshot date documented).
-- [ ] SIC→Damodaran mapping covers all SIC codes observed in the past 60 days of `valuation_results`.
-- [ ] `industry.multiple_source` surfaces the dataset date in API responses.
-- [ ] Annual-refresh runbook documented.
-- [ ] CI gate prevents unmapped SIC codes from being silently bucketed to the default.
-- [ ] Phase 1's manually-curated entries removed (Damodaran is now canonical).
-- [ ] CHANGELOG/CLAUDE.md updated.
+### Phase 2 acceptance (additive over Phase 1 — implemented 2026-06-29, branch `feat/rm-2-p2-damodaran-multiples`)
+- [x] Damodaran data ingested and committed (snapshot date documented). `config/damodaran_sector_multiples.json` (94 industries, `dataset_date: 2026-01-01`) + `config/sic_to_damodaran.json` crosswalk; both `go:embed`'d. Regenerated bit-for-bit by `cmd/refresh-damodaran` from a live psdata.xls fetch.
+- [x] SIC→Damodaran mapping covers the initial high-volume set. **DEVIATION:** the original "all SICs in the past 60 days of `valuation_results`" check needs a request-log corpus we do not have in CI; substituted by the static referential-integrity gate (`models/sector_lookup_integrity_test.go`). Coverage is partial **by design** — unmapped SICs degrade gracefully to the Phase 1 bucket, then `default` 2.0×.
+- [x] `industry.multiple_source` surfaces the dataset date in API responses (`"Damodaran 2026-01-01"` vs `"sector-bucket"`; omitempty so DCF/DDM/FFO omit it).
+- [x] Annual-refresh runbook documented — `docs/operations/damodaran-refresh.md`.
+- [x] CI gate prevents dangling/unmapped references. **DEVIATION (as above):** static referential-integrity (every crosswalk industry name exists as a Damodaran table key; `dataset_date` parses YYYY-MM-DD), not a request-log coverage check.
+- [x] Phase 1's manually-curated entries **RETAINED as a fallback tier** (NOT removed). **DEVIATION from the original "removed" wording — explicit human decision:** additive fallback gives zero-regression (any non-Damodaran-resolved path is bit-for-bit identical to pre-Phase-2). Phase 1 buckets now serve unmapped SICs.
+- [x] CLAUDE.md updated (build command + gotcha entry); `CalculationVersion` bumped 4.10 → 4.11 (mapped-SIC `revenue_multiple` multiplier is a real output change).
+- [x] **Live-API verification (closes the Phase-1 deferred MXL box too).** QA hit the running engine 2026-06-29: `GET /api/v1/fair-value/MXL` → `calculation_method: revenue_multiple`, `industry.multiple_source: "Damodaran 2026-01-01"`, warning `Applied 15.7x EV/Revenue multiple for MFG_SEMI sector` + `multiple_source: Damodaran 2026-01-01 (industry=Semiconductor)`, `calculation_version: 4.11`. The applied **15.7×** is the live Damodaran "Semiconductor" EV/Sales (`15.7006` in the committed table), traceably read from config — **NOT** the 1.5× MFG default and not a hardcoded constant. (This supersedes the Phase-1 estimate of 6.5×: the actual 2026 Damodaran semiconductor multiple is higher — the NVDA-era multiple expansion the "Why it matters #4" section predicted. The Phase-1 unit pin still asserts 6.5× for the *Phase-1 bucket* `MFG_SEMI`, which is the fallback when no SIC maps.) Control: `GET /api/v1/fair-value/AAPL` → `multi_stage_dcf`, `multiple_source` **absent** (omitempty byte-identity confirmed).
+
+**Other Phase-2 deviation:** the source `Date updated:` cell is a `"YYYY.MM"` string (`"2026.01"`), NOT an Excel serial as the plan assumed — canonicalized to first-of-month `2026-01-01`.

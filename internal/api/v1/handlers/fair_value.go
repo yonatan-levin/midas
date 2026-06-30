@@ -57,6 +57,10 @@ type Industry struct {
 	HeuristicCode string `json:"heuristic_code,omitempty" example:"45"`                     // GICS sector code from IndustryClassifier.ClassifyIndustry
 	HeuristicName string `json:"heuristic_name,omitempty" example:"Information Technology"` // GICS sector name
 	Match         bool   `json:"match" example:"true"`                                      // true when SIC and heuristic agree per the canonical mapping
+	// RM-2 Phase 2: EV/Revenue multiple provenance. Present only on
+	// revenue_multiple responses ("Damodaran <date>" or "sector-bucket");
+	// omitted entirely for DCF/DDM/FFO.
+	MultipleSource string `json:"multiple_source,omitempty" example:"Damodaran 2026-01-01"`
 }
 
 // sicToGICS is the canonical mapping from SIC-classifier labels (as emitted by
@@ -158,6 +162,11 @@ func BuildIndustryFromResult(result *entities.ValuationResult) *Industry {
 		HeuristicCode: result.IndustryHeuristicCode,
 		HeuristicName: result.IndustryHeuristicName,
 		Match:         matchSICToGICS(result.IndustrySIC, result.IndustryHeuristicCode),
+		// RM-2 Phase 2: provenance does NOT count toward the "no classification
+		// signal" nil-guard above (an SIC-less ticker that somehow carried a
+		// source is an anomaly; safe to drop). Keeps the Industry-absent case
+		// byte-identical.
+		MultipleSource: result.MultipleSource,
 	}
 }
 
@@ -198,7 +207,7 @@ type FairValueResponse struct {
 	DataQualityScore   float64               `json:"data_quality_score,omitempty" example:"85.5"`            // Data quality score (0-100)
 	DataQualityGrade   string                `json:"data_quality_grade,omitempty" example:"B"`               // Data quality grade (A-F)
 	CalculationMethod  string                `json:"calculation_method,omitempty" example:"multi_stage_dcf"` // Model used: multi_stage_dcf, ddm, ffo, revenue_multiple
-	CalculationVersion string                `json:"calculation_version,omitempty" example:"4.10"`            // Engine version that produced this result
+	CalculationVersion string                `json:"calculation_version,omitempty" example:"4.11"`           // Engine version that produced this result
 	Warnings           []string              `json:"warnings,omitempty"`                                     // Data quality or assumption warnings
 	SanityCheck        *entities.SanityCheck `json:"sanity_check,omitempty"`                                 // Multiples cross-check against sector medians
 	Industry           *Industry             `json:"industry,omitempty"`                                     // Dual industry classification (SIC + heuristic) for drift detection

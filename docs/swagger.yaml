@@ -368,7 +368,7 @@ definitions:
         type: string
       calculation_version:
         description: Engine version that produced this result
-        example: "4.10"
+        example: "4.11"
         type: string
       cleaning_adjustments:
         description: |-
@@ -427,6 +427,9 @@ definitions:
         description: Data quality score (0-100)
         example: 85.5
         type: number
+      dcf_applied_dilution_rate:
+        example: 0.04
+        type: number
       dcf_base_normalization:
         description: |-
           DCFBaseNormalization (VAL-1 Phase 3): "latest" | "3y_mean". Omitempty +
@@ -436,6 +439,16 @@ definitions:
         type: string
       dcf_exit_multiple_terminal_value:
         example: 21000000000
+        type: number
+      dcf_forward_diluted_shares:
+        description: |-
+          DCFForwardDilutedShares / DCFAppliedDilutionRate (VAL-1 Phase 5): the
+          diluted share count projected to the DCF horizon and the clamped annual
+          dilution rate (decimal, e.g. 0.04) used for the projection. Present only
+          when the profile-gated, default-off diluted-share-forward adjustment fired
+          on the DCF path; both omitempty so default-path and DDM/FFO/revenue_multiple
+          responses are byte-identical.
+        example: 1250000000
         type: number
       dcf_gordon_terminal_value:
         description: |-
@@ -575,6 +588,13 @@ definitions:
         description: true when SIC and heuristic agree per the canonical mapping
         example: true
         type: boolean
+      multiple_source:
+        description: |-
+          RM-2 Phase 2: EV/Revenue multiple provenance. Present only on
+          revenue_multiple responses ("Damodaran <date>" or "sector-bucket");
+          omitted entirely for DCF/DDM/FFO.
+        example: Damodaran 2026-01-01
+        type: string
       sic:
         description: SIC-derived industry label from IndustryClassifier.Classify
         example: MFG

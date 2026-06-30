@@ -38,31 +38,103 @@ const DefaultEVRevenueMultiple = 2.0
 // profitability or cash flow generation. It serves as a fallback when DCF is
 // inapplicable due to negative operating income.
 type RevenueMultipleModel struct {
-	multiples map[string]float64 // industry code -> EV/Revenue multiple
-	logger    *zap.Logger
+	multiples map[string]float64 // industry code -> EV/Revenue multiple (Phase 1 fallback)
+
+	// RM-2 Phase 2: Damodaran sector tables (primary source). When either is
+	// nil (config absent/unparseable at construction) resolveMultiple skips
+	// tier (1) and behaves exactly like Phase 1 — the zero-regression path.
+	damodaran      map[string]float64 // Damodaran industry name -> EV/Sales
+	sicToDamodaran map[string]string  // SIC code -> Damodaran industry name
+	datasetDate    string             // e.g. "2026-01-01"; "" when table absent
+
+	logger *zap.Logger
 }
 
 // NewRevenueMultipleModel creates a new Revenue Multiple model. Loads sector
 // multiples from the embedded industry_multiples.json (see config/configfs).
 // No filesystem I/O — safe in any working directory and any deployment.
 func NewRevenueMultipleModel(logger *zap.Logger) *RevenueMultipleModel {
+	named := logger.Named("revenue-multiple-model")
+
 	multiples := map[string]float64{"default": DefaultEVRevenueMultiple}
 	if configMultiples, err := loadEVRevenueMultiples(); err == nil && len(configMultiples) > 0 {
 		multiples = configMultiples
 	}
+
+	// RM-2 Phase 2: load the Damodaran sector table + SIC crosswalk. Warn-and-
+	// fallback on any load error (same stance as loadEVRevenueMultiples above):
+	// a nil table leaves resolveMultiple on the Phase 1 path — zero regression.
+	damodaran, datasetDate, err := loadDamodaranMultiples()
+	if err != nil || len(damodaran) == 0 {
+		named.Warn("Damodaran multiples table unavailable; falling back to Phase 1 sector buckets",
+			zap.Error(err))
+		damodaran, datasetDate = nil, ""
+	}
+	sicToDamodaran, err := loadSICToDamodaran()
+	if err != nil || len(sicToDamodaran) == 0 {
+		named.Warn("SIC->Damodaran crosswalk unavailable; falling back to Phase 1 sector buckets",
+			zap.Error(err))
+		sicToDamodaran = nil
+	}
+
+	return &RevenueMultipleModel{
+		multiples:      multiples,
+		damodaran:      damodaran,
+		sicToDamodaran: sicToDamodaran,
+		datasetDate:    datasetDate,
+		logger:         named,
+	}
+}
+
+// NewRevenueMultipleModelWithMultiples creates a Revenue Multiple model with explicit multiples.
+// Used for testing. The Damodaran tables are left nil, so resolveMultiple runs
+// the Phase 1 path exclusively (the zero-regression configuration).
+func NewRevenueMultipleModelWithMultiples(multiples map[string]float64, logger *zap.Logger) *RevenueMultipleModel {
 	return &RevenueMultipleModel{
 		multiples: multiples,
 		logger:    logger.Named("revenue-multiple-model"),
 	}
 }
 
-// NewRevenueMultipleModelWithMultiples creates a Revenue Multiple model with explicit multiples.
-// Used for testing.
-func NewRevenueMultipleModelWithMultiples(multiples map[string]float64, logger *zap.Logger) *RevenueMultipleModel {
+// NewRevenueMultipleModelWithDamodaran creates a Revenue Multiple model with
+// explicit Phase 1 multiples AND injected Damodaran tables. Used for testing the
+// SIC-first resolution path without depending on the embedded config bytes.
+func NewRevenueMultipleModelWithDamodaran(
+	multiples map[string]float64,
+	damodaran map[string]float64,
+	sicToDamodaran map[string]string,
+	datasetDate string,
+	logger *zap.Logger,
+) *RevenueMultipleModel {
 	return &RevenueMultipleModel{
-		multiples: multiples,
-		logger:    logger.Named("revenue-multiple-model"),
+		multiples:      multiples,
+		damodaran:      damodaran,
+		sicToDamodaran: sicToDamodaran,
+		datasetDate:    datasetDate,
+		logger:         logger.Named("revenue-multiple-model"),
 	}
+}
+
+// resolveMultiple selects the EV/Revenue multiple and reports its provenance.
+// Resolution order (RM-2 Phase 2):
+//  1. Damodaran-by-SIC (lookupDamodaranMultiple) -> source "Damodaran <date>".
+//  2. Phase 1 longest-prefix over m.multiples (getMultiple) -> source
+//     "sector-bucket". This also covers the "default" key and the package
+//     constant fallback, so resolveMultiple always returns a usable multiple.
+//
+// When the Damodaran tables are nil (config absent, or a test ctor that did not
+// inject them) tier (1) is skipped and the result is bit-for-bit identical to
+// getMultiple(industry) — the zero-regression guarantee.
+// The third return value is the matched Damodaran industry name (e.g.
+// "Semiconductor") on the Damodaran path, or "" on the Phase 1 / fallback path.
+// It is used ONLY to enrich the audit warning line — the contract `source`
+// string ("Damodaran <date>" / "sector-bucket") deliberately excludes it so the
+// response field value stays stable.
+func (m *RevenueMultipleModel) resolveMultiple(sic, industry string) (multiple float64, source, damodaranIndustry string) {
+	if multiple, matchedIndustry, ok := lookupDamodaranMultiple(sic, m.sicToDamodaran, m.damodaran); ok {
+		return multiple, "Damodaran " + m.datasetDate, matchedIndustry
+	}
+	return m.getMultiple(industry), "sector-bucket", ""
 }
 
 // ModelType returns the model identifier.
@@ -97,8 +169,10 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 		return nil, fmt.Errorf("revenue_multiple: insufficient revenue history (%s)", source)
 	}
 
-	// Select the appropriate EV/Revenue multiple for this industry
-	multiple := m.getMultiple(input.Industry)
+	// Select the appropriate EV/Revenue multiple for this industry. RM-2
+	// Phase 2: resolveMultiple tries the Damodaran-by-SIC table first and
+	// degrades to the Phase 1 sector bucket; multipleSource records which won.
+	multiple, multipleSource, damodaranIndustry := m.resolveMultiple(input.SICCode, input.Industry)
 
 	// Calculate enterprise value
 	enterpriseValue := revenue * multiple
@@ -134,6 +208,16 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 	warnings = append(warnings, fmt.Sprintf("revenue_base: source=%s revenue=$%.0f", source, revenue))
 	if ttmWarning != "" {
 		warnings = append(warnings, ttmWarning)
+	}
+
+	// RM-2 Phase 2: surface the multiple provenance on a dedicated warning line
+	// (mirrors the revenue_base: convention) so dashboards can pivot on the
+	// source without parsing the response struct. "Damodaran <date>" vs
+	// "sector-bucket" — both are part of the public contract.
+	if damodaranIndustry != "" {
+		warnings = append(warnings, fmt.Sprintf("multiple_source: %s (industry=%s)", multipleSource, damodaranIndustry))
+	} else {
+		warnings = append(warnings, fmt.Sprintf("multiple_source: %s", multipleSource))
 	}
 
 	// RM-1.A: stale-data check (T7 from spec, deferred from the entity layer).
@@ -238,6 +322,7 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 		EnterpriseValue:        enterpriseValue,
 		EquityValue:            equityValue,
 		ModelType:              "revenue_multiple",
+		MultipleSource:         multipleSource,
 		Warnings:               warnings,
 		Confidence:             "low", // Always low confidence for revenue multiples
 	}, nil

@@ -17,7 +17,13 @@ import "embed"
 // binary was built with — this avoids the "wrong cwd → can't find config"
 // failure mode that bit early replay builds (RPL-2k).
 //
-//go:embed industry_multiples.json datacleaner assumption_profiles.json
+// RM-2 Phase 2: damodaran_sector_multiples.json (Damodaran NYU-Stern annual
+// EV/Sales table) + sic_to_damodaran.json (SIC → Damodaran-industry crosswalk)
+// are embedded so the revenue_multiple model can resolve a SIC-driven sector
+// multiple regardless of process cwd, identical to industry_multiples.json. A
+// file omitted from this directive is unreadable in production/replay.
+//
+//go:embed industry_multiples.json datacleaner assumption_profiles.json damodaran_sector_multiples.json sic_to_damodaran.json
 var fs embed.FS
 
 // Read returns the contents of a file packaged into the binary. The path is

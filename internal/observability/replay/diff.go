@@ -487,11 +487,12 @@ var goFieldToJSON = map[string]string{
 	"IsReasonable":         "is_reasonable",
 	"Flags":                "flags",
 	// Industry
-	"SICCode":       "sic_code",
-	"SIC":           "sic",
-	"HeuristicCode": "heuristic_code",
-	"HeuristicName": "heuristic_name",
-	"Match":         "match",
+	"SICCode":        "sic_code",
+	"SIC":            "sic",
+	"HeuristicCode":  "heuristic_code",
+	"HeuristicName":  "heuristic_name",
+	"Match":          "match",
+	"MultipleSource": "multiple_source", // RM-2 Phase 2
 	// ResolutionTrace (closes T2-P4-W2 item 12 — kept here so a future
 	// migration of Replay() to the reflection-based CompareResponse walker
 	// gets the same dotted snake_case paths the hand-rolled walker emits).
@@ -553,7 +554,8 @@ func nilOrType(p any) string {
 // PAFFOValuePerShare [VAL-3 Phase 2] + DCFBaseNormalization [VAL-1
 // Phase 3] + DCFGordonTerminalValue + DCFExitMultipleTerminalValue
 // [VAL-1 Phase 4] + DCFForwardDilutedShares + DCFAppliedDilutionRate
-// [VAL-1 Phase 5]) + 5 (Industry) + 8 (SanityCheck) = 53.
+// [VAL-1 Phase 5]) + 6 (Industry — +MultipleSource [RM-2 Phase 2]) + 8
+// (SanityCheck) = 54.
 //
 // When a future commit extends FairValueResponse, Industry, or
 // SanityCheck:
@@ -569,7 +571,7 @@ func countFairValueFields() int {
 	// + DCFBaseNormalization [VAL-1 Phase 3] + DCFGordonTerminalValue +
 	// DCFExitMultipleTerminalValue [VAL-1 Phase 4] + DCFForwardDilutedShares +
 	// DCFAppliedDilutionRate [VAL-1 Phase 5]).
-	// Industry: 5 fields.
+	// Industry: 6 fields (+MultipleSource [RM-2 Phase 2]).
 	// SanityCheck: 8 fields.
-	return 40 + 5 + 8
+	return 40 + 6 + 8
 }

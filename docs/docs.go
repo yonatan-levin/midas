@@ -788,7 +788,7 @@ const docTemplate = `{
                 "calculation_version": {
                     "description": "Engine version that produced this result",
                     "type": "string",
-                    "example": "4.10"
+                    "example": "4.11"
                 },
                 "cleaning_adjustments": {
                     "description": "CleaningAdjustments is the datacleaner audit trail: one entry per\nnormalization adjuster that FIRED on this company's financials (A1–C7,\nthe B1/B2/B3 overlays, and the TDB-2 A6/A7 + TDB-12 contingent\noverlays), projected from result.CleaningAdjustments via\nadjustmentsFromLedger. Lets consumers see which restatements/overlays\nshaped the valuation inputs (e.g. lease capitalization, inventory\nrestatement, excess-cash exclusion). Omitted (omitempty) when no\nadjuster fired, so the default no-adjustment response stays\nbyte-identical to the pre-TDB-11 wire shape. Fired-only — the\nprojection emits only Applied==true entries.",
@@ -822,6 +822,10 @@ const docTemplate = `{
                     "type": "number",
                     "example": 85.5
                 },
+                "dcf_applied_dilution_rate": {
+                    "type": "number",
+                    "example": 0.04
+                },
                 "dcf_base_normalization": {
                     "description": "DCFBaseNormalization (VAL-1 Phase 3): \"latest\" | \"3y_mean\". Omitempty +\npresent only on the cyclical DCF path, so non-cyclical responses are\nbyte-identical (no key emitted).",
                     "type": "string",
@@ -830,6 +834,11 @@ const docTemplate = `{
                 "dcf_exit_multiple_terminal_value": {
                     "type": "number",
                     "example": 21000000000
+                },
+                "dcf_forward_diluted_shares": {
+                    "description": "DCFForwardDilutedShares / DCFAppliedDilutionRate (VAL-1 Phase 5): the\ndiluted share count projected to the DCF horizon and the clamped annual\ndilution rate (decimal, e.g. 0.04) used for the projection. Present only\nwhen the profile-gated, default-off diluted-share-forward adjustment fired\non the DCF path; both omitempty so default-path and DDM/FFO/revenue_multiple\nresponses are byte-identical.",
+                    "type": "number",
+                    "example": 1250000000
                 },
                 "dcf_gordon_terminal_value": {
                     "description": "DCFGordonTerminalValue / DCFExitMultipleTerminalValue (VAL-1 Phase 4):\nthe two raw terminal-value estimates (nominal, pre-discount, pre-blend) on\nan EV/EBITDA basis. The blended primary stays enterprise_value /\ndcf_value_per_share; dcf_terminal_method names the driving method.\ndcf_exit_multiple_terminal_value is omitted on the pure-Gordon path\n(byte-identical non-exit-multiple responses).",
@@ -1005,6 +1014,11 @@ const docTemplate = `{
                     "description": "true when SIC and heuristic agree per the canonical mapping",
                     "type": "boolean",
                     "example": true
+                },
+                "multiple_source": {
+                    "description": "RM-2 Phase 2: EV/Revenue multiple provenance. Present only on\nrevenue_multiple responses (\"Damodaran \u003cdate\u003e\" or \"sector-bucket\");\nomitted entirely for DCF/DDM/FFO.",
+                    "type": "string",
+                    "example": "Damodaran 2026-01-01"
                 },
                 "sic": {
                     "description": "SIC-derived industry label from IndustryClassifier.Classify",
