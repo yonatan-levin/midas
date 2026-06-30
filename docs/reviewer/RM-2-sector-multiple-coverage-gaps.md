@@ -1,11 +1,24 @@
 # RM-2 — Sector EV/Revenue multiples are coarsely categorised; semis/biotech/SaaS hit a 1.5× MFG default
 
-**Status:** PHASE 1 RESOLVED (2026-05-23); PHASE 2 (Damodaran sprint) IMPLEMENTED 2026-06-29 on branch `feat/rm-2-p2-damodaran-multiples` (Phase 1 retained as fallback; RM-2.5 DEFERRED). RM-2.4 (regional split) remains the only OPEN follow-up. Filed 2026-05-06 during live-API verification of the Graham-floor PR.
+**Status:** PHASE 1 RESOLVED (2026-05-23); **PHASE 2 (Damodaran sprint) MERGED TO MASTER 2026-06-30** (PR [#31](https://github.com/yonatan-levin/midas/pull/31), merge commit `7e56a68`; Phase 1 retained as fallback). **Two OPEN deferred follow-ups remain — see "Remaining open follow-ups" below: RM-2.5 (TDB-9 datacleaner override files) and RM-2.4 (per-region multiples).** Filed 2026-05-06 during live-API verification of the Graham-floor PR.
 **GitHub issue:** [#14](https://github.com/yonatan-levin/midas/issues/14) (mirrors this tracker; covers Phase 2 + the absorbed TDB-9 override-file work in RM-2.5).
 **Severity:** Major. Compounds with RM-1 to produce silent ~25× understatements of fair value for negative-OI tickers in tech/biotech/finance sectors.
 **Origin:** Live MXL response showed `revenue_multiple` applying `1.5×` (the MFG default) to a fabless semiconductor whose peer-group EV/Revenue is in the 6-12× range. Investigation revealed `config/industry_multiples.json` has only a handful of broad sector entries and no semiconductor-specific bucket.
 **Blocks:** Nothing — long-standing gap, not a regression.
 **Related specs:** `docs/reviewer/RM-1-revenue-multiple-quarterly-vs-ttm.md` (revenue base; the multiplier and the base are independent fixes for the same headline number), `docs/refactoring/spec/industry-classification-unification-spec.md` (the underlying classifier-emits-coarse-codes problem), `docs/reviewer/archive/TDB-9-industry-mapping-expansion.md` (datacleaner override-file coverage — deferred work **absorbed here**; see "Absorbed from TDB-9" below).
+
+---
+
+## Remaining open follow-ups (post-Phase-2)
+
+Phase 1 + Phase 2 are MERGED. Two deliberately-deferred items keep this tracker (and GitHub #14) OPEN. Neither blocks anything — both are gated on a concrete driver, not on Phase 2.
+
+| ID | Title | Axis | Status / gate | Detail |
+|----|-------|------|---------------|--------|
+| **RM-2.5** | Datacleaner industry rule-override files (absorbed from TDB-9) | datacleaner **cleaning-rule overrides** (`loadIndustryRules` → `config/datacleaner/industry/<sector>.json`) — NOT valuation multiples | **DEFERRED, no code** (disposition recorded at Phase 2 close, B12). Gate: a GICS-`20` (Industrials) sector whose base-rule cleaning is demonstrably wrong. Today `20` degrades gracefully to base `rules.json` with a non-fatal warning (a working default, not a bug). | Tasks RM-2.5.1–RM-2.5.3 + the 5-step add procedure are in the "Absorbed from TDB-9 — RM-2.5" section below. |
+| **RM-2.4** | Per-region multiples (US / Europe / Japan / China) | valuation multiple **regional split** (Damodaran publishes `psGlobal.xls`) | **DEFERRED.** Phase 2 ships **US-only** (`psdata.xls`); international tickers (TSM, ASML) get the US-equivalent industry multiple as a stopgap. Gate: demand for region-accurate multiples on non-US ADRs. | See "Out of scope" below. Implementation would add a region-keyed table + a region resolver on top of the existing `cmd/refresh-damodaran` + crosswalk plumbing. |
+
+Both are durably tracked here (depth) and on GitHub **#14** (discoverability), per the dual-tracking rule. When a driver appears, lift the relevant section into an active sprint.
 
 ---
 
