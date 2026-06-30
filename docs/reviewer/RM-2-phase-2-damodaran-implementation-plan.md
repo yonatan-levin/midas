@@ -205,11 +205,11 @@ ModelInput ──► RevenueMultipleModel.Calculate
     "heuristic_code": "45",
     "heuristic_name": "Information Technology",
     "match": true,
-    "multiple_source": "Damodaran 2026-01-05"
+    "multiple_source": "Damodaran 2026-01-01"
   },
   "warnings": [
-    "Applied 6.8x EV/Revenue multiple for MFG_SEMI sector",
-    "multiple_source: Damodaran 2026-01-05 (industry=Semiconductor)",
+    "Applied 15.7x EV/Revenue multiple for MFG_SEMI sector",
+    "multiple_source: Damodaran 2026-01-01 (industry=Semiconductor)",
     "revenue_base: source=TTM_4Q revenue=$..."
   ]
 }
@@ -234,7 +234,7 @@ Plus the two godoc comment updates (Industry 5→6; total 53→54).
   "dataset_date": "2026-01-05",
   "source_url": "https://pages.stern.nyu.edu/~adamodar/pc/datasets/psdata.xls",
   "industries": {
-    "Semiconductor": 6.81,
+    "Semiconductor": 15.7006,
     "Software (System & Application)": 8.42,
     "Drugs (Biotechnology)": 7.918,
     "...": 0.0
