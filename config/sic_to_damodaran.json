@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "SEC SIC code -> Damodaran industry name. Partial coverage by design: unmapped SICs degrade gracefully to industry_multiples.json (Phase 1 sector buckets), then the default 2.0x. Every industry-name value MUST exist as a key in damodaran_sector_multiples.json (CI-gated by models/sector_lookup_integrity_test.go). Initial coverage (RM-2 Phase 2) targets the classifier special-cases (semiconductors, banks, insurance, biotech/pharma, software, computer hardware) plus common large-cap manufacturing / consumer / energy / retail SICs. Extend per docs/operations/damodaran-refresh.md.",
   "map": {
     "2834": "Drugs (Pharmaceutical)",
@@ -20,7 +20,7 @@
     "7373": "Computer Services",
     "7374": "Computer Services",
     "7389": "Business & Consumer Services",
-    "5961": "Software (Internet)",
+    "5961": "Retail (General)",
     "7990": "Recreation",
     "7900": "Entertainment",
     "6020": "Banks (Regional)",
@@ -29,7 +29,6 @@
     "6029": "Banks (Regional)",
     "6035": "Banks (Regional)",
     "6036": "Banks (Regional)",
-    "6199": "Financial Svcs. (Non-bank & Insurance)",
     "6200": "Brokerage & Investment Banking",
     "6211": "Brokerage & Investment Banking",
     "6282": "Investments & Asset Management",
