@@ -66,11 +66,11 @@ cleaner/adjuster math (preserves `TestDDM_LegacyPath_BitForBit` + recompute-shad
   with `schema drift detected (use --allow-schema-drift to proceed)`; post-fix it runs with only the benign
   `as_of` clock-binding field differing (`fields=1/70`), exactly the "succeeds with fields_changed: 1
   (as_of only)" outcome this tracker's acceptance criteria anticipated.
-  - NOTE: the no-flag replay ALSO required **RPL-11 (#28)** — the live test surfaced that
+  - NOTE: the no-flag replay ALSO required **RPL-12 (#28)** — the live test surfaced that
     `replay/schema.go::CurrentSchemaVersions` had never registered the `AssumptionProfileManifest` +
     `GuidanceResolution` entities the manifest now stamps, which independently forced
     `--allow-schema-drift` on EVERY fresh bundle (bank or not). Fixed in the same branch (commit
-    `445bd3a`). Without RPL-11 the RPL-8 `FinancialData` fix alone would still have been masked by that
+    `445bd3a`). Without RPL-12 the RPL-8 `FinancialData` fix alone would still have been masked by that
     unrelated drift.
 
 ## Acceptance criteria — ALL MET
@@ -78,7 +78,7 @@ cleaner/adjuster math (preserves `TestDDM_LegacyPath_BitForBit` + recompute-shad
 - [x] Capture a bank (JPM) bundle → contains `10-clean-output.json` and `10-clean-trace.json`. (live-confirmed)
 - [x] Same bundle's manifest `schema_versions` contains `FinancialData` (value 10). (live-confirmed)
 - [x] Replay JPM `--from=parsed` WITHOUT `--allow-schema-drift` → succeeds with `fields_changed: 1`
-      (as_of only). (live-confirmed; required RPL-11 #28 for the two unrelated schema entities)
+      (as_of only). (live-confirmed; required RPL-12 #28 for the two unrelated schema entities)
 - [x] Regression tests added (ValidateData-fail path + cache-HIT path; both teeth-proven).
 
 ## Traceability
@@ -86,7 +86,7 @@ cleaner/adjuster math (preserves `TestDDM_LegacyPath_BitForBit` + recompute-shad
 - GitHub issue: #25
 - Branch: `fix/rpl8-ddm-cleaner-snapshot` (commits `5b3e0a1`, `5276272`, `378dc9c`)
 - Original filing: 2026-05-14 (QA cycle 1, replay-fidelity debug)
-- Spun off during this fix: **RPL-11 (#28)** — `docs/reviewer/archive/RPL11-replay-schema-registry-missing-entities.md`
+- Spun off during this fix: **RPL-12 (#28)** — `docs/reviewer/archive/RPL12-replay-schema-registry-missing-entities.md`
   (the replay-registry staleness the live test exposed; same branch, commit `445bd3a`).
 - Related: #22 / BUG-016 (tier2-baseline fixtures never committed — why the OLD JPM baseline can't be
   replayed locally; the live-capture acceptance check used a FRESH bundle instead).

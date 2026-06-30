@@ -1,4 +1,4 @@
-# RPL-11 — Replay `CurrentSchemaVersions` missing AssumptionProfileManifest + GuidanceResolution
+# RPL-12 — Replay `CurrentSchemaVersions` missing AssumptionProfileManifest + GuidanceResolution
 
 **Status:** RESOLVED — fixed 2026-06-29 on `fix/rpl8-ddm-cleaner-snapshot` (commit `445bd3a`). GitHub issue: #28.
 **Severity:** MEDIUM — replay/observability ergonomics; `--allow-schema-drift` workaround existed. No valuation impact.
@@ -60,7 +60,10 @@ packages green; RPL-8 + DDM bit-for-bit invariants unaffected.
 
 ## Traceability
 
-- GitHub issue: #28 (title corrected RPL-10 → RPL-11; `RPL10` was already taken by an archived tracker).
+- GitHub issue: #28. Numbering note: provisionally filed as RPL-10 (collided with archived `RPL10`),
+  briefly RPL-11 (collided with `RPL11`/#30 "current replay baseline capture" which landed on master in
+  parallel), finalized as **RPL-12**. Earlier commit messages (`445bd3a`, `2ba60a5`) carry the provisional
+  RPL-10/RPL-11 labels; issue **#28** is the canonical handle.
 - Branch: `fix/rpl8-ddm-cleaner-snapshot`, commit `445bd3a`.
 - Parent: RPL-8 (#25) — this gap blocked RPL-8's acceptance criterion #3; fixed in the same branch.
 - Files: `internal/observability/replay/schema.go`, `schema_test.go`,
