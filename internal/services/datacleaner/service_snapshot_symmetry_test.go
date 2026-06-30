@@ -186,10 +186,13 @@ func TestCleanFinancialData_SnapshotSymmetry_CacheHit_RPL8(t *testing.T) {
 	// snapshotCleanOutput.
 	b2, r2 := runOnce("rid-rpl8-cache-hit")
 
-	// Prove the second call really was a cache hit: getCachedResult returns the
-	// exact stored pointer, so the cache-hit result IS the first call's result.
-	require.Same(t, r1, r2,
-		"second call must return the cached result pointer (cache HIT); a re-run would allocate a new result")
+	// Prove the second call really was a cache hit. SR-1 B6 returns a shallow
+	// COPY of the cached *CleaningResult (to avoid racing the shared pointer on
+	// ProcessingTime), so the outer pointers differ — but the copy shares the
+	// inner CleanedData pointer, which a fresh full-pipeline run would have
+	// re-allocated. Same CleanedData pointer ⇒ cache HIT.
+	require.Same(t, r1.CleanedData, r2.CleanedData,
+		"second call must reuse the cached CleanedData (cache HIT); a re-run would allocate a new one")
 
 	root2 := b2.Root()
 
