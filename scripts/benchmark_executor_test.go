@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -137,14 +139,16 @@ func TestBenchmarkExecutor_AuthenticationHandling(t *testing.T) {
 
 // TestScenarioExecution tests running specific test scenarios
 func TestScenarioExecution_SingleTicker(t *testing.T) {
-	// Track request count
-	requestCount := 0
+	// Track request count. The httptest handler runs in a fresh goroutine per
+	// request and the scenario drives them concurrently, so this MUST be atomic
+	// or `go test -race` fires (CI-1 / #20).
+	var requestCount atomic.Int64
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
+		rc := requestCount.Add(1)
 
 		// Simulate varying response times
-		delay := time.Duration(requestCount%3) * 50 * time.Millisecond
+		delay := time.Duration(rc%3) * 50 * time.Millisecond
 		time.Sleep(delay)
 
 		w.Header().Set("Content-Type", "application/json")
@@ -187,7 +191,7 @@ func TestScenarioExecution_SingleTicker(t *testing.T) {
 	assert.LessOrEqual(t, result.ErrorRatePercent, 100.0, "Error rate should not exceed 100%")
 
 	// Verify the server received requests
-	assert.Greater(t, requestCount, 0, "Server should have received requests")
+	assert.Greater(t, requestCount.Load(), int64(0), "Server should have received requests")
 }
 
 // TestScenarioExecution_BulkRequests tests bulk API endpoint performance
@@ -236,13 +240,13 @@ func TestScenarioExecution_BulkRequests(t *testing.T) {
 
 // TestErrorHandling tests how the executor handles API errors
 func TestErrorHandling_APIErrors(t *testing.T) {
-	errorCount := 0
+	var errorCount atomic.Int64
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		errorCount++
+		ec := errorCount.Add(1)
 
 		// Return errors for first few requests, then success
-		if errorCount <= 2 {
+		if ec <= 2 {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte(`{"error": "internal server error"}`))
 			return
@@ -279,19 +283,27 @@ func TestErrorHandling_APIErrors(t *testing.T) {
 
 // TestConcurrencyHandling tests concurrent request execution
 func TestConcurrencyHandling_ParallelRequests(t *testing.T) {
+	// concurrentRequests is a gauge (inc on entry, dec on exit) and maxConcurrent
+	// tracks its peak — a cross-variable critical section, so guard both with a
+	// mutex rather than atomics or `go test -race` fires (CI-1 / #20).
+	var mu sync.Mutex
 	concurrentRequests := 0
 	maxConcurrent := 0
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		concurrentRequests++
 		if concurrentRequests > maxConcurrent {
 			maxConcurrent = concurrentRequests
 		}
+		mu.Unlock()
 
 		// Hold request open to test concurrency
 		time.Sleep(100 * time.Millisecond)
 
+		mu.Lock()
 		concurrentRequests--
+		mu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ticker": "AAPL", "dcf_value_per_share": 123.45}`))
@@ -317,8 +329,11 @@ func TestConcurrencyHandling_ParallelRequests(t *testing.T) {
 	require.NoError(t, err, "Should handle concurrent requests")
 
 	assert.Greater(t, result.TotalRequests, int64(3), "Should have made multiple requests")
-	assert.Greater(t, maxConcurrent, 1, "Should have processed requests concurrently")
-	assert.LessOrEqual(t, maxConcurrent, 5, "Should not exceed concurrency limit")
+	mu.Lock()
+	mc := maxConcurrent
+	mu.Unlock()
+	assert.Greater(t, mc, 1, "Should have processed requests concurrently")
+	assert.LessOrEqual(t, mc, 5, "Should not exceed concurrency limit")
 }
 
 // TestLatencyMeasurement tests accurate latency measurement

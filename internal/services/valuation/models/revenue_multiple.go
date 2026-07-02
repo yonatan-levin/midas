@@ -195,9 +195,18 @@ func (m *RevenueMultipleModel) Calculate(ctx context.Context, input *ModelInput)
 		valuePerShare = 0
 	}
 
+	// When the multiple came from the Damodaran-by-SIC table, name the matched
+	// Damodaran industry alongside the classifier code so the audit line is not
+	// misread (e.g. a 15.7x Damodaran "Semiconductor" multiple applied to the
+	// MFG_SEMI bucket, whose Phase 1 value is 6.5x). Empty on the Phase 1 path.
+	appliedSector := input.Industry
+	if damodaranIndustry != "" {
+		appliedSector = fmt.Sprintf("%s (Damodaran: %s)", input.Industry, damodaranIndustry)
+	}
+
 	warnings := []string{
 		"Revenue multiple valuation is a rough approximation — does not account for profitability or cash flows",
-		fmt.Sprintf("Applied %.1fx EV/Revenue multiple for %s sector", multiple, input.Industry),
+		fmt.Sprintf("Applied %.1fx EV/Revenue multiple for %s sector", multiple, appliedSector),
 	}
 
 	// Surface the TTM source so consumers can distinguish a clean TTM_4Q

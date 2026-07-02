@@ -75,7 +75,11 @@ func TestDataCleanerRecompute_ShadowMode_TickerBasket(t *testing.T) {
 			dateDirs = append(dateDirs, m)
 		}
 	}
-	require.NotEmpty(t, dateDirs, "no baseline date directories under %s — capture a baseline first", baselineParent)
+	if len(dateDirs) == 0 {
+		// BUG-016: the tier2-baseline subtree is gitignored and not present on
+		// every machine (e.g. CI). Skip rather than hard-fail when it's absent.
+		t.Skipf("no tier2-baseline date dirs under %s (BUG-016)", baselineParent)
+	}
 	// Pin to a FIXED baseline date rather than the newest. The committed shadow
 	// snapshots are a byte-stable regression reference ("git diff --quiet
 	// recompute-shadow/" is load-bearing per CLAUDE.md). Resolving "newest" made

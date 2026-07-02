@@ -193,12 +193,14 @@ func TestNewLogger_FileSinkProbeFailure(t *testing.T) {
 	// directory-creation failure on MkdirAll. On Linux, "/proc/1/nope/x.log"
 	// fails because /proc/1 is a kernel-managed directory that rejects
 	// arbitrary subdirectory creation even for root.
-	var unwritablePath string
+	var unwritablePath, wantPathSubstr string
 	switch runtime.GOOS {
 	case "windows":
 		unwritablePath = `Z:\midas-m1e-probe-fail\test.log`
+		wantPathSubstr = "midas-m1e-probe-fail"
 	default:
 		unwritablePath = "/proc/1/nope/test.log"
+		wantPathSubstr = "/proc/1/nope"
 	}
 
 	cfg := baseLoggingCfg()
@@ -231,9 +233,9 @@ func TestNewLogger_FileSinkProbeFailure(t *testing.T) {
 
 	assert.Contains(t, capturedStr, "falling back to stdout-only",
 		"expected fallback warning in stdout, got: %s", capturedStr)
-	// JSON-encoded path: backslashes get escaped. Match the substring that
-	// appears in the encoded form ("midas-m1e-probe-fail" is invariant).
-	assert.Contains(t, capturedStr, "midas-m1e-probe-fail",
+	// Match a per-OS substring of the failing path (the two OSes use different
+	// unwritable paths; the Windows-only literal fails on Linux CI — CI-1 / #20).
+	assert.Contains(t, capturedStr, wantPathSubstr,
 		"warning must include the failing path. captured: %s", capturedStr)
 
 	// Sanity: the configured log file must NOT exist (probe rejected creation).

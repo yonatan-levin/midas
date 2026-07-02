@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -130,13 +131,26 @@ type entry struct {
 	v   interface{}
 	exp time.Time
 }
-type testCacheRepo struct{ store map[string]entry }
+
+// testCacheRepo is a mutex-guarded in-process cache fake. The production
+// coordinator legitimately fans out fetches across goroutines that all touch
+// the injected cache (fetchSECData.func1 in coordinator.go), so — like the real
+// Redis/in-memory caches — this fake MUST be safe for concurrent use or the
+// race detector fires under `go test -race` (CI-1 / #20).
+type testCacheRepo struct {
+	mu    sync.Mutex
+	store map[string]entry
+}
 
 func (r *testCacheRepo) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.store[key] = entry{v: value, exp: time.Now().Add(ttl)}
 	return nil
 }
 func (r *testCacheRepo) Get(ctx context.Context, key string, dest interface{}) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	e, ok := r.store[key]
 	if !ok || time.Now().After(e.exp) {
 		return fmt.Errorf("not found")
@@ -145,18 +159,26 @@ func (r *testCacheRepo) Get(ctx context.Context, key string, dest interface{}) e
 	return json.Unmarshal(b, dest)
 }
 func (r *testCacheRepo) Delete(ctx context.Context, key string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	delete(r.store, key)
 	return nil
 }
 func (r *testCacheRepo) Exists(ctx context.Context, key string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	_, ok := r.store[key]
 	return ok, nil
 }
 func (r *testCacheRepo) SetNX(ctx context.Context, key string, value interface{}, ttl time.Duration) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if _, ok := r.store[key]; ok {
 		return false, nil
 	}
-	return true, r.Set(ctx, key, value, ttl)
+	// Inline the write (do NOT call r.Set) — the mutex is non-reentrant.
+	r.store[key] = entry{v: value, exp: time.Now().Add(ttl)}
+	return true, nil
 }
 func (r *testCacheRepo) GetKeys(ctx context.Context, pattern string) ([]string, error) {
 	return []string{}, nil

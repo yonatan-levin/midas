@@ -618,6 +618,9 @@ func TestRevenueMultipleModel_Calculate_DamodaranSIC(t *testing.T) {
 	assert.InDelta(t, 15.7006e9, result.EnterpriseValue, 1.0)
 	assert.Equal(t, "Damodaran 2026-01-01", result.MultipleSource)
 	assertHasWarningPrefix(t, result.Warnings, "multiple_source: Damodaran 2026-01-01")
+	// The audit "Applied" line names the matched Damodaran industry alongside the
+	// classifier code, so the 15.7x is not misread as the MFG_SEMI bucket value.
+	assertHasWarningPrefix(t, result.Warnings, "Applied 15.7x EV/Revenue multiple for MFG_SEMI (Damodaran: Semiconductor) sector")
 }
 
 // TestRevenueMultipleModel_Calculate_UnmappedSIC_SectorBucket confirms the

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -210,12 +211,18 @@ func TestSnapshot_WriteFailureDegradesAndAnnotates(t *testing.T) {
 		b.Snapshot(context.Background(), "fetch.sec", "x.json", Payload{N: i})
 	}
 
-	// Restore the directory before Close so Finalize's manifest write
-	// succeeds. We can't reliably synchronise with the worker without
-	// closing the queue, so this races: we accept the test must tolerate
-	// the worker possibly seeing a healed root for the LAST snapshot
-	// in-flight when we restore. The assertion uses GreaterOrEqual on the
-	// failed count and matches any annotated value.
+	// Block until the background worker has actually observed the blocked
+	// writes BEFORE restoring the directory. WriteErrors() reads the atomic
+	// counter the worker increments on each failed os.WriteFile, so once it
+	// reaches writeAttempts every queued snapshot has drained against the
+	// sabotaged root. Removes the fast-CI race (CI-1 / #20) where the worker
+	// drained all snapshots only AFTER the heal, observing zero failures.
+	require.Eventually(t, func() bool {
+		return b.WriteErrors() >= int64(writeAttempts)
+	}, 5*time.Second, time.Millisecond,
+		"worker must observe all write failures before the directory is healed")
+
+	// Restore the directory before Close so Finalize's manifest write succeeds.
 	require.NoError(t, os.Remove(bundleRoot))
 	require.NoError(t, os.MkdirAll(bundleRoot, 0o755))
 	require.NoError(t, b.Close())

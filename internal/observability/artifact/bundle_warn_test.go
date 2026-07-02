@@ -15,6 +15,7 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -252,9 +253,17 @@ func TestBundle_WriteErrorEmitsWarn(t *testing.T) {
 		b.Snapshot(context.Background(), "fetch.sec", "x.json", Payload{N: i})
 	}
 
-	// Restore the directory before Close so Finalize's manifest write can
-	// succeed. Races with the worker, but at least one of the 5 snapshots will
-	// have failed against the sabotaged root before the heal.
+	// Block until the worker has observed all blocked writes BEFORE healing the
+	// directory. WriteErrors() reads the atomic counter the worker bumps on each
+	// failed os.WriteFile; once it reaches writeAttempts the first failure has
+	// already fired the at-most-once write_error Warn. Removes the fast-CI race
+	// (CI-1 / #20) where the worker drained everything only after the heal.
+	require.Eventually(t, func() bool {
+		return b.WriteErrors() >= int64(writeAttempts)
+	}, 5*time.Second, time.Millisecond,
+		"worker must observe all write failures before the directory is healed")
+
+	// Restore the directory before Close so Finalize's manifest write can succeed.
 	require.NoError(t, os.Remove(bundleRoot))
 	require.NoError(t, os.MkdirAll(bundleRoot, 0o755))
 	require.NoError(t, b.Close())

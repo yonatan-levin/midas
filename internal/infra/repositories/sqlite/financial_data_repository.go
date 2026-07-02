@@ -348,7 +348,7 @@ func (r *FinancialDataRepository) StoreHistorical(ctx context.Context, data *ent
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback() // no-op after Commit
+	defer func() { _ = tx.Rollback() }() // no-op after Commit; error intentionally ignored
 
 	for _, periodData := range data.Data {
 		if err := r.storeInTx(ctx, tx, periodData); err != nil {

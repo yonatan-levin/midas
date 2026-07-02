@@ -3,6 +3,7 @@ name: Performance Testing
 on:
   pull_request:
     branches: [ master ]
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'internal/**'
       - 'pkg/**'
@@ -32,8 +33,16 @@ env:
 
 jobs:
   performance-test:
+    # Gated off the default push/PR path (CI-1 / #20): the benchmark harness is
+    # incomplete (no `main` entrypoint — see docs/reviewer/CI-1.2) AND its
+    # scenarios drive the live valuation path against real SEC/Yahoo APIs, the
+    # same rationale that gates e2e-live. Runs on manual dispatch or a PR labeled
+    # `perf`; nightly coverage is the separate scheduled-performance-test job.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'perf'))
     runs-on: ubuntu-latest
-    
+
     services:
       redis:
         image: redis:7-alpine
@@ -52,12 +61,12 @@ jobs:
         fetch-depth: 0  # Fetch full history for baseline comparison
     
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: ${{ env.GO_VERSION }}
     
     - name: Cache Go modules
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cache/go-build
@@ -76,31 +85,34 @@ jobs:
     
     - name: Setup test database
       run: |
-        # Create test database directory
+        # Create test database directory and migrate schema + seed demo key at
+        # the EXACT path the server opens below. cmd/migrate is the canonical
+        # initializer (schema.sql + 0001_seed_demo_key) — CI-1 / #20.
         mkdir -p testdata/db
-        
-        # Initialize SQLite database for testing
-        go run -tags tools scripts/setup_test_db.go
-    
+        go run ./cmd/migrate -db testdata/db/test.db
+
     - name: Start DCF API server
       run: |
-        # Start server in background for performance testing
-        export CONFIG_ENV=test
-        export DATABASE_URL="sqlite://testdata/db/test.db"
-        export REDIS_URL="redis://localhost:6379"
+        # Env keys MUST match internal/config/config.go (viper: database.driver ->
+        # DATABASE_DRIVER, database.sqlite_path -> DATABASE_SQLITE_PATH). The old
+        # DATABASE_URL key was ignored, so the server fell back to ./data/midas.db
+        # (a nonexistent dir) and failed to boot — CI-1 / #20.
+        export DATABASE_DRIVER=sqlite3
+        export DATABASE_SQLITE_PATH=testdata/db/test.db
         export LOG_LEVEL=warn
-        export API_KEY_FOR_TESTING=test-performance-api-key-2024
-        
+
         ./bin/dcf-server &
         SERVER_PID=$!
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
-        
-        # Wait for server to be ready
-        sleep 5
-        
-        # Health check
-        curl -f http://localhost:8080/api/v1/health || exit 1
-        
+
+        # Wait for the public health endpoint (retry — startup can exceed a
+        # fixed sleep when the optional Redis dial times out first).
+        for i in $(seq 1 30); do
+          curl -sf http://localhost:8080/health && break
+          sleep 1
+        done
+        curl -sf http://localhost:8080/health || { echo 'server not healthy'; exit 1; }
+
         echo "DCF API server started successfully (PID: $SERVER_PID)"
     
     - name: Run performance benchmarks
@@ -172,7 +184,7 @@ jobs:
         fi
     
     - name: Upload performance results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: performance-results-${{ github.sha }}
         path: |
@@ -260,7 +272,7 @@ jobs:
       uses: actions/checkout@v4
     
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@v5
       with:
         go-version: ${{ env.GO_VERSION }}
     
@@ -274,23 +286,26 @@ jobs:
     
     - name: Setup test database
       run: |
+        # cmd/migrate at the exact path the server opens below (CI-1 / #20).
         mkdir -p testdata/db
-        go run -tags tools scripts/setup_test_db.go
-    
+        go run ./cmd/migrate -db testdata/db/test.db
+
     - name: Start DCF API server
       run: |
-        export CONFIG_ENV=test
-        export DATABASE_URL="sqlite://testdata/db/test.db"
-        export REDIS_URL="redis://localhost:6379"
+        # Correct viper env keys so the server opens the migrated DB (CI-1 / #20).
+        export DATABASE_DRIVER=sqlite3
+        export DATABASE_SQLITE_PATH=testdata/db/test.db
         export LOG_LEVEL=warn
-        export API_KEY_FOR_TESTING=test-performance-api-key-2024
-        
+
         ./bin/dcf-server &
         SERVER_PID=$!
         echo "SERVER_PID=$SERVER_PID" >> $GITHUB_ENV
-        
-        sleep 5
-        curl -f http://localhost:8080/api/v1/health || exit 1
+
+        for i in $(seq 1 30); do
+          curl -sf http://localhost:8080/health && break
+          sleep 1
+        done
+        curl -sf http://localhost:8080/health || { echo 'server not healthy'; exit 1; }
     
     - name: Run comprehensive performance tests
       run: |
@@ -315,7 +330,7 @@ jobs:
           -detailed
     
     - name: Archive nightly results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: nightly-performance-results-${{ github.run_number }}
         path: |

@@ -377,7 +377,10 @@ func calcVersionLabel(rows []Row) string {
 // two segments so the report header is stable across machines, e.g.
 // "C:/.../artifacts/tier2-baseline/2026-06-03" -> "tier2-baseline/2026-06-03".
 func shortPath(p string) string {
-	p = filepath.ToSlash(strings.TrimRight(p, `/\`))
+	// Normalize backslashes unconditionally: filepath.ToSlash only replaces the
+	// native os.PathSeparator, so on Linux a Windows-captured "C:\...\x" path
+	// keeps its backslashes and the split below returns it unchanged (CI-1 / #20).
+	p = strings.ReplaceAll(strings.TrimRight(p, `/\`), `\`, "/")
 	parts := strings.Split(p, "/")
 	if len(parts) <= 2 {
 		return p
