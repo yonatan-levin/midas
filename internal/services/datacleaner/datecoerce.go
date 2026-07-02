@@ -1,10 +1,9 @@
-// Package datacleaner — shared flexible date/duration coercion helpers (TDB-10 / #10).
-// Used by the XBRL matcher's date/duration data-type validation and the flag evaluator's
-// date-condition evaluation. Lenient by default: a small fixed layout list, no new dependency.
+// Package datacleaner — shared flexible date coercion helpers (TDB-10 / #10).
+// Used by the flag evaluator's date-condition evaluation. Lenient by default:
+// a small fixed layout list, no new dependency.
 package datacleaner
 
 import (
-	"regexp"
 	"time"
 )
 
@@ -39,13 +38,4 @@ func coerceTime(v interface{}) (time.Time, bool) {
 	default:
 		return time.Time{}, false
 	}
-}
-
-// iso8601DurationRE matches ISO-8601 durations (e.g. "P1Y", "P3M", "P1Y6M", "PT12H").
-var iso8601DurationRE = regexp.MustCompile(`^P(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$`)
-
-// isISO8601Duration reports whether s looks like an ISO-8601 duration. A bare "P" (no components)
-// is rejected because it carries no duration.
-func isISO8601Duration(s string) bool {
-	return s != "P" && iso8601DurationRE.MatchString(s)
 }

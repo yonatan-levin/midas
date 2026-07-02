@@ -79,7 +79,11 @@ func TestDatacleaner_PlugInvariants_TickerBasket(t *testing.T) {
 			dateDirs = append(dateDirs, m)
 		}
 	}
-	require.NotEmpty(t, dateDirs, "no baseline date directories under %s — capture a baseline first", baselineParent)
+	if len(dateDirs) == 0 {
+		// BUG-016: the tier2-baseline subtree is gitignored and not present on
+		// every machine (e.g. CI). Skip rather than hard-fail when it's absent.
+		t.Skipf("no tier2-baseline date dirs under %s (BUG-016)", baselineParent)
+	}
 	sort.Strings(dateDirs)
 	bundleRoot := dateDirs[len(dateDirs)-1]
 	t.Logf("tier2-baseline resolved to %s (newest of %d date dirs)", filepath.Base(bundleRoot), len(dateDirs))

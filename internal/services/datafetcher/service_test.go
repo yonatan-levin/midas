@@ -16,11 +16,14 @@ import (
 type mockSECGateway struct {
 	companyFacts *entities.CompanyFactsResponse
 	err          error
+	mu           sync.Mutex // guards callCount — the coordinator fans out fetches concurrently (CI-1 / #20)
 	callCount    int
 }
 
 func (m *mockSECGateway) GetCompanyFacts(ctx context.Context, cik string) (*entities.CompanyFactsResponse, error) {
+	m.mu.Lock()
 	m.callCount++
+	m.mu.Unlock()
 	// Add small delay to simulate real API call for duration tracking
 	select {
 	case <-ctx.Done():
@@ -36,7 +39,9 @@ func (m *mockSECGateway) GetCompanyConcepts(ctx context.Context, cik string, tag
 }
 
 func (m *mockSECGateway) GetFinancialDataForTicker(ctx context.Context, ticker, cik string) (*entities.HistoricalFinancialData, error) {
+	m.mu.Lock()
 	m.callCount++
+	m.mu.Unlock()
 	// Simulate API latency for duration tracking
 	select {
 	case <-ctx.Done():
@@ -119,11 +124,14 @@ func (m *mockSECGateway) GetTickerCIKMapping(ctx context.Context) (map[string]st
 type mockMarketDataGateway struct {
 	marketData *entities.MarketData
 	err        error
+	mu         sync.Mutex // guards callCount — concurrent coordinator fan-out (CI-1 / #20)
 	callCount  int
 }
 
 func (m *mockMarketDataGateway) GetQuote(ctx context.Context, ticker string) (*entities.MarketData, error) {
+	m.mu.Lock()
 	m.callCount++
+	m.mu.Unlock()
 	// Add small delay to simulate real API call for duration tracking
 	select {
 	case <-ctx.Done():
@@ -166,11 +174,14 @@ func (m *mockMarketDataGateway) HealthCheck(ctx context.Context) error {
 type mockMacroDataGateway struct {
 	macroData *entities.MacroData
 	err       error
+	mu        sync.Mutex // guards callCount — concurrent coordinator fan-out (CI-1 / #20)
 	callCount int
 }
 
 func (m *mockMacroDataGateway) GetTreasuryRates(ctx context.Context) (*entities.TreasuryRates, error) {
+	m.mu.Lock()
 	m.callCount++
+	m.mu.Unlock()
 	// Add small delay to simulate real API call for duration tracking
 	time.Sleep(5 * time.Millisecond)
 	treasuryRates := &entities.TreasuryRates{

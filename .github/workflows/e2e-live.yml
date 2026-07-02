@@ -1,12 +1,26 @@
 name: E2E Live Tests
 
 on:
-  push:
-    branches: [ master ]
+  # This suite runs with E2E_LIVE=1 against real SEC EDGAR / Yahoo / FRED APIs,
+  # which are rate-limited and not reliably reachable from ephemeral CI runners.
+  # It is therefore GATED off the default push/PR path (CI-1 / #20): non-live
+  # integration coverage runs in ci.yml's `go test ./...`. This runs manually,
+  # nightly, or on a pull request explicitly labeled `live`.
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * *'
   pull_request:
+    types: [labeled, opened, synchronize, reopened]
 
 jobs:
   e2e-live:
+    # Only run for manual dispatch, the nightly schedule, or a PR carrying the
+    # `live` label — never on every PR event (which would re-introduce the
+    # flaky live-API failures this gate exists to avoid).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'live'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -25,7 +39,9 @@ jobs:
         env:
           ENABLE_SWAGGER: 'true'
           DATABASE_DRIVER: sqlite3
-          DATABASE_PATH: ./data/midas_ci.db
+          # Must be DATABASE_SQLITE_PATH to match internal/config/config.go
+          # (viper maps database.sqlite_path). DATABASE_PATH was ignored.
+          DATABASE_SQLITE_PATH: ./data/midas_ci.db
         run: |
           nohup bash -c 'go run ./cmd/server' >/tmp/server.log 2>&1 &
 
