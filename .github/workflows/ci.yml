@@ -54,7 +54,7 @@ jobs:
     - name: Run tests
       run: go test -v -race -coverprofile=coverage.out ./...
       env:
-        DATABASE_DRIVER: sqlite
+        DATABASE_DRIVER: sqlite3
         DATABASE_SQLITE_PATH: ":memory:"
         CACHE_REDIS_URL: "redis://localhost:6379"
         LOG_LEVEL: debug

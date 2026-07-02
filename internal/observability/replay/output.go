@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -253,7 +252,10 @@ func (r *Report) RenderJSON(w io.Writer) error {
 	normalized := *r
 	normalized.Results = make([]Result, len(r.Results))
 	for i, res := range r.Results {
-		res.Bundle = filepath.ToSlash(res.Bundle)
+		// Normalize backslashes unconditionally — filepath.ToSlash is a no-op on
+		// Linux for a Windows-captured path, breaking the "forward slashes on all
+		// platforms" JSON contract that jq|xargs pipelines rely on (CI-1 / #20).
+		res.Bundle = strings.ReplaceAll(res.Bundle, `\`, "/")
 		// RPL-7 Option C: errored rows emit fields_changed = -1 so
 		// downstream consumers can't false-positive on "0 changes"
 		// while the run actually errored. The mutation lives ONLY in
