@@ -23,8 +23,16 @@ and fixed per the Hybrid strategy chosen by the maintainer:
    → **0 issues, exit 0** repo-wide. (One non-fatal `//nolint:unused` warning remains on the
    unrelated `reaper_test.go:201` helper — cosmetic, does not fail the step; left in place to avoid
    scope creep / an unused-helper regression.)
-2. **performance-test — GREEN.** Root cause was a hard-fail on deprecated `actions/upload-artifact@v3`,
-   not "infra". Bumped `upload-artifact@v3→v4` (×2), `actions/cache@v3→v4`, `actions/setup-go@v4→v5`.
+2. **performance-test — GATED (revised after the live CI run).** The first *observable* failure was
+   a hard-fail on deprecated `actions/upload-artifact@v3` (bumped `upload-artifact@v3→v4` ×2,
+   `cache@v3→v4`, `setup-go@v4→v5`) plus a server-boot env bug (fixed: migrate + `DATABASE_DRIVER`/
+   `DATABASE_SQLITE_PATH`). But once the server booted, the real GitHub run exposed that the benchmark
+   **harness is incomplete — it has no `main` entrypoint** — and its scenarios drive the *live*
+   valuation path against real SEC/Yahoo APIs (same dependency that gates e2e-live). So this job is
+   now **gated** (`workflow_dispatch` / PR label `perf`; nightly stays on `scheduled-performance-test`)
+   rather than "green", with the harness gap filed in **`docs/reviewer/CI-1.2-...`**. This revises the
+   maintainer's "performance: green (v4 actions)" sub-choice — the live evidence showed the action bump
+   alone can't make it green.
 3. **The 3 basket integration tests** (`TestLedger_BasketSnapshot_ClusterPrediction`,
    `TestDatacleaner_PlugInvariants_TickerBasket`, `TestDataCleanerRecompute_ShadowMode_TickerBasket`)
    failed in `ci.yml`'s own `go test ./...` too — they index `dateDirs[len-1]` on an empty slice when
@@ -64,6 +72,20 @@ and fixed per the Hybrid strategy chosen by the maintainer:
    (`mockSECGateway`/`mockMarketDataGateway`/`mockMacroDataGateway` in `service_test.go`) had an
    unsynchronized `callCount++`. Added a `sync.Mutex` to each (mirroring the already-guarded
    `mockCacheRepository` in the same file). No product-code change. Full `go test -race ./...` now green.
+
+8. **Linux-only failures found by the real CI run (round 2).** Pushing to a draft PR (#32) showed the
+   Test + Performance jobs red for reasons that could NOT reproduce on the Windows dev box — all
+   pre-existing, all masked by the perpetual lint failure. Fixed: (a) `filepath.ToSlash` is a no-op on
+   Linux for Windows-captured backslash paths — replaced with `strings.ReplaceAll(p, "\\", "/")` in
+   `cmd/accuracy/main.go::shortPath` and `replay/output.go` (fixes `TestShortPath`,
+   `TestRenderJSON_*`); (b) `ci.yml` set an INVALID `DATABASE_DRIVER: sqlite` (must be `sqlite3`) so
+   every test calling `config.Load()` failed (`TestGuidanceRoot_*`); (c) `internal/di` logger test
+   hard-coded a Windows-only path substring (per-OS `wantPathSubstr`); (d) two `artifact` write-failure
+   tests raced the async writer worker on fast Linux CI — added `require.Eventually` to wait for the
+   worker to observe the sabotaged writes before healing the dir. Verified locally where possible
+   (Windows pass + `DATABASE_DRIVER=sqlite3` pass / `sqlite` fail proof); the OS-path fixes are correct
+   by construction. **Lesson: a green lint gate was masking a substantial backlog of Linux/CI-specific
+   test failures — CI had effectively never run the Test job to completion.**
 
 **Net effect on a default push/PR:** `Test and Coverage` (lint + full suite + coverage), the Docker
 build, and Trivy run and are green; `e2e-live` and `Contract Fuzzing` no longer run on push (they

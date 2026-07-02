@@ -3,6 +3,7 @@ name: Performance Testing
 on:
   pull_request:
     branches: [ master ]
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'internal/**'
       - 'pkg/**'
@@ -32,8 +33,16 @@ env:
 
 jobs:
   performance-test:
+    # Gated off the default push/PR path (CI-1 / #20): the benchmark harness is
+    # incomplete (no `main` entrypoint — see docs/reviewer/CI-1.2) AND its
+    # scenarios drive the live valuation path against real SEC/Yahoo APIs, the
+    # same rationale that gates e2e-live. Runs on manual dispatch or a PR labeled
+    # `perf`; nightly coverage is the separate scheduled-performance-test job.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'perf'))
     runs-on: ubuntu-latest
-    
+
     services:
       redis:
         image: redis:7-alpine
