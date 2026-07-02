@@ -1,9 +1,12 @@
 # CI-1 — Master CI is red (pre-existing): golangci-lint + e2e-live + performance-test + schemathesis
 
-**Status:** RESOLVED (code-complete, locally verified) 2026-07-02 on branch
-`worktree-ci-1-master-ci-green` — filed 2026-06-24 during the VAL-1 Phases 2-5 merge (#17 / PR #18).
-**GitHub issue: #20** (stays open until the branch is pushed and a clean master run is observed —
-the push is a separate user-initiated step per midas/CLAUDE.md).
+**Status:** RESOLVED — CI confirmed GREEN on the live GitHub run 2026-07-02 (draft PR **#32**,
+`mergeStateStatus: CLEAN`). Filed 2026-06-24 during the VAL-1 Phases 2-5 merge (#17 / PR #18).
+**GitHub issue: #20** — closes when PR #32 merges (the merge is the maintainer's step per
+midas/CLAUDE.md; the agent does not merge/push-to-master).
+**Live CI evidence (PR #32, commit `27ea6ea`):** `Test and Coverage` pass · `Build Docker Image`
+pass · `Security Scan` + `Trivy` pass · `e2e-live` / `performance-test` / `schemathesis` /
+`scheduled-performance-test` skipping (gated) · `Deploy` jobs skipping (master-ref only).
 **Severity:** Medium. CI hygiene — merges only proceed because these checks are non-required; that masks real regressions and erodes signal.
 **Origin:** Surfaced by the holistic `/code-review` + merge gate on VAL-1. **Confirmed PRE-EXISTING**, not introduced by VAL-1: the same four checks fail identically at master `5b26eef` and `4c4f6b4` (before VAL-1), and none of the lint-flagged symbols are VAL-1 code.
 **Blocks:** Nothing hard (checks are non-required → `mergeStateStatus = UNSTABLE`, still mergeable), but it blocks *confident* green-CI merges.
@@ -123,9 +126,10 @@ Installs Python deps then `exit code 1`; needs a running server + the OpenAPI sp
 - [x] e2e-live / performance-test / schemathesis root-caused and either green or gated-with-documented-reason.
       _performance-test → green (v4/v5 actions); e2e-live → gated nightly/label + env fix;_
       _schemathesis → gated nightly/label + env fix, findings tracked in CI-1.1._
-- [ ] A clean master run is green (or red-with-documented-reason), and GitHub #20 closed.
-      _Pending: push `worktree-ci-1-master-ci-green` → observe the green run → close #20. The push_
-      _is a separate user-initiated step (midas/CLAUDE.md). Master fast-forwarded locally 2026-07-02._
+- [x] A clean master run is green (or red-with-documented-reason).
+      _Confirmed on the live GitHub run: PR #32 is `CLEAN` — Test/Build/Security/Trivy pass; the four_
+      _live/heavy suites skip (gated). Local master fast-forwarded through `27ea6ea`._
+- [ ] GitHub #20 closed — closes automatically when PR #32 merges (maintainer's step; agent does not merge).
 
 ## Out of scope
 - Making these checks *required* branch-protection gates — decide that after they're reliably green.
